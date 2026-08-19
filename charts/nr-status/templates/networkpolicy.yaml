@@ -1,0 +1,138 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $root := . -}}
+{{/*
+Reusable pieces. Each policy below is default-deny for ingress (an empty or
+absent `ingress:` list denies everything) plus the specific allows the
+service actually needs.
+*/}}
+{{- if .Values.postgresql.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nr-status.postgresFullname" . }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nr-status.selectorLabels" (dict "root" . "component" "postgres") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the api and the aggregator talk to Postgres. The pollers never do.
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  - {{ .Release.Name }}
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - api
+                  - aggregator
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.service.port }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nr-status.apiFullname" . }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nr-status.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  - {{ .Release.Name }}
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - frontend
+                  {{- range $name, $poller := .Values.pollers }}
+                  {{- if $poller.enabled }}
+                  - poller-{{ $name }}
+                  {{- end }}
+                  {{- end }}
+      {{- if and .Values.ingress.enabled .Values.ingress.api.enabled }}
+        # The api is published externally, so the ingress controller must
+        # reach it too. SECURITY: this also exposes /private/*, guarded only
+        # by the X-Internal-Token shared secret.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace | quote }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nr-status.frontendFullname" . }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "frontend") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nr-status.selectorLabels" (dict "root" . "component" "frontend") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- if and .Values.ingress.enabled .Values.ingress.frontend.enabled }}
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.frontend.service.port }}
+  {{- else }}
+  # No Ingress in front of the frontend, so nothing outside the pod needs to
+  # reach it. Omitting `ingress` entirely is a default-deny.
+  {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-aggregator" (include "nr-status.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "aggregator") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nr-status.selectorLabels" (dict "root" . "component" "aggregator") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  # Default-deny: the aggregator exposes no listener at all.
+{{- range $name, $poller := .Values.pollers }}
+{{- if $poller.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-poller-%s" (include "nr-status.fullname" $root) $name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" $root "component" (printf "poller-%s" $name)) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nr-status.selectorLabels" (dict "root" $root "component" (printf "poller-%s" $name)) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  # Default-deny: pollers expose no listener.
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nr-status.apiFullname" . }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "nr-status.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nr-status.labels" (dict "root" . "component" "api") | nindent 8 }}
+      {{- with .Values.api.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "nr-status.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "nr-status.podSecurityContext" (dict "override" .Values.api.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "nr-status.image" (dict "root" . "image" .Values.api.image) | quote }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          securityContext:
+            {{- include "nr-status.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.service.port }}
+              protocol: TCP
+          env:
+            - name: BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.api.service.port) | quote }}
+            # PGPASSWORD must stay immediately before DATABASE_URL -- the
+            # kubelet only expands $(VAR) from EARLIER entries in this list.
+            {{- include "nr-status.databaseEnv" . | nindent 12 }}
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nr-status.internalTokenSecretName" . }}
+                  key: {{ include "nr-status.internalTokenSecretKey" . }}
+            - name: RUST_LOG
+              value: {{ .Values.api.logLevel | quote }}
+            # LINES_DIR is deliberately NOT set: crates/api/src/data/config.rs
+            # already defaults it to /app/lines, which is exactly where
+            # docker/api.Dockerfile bakes the line catalogue.
+            {{- with .Values.api.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.api.probes.path }}
+              port: http
+            periodSeconds: {{ .Values.api.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.api.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.api.probes.startup.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.api.probes.path }}
+              port: http
+            periodSeconds: {{ .Values.api.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.api.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.api.probes.readiness.timeoutSeconds }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.api.probes.path }}
+              port: http
+            periodSeconds: {{ .Values.api.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.api.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.api.probes.liveness.timeoutSeconds }}
+          {{- with .Values.api.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

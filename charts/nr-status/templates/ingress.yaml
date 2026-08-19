@@ -1,0 +1,52 @@
+{{- if .Values.ingress.enabled }}
+{{- if and .Values.ingress.frontend.enabled (not .Values.ingress.frontend.host) }}
+{{- fail "ingress.frontend.enabled is true but ingress.frontend.host is empty. Set it to the hostname the web UI should be served on, or set ingress.frontend.enabled=false." }}
+{{- end }}
+{{- if and .Values.ingress.api.enabled (not .Values.ingress.api.host) }}
+{{- fail "ingress.api.enabled is true but ingress.api.host is empty. Set it to the hostname the api should be served on, or set ingress.api.enabled=false." }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "nr-status.fullname" . }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "shared") | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- if and .Values.ingress.frontend.enabled .Values.ingress.frontend.host }}
+    - host: {{ .Values.ingress.frontend.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "nr-status.frontendFullname" . }}
+                port:
+                  number: {{ .Values.frontend.service.port }}
+    {{- end }}
+    {{- if and .Values.ingress.api.enabled .Values.ingress.api.host }}
+    # Whole-host, not a path prefix -- see the values.yaml comment.
+    - host: {{ .Values.ingress.api.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "nr-status.apiFullname" . }}
+                port:
+                  number: {{ .Values.api.service.port }}
+    {{- end }}
+{{- end }}

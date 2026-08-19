@@ -1,0 +1,432 @@
+# Values for the nr-status chart.
+#
+# The layout mirrors .env.example so the docker-compose path and the Helm
+# path do not drift. Every service section names the crate whose
+# `config.rs` defines its environment contract.
+
+# -- Override the chart name used in resource names and labels.
+nameOverride: ""
+# -- Override the fully-qualified release name entirely.
+fullnameOverride: ""
+
+# -- Image pull secrets applied to every pod in the chart.
+imagePullSecrets: []
+# - name: my-registry-creds
+
+serviceAccount:
+  # -- Create a ServiceAccount for the chart's workloads.
+  create: true
+  # -- Name to use. When empty and `create` is true, the fullname is used.
+  name: ""
+  # -- Annotations for the ServiceAccount (e.g. cloud workload identity).
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Shared secrets
+# ---------------------------------------------------------------------------
+# Every secret value in this chart follows the same three-way rule:
+#   1. `existingSecret` set  -> the chart renders NO key for it; the workloads
+#                               read the named Secret directly. Use this with
+#                               External Secrets Operator, Vault or SOPS.
+#   2. an explicit value set -> the chart renders that value.
+#   3. neither               -> for `internalToken` and the postgres password
+#                               ONLY, a 32-character alphanumeric value is
+#                               generated, and PRESERVED across `helm upgrade`
+#                               by reading the live Secret back (see README).
+secrets:
+  # -- Shared secret the pollers present as `X-Internal-Token` to reach the
+  # api's /private/* endpoints (crates/api/src/auth.rs). Generated when empty.
+  # The api refuses to start if this ends up empty (crates/api/src/app.rs).
+  internalToken: ""
+  # -- Read `internal-token` from this pre-existing Secret instead.
+  existingSecret: ""
+  # -- Key within `existingSecret` holding the internal token.
+  existingSecretInternalTokenKey: internal-token
+
+# ---------------------------------------------------------------------------
+# postgres
+# ---------------------------------------------------------------------------
+# There is intentionally no `replicaCount` here: this is a single-replica
+# StatefulSet with no replication, backup or restore story (an explicit
+# non-goal of the design). If you need HA, set `postgresql.enabled: false`
+# and point `externalDatabase` at a managed database.
+postgresql:
+  # -- Deploy the bundled single-replica PostgreSQL StatefulSet. Set to false
+  # to use a managed database, and fill in `externalDatabase` below.
+  enabled: true
+  auth:
+    # -- Database role the api and aggregator connect as.
+    username: nr_status
+    # -- Database name.
+    database: nr_status
+    # -- Password. Generated (32 alphanumeric chars) when empty.
+    #
+    # IMPORTANT: DATABASE_URL is assembled as a URL, and the chart never sees
+    # this value at render time when `existingSecret` is used, so it cannot
+    # percent-encode it for you. A password containing any of
+    #   @ : / ? # [ ] %
+    # must be percent-encoded by YOU before being put here. Generated
+    # passwords use randAlphaNum (letters and digits only), so the default
+    # path is never affected.
+    password: ""
+    # -- Read `postgres-password` from this pre-existing Secret instead.
+    existingSecret: ""
+    # -- Key within `existingSecret` holding the password.
+    existingSecretPasswordKey: postgres-password
+  image:
+    repository: postgres
+    # -- Pinned to the same major the docker-compose stack uses.
+    tag: "16"
+    pullPolicy: IfNotPresent
+  service:
+    # -- Port the headless Service and the container listen on.
+    port: 5432
+  persistence:
+    # -- Attach a PersistentVolumeClaim. When false, an emptyDir is used and
+    # ALL DATA IS LOST when the pod is rescheduled -- ephemeral testing only.
+    enabled: true
+    size: 8Gi
+    # -- StorageClass name. Empty means the cluster default.
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    # -- Use a pre-existing PVC instead of a volumeClaimTemplates entry.
+    existingClaim: ""
+  # -- Extra PostgreSQL container env vars (e.g. shared_buffers tuning).
+  extraEnv: []
+  # -- Merged over the pod securityContext. The uid/gid/fsGroup 999 pins are
+  # required by the postgres image -- override them only if you know why.
+  podSecurityContext: {}
+  resources: {}
+    # requests:
+    #   cpu: 100m
+    #   memory: 256Mi
+    # limits:
+    #   memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# ---------------------------------------------------------------------------
+# External database (used only when postgresql.enabled is false)
+# ---------------------------------------------------------------------------
+# Exactly one of `url` or `existingSecret` must be set when
+# postgresql.enabled is false; otherwise rendering fails with an explicit
+# message. `existingSecret` is the preferred form -- it keeps the password
+# out of `helm get values` as well as out of the Deployment spec.
+externalDatabase:
+  # -- Full libpq/sqlx connection URL, e.g.
+  # postgres://user:pass@host.example.com:5432/nr_status
+  url: ""
+  # -- Pre-existing Secret holding the whole connection URL.
+  existingSecret: ""
+  # -- Key within `existingSecret` holding the URL.
+  existingSecretUrlKey: database-url
+
+# ---------------------------------------------------------------------------
+# Rail Data Marketplace pollers
+# ---------------------------------------------------------------------------
+# ALL FOUR ARE DISABLED BY DEFAULT. As documented in .env.example, no
+# confirmed RDM endpoint exists for any of these feeds -- every base URL in
+# the repository today is a deliberately non-functional `*.example.invalid`
+# placeholder. A default install therefore brings up postgres + api +
+# aggregator + frontend and works immediately, instead of four pods logging
+# connection failures.
+#
+# Enabling a poller without setting its `baseUrl` aborts rendering with an
+# explicit message rather than deploying a pod that cannot work.
+#
+# `baseUrlEnvVar` and `ingestPath` are part of each poller's contract with
+# its binary (see crates/poller-*/src/config.rs) -- change them only if that
+# code changes.
+pollers:
+  incidents:
+    enabled: false
+    image:
+      repository: nr-status/poller-incidents
+      tag: ""
+      pullPolicy: IfNotPresent
+    # -- RDM Knowledgebase Incidents feed base URL. Required when enabled.
+    baseUrl: ""
+    # -- Env var this binary reads the base URL from. Do not change.
+    baseUrlEnvVar: RDM_INCIDENTS_BASE_URL
+    # -- Path on the api Service this poller POSTs its results to.
+    ingestPath: /private/incidents
+    # -- RSPS5050 P-03-00 Rev A section 10: "Recommend every 5 minutes."
+    pollIntervalSecs: 300
+    # -- RDM API key, sent as the `x-apikey` header. Rendered into the chart
+    # Secret as `rdm-incidents-api-key` when `existingSecret` is empty.
+    apiKey: ""
+    existingSecret: ""
+    existingSecretApiKeyKey: rdm-incidents-api-key
+    logLevel: info
+    extraEnv: []
+    resources: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    podSecurityContext: {}
+  stations:
+    enabled: false
+    image:
+      repository: nr-status/poller-stations
+      tag: ""
+      pullPolicy: IfNotPresent
+    baseUrl: ""
+    baseUrlEnvVar: RDM_STATIONS_BASE_URL
+    ingestPath: /private/stations
+    # -- RSPS5050 P-03-00 Rev A section 6: once every 24 hours, overnight.
+    pollIntervalSecs: 86400
+    apiKey: ""
+    existingSecret: ""
+    existingSecretApiKeyKey: rdm-stations-api-key
+    logLevel: info
+    extraEnv: []
+    resources: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    podSecurityContext: {}
+  tocs:
+    enabled: false
+    image:
+      repository: nr-status/poller-tocs
+      tag: ""
+      pullPolicy: IfNotPresent
+    baseUrl: ""
+    baseUrlEnvVar: RDM_TOCS_BASE_URL
+    ingestPath: /private/tocs
+    # -- RSPS5050 P-03-00 Rev A section 3: at least once every 24 hours.
+    pollIntervalSecs: 86400
+    apiKey: ""
+    existingSecret: ""
+    existingSecretApiKeyKey: rdm-tocs-api-key
+    logLevel: info
+    extraEnv: []
+    resources: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    podSecurityContext: {}
+  ldbws:
+    enabled: false
+    image:
+      repository: nr-status/poller-ldbws
+      tag: ""
+      pullPolicy: IfNotPresent
+    # -- LDBWS base URL up to and including the /LDBWS/api/20220120 segment;
+    # the binary appends /GetDepBoardWithDetails/{crs} itself.
+    baseUrl: ""
+    baseUrlEnvVar: LDBWS_BASE_URL
+    ingestPath: /private/station-samples
+    # -- ldbws only: the api endpoint listing which stations to sample. This
+    # is a SECOND api URL, separate from ingestPath -- see
+    # crates/poller-ldbws/src/config.rs.
+    sampleStationsPath: /private/sample-stations
+    # -- ldbws only: LDBWS `numRows` query parameter (upstream default 10).
+    numRows: 10
+    # -- DESIGN.md section 4 targets 30-60s; 60 is the conservative end
+    # because this feed's real rate limit is unconfirmed.
+    pollIntervalSecs: 60
+    apiKey: ""
+    existingSecret: ""
+    existingSecretApiKeyKey: rdm-ldbws-api-key
+    logLevel: info
+    extraEnv: []
+    resources: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# api (crates/api/src/data/config.rs: ServiceArguments)
+# ---------------------------------------------------------------------------
+api:
+  image:
+    repository: nr-status/api
+    # -- Empty means "use the chart's appVersion".
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- Replicas. >1 is safe: crates/api/src/main.rs runs sqlx::migrate!() in
+  # process at startup, and sqlx's Migrator takes a Postgres advisory lock,
+  # so concurrent startups serialise their migrations rather than racing.
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8080
+  # -- tracing-subscriber EnvFilter syntax: "info", "api=debug", "warn", ...
+  logLevel: info
+  probes:
+    # -- Path served by crates/api/src/routes/health.rs, nested under /public
+    # by main.rs. Changing this must be matched in tests/test-api-health.yaml.
+    path: /public/health
+    startup:
+      # 30 x 2s = 60s of headroom. The api runs sqlx::migrate!() BEFORE it
+      # binds its listener (crates/api/src/main.rs), so a cold start against
+      # an empty database can take a while and must not be killed by the
+      # liveness probe.
+      periodSeconds: 2
+      failureThreshold: 30
+      timeoutSeconds: 3
+    readiness:
+      periodSeconds: 10
+      failureThreshold: 3
+      timeoutSeconds: 3
+    liveness:
+      periodSeconds: 10
+      failureThreshold: 3
+      timeoutSeconds: 3
+  # -- Extra env vars appended to the container.
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # -- Merged over the chart-wide pod securityContext defaults
+  # (runAsNonRoot: true, seccompProfile: RuntimeDefault).
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# aggregator (crates/aggregator/src/config.rs: Config)
+# ---------------------------------------------------------------------------
+# There is intentionally no `replicaCount` here. The aggregator is a
+# singleton write loop against Postgres: two copies would double-write
+# line_status and race the history prune. The Deployment is pinned to
+# replicas: 1 with strategy Recreate for the same reason -- a RollingUpdate
+# would briefly run two.
+aggregator:
+  image:
+    repository: nr-status/aggregator
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- DESIGN.md section 4 targets every 30-60s; 60 is the conservative end.
+  pollIntervalSecs: 60
+  # -- How long line_status_history rows are kept before being pruned.
+  historyRetentionDays: 7
+  logLevel: info
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # -- Merged over the chart-wide pod securityContext defaults
+  # (runAsNonRoot: true, seccompProfile: RuntimeDefault).
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# frontend (frontend/lib/api.ts)
+# ---------------------------------------------------------------------------
+frontend:
+  image:
+    repository: nr-status/frontend
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 3000
+  probes:
+    # -- Next.js ships no dedicated health route, so both probes hit "/".
+    # Change this if one is ever added.
+    path: /
+    readiness:
+      periodSeconds: 10
+      failureThreshold: 3
+      timeoutSeconds: 3
+    liveness:
+      periodSeconds: 10
+      failureThreshold: 3
+      timeoutSeconds: 3
+  # -- Override the api base URL the server-side render calls. Leave empty to
+  # use the in-cluster api Service. API_BASE_URL is read at REQUEST time in
+  # Server Components, not baked at build time, so this is a runtime value.
+  apiBaseUrl: ""
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # -- Merged over the chart-wide pod securityContext defaults
+  # (runAsNonRoot: true, seccompProfile: RuntimeDefault).
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# Ingress
+# ---------------------------------------------------------------------------
+# SEPARATE HOSTNAMES, NOT PATH-SPLITTING ONE HOST. The api serves its
+# TfL-compatible routes at UNPREFIXED top-level paths -- GET /Line/... and
+# GET /StopPoint/{crs}/Disruption -- alongside /public/... and /private/...
+# (crates/api/src/routes/mod.rs explains why: clients built against TfL's own
+# API must work unchanged). Splitting a single host by path prefix would
+# either collide with Next.js's own routes or break that compatibility.
+ingress:
+  enabled: false
+  # -- IngressClass name, e.g. "nginx" or "traefik". Empty uses the cluster
+  # default IngressClass.
+  className: ""
+  # -- Annotations applied to the single Ingress object, e.g.
+  # cert-manager.io/cluster-issuer: letsencrypt-prod
+  annotations: {}
+  frontend:
+    enabled: true
+    # -- Hostname for the web UI, e.g. status.example.com. Required when
+    # ingress.enabled and ingress.frontend.enabled are both true.
+    host: ""
+  api:
+    # SECURITY: enabling this exposes /private/* to the internet as well.
+    # Those endpoints are protected ONLY by the X-Internal-Token shared
+    # secret (crates/api/src/auth.rs) -- there is no other authentication in
+    # front of them. If you do not need external API access, leave this off;
+    # the frontend reaches the api over the in-cluster Service either way.
+    enabled: false
+    # -- Hostname for the api, e.g. api.example.com.
+    host: ""
+  # -- TLS blocks passed through verbatim. Shaped for cert-manager (pair it
+  # with a cluster-issuer annotation above) but issuer-agnostic.
+  tls: []
+  # - secretName: nr-status-tls
+  #   hosts:
+  #     - status.example.com
+  #     - api.example.com
+
+# ---------------------------------------------------------------------------
+# NetworkPolicy (optional)
+# ---------------------------------------------------------------------------
+# Off by default: many clusters run a CNI that does not enforce
+# NetworkPolicy at all, and a silently-unenforced policy is worse than an
+# absent one because it looks like protection.
+#
+# EGRESS IS DELIBERATELY UNRESTRICTED. The pollers must reach arbitrary
+# external Rail Data Marketplace hosts, and constraining that would mean
+# making every operator enumerate them.
+networkPolicy:
+  enabled: false
+  # -- Namespace your ingress controller runs in. Matched via the automatic
+  # `kubernetes.io/metadata.name` namespace label. Only used when
+  # ingress.enabled is true.
+  ingressControllerNamespace: ingress-nginx
+
+# ---------------------------------------------------------------------------
+# helm test
+# ---------------------------------------------------------------------------
+tests:
+  # -- Render the `helm test` pod. Running it requires a live cluster with
+  # the images available.
+  enabled: true
+  image:
+    # -- Empty means "reuse the api image", which already ships curl
+    # (docker/api.Dockerfile installs it for the compose HEALTHCHECK). That
+    # keeps `helm test` working in an air-gapped cluster with no extra pull.
+    # Set a repository here only if you want a different probe image.
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent

@@ -1,0 +1,130 @@
+# A filled-in "real deployment" example. Render it with:
+#
+#   helm template nr-status ./charts/nr-status -f charts/nr-status/values-example.yaml
+#
+# Every RDM base URL below is still a placeholder host -- as of this chart's
+# writing no confirmed Rail Data Marketplace endpoint exists for any of the
+# four feeds (see .env.example in the repository root). Replace them, and the
+# API keys, with real values before installing this for real.
+
+imagePullSecrets:
+  - name: registry-creds
+
+api:
+  image:
+    repository: registry.example.com/nr-status/api
+    tag: "0.1.0"
+  replicaCount: 2
+  logLevel: info
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+aggregator:
+  image:
+    repository: registry.example.com/nr-status/aggregator
+    tag: "0.1.0"
+  pollIntervalSecs: 60
+  historyRetentionDays: 30
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+frontend:
+  image:
+    repository: registry.example.com/nr-status/frontend
+    tag: "0.1.0"
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 768Mi
+
+postgresql:
+  enabled: true
+  auth:
+    username: nr_status
+    database: nr_status
+    # Left empty on purpose: generated on first install and preserved across
+    # upgrades. Set `existingSecret` instead if an external secret manager
+    # owns this credential.
+    password: ""
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: fast-ssd
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+secrets:
+  # Left empty on purpose: generated on first install, preserved on upgrade.
+  internalToken: ""
+
+pollers:
+  incidents:
+    enabled: true
+    image:
+      repository: registry.example.com/nr-status/poller-incidents
+      tag: "0.1.0"
+    baseUrl: https://rdm.example.com/incidents
+    apiKey: replace-me-rdm-incidents-key
+    pollIntervalSecs: 300
+  stations:
+    enabled: true
+    image:
+      repository: registry.example.com/nr-status/poller-stations
+      tag: "0.1.0"
+    baseUrl: https://rdm.example.com/json/1.0
+    apiKey: replace-me-rdm-stations-key
+    pollIntervalSecs: 86400
+  tocs:
+    enabled: true
+    image:
+      repository: registry.example.com/nr-status/poller-tocs
+      tag: "0.1.0"
+    baseUrl: https://rdm.example.com/tocs
+    apiKey: replace-me-rdm-tocs-key
+    pollIntervalSecs: 86400
+  ldbws:
+    enabled: true
+    image:
+      repository: registry.example.com/nr-status/poller-ldbws
+      tag: "0.1.0"
+    baseUrl: https://rdm.example.com/LDBWS/api/20220120
+    apiKey: replace-me-rdm-ldbws-key
+    numRows: 10
+    pollIntervalSecs: 60
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  frontend:
+    enabled: true
+    host: status.example.com
+  api:
+    # Left off deliberately: enabling it publishes /private/*, which is
+    # guarded only by the X-Internal-Token shared secret.
+    enabled: false
+    host: ""
+  tls:
+    - secretName: nr-status-tls
+      hosts:
+        - status.example.com
+
+networkPolicy:
+  enabled: true
+  ingressControllerNamespace: ingress-nginx

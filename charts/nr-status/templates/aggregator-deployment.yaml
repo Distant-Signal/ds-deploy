@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-aggregator" (include "nr-status.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "aggregator") | nindent 4 }}
+spec:
+  # Fixed at 1 -- see the comment above `aggregator:` in values.yaml.
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: a rolling update would briefly run two
+    # aggregators, double-writing line_status and racing the history prune.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "nr-status.selectorLabels" (dict "root" . "component" "aggregator") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nr-status.labels" (dict "root" . "component" "aggregator") | nindent 8 }}
+      {{- with .Values.aggregator.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "nr-status.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "nr-status.podSecurityContext" (dict "override" .Values.aggregator.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: aggregator
+          image: {{ include "nr-status.image" (dict "root" . "image" .Values.aggregator.image) | quote }}
+          imagePullPolicy: {{ .Values.aggregator.image.pullPolicy }}
+          securityContext:
+            {{- include "nr-status.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          # No probes: this binary exposes no HTTP surface at all. Failure
+          # handling is restart-on-exit via the default restartPolicy.
+          env:
+            {{- include "nr-status.databaseEnv" . | nindent 12 }}
+            # Matches the binary's own default (crates/aggregator/src/config.rs)
+            # and where docker/aggregator.Dockerfile bakes the catalogue in.
+            - name: LINES_DIR
+              value: /app/lines
+            - name: POLL_INTERVAL_SECS
+              value: {{ .Values.aggregator.pollIntervalSecs | quote }}
+            - name: HISTORY_RETENTION_DAYS
+              value: {{ .Values.aggregator.historyRetentionDays | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.aggregator.logLevel | quote }}
+            {{- with .Values.aggregator.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.aggregator.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.aggregator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.aggregator.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.aggregator.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

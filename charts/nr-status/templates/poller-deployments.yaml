@@ -1,0 +1,106 @@
+{{/*
+One template, four Deployments. Everything that differs between the pollers
+lives in the `.Values.pollers` map (baseUrlEnvVar, ingestPath, cadence, and
+ldbws's two extra vars), so this file never branches on a poller's name.
+
+Go templates iterate maps in sorted key order, so the rendered document
+order is stable: incidents, ldbws, stations, tocs.
+*/}}
+{{- $root := . -}}
+{{- range $name, $poller := .Values.pollers }}
+{{- if $poller.enabled }}
+{{- if not $poller.baseUrl }}
+{{- fail (printf "pollers.%s.enabled is true but pollers.%s.baseUrl is empty. Set it to the confirmed Rail Data Marketplace base URL for this feed (see .env.example -- no confirmed endpoint exists for any of the four feeds yet), or set pollers.%s.enabled=false." $name $name $name) }}
+{{- end }}
+{{- $component := printf "poller-%s" $name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-%s" (include "nr-status.fullname" $root) $component | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" $root "component" $component) | nindent 4 }}
+spec:
+  # Every poller is a singleton loop; a second copy would just duplicate
+  # every upstream request and every ingest POST.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "nr-status.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nr-status.labels" (dict "root" $root "component" $component) | nindent 8 }}
+      {{- with $poller.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "nr-status.serviceAccountName" $root }}
+      automountServiceAccountToken: false
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "nr-status.podSecurityContext" (dict "override" $poller.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: {{ $component }}
+          image: {{ include "nr-status.image" (dict "root" $root "image" $poller.image) | quote }}
+          imagePullPolicy: {{ $poller.image.pullPolicy }}
+          securityContext:
+            {{- include "nr-status.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          # No probes: none of the pollers expose an HTTP surface.
+          env:
+            - name: {{ $poller.baseUrlEnvVar }}
+              value: {{ $poller.baseUrl | quote }}
+            - name: RDM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nr-status.pollerSecretName" (dict "root" $root "poller" $poller) }}
+                  key: {{ include "nr-status.pollerSecretKey" (dict "root" $root "name" $name "poller" $poller) }}
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nr-status.internalTokenSecretName" $root }}
+                  key: {{ include "nr-status.internalTokenSecretKey" $root }}
+            - name: API_INGEST_URL
+              value: {{ printf "%s%s" (include "nr-status.apiBaseUrl" $root) $poller.ingestPath | quote }}
+            {{- if $poller.sampleStationsPath }}
+            # ldbws only: a SECOND api endpoint, listing which stations to
+            # sample (crates/poller-ldbws/src/config.rs).
+            - name: API_SAMPLE_STATIONS_URL
+              value: {{ printf "%s%s" (include "nr-status.apiBaseUrl" $root) $poller.sampleStationsPath | quote }}
+            {{- end }}
+            {{- if $poller.numRows }}
+            # ldbws only: LDBWS's own `numRows` query parameter.
+            - name: NUM_ROWS
+              value: {{ $poller.numRows | quote }}
+            {{- end }}
+            - name: POLL_INTERVAL_SECS
+              value: {{ $poller.pollIntervalSecs | quote }}
+            - name: RUST_LOG
+              value: {{ $poller.logLevel | quote }}
+            {{- with $poller.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with $poller.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $poller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $poller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $poller.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
