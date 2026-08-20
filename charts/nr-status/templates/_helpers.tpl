@@ -90,6 +90,18 @@ Per-component object names. Each takes root.
 {{- printf "%s-frontend" (include "nr-status.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "nr-status.redisFullname" -}}
+{{- printf "%s-redis" (include "nr-status.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+In-cluster Redis URL, consumed by both api (publisher) and enricher
+(consumer). Takes root.
+*/}}
+{{- define "nr-status.redisUrl" -}}
+{{- printf "redis://%s:%d" (include "nr-status.redisFullname" .) (int .Values.redis.service.port) }}
+{{- end }}
+
 {{/*
 In-cluster base URL of the api Service. Consumed by the frontend
 (API_BASE_URL), by every poller (API_INGEST_URL / API_SAMPLE_STATIONS_URL)

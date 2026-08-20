@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-enricher" (include "nr-status.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "enricher") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nr-status.selectorLabels" (dict "root" . "component" "enricher") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nr-status.labels" (dict "root" . "component" "enricher") | nindent 8 }}
+      {{- with .Values.enricher.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "nr-status.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "nr-status.podSecurityContext" (dict "override" .Values.enricher.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: enricher
+          image: {{ include "nr-status.image" (dict "root" . "image" .Values.enricher.image) | quote }}
+          imagePullPolicy: {{ .Values.enricher.image.pullPolicy }}
+          securityContext:
+            {{- include "nr-status.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          # No probes: like aggregator, this binary exposes no HTTP surface.
+          env:
+            {{- include "nr-status.databaseEnv" . | nindent 12 }}
+            - name: REDIS_URL
+              value: {{ include "nr-status.redisUrl" . | quote }}
+            - name: LLM_BASE_URL
+              value: {{ .Values.enricher.llm.baseUrl | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.enricher.llm.model | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "nr-status.secretName" .) .Values.enricher.llm.existingSecret }}
+                  key: {{ .Values.enricher.llm.existingSecretApiKeyKey }}
+            - name: SWEEP_INTERVAL_SECS
+              value: {{ .Values.enricher.sweepIntervalSecs | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.enricher.logLevel | quote }}
+            {{- with .Values.enricher.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.enricher.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.enricher.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.enricher.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.enricher.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

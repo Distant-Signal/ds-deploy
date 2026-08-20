@@ -322,6 +322,53 @@ aggregator:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
+# redis (crates/enricher's trigger queue; crates/api publishes to it)
+# ---------------------------------------------------------------------------
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: "7"
+    pullPolicy: IfNotPresent
+  service:
+    port: 6379
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# enricher (crates/enricher/src/config.rs)
+# ---------------------------------------------------------------------------
+enricher:
+  image:
+    repository: nr-status/enricher
+    tag: ""
+    pullPolicy: IfNotPresent
+  llm:
+    baseUrl: ""
+    model: ""
+    # -- API key for the OpenAI-compatible endpoint. Empty is valid for
+    # local servers that don't require one. Follows the chart's normal
+    # secrets rule: an existingSecret takes priority; otherwise this
+    # value (possibly empty) is rendered as-is -- never auto-generated,
+    # since a random LLM API key is meaningless.
+    apiKey: ""
+    existingSecret: ""
+    existingSecretApiKeyKey: llm-api-key
+  sweepIntervalSecs: 3600
+  logLevel: info
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
 # frontend (frontend/lib/api.ts)
 # ---------------------------------------------------------------------------
 frontend:
