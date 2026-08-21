@@ -371,7 +371,14 @@ enricher:
   # 3x this value. Raise this for a slow/remote self-hosted endpoint, but
   # raise reclaimMinIdleSecs to match -- it must stay comfortably above
   # 3x this value (see its own comment below).
-  llmRequestTimeoutSecs: 120
+  #
+  # Raised from 120 to 300 (2026-08-21) after a live eval against a real
+  # self-hosted endpoint (Ollama, qwen3.5:4b) measured single-call
+  # latencies of 86-104s for the flat single-period case alone -- within
+  # striking distance of the old 120s default, and multi-period payloads
+  # push that further. See
+  # docs/superpowers/specs/2026-08-21-multi-period-extraction-design.md.
+  llmRequestTimeoutSecs: 300
   sweepIntervalSecs: 3600
   # -- How often (seconds) the reclaim loop checks the Redis Stream
   # consumer group's pending-entries list for entries stuck longer than
@@ -382,10 +389,10 @@ enricher:
   # it's eligible for reclaim. Must comfortably exceed the worst-case time
   # for all three extraction calls (each bounded by llmRequestTimeoutSecs)
   # plus the DB write, so a still-in-flight attempt is never reclaimed out
-  # from under itself. Default here matches the 120s default timeout: 3 *
-  # 120s = 360s worst case, plus headroom. Raise if you raise
+  # from under itself. Default here matches the 300s default timeout: 3 *
+  # 300s = 900s worst case, plus headroom. Raise if you raise
   # llmRequestTimeoutSecs.
-  reclaimMinIdleSecs: 600
+  reclaimMinIdleSecs: 1000
   logLevel: info
   extraEnv: []
   resources: {}
