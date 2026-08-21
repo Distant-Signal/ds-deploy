@@ -47,6 +47,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "nr-status.internalTokenSecretName" . }}
                   key: {{ include "nr-status.internalTokenSecretKey" . }}
+            - name: REDIS_URL
+              value: {{ include "nr-status.redisUrl" . | quote }}
             - name: RUST_LOG
               value: {{ .Values.api.logLevel | quote }}
             # LINES_DIR is deliberately NOT set: crates/api/src/data/config.rs
