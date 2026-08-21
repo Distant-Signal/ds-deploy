@@ -1,9 +1,10 @@
 # nr-status Helm chart
 
 Deploys the whole National Rail status stack into a single namespace: a
-bundled single-replica **PostgreSQL** StatefulSet, the **api**, the
-**aggregator**, the **frontend**, and four optional Rail Data Marketplace
-**pollers** (incidents, stations, tocs, ldbws). The chart has no subchart
+bundled single-replica **PostgreSQL** StatefulSet, a bundled single-replica
+**Redis** (a disposable trigger queue, no persistence), the **api**, the
+**aggregator**, the **enricher**, the **frontend**, and four optional Rail
+Data Marketplace **pollers** (incidents, stations, tocs, ldbws). The chart has no subchart
 dependencies and no `dependencies:` block, so `helm dependency update` is
 never needed and it installs in an air-gapped cluster given the images. It
 mirrors the topology, environment contract and cadences that the
@@ -34,6 +35,7 @@ and push them yourself before installing.
 |---|---|
 | `docker/api.Dockerfile` | `nr-status/api` |
 | `docker/aggregator.Dockerfile` | `nr-status/aggregator` |
+| `docker/enricher.Dockerfile` | `nr-status/enricher` |
 | `docker/poller-incidents.Dockerfile` | `nr-status/poller-incidents` |
 | `docker/poller-stations.Dockerfile` | `nr-status/poller-stations` |
 | `docker/poller-tocs.Dockerfile` | `nr-status/poller-tocs` |
@@ -45,15 +47,19 @@ REG=registry.example.com/nr-status
 TAG=0.1.0
 docker build -f docker/api.Dockerfile              -t $REG/api:$TAG .
 docker build -f docker/aggregator.Dockerfile       -t $REG/aggregator:$TAG .
+docker build -f docker/enricher.Dockerfile         -t $REG/enricher:$TAG .
 docker build -f docker/poller-incidents.Dockerfile -t $REG/poller-incidents:$TAG .
 docker build -f docker/poller-stations.Dockerfile  -t $REG/poller-stations:$TAG .
 docker build -f docker/poller-tocs.Dockerfile      -t $REG/poller-tocs:$TAG .
 docker build -f docker/poller-ldbws.Dockerfile     -t $REG/poller-ldbws:$TAG .
 docker build -f frontend/Dockerfile --target runtime-prod -t $REG/frontend:$TAG .
-for i in api aggregator poller-incidents poller-stations poller-tocs poller-ldbws frontend; do
+for i in api aggregator enricher poller-incidents poller-stations poller-tocs poller-ldbws frontend; do
   docker push $REG/$i:$TAG
 done
 ```
+
+Redis is **not** in this table: the bundled Redis uses the upstream `redis`
+image (`redis.image.*`), which this repository does not build.
 
 Then point each `*.image.repository` value at `$REG/...`. An empty
 `image.tag` falls back to the chart's `appVersion`.
@@ -61,12 +67,26 @@ Then point each `*.image.repository` value at `$REG/...`. An empty
 ## Install
 
 ```bash
-helm install nr-status ./charts/nr-status -n nr-status --create-namespace
+helm install nr-status ./charts/nr-status -n nr-status --create-namespace \
+  --set enricher.llm.baseUrl=https://llm.example.com/v1 \
+  --set enricher.llm.model=your-model-name
 ```
 
-A default install brings up **postgres + api + aggregator + frontend**, with
-**all four pollers off**, and works immediately. See "Enabling the pollers"
-below for why.
+An install brings up **postgres + redis + api + aggregator + enricher +
+frontend**, with **all four pollers off**. See "Enabling the pollers" below
+for why.
+
+`enricher.llm.baseUrl` and `enricher.llm.model` are the chart's only two
+**required** values — the enricher has no `enabled` toggle, and both become
+plain (non-optional) env vars on its binary, so an empty value would deploy
+a pod that fails every extraction request forever with nothing but log noise
+to show for it. Leaving either empty **aborts the render** with an explicit
+message rather than deploying that. Everything else has a working default.
+
+The enricher is a strictly additive signal: it only ever *demotes* a
+severity a line already has, and never suppresses one. A missing, failed or
+low-confidence extraction is a no-op, so a broken LLM endpoint degrades the
+enricher's own output and nothing else — the status pages keep working.
 
 With the worked example values:
 
@@ -140,11 +160,18 @@ pollers:
     baseUrl: https://rdm.example.com/LDBWS/api/20220120
     existingSecret: nr-status-rdm
     existingSecretApiKeyKey: ldbws-api-key
+
+enricher:
+  llm:
+    baseUrl: https://llm.example.com/v1
+    model: your-model-name
+    existingSecret: nr-status-llm
+    existingSecretApiKeyKey: llm-api-key
 ```
 
-The Postgres StatefulSet and its api/aggregator consumers resolve the
-password reference through the *same* template helper, so an
-`existingSecret` override can never leave the two disagreeing about which
+The Postgres StatefulSet and its api/aggregator/enricher consumers resolve
+the password reference through the *same* template helper, so an
+`existingSecret` override can never leave them disagreeing about which
 Secret holds the password.
 
 ## Using an external database
@@ -175,6 +202,30 @@ Setting `postgresql.enabled: false` with neither aborts rendering with an
 explicit message rather than deploying an api that cannot connect. When the
 bundled Postgres is disabled, no Postgres objects render at all and no
 `PGPASSWORD` env var is injected.
+
+## Using an external Redis
+
+Redis here is a **disposable trigger queue, not a system of record**: the api
+publishes an event when an incident's text changes, and the enricher consumes
+it to re-extract promptly. Losing the queue costs nothing but promptness —
+the enricher's hourly sweep re-finds anything a dropped event would have
+triggered, and the api logs and continues if a publish fails. The bundled
+Redis therefore runs with **no persistence** on purpose.
+
+Set `redis.enabled: false` and give a URL to point at a managed instance
+instead:
+
+```yaml
+redis:
+  enabled: false
+  externalUrl: redis://redis.example.com:6379
+```
+
+Setting `redis.enabled: false` **without** `redis.externalUrl` aborts
+rendering with an explicit message — previously the chart would silently
+point both the api and the enricher at an in-chart Service that was never
+created. Unlike `DATABASE_URL` there is no `existingSecret` form; a URL with
+inline credentials works but is visible in the rendered Deployment.
 
 ## Password encoding caveat
 
@@ -233,13 +284,18 @@ is worse than an absent one because it looks like protection.
 When enabled, the chart renders default-deny ingress per workload plus these
 explicit allows:
 
-- **postgres** ← api, aggregator only (the pollers never talk to it).
+- **postgres** ← api, aggregator, enricher only (the pollers never talk to
+  it; they reach the database only indirectly, via the api's ingest
+  endpoints).
+- **redis** ← api (publisher) and enricher (consumer) only. Rendered only
+  when `redis.enabled`.
 - **api** ← frontend, every enabled poller, and — when `ingress.enabled` and
   `ingress.api.enabled` — the namespace named by
   `networkPolicy.ingressControllerNamespace`.
 - **frontend** ← that same ingress-controller namespace, when
   `ingress.enabled` and `ingress.frontend.enabled`.
-- **aggregator** and every poller: default-deny; they expose no listener.
+- **aggregator**, **enricher** and every poller: default-deny; they expose no
+  listener.
 
 **Egress is deliberately unrestricted.** The pollers must reach arbitrary
 external Rail Data Marketplace hosts, and constraining that would mean
@@ -385,6 +441,58 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 | `aggregator.podAnnotations` | `{}` | Pod annotations. |
 | `aggregator.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 
+### redis
+
+There is intentionally no `replicaCount` and no persistence: this is a
+disposable trigger queue, not a system of record. See "Using an external
+Redis" above.
+
+| Key | Default | Description |
+|---|---|---|
+| `redis.enabled` | `true` | Deploy the bundled Redis Deployment and Service. |
+| `redis.externalUrl` | `""` | Connection URL of an externally-managed Redis. Used only when `redis.enabled` is false, where it is **required** — empty aborts the render. |
+| `redis.image.repository` | `redis` | Redis image repository (upstream image; this repo builds no Redis image). |
+| `redis.image.tag` | `"7"` | Pinned to the major the compose stack uses. |
+| `redis.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `redis.service.port` | `6379` | Service and container port; also sets the `REDIS_URL` the api and enricher get. |
+| `redis.resources` | `{}` | Container resource requests/limits. |
+| `redis.nodeSelector` | `{}` | Pod node selector. |
+| `redis.tolerations` | `[]` | Pod tolerations. |
+| `redis.affinity` | `{}` | Pod affinity rules. |
+| `redis.podAnnotations` | `{}` | Pod annotations. |
+| `redis.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
+### enricher
+
+There is intentionally no `replicaCount` and no `enabled` toggle: the
+enricher is a singleton consumer of one Redis consumer group plus one sweep
+loop, and it renders unconditionally.
+
+`enricher.llm.baseUrl` and `enricher.llm.model` are the chart's **only two
+required values** — leaving either empty aborts the render, because both
+become non-optional env vars on the binary and an empty value would deploy a
+pod that fails every request forever.
+
+| Key | Default | Description |
+|---|---|---|
+| `enricher.image.repository` | `nr-status/enricher` | enricher image repository. |
+| `enricher.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `enricher.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `enricher.llm.baseUrl` | `""` | **Required.** Base URL of an OpenAI-compatible chat-completions endpoint. Empty aborts the render. |
+| `enricher.llm.model` | `""` | **Required.** Model name that endpoint serves. Empty aborts the render. Also stored as the extraction's `model_version`, so changing it re-extracts every incident on the next sweep. |
+| `enricher.llm.apiKey` | `""` | API key for that endpoint. Rendered into the chart Secret when `existingSecret` is empty. Empty is valid for a local endpoint needing no auth, and is never auto-generated. |
+| `enricher.llm.existingSecret` | `""` | Read the API key from this pre-existing Secret instead. |
+| `enricher.llm.existingSecretApiKeyKey` | `llm-api-key` | Key within `enricher.llm.existingSecret`. |
+| `enricher.sweepIntervalSecs` | `3600` | Cadence of the backstop sweep that re-checks every uncleared incident's text hash and model version. |
+| `enricher.logLevel` | `info` | `RUST_LOG` value. |
+| `enricher.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `enricher.resources` | `{}` | Container resource requests/limits. |
+| `enricher.nodeSelector` | `{}` | Pod node selector. |
+| `enricher.tolerations` | `[]` | Pod tolerations. |
+| `enricher.affinity` | `{}` | Pod affinity rules. |
+| `enricher.podAnnotations` | `{}` | Pod annotations. |
+| `enricher.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
 ### frontend
 
 | Key | Default | Description |
@@ -502,8 +610,11 @@ helm uninstall nr-status -n nr-status
 ## Not in scope
 
 - **No image build or publish pipeline.** See the manual loop above.
-- **No HorizontalPodAutoscaler.** The aggregator and all four pollers are
-  singleton loops that must not be scaled, and the api is database-bound.
+- **No HorizontalPodAutoscaler.** The aggregator, the enricher and all four
+  pollers are singleton loops that must not be scaled, and the api is
+  database-bound.
+- **No persistence, backup or HA for the bundled Redis.** It is a disposable
+  trigger queue; see "Using an external Redis" above.
 - **No backup, restore or replication** for the bundled Postgres. It is a
   single-replica StatefulSet on a PVC. Set `postgresql.enabled: false` and
   use a managed database if you need HA.
