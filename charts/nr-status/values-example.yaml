@@ -36,6 +36,33 @@ aggregator:
     limits:
       memory: 512Mi
 
+# The bundled Redis is deliberately left at its default (`enabled: true`).
+# It is a disposable trigger queue with no persistence, not a system of
+# record -- losing it costs nothing but promptness, since the enricher's
+# hourly sweep re-finds anything a dropped event would have triggered. Set
+# `redis.enabled: false` together with `redis.externalUrl` to point at a
+# managed instance instead.
+
+enricher:
+  image:
+    repository: registry.example.com/nr-status/enricher
+    tag: "0.1.0"
+  llm:
+    # Both of these are REQUIRED -- leaving either empty aborts the render
+    # (see templates/enricher-deployment.yaml). Any OpenAI-compatible
+    # chat-completions endpoint works, including a self-hosted one.
+    baseUrl: https://llm.example.com/v1
+    model: replace-me-model-name
+    # Empty is valid for a local endpoint that requires no auth.
+    apiKey: replace-me-llm-api-key
+  sweepIntervalSecs: 3600
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
 frontend:
   image:
     repository: registry.example.com/nr-status/frontend

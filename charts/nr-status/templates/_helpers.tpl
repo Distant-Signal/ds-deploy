@@ -95,11 +95,27 @@ Per-component object names. Each takes root.
 {{- end }}
 
 {{/*
-In-cluster Redis URL, consumed by both api (publisher) and enricher
-(consumer). Takes root.
+Redis URL, consumed by both api (publisher) and enricher (consumer). Takes
+root.
+
+Mirrors the `postgresql.enabled` / `externalDatabase` contract below: the
+bundled Redis is used when `redis.enabled`, an operator-supplied
+`redis.externalUrl` otherwise, and disabling the bundled Redis without
+supplying one aborts the render rather than silently pointing both
+workloads at a Service that was never created. Unlike DATABASE_URL there is
+no existingSecret form -- a Redis URL for a disposable trigger queue carries
+no credential the chart needs to keep out of the Deployment spec; an
+operator who does need one can point `redis.externalUrl` at a URL with
+inline auth, accepting that it is visible in the rendered Deployment.
 */}}
 {{- define "nr-status.redisUrl" -}}
+{{- if .Values.redis.enabled -}}
 {{- printf "redis://%s:%d" (include "nr-status.redisFullname" .) (int .Values.redis.service.port) }}
+{{- else if .Values.redis.externalUrl -}}
+{{- .Values.redis.externalUrl }}
+{{- else -}}
+{{- fail "redis.enabled is false but no external Redis is configured. Set redis.externalUrl (e.g. redis://redis.example.com:6379), or re-enable the bundled Redis with redis.enabled=true." -}}
+{{- end -}}
 {{- end }}
 
 {{/*

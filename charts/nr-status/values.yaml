@@ -326,6 +326,13 @@ aggregator:
 # ---------------------------------------------------------------------------
 redis:
   enabled: true
+  # -- Connection URL of an externally-managed Redis. Used ONLY when
+  # `redis.enabled` is false, in which case it is required: setting
+  # `redis.enabled: false` with this left empty aborts the render rather
+  # than pointing api and enricher at an in-chart Service that was never
+  # created. Same contract as `postgresql.enabled: false` +
+  # `externalDatabase.*`.
+  externalUrl: ""
   image:
     repository: redis
     tag: "7"
