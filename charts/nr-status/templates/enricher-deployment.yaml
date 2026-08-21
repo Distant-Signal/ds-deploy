@@ -62,8 +62,14 @@ spec:
                 secretKeyRef:
                   name: {{ default (include "nr-status.secretName" .) .Values.enricher.llm.existingSecret }}
                   key: {{ .Values.enricher.llm.existingSecretApiKeyKey }}
+            - name: LLM_REQUEST_TIMEOUT_SECS
+              value: {{ .Values.enricher.llmRequestTimeoutSecs | quote }}
             - name: SWEEP_INTERVAL_SECS
               value: {{ .Values.enricher.sweepIntervalSecs | quote }}
+            - name: RECLAIM_INTERVAL_SECS
+              value: {{ .Values.enricher.reclaimIntervalSecs | quote }}
+            - name: RECLAIM_MIN_IDLE_SECS
+              value: {{ .Values.enricher.reclaimMinIdleSecs | quote }}
             - name: RUST_LOG
               value: {{ .Values.enricher.logLevel | quote }}
             {{- with .Values.enricher.extraEnv }}

@@ -483,7 +483,10 @@ pod that fails every request forever.
 | `enricher.llm.apiKey` | `""` | API key for that endpoint. Rendered into the chart Secret when `existingSecret` is empty. Empty is valid for a local endpoint needing no auth, and is never auto-generated. |
 | `enricher.llm.existingSecret` | `""` | Read the API key from this pre-existing Secret instead. |
 | `enricher.llm.existingSecretApiKeyKey` | `llm-api-key` | Key within `enricher.llm.existingSecret`. |
+| `enricher.llmRequestTimeoutSecs` | `120` | Per-request timeout for a single LLM call. One incident makes three sequential calls, so raise `reclaimMinIdleSecs` to match if you raise this. |
 | `enricher.sweepIntervalSecs` | `3600` | Cadence of the backstop sweep that re-checks every uncleared incident's text hash and model version. |
+| `enricher.reclaimIntervalSecs` | `60` | How often the reclaim loop checks for stream entries stuck unacked past `reclaimMinIdleSecs` (a timed-out request, or a crash between processing and acking). |
+| `enricher.reclaimMinIdleSecs` | `600` | How long a pending entry must sit unacked before it's eligible for reclaim. Must stay comfortably above `3 * llmRequestTimeoutSecs`. |
 | `enricher.logLevel` | `info` | `RUST_LOG` value. |
 | `enricher.extraEnv` | `[]` | Extra env vars appended to the container. |
 | `enricher.resources` | `{}` | Container resource requests/limits. |
