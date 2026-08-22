@@ -2,8 +2,8 @@ apiVersion: v2
 name: nr-status
 description: >-
   National Rail status stack: PostgreSQL, the api, the aggregator, the
-  frontend and four optional Rail Data Marketplace pollers, mirroring the
-  topology of the repository's docker-compose.yml.
+  frontend and five optional pollers (four Rail Data Marketplace, plus TfL),
+  mirroring the topology of the repository's docker-compose.yml.
 type: application
 
 # Chart version: bumped for chart-only changes.

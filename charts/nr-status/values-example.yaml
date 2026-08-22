@@ -133,6 +133,16 @@ pollers:
     apiKey: replace-me-rdm-ldbws-key
     numRows: 10
     pollIntervalSecs: 60
+  tfl:
+    enabled: true
+    image:
+      repository: registry.example.com/nr-status/poller-tfl
+      tag: "0.1.0"
+    # No `baseUrl` override here, unlike the RDM pollers above: TfL's
+    # Unified API is a real, public, documented endpoint, so
+    # `values.yaml`'s default (`https://api.tfl.gov.uk`) is already correct.
+    apiKey: replace-me-tfl-app-key
+    pollIntervalSecs: 300
 
 ingress:
   enabled: true

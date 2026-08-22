@@ -73,7 +73,7 @@ helm install nr-status ./charts/nr-status -n nr-status --create-namespace \
 ```
 
 An install brings up **postgres + redis + api + aggregator + enricher +
-frontend**, with **all four pollers off**. See "Enabling the pollers" below
+frontend**, with **all five pollers off**. See "Enabling the pollers" below
 for why.
 
 `enricher.llm.baseUrl` and `enricher.llm.model` are the chart's only two
@@ -102,6 +102,16 @@ helm upgrade nr-status ./charts/nr-status -n nr-status
 ```
 
 Read the next section before upgrading if you rely on generated secrets.
+
+`api` and `aggregator` roll concurrently with no ordering guarantee between
+them. When a release adds a database migration that `aggregator` depends on
+(as `20260822120000_line_status_source.sql` did, for the `line_status.source`
+column `aggregator`'s TfL write path requires), a new `aggregator` pod can
+start before `api` has finished running its in-process migrations, and will
+log write errors until `api` becomes ready and applies them. This is
+self-healing — `aggregator` retries on its normal poll cycle, so no data is
+lost — but expect a brief window of `aggregator` error logs during such an
+upgrade; it is not a sign of a failed rollout.
 
 ## Generated secrets and the `lookup` limitation
 

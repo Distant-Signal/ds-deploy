@@ -1,5 +1,5 @@
 {{/*
-One template, four Deployments. Everything that differs between the pollers
+One template, five Deployments. Everything that differs between the pollers
 lives in the `.Values.pollers` map (baseUrlEnvVar, ingestPath, cadence, and
 ldbws's two extra vars), so this file never branches on a poller's name.
 
