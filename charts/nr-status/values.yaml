@@ -190,6 +190,40 @@ pollers:
     affinity: {}
     podAnnotations: {}
     podSecurityContext: {}
+  tfl:
+    enabled: false
+    image:
+      repository: nr-status/poller-tfl
+      tag: ""
+      pullPolicy: IfNotPresent
+    # -- TfL Unified API root. Unlike the RDM feeds this is a real, public,
+    # documented endpoint, so it has a working default rather than "".
+    baseUrl: "https://api.tfl.gov.uk"
+    baseUrlEnvVar: TFL_BASE_URL
+    # -- tfl only. TfL sends its subscription key in its own header, so the
+    # binary reads TFL_APP_KEY where the RDM pollers read RDM_API_KEY.
+    apiKeyEnvVar: TFL_APP_KEY
+    ingestPath: /private/tfl-line-status
+    # -- TfL publishes no recommended cadence for the line-status endpoint,
+    # and offers no push or conditional requests. 300s mirrors incidents.
+    pollIntervalSecs: 300
+    # -- TfL subscription key from api-portal.tfl.gov.uk. Rendered into the
+    # chart Secret as `rdm-tfl-api-key` when `existingSecret` is empty — the
+    # `rdm-` prefix is the chart's uniform per-poller key naming
+    # (nr-status.pollerSecretKey), not a claim that this is an RDM key.
+    apiKey: ""
+    existingSecret: ""
+    existingSecretApiKeyKey: rdm-tfl-api-key
+    logLevel: info
+    extraEnv:
+      - name: TFL_MODES
+        value: "tube,dlr,overground,elizabeth-line,tram"
+    resources: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    podSecurityContext: {}
   tocs:
     enabled: false
     image:

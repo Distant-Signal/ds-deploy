@@ -4,7 +4,7 @@ lives in the `.Values.pollers` map (baseUrlEnvVar, ingestPath, cadence, and
 ldbws's two extra vars), so this file never branches on a poller's name.
 
 Go templates iterate maps in sorted key order, so the rendered document
-order is stable: incidents, ldbws, stations, tocs.
+order is stable: incidents, ldbws, stations, tfl, tocs.
 */}}
 {{- $root := . -}}
 {{- range $name, $poller := .Values.pollers }}
@@ -56,7 +56,12 @@ spec:
           env:
             - name: {{ $poller.baseUrlEnvVar }}
               value: {{ $poller.baseUrl | quote }}
-            - name: RDM_API_KEY
+            # RDM_API_KEY for the four Rail Data Marketplace pollers; tfl
+            # reads TFL_APP_KEY instead, because TfL's key goes in its own
+            # `Ocp-Apim-Subscription-Key` header rather than RDM's
+            # `x-apikey`. Defaulted so the four existing entries in
+            # .Values.pollers need no change.
+            - name: {{ $poller.apiKeyEnvVar | default "RDM_API_KEY" }}
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nr-status.pollerSecretName" (dict "root" $root "poller" $poller) }}
