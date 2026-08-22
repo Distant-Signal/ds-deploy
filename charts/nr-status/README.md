@@ -3,8 +3,9 @@
 Deploys the whole National Rail status stack into a single namespace: a
 bundled single-replica **PostgreSQL** StatefulSet, a bundled single-replica
 **Redis** (a disposable trigger queue, no persistence), the **api**, the
-**aggregator**, the **enricher**, the **frontend**, and four optional Rail
-Data Marketplace **pollers** (incidents, stations, tocs, ldbws). The chart has no subchart
+**aggregator**, the **enricher**, the **frontend**, and five optional
+**pollers** — four Rail Data Marketplace pollers (incidents, stations, tocs, ldbws)
+plus a TfL Unified API poller (tfl). The chart has no subchart
 dependencies and no `dependencies:` block, so `helm dependency update` is
 never needed and it installs in an air-gapped cluster given the images. It
 mirrors the topology, environment contract and cadences that the
