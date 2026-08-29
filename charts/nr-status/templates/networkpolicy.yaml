@@ -85,7 +85,22 @@ spec:
       {{- include "nr-status.selectorLabels" (dict "root" . "component" "enricher") | nindent 6 }}
   policyTypes:
     - Ingress
-  # Default-deny: like the aggregator, the enricher exposes no listener.
+  {{- if .Values.metrics.enabled }}
+  ingress:
+    # The enricher's own /metrics listener (Task 9 of the metrics plan) --
+    # scoped to whatever namespace runs Prometheus (or another scraper),
+    # not opened to the whole cluster.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+  {{- else }}
+  # Default-deny: like the aggregator, the enricher exposes no listener
+  # when metrics.enabled is false.
+  {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -123,6 +138,15 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace | quote }}
+      {{- end }}
+      {{- if .Values.metrics.enabled }}
+        # api serves /metrics on this same port (it reuses its existing
+        # listener rather than a separate metrics.port), so the monitoring
+        # namespace just needs to be added as an allowed source -- the
+        # ports entry below already covers it.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
       {{- end }}
       ports:
         - protocol: TCP
@@ -166,7 +190,22 @@ spec:
       {{- include "nr-status.selectorLabels" (dict "root" . "component" "aggregator") | nindent 6 }}
   policyTypes:
     - Ingress
-  # Default-deny: the aggregator exposes no listener at all.
+  {{- if .Values.metrics.enabled }}
+  ingress:
+    # The aggregator's own /metrics listener (Task 3 of the metrics plan) --
+    # scoped to whatever namespace runs Prometheus (or another scraper),
+    # not opened to the whole cluster.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+  {{- else }}
+  # Default-deny: the aggregator exposes no listener at all when
+  # metrics.enabled is false.
+  {{- end }}
 {{- range $name, $poller := .Values.pollers }}
 {{- if $poller.enabled }}
 ---
@@ -182,7 +221,22 @@ spec:
       {{- include "nr-status.selectorLabels" (dict "root" $root "component" (printf "poller-%s" $name)) | nindent 6 }}
   policyTypes:
     - Ingress
-  # Default-deny: pollers expose no listener.
+  {{- if $root.Values.metrics.enabled }}
+  ingress:
+    # This poller's own /metrics listener (Tasks 4-8 of the metrics plan)
+    # -- scoped to whatever namespace runs Prometheus (or another
+    # scraper), not opened to the whole cluster. Same port for every
+    # poller -- there's no per-poller port to disambiguate.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $root.Values.networkPolicy.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ $root.Values.metrics.port }}
+  {{- else }}
+  # Default-deny: pollers expose no listener when metrics.enabled is false.
+  {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

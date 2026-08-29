@@ -33,9 +33,16 @@ spec:
     metadata:
       labels:
         {{- include "nr-status.labels" (dict "root" $root "component" $component) | nindent 8 }}
-      {{- with $poller.podAnnotations }}
+      {{- if or $root.Values.metrics.enabled $poller.podAnnotations }}
       annotations:
+        {{- if $root.Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $root.Values.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with $poller.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "nr-status.serviceAccountName" $root }}
@@ -52,10 +59,31 @@ spec:
           imagePullPolicy: {{ $poller.image.pullPolicy }}
           securityContext:
             {{- include "nr-status.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          # No probes: none of the pollers expose an HTTP surface.
+          # No probes: none of the pollers expose an HTTP surface for
+          # health checks. Each DOES now optionally expose a /metrics
+          # listener when metrics.enabled -- a scrape target, not a
+          # liveness/readiness signal.
+          {{- if $root.Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ $root.Values.metrics.port }}
+              protocol: TCP
+          {{- end }}
           env:
             - name: {{ $poller.baseUrlEnvVar }}
               value: {{ $poller.baseUrl | quote }}
+            # Always rendered, unlike the port env var below: this is
+            # the Rust-side toggle that actually stops the binary from
+            # starting its /metrics listener (`metrics_enabled` in
+            # crates/poller-*/src/config.rs). Omitting the port/env/annotations
+            # alone would not -- Kubernetes container ports are purely
+            # declarative -- so this must render "false" too, not vanish.
+            - name: METRICS_ENABLED
+              value: {{ $root.Values.metrics.enabled | quote }}
+            {{- if $root.Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ $root.Values.metrics.port | quote }}
+            {{- end }}
             # RDM_API_KEY for the four Rail Data Marketplace pollers; tfl
             # reads TFL_APP_KEY instead, because TfL's key goes in its own
             # `Ocp-Apim-Subscription-Key` header rather than RDM's

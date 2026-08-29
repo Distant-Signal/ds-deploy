@@ -335,6 +335,13 @@ annotation but is issuer-agnostic.
 > is no other authentication in front of them. If you do not need external
 > API access, leave `ingress.api.enabled: false`; the frontend reaches the
 > api over the in-cluster Service either way.
+>
+> It publishes the api's `/metrics` endpoint the same way when
+> `metrics.enabled` is true (the default), because api serves `/metrics` on
+> its own HTTP port rather than on a separate `metrics.port` — unlike the
+> other seven binaries, whose metrics ports are never behind an Ingress.
+> That endpoint is read-only request-count/latency telemetry with no
+> secrets in it, and `metrics.enabled: false` removes the route entirely.
 
 Enabling either host without setting its hostname aborts the render.
 
@@ -357,8 +364,13 @@ explicit allows:
   `networkPolicy.ingressControllerNamespace`.
 - **frontend** ← that same ingress-controller namespace, when
   `ingress.enabled` and `ingress.frontend.enabled`.
-- **aggregator**, **enricher** and every poller: default-deny; they expose no
-  listener.
+- **aggregator**, **enricher** and every poller: default-deny apart from
+  `metrics.port` from the namespace named by
+  `networkPolicy.monitoringNamespace`, and only when `metrics.enabled` is
+  true. With `metrics.enabled: false` they are pure default-deny — those
+  three expose no other listener. The api policy gains that same
+  monitoring-namespace allow, needing no extra port since api serves
+  `/metrics` on its existing one.
 
 **Egress is deliberately unrestricted.** The pollers must reach arbitrary
 external Rail Data Marketplace hosts, and constraining that would mean
@@ -638,12 +650,33 @@ Keys below exist under each of `pollers.incidents`, `pollers.stations`,
 | `ingress.api.host` | `""` | Hostname for the api. Required when enabled. |
 | `ingress.tls` | `[]` | TLS blocks passed through verbatim. |
 
+### metrics
+
+On by default: the exporters are in-process and add no runtime dependency
+once the images are built. `metrics.enabled: false` is a real off switch,
+not merely an un-scraped one — it renders `METRICS_ENABLED=false` into every
+workload, and each binary then never starts its `/metrics` listener at all
+(api keeps its own HTTP listener, but drops the `/metrics` route and its
+request-metrics middleware). Note that api serves `/metrics` on
+`api.service.port`, not on `metrics.port`, because it already has a
+listener; only the aggregator, the enricher and the pollers use
+`metrics.port`.
+
+| Key | Default | Description |
+|---|---|---|
+| `metrics.enabled` | `true` | Expose Prometheus `/metrics` on every workload, and render the metrics port, env, `prometheus.io/*` scrape annotations and NetworkPolicy allows. |
+| `metrics.port` | `9091` | Port the aggregator, enricher and each poller serve `/metrics` on. Not used by api, which serves it on `api.service.port`. |
+| `metrics.podMonitor.enabled` | `false` | Render a Prometheus Operator `PodMonitor`. Off by default — the CRD is absent on clusters without the operator, and installing it would fail the release outright. |
+| `metrics.podMonitor.interval` | `30s` | Scrape interval on the `PodMonitor`. |
+| `metrics.podMonitor.scrapeTimeout` | `10s` | Scrape timeout on the `PodMonitor`. Must stay below `interval`. |
+
 ### networkPolicy
 
 | Key | Default | Description |
 |---|---|---|
 | `networkPolicy.enabled` | `false` | Render default-deny NetworkPolicies with explicit allows. |
 | `networkPolicy.ingressControllerNamespace` | `ingress-nginx` | Namespace the ingress controller runs in, matched by `kubernetes.io/metadata.name`. |
+| `networkPolicy.monitoringNamespace` | `monitoring` | Namespace Prometheus runs in, matched by `kubernetes.io/metadata.name`. Allowed to reach each workload's metrics port. Only used when `metrics.enabled` is true. |
 
 ### tests
 
@@ -692,5 +725,10 @@ helm uninstall nr-status -n nr-status
 - **No backup, restore or replication** for the bundled Postgres. It is a
   single-replica StatefulSet on a PVC. Set `postgresql.enabled: false` and
   use a managed database if you need HA.
-- **No metrics or ServiceMonitor wiring** — the services expose no metrics
-  endpoint today.
+- **No ServiceMonitor, no bundled Prometheus and no dashboards.** Every
+  service does expose a Prometheus `/metrics` endpoint (see the `metrics`
+  values below), and the chart can render a `PodMonitor` for Prometheus
+  Operator, but it never installs Prometheus itself, ships no Grafana
+  dashboards and no alerting rules, and offers no `ServiceMonitor`
+  alternative — `PodMonitor` alone, because the pollers, the aggregator and
+  the enricher have no Service in front of them at all.

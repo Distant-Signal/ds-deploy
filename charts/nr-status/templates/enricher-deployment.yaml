@@ -29,9 +29,16 @@ spec:
     metadata:
       labels:
         {{- include "nr-status.labels" (dict "root" . "component" "enricher") | nindent 8 }}
-      {{- with .Values.enricher.podAnnotations }}
+      {{- if or .Values.metrics.enabled .Values.enricher.podAnnotations }}
       annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.enricher.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "nr-status.serviceAccountName" . }}
@@ -48,9 +55,31 @@ spec:
           imagePullPolicy: {{ .Values.enricher.image.pullPolicy }}
           securityContext:
             {{- include "nr-status.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          # No probes: like aggregator, this binary exposes no HTTP surface.
+          # No probes: like aggregator, this binary exposes no HTTP surface
+          # for health checks. It DOES now optionally expose a /metrics
+          # listener (see docs/superpowers/specs/2026-08-29-metrics-design.md)
+          # -- that's a scrape target, not a liveness/readiness signal, so no
+          # probe is added here even with metrics.enabled=true.
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          {{- end }}
           env:
             {{- include "nr-status.databaseEnv" . | nindent 12 }}
+            # Always rendered, unlike the port env var below: this is
+            # the Rust-side toggle that actually stops the binary from
+            # starting its /metrics listener (`metrics_enabled` in
+            # crates/enricher/src/config.rs). Omitting the port/env/annotations
+            # alone would not -- Kubernetes container ports are purely
+            # declarative -- so this must render "false" too, not vanish.
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            {{- end }}
             - name: REDIS_URL
               value: {{ include "nr-status.redisUrl" . | quote }}
             - name: LLM_BASE_URL

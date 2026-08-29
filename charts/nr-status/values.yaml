@@ -563,6 +563,35 @@ ingress:
   #     - api.example.com
 
 # ---------------------------------------------------------------------------
+# Metrics (Prometheus)
+# ---------------------------------------------------------------------------
+metrics:
+  # Cheap, in-process, no new runtime dependency once the images are built
+  # -- unlike podMonitor.enabled below, safe to default on. Renders the
+  # metrics containerPort/env on aggregator, enricher and every enabled
+  # poller, plus the prometheus.io/scrape pod annotations (the CRD-free
+  # fallback) on every workload including api. Setting this false leaves
+  # every service working exactly as it does today with metrics wiring
+  # absent entirely, not merely un-scraped.
+  enabled: true
+  # aggregator, enricher and the five pollers each listen on this port for
+  # their own embedded Prometheus exporter (crates/common::metrics::install,
+  # see docs/superpowers/specs/2026-08-29-metrics-design.md). api does NOT
+  # use this value -- it serves /metrics on its own api.service.port
+  # instead, since it already has a listener. Distinct from
+  # api.service.port (8080), frontend.service.port (3000),
+  # postgresql.service.port (5432), and redis.service.port (6379).
+  port: 9091
+  podMonitor:
+    # Prometheus Operator's PodMonitor CRD -- off by default, mirroring
+    # networkPolicy.enabled's identical reasoning: many clusters don't have
+    # Prometheus Operator installed, and rendering a CRD that doesn't exist
+    # would fail `helm install` outright rather than degrade gracefully.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+
+# ---------------------------------------------------------------------------
 # NetworkPolicy (optional)
 # ---------------------------------------------------------------------------
 # Off by default: many clusters run a CNI that does not enforce
@@ -578,6 +607,10 @@ networkPolicy:
   # `kubernetes.io/metadata.name` namespace label. Only used when
   # ingress.enabled is true.
   ingressControllerNamespace: ingress-nginx
+  # Namespace Prometheus (or whatever scrapes metrics.port) runs in. Only
+  # consulted when both networkPolicy.enabled and metrics.enabled are true.
+  # Same pattern as the existing ingressControllerNamespace value.
+  monitoringNamespace: monitoring
 
 # ---------------------------------------------------------------------------
 # helm test

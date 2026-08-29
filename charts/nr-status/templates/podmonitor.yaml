@@ -1,0 +1,56 @@
+{{/*
+Prometheus Operator's PodMonitor CRD -- gated separately from
+metrics.enabled because rendering a CRD-backed resource against a cluster
+that doesn't have the CRD installed fails `helm install` outright, whereas
+metrics.enabled=true with podMonitor.enabled=false still leaves every
+prometheus.io/* annotation in place as a CRD-free fallback (see
+docs/superpowers/specs/2026-08-29-metrics-design.md).
+
+frontend is deliberately absent from the selector below -- out of scope for
+this design (it's a Next.js service with its own, un-designed metrics
+story, see the spec's Architecture table).
+
+Two podMetricsEndpoints, not one, because api serves /metrics on a port
+literally named "http" (it reuses its existing listener -- see
+crates/api/src/main.rs, Task 2 of the metrics plan), while every other
+selected workload serves it on a new port named "metrics" (Steps 2-4
+above). A pod without a port of a given name is simply not matched by that
+podMetricsEndpoint entry -- this is not two separate PodMonitors because
+Prometheus Operator supports multiple endpoints per PodMonitor sharing one
+selector.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "nr-status.fullname" . }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "metrics") | nindent 4 }}
+spec:
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/instance
+        operator: In
+        values:
+          - {{ .Release.Name }}
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - api
+          - aggregator
+          - enricher
+          {{- range $name, $poller := .Values.pollers }}
+          {{- if $poller.enabled }}
+          - poller-{{ $name }}
+          {{- end }}
+          {{- end }}
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout }}
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout }}
+{{- end }}

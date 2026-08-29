@@ -41,9 +41,16 @@ spec:
     metadata:
       labels:
         {{- include "nr-status.labels" (dict "root" . "component" "api") | nindent 8 }}
-      {{- with .Values.api.podAnnotations }}
+      {{- if or .Values.metrics.enabled .Values.api.podAnnotations }}
       annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.api.service.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.api.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "nr-status.serviceAccountName" . }}
@@ -77,6 +84,13 @@ spec:
                   key: {{ include "nr-status.internalTokenSecretKey" . }}
             - name: REDIS_URL
               value: {{ include "nr-status.redisUrl" . | quote }}
+            # Always rendered, so it reflects the real value either way.
+            # api has no metrics port of its own -- /metrics shares the http
+            # port above -- so this alone decides whether that route and its
+            # request-metrics middleware are registered
+            # (`metrics_enabled` in crates/api/src/data/config.rs).
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
             - name: RUST_LOG
               value: {{ .Values.api.logLevel | quote }}
             # OIDC SSO (crates/api/src/data/config.rs: ServiceArguments).
