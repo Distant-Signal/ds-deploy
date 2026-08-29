@@ -53,6 +53,20 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.devAuthentikSecretName" . }}
                   key: {{ include "distant-signal.devAuthentikPostgresSecretKey" . }}
+            # Telemetry -- same two vars and same rationale as
+            # devauthentik-server-deployment.yaml's identical block and
+            # docker-compose.authentik.yml's &authentik-env anchor, confirmed
+            # against https://docs.goauthentik.io/install-config/configuration/
+            # for 2026.8.0: AUTHENTIK_ERROR_REPORTING__ENABLED already
+            # defaults to "false" (pinned explicitly in case a future
+            # authentik version changes that default) but
+            # AUTHENTIK_DISABLE_UPDATE_CHECK defaults to "false" too, i.e.
+            # the inbuilt update-checker is ON and phones home unless told
+            # otherwise.
+            - name: AUTHENTIK_ERROR_REPORTING__ENABLED
+              value: "false"
+            - name: AUTHENTIK_DISABLE_UPDATE_CHECK
+              value: "true"
           volumeMounts:
             - name: blueprints
               mountPath: /blueprints/local
