@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "distant-signal.frontendFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "frontend") | nindent 4 }}
+spec:
+  type: {{ .Values.frontend.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.frontend.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "distant-signal.selectorLabels" (dict "root" . "component" "frontend") | nindent 4 }}

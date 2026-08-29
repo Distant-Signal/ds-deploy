@@ -1,0 +1,242 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $root := . -}}
+{{/*
+Reusable pieces. Each policy below is default-deny for ingress (an empty or
+absent `ingress:` list denies everything) plus the specific allows the
+service actually needs.
+*/}}
+{{- if .Values.postgresql.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "distant-signal.postgresFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the api, the aggregator and the enricher talk to Postgres. The
+    # pollers never do -- they reach the database only indirectly, by POSTing
+    # to the api's /private/* ingest endpoints.
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  - {{ .Release.Name }}
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - api
+                  - aggregator
+                  - enricher
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.service.port }}
+---
+{{- end }}
+{{- if .Values.redis.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "distant-signal.redisFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "redis") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "redis") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # api publishes incident-text-changed events, enricher consumes them.
+    # Nothing else touches the queue.
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  - {{ .Release.Name }}
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - api
+                  - enricher
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.service.port }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-enricher" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "enricher") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "enricher") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- if .Values.metrics.enabled }}
+  ingress:
+    # The enricher's own /metrics listener (Task 9 of the metrics plan) --
+    # scoped to whatever namespace runs Prometheus (or another scraper),
+    # not opened to the whole cluster.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+  {{- else }}
+  # Default-deny: like the aggregator, the enricher exposes no listener
+  # when metrics.enabled is false.
+  {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "distant-signal.apiFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  - {{ .Release.Name }}
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - frontend
+                  {{- range $name, $poller := .Values.pollers }}
+                  {{- if $poller.enabled }}
+                  - poller-{{ $name }}
+                  {{- end }}
+                  {{- end }}
+      {{- if and .Values.ingress.enabled .Values.ingress.api.enabled }}
+        # The api is published externally, so the ingress controller must
+        # reach it too. SECURITY: this also exposes /private/*, guarded only
+        # by the X-Internal-Token shared secret.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace | quote }}
+      {{- end }}
+      {{- if .Values.metrics.enabled }}
+        # api serves /metrics on this same port (it reuses its existing
+        # listener rather than a separate metrics.port), so the monitoring
+        # namespace just needs to be added as an allowed source -- the
+        # ports entry below already covers it.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "distant-signal.frontendFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "frontend") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "frontend") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- if and .Values.ingress.enabled .Values.ingress.frontend.enabled }}
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.frontend.service.port }}
+  {{- else }}
+  # No Ingress in front of the frontend, so nothing outside the pod needs to
+  # reach it. Omitting `ingress` entirely is a default-deny.
+  {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-aggregator" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "aggregator") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "aggregator") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- if .Values.metrics.enabled }}
+  ingress:
+    # The aggregator's own /metrics listener (Task 3 of the metrics plan) --
+    # scoped to whatever namespace runs Prometheus (or another scraper),
+    # not opened to the whole cluster.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+  {{- else }}
+  # Default-deny: the aggregator exposes no listener at all when
+  # metrics.enabled is false.
+  {{- end }}
+{{- range $name, $poller := .Values.pollers }}
+{{- if $poller.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-poller-%s" (include "distant-signal.fullname" $root) $name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" $root "component" (printf "poller-%s" $name)) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" $root "component" (printf "poller-%s" $name)) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- if $root.Values.metrics.enabled }}
+  ingress:
+    # This poller's own /metrics listener (Tasks 4-8 of the metrics plan)
+    # -- scoped to whatever namespace runs Prometheus (or another
+    # scraper), not opened to the whole cluster. Same port for every
+    # poller -- there's no per-poller port to disambiguate.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $root.Values.networkPolicy.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ $root.Values.metrics.port }}
+  {{- else }}
+  # Default-deny: pollers expose no listener when metrics.enabled is false.
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,142 @@
+{{- if .Values.postgresql.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "distant-signal.postgresFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  # Fixed at 1 -- see the comment above `postgresql:` in values.yaml.
+  replicas: 1
+  serviceName: {{ include "distant-signal.postgresFullname" . }}
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "postgres") | nindent 8 }}
+      {{- with .Values.postgresql.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # NOTE: postgres:16 is the one image in this chart whose default USER
+      # is root -- its entrypoint drops to `postgres` via gosu. A bare
+      # `runAsNonRoot: true` would therefore fail admission, so the uid/gid
+      # are pinned explicitly below (the image runs correctly when it is
+      # already uid 999 and skips its own gosu step). fsGroup: 999 is what
+      # lets the postgres user write a freshly-provisioned PVC.
+      #
+      # This is the one workload that does not use the chart-wide
+      # distant-signal.podSecurityContext helper, because those two extra pins are
+      # mandatory here. `postgresql.podSecurityContext` still overrides.
+      securityContext:
+        {{- $pgSecurityDefaults := dict "runAsNonRoot" true "runAsUser" 999 "runAsGroup" 999 "fsGroup" 999 "seccompProfile" (dict "type" "RuntimeDefault") }}
+        {{- toYaml (mergeOverwrite $pgSecurityDefaults (default (dict) .Values.postgresql.podSecurityContext | deepCopy)) | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.postgresql.image) | quote }}
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # NOT read-only: postgres writes its socket to /var/run/postgresql.
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.postgresql.service.port }}
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.postgresql.auth.username | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.auth.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.postgresSecretName" . }}
+                  key: {{ include "distant-signal.postgresSecretPasswordKey" . }}
+            # PGDATA must be a SUBDIRECTORY of the mount, not the mount
+            # itself: many CSI drivers put a `lost+found` entry in a fresh
+            # volume, and initdb refuses to initialise a non-empty directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            {{- with .Values.postgresql.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Same probe command docker-compose.yml uses for its healthcheck.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          {{- with .Values.postgresql.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.postgresql.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgresql.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgresql.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or (not .Values.postgresql.persistence.enabled) .Values.postgresql.persistence.existingClaim }}
+      volumes:
+        - name: data
+          {{- if .Values.postgresql.persistence.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.postgresql.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- end }}
+  {{- if and .Values.postgresql.persistence.enabled (not .Values.postgresql.persistence.existingClaim) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "distant-signal.labels" (dict "root" . "component" "postgres") | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.postgresql.persistence.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.persistence.size | quote }}
+        {{- if .Values.postgresql.persistence.storageClass }}
+        storageClassName: {{ .Values.postgresql.persistence.storageClass | quote }}
+        {{- end }}
+  {{- end }}
+{{- end }}

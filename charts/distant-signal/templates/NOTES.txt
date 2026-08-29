@@ -1,0 +1,116 @@
+distant-signal {{ .Chart.AppVersion }} has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Watch it come up:
+
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -w
+
+The api runs its database migrations in-process before it binds, so the api
+pod can legitimately take up to {{ mul .Values.api.probes.startup.periodSeconds .Values.api.probes.startup.failureThreshold }}s to become ready on a first install.
+
+Reach the web UI:
+{{- if and .Values.ingress.enabled .Values.ingress.frontend.enabled .Values.ingress.frontend.host }}
+
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.frontend.host }}/
+{{- else }}
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "distant-signal.frontendFullname" . }} {{ .Values.frontend.service.port }}:{{ .Values.frontend.service.port }}
+  # then open http://localhost:{{ .Values.frontend.service.port }}/
+{{- end }}
+
+Reach the api:
+{{- if and .Values.ingress.enabled .Values.ingress.api.enabled .Values.ingress.api.host }}
+
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.api.host }}{{ .Values.api.probes.path }}
+
+  ############################################################################
+  # SECURITY WARNING
+  #
+  # ingress.api.host is enabled, so /private/* is reachable from outside the
+  # cluster as well. Those ingestion endpoints are protected ONLY by the
+  # X-Internal-Token shared secret (crates/api/src/auth.rs) -- there is no
+  # other authentication in front of them. If you do not need external API
+  # access, set ingress.api.enabled=false; the frontend reaches the api over
+  # the in-cluster Service either way.
+  ############################################################################
+{{- else }}
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "distant-signal.apiFullname" . }} {{ .Values.api.service.port }}:{{ .Values.api.service.port }}
+  # then: curl http://localhost:{{ .Values.api.service.port }}{{ .Values.api.probes.path }}
+{{- end }}
+
+{{- if not .Values.secrets.existingSecret }}
+
+Read the internal token (generated on first install, preserved on upgrade):
+
+  kubectl get secret -n {{ .Release.Namespace }} {{ include "distant-signal.secretName" . }} -o jsonpath='{.data.internal-token}' | base64 -d; echo
+{{- end }}
+
+{{- if .Values.devAuthentik.enabled }}
+
+############################################################################
+# Local dev identity provider (devAuthentik) is ENABLED.
+############################################################################
+
+This is a throwaway, unhardened local Authentik instance for exercising
+this app's own login flow -- see charts/distant-signal/README.md's "Local dev
+identity provider" section and
+docs/superpowers/specs/2026-08-29-dev-oidc-server-design.md for the full
+design and its OPEN RISKS, not fully verified against a real cluster as of
+this writing:
+
+1. Your local cluster tool must forward NodePort
+   {{ .Values.devAuthentik.service.nodePort }} to your machine's loopback
+   interface, AT THE SAME PORT NUMBER, or your browser cannot reach
+   Authentik at all. This is outside this chart's control -- see the
+   worked examples in charts/distant-signal/README.md (kind's
+   extraPortMappings, `minikube tunnel`, k3d's `--port`).
+
+2. If this is your FIRST `helm install` with devAuthentik.enabled=true, and
+   you did not set devAuthentik.hostAliasIP explicitly, the api
+   Deployment's hostAliases entry could not be written yet --
+   devauthentik-service did not exist when api was rendered in this same
+   release. Run:
+
+     helm upgrade {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} --reuse-values
+
+   once, immediately, so api picks up the now-existing Service's
+   ClusterIP. This is a known, documented gap, not a bug you're hitting by
+   accident.
+
+Once both of the above are done, reach Authentik itself at:
+
+  http://{{ .Values.devAuthentik.hostname }}:{{ .Values.devAuthentik.service.nodePort }}/
+
+There is NO default admin account (deliberately -- see the design doc's
+Bootstrap section). Sign in through THIS APP's own login flow --
+devAuthentik provisions open, self-service signup. To get into Authentik's
+OWN admin UI instead, use its interactive first-run flow:
+
+  http://{{ .Values.devAuthentik.hostname }}:{{ .Values.devAuthentik.service.nodePort }}/if/flow/initial-setup/
+
+api.sso.redirectUrl/postLoginRedirectUrl were computed assuming the
+frontend is reachable at exactly http://localhost:3000, e.g.:
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "distant-signal.frontendFullname" . }} 3000:{{ .Values.frontend.service.port }}
+{{- end }}
+
+{{- $anyPoller := false }}
+{{- range $name, $poller := .Values.pollers }}{{- if $poller.enabled }}{{- $anyPoller = true }}{{- end }}{{- end }}
+{{- if not $anyPoller }}
+
+No RDM pollers are enabled, so no external feed data is being ingested. This
+is the default: as documented in .env.example, no confirmed Rail Data
+Marketplace endpoint exists for any of the four feeds yet. Once you have real
+account data, enable a poller with, for example:
+
+  --set pollers.incidents.enabled=true \
+  --set pollers.incidents.baseUrl=https://<your-rdm-host>/... \
+  --set pollers.incidents.apiKey=<your-key>
+{{- end }}
+
+{{- if .Values.tests.enabled }}
+
+Verify the api is serving:
+
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+{{- end }}

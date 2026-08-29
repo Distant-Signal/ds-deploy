@@ -1,0 +1,26 @@
+apiVersion: v2
+name: distant-signal
+description: >-
+  National Rail status stack: PostgreSQL, the api, the aggregator, the
+  frontend and five optional pollers (four Rail Data Marketplace, plus TfL),
+  mirroring the topology of the repository's docker-compose.yml.
+type: application
+
+# Chart version: bumped for chart-only changes.
+version: 0.1.0
+
+# Tracks the workspace crate version (crates/api/Cargo.toml). Used as the
+# default image tag for every workload whose `image.tag` is left empty.
+appVersion: "0.1.0"
+
+# templates/networkpolicy.yaml selects the ingress-controller namespace via
+# the automatic `kubernetes.io/metadata.name` label, which is GA from 1.22.
+kubeVersion: ">=1.23.0-0"
+
+home: https://github.com/FasterSpeeding/nr-status-v2
+sources:
+  - https://github.com/FasterSpeeding/nr-status-v2
+
+# Deliberately no `dependencies:` — the chart bundles its own PostgreSQL
+# StatefulSet rather than pulling a subchart, so `helm dependency update` is
+# never needed and the chart installs in an air-gapped cluster.

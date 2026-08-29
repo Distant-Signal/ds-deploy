@@ -1,0 +1,20 @@
+{{- if .Values.postgresql.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "distant-signal.postgresFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  # Headless: this Service exists to give the StatefulSet stable pod DNS,
+  # not to load-balance. With one replica the name resolves to the single
+  # pod's IP, which is exactly what DATABASE_URL needs.
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: {{ .Values.postgresql.service.port }}
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 4 }}
+{{- end }}

@@ -1,0 +1,122 @@
+{{/*
+Fail-fast on an unusable LLM config, same pattern as poller-deployments.yaml's
+empty-baseUrl guard. Unlike the pollers, the enricher has no `enabled` toggle
+and renders unconditionally, so the guard is unconditional too.
+
+Both values are plain `String` fields on crates/enricher/src/config.rs's clap
+Config, not Options -- an empty string parses fine, so the pod would boot and
+then fail every single extraction request forever with nothing but log noise
+to show for it.
+*/}}
+{{- if not .Values.enricher.llm.baseUrl }}
+{{- fail "enricher.llm.baseUrl is empty. Set it to the base URL of an OpenAI-compatible chat-completions endpoint (e.g. --set enricher.llm.baseUrl=http://vllm.internal:8000/v1). An empty value would deploy an enricher that fails every extraction request." }}
+{{- end }}
+{{- if not .Values.enricher.llm.model }}
+{{- fail "enricher.llm.model is empty. Set it to a model name the endpoint at enricher.llm.baseUrl serves (e.g. --set enricher.llm.model=gpt-4o-mini). An empty value would deploy an enricher that fails every extraction request." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-enricher" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "enricher") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "enricher") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "enricher") | nindent 8 }}
+      {{- if or .Values.metrics.enabled .Values.enricher.podAnnotations }}
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.enricher.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.enricher.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: enricher
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.enricher.image) | quote }}
+          imagePullPolicy: {{ .Values.enricher.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          # No probes: like aggregator, this binary exposes no HTTP surface
+          # for health checks. It DOES now optionally expose a /metrics
+          # listener (see docs/superpowers/specs/2026-08-29-metrics-design.md)
+          # -- that's a scrape target, not a liveness/readiness signal, so no
+          # probe is added here even with metrics.enabled=true.
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          {{- end }}
+          env:
+            {{- include "distant-signal.databaseEnv" . | nindent 12 }}
+            # Always rendered, unlike the port env var below: this is
+            # the Rust-side toggle that actually stops the binary from
+            # starting its /metrics listener (`metrics_enabled` in
+            # crates/enricher/src/config.rs). Omitting the port/env/annotations
+            # alone would not -- Kubernetes container ports are purely
+            # declarative -- so this must render "false" too, not vanish.
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            {{- end }}
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            - name: LLM_BASE_URL
+              value: {{ .Values.enricher.llm.baseUrl | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.enricher.llm.model | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "distant-signal.secretName" .) .Values.enricher.llm.existingSecret }}
+                  key: {{ .Values.enricher.llm.existingSecretApiKeyKey }}
+            - name: LLM_REQUEST_TIMEOUT_SECS
+              value: {{ .Values.enricher.llmRequestTimeoutSecs | quote }}
+            - name: SWEEP_INTERVAL_SECS
+              value: {{ .Values.enricher.sweepIntervalSecs | quote }}
+            - name: RECLAIM_INTERVAL_SECS
+              value: {{ .Values.enricher.reclaimIntervalSecs | quote }}
+            - name: RECLAIM_MIN_IDLE_SECS
+              value: {{ .Values.enricher.reclaimMinIdleSecs | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.enricher.logLevel | quote }}
+            {{- with .Values.enricher.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.enricher.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.enricher.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.enricher.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.enricher.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

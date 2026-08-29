@@ -1,0 +1,41 @@
+{{- if .Values.tests.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ printf "%s-test-api-health" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "test") | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    {{- include "distant-signal.podSecurityContext" (dict "override" (dict)) | nindent 4 }}
+  containers:
+    - name: probe
+      {{- if .Values.tests.image.repository }}
+      image: {{ include "distant-signal.image" (dict "root" . "image" .Values.tests.image) | quote }}
+      {{- else }}
+      # Default: the api image, which already contains curl.
+      image: {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) | quote }}
+      {{- end }}
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      securityContext:
+        {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 8 }}
+      # Overrides the image's ENTRYPOINT (/usr/local/bin/api) with a one-shot
+      # probe. -f makes curl exit non-zero on any HTTP error status, which is
+      # what `helm test` reads as failure.
+      command:
+        - curl
+      args:
+        - -fsS
+        - --max-time
+        - "10"
+        - {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.api.probes.path | quote }}
+{{- end }}

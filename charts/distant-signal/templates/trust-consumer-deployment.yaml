@@ -1,0 +1,134 @@
+{{/*
+Fail-fast on an unusable Kafka config, same pattern as enricher-deployment.yaml's
+llm.baseUrl/model guard and poller-deployments.yaml's empty-baseUrl guard.
+Unlike the pollers, trust-consumer has no `enabled` toggle and renders
+unconditionally, so the guard is unconditional too.
+
+All three values are plain `String` fields on crates/trust-consumer/src/config.rs's
+clap Config with no default -- an empty string parses fine, so the pod would
+boot and then fail to connect to Kafka forever with nothing but log noise to
+show for it. See that file's doc comment: the exact RDM Train Movements
+broker address, topic name, and SASL mechanism are all GAP-flagged as
+unconfirmed, so there is no sane default to fall back to.
+*/}}
+{{- if not .Values.trustConsumer.kafka.brokers }}
+{{- fail "trustConsumer.kafka.brokers is empty. Set it to the RDM Train Movements Kafka broker address(es) (e.g. --set trustConsumer.kafka.brokers=kafka.raildata.org.uk:9094). An empty value would deploy a trust-consumer that never connects." }}
+{{- end }}
+{{- if not .Values.trustConsumer.kafka.topic }}
+{{- fail "trustConsumer.kafka.topic is empty. Set it to the confirmed RDM Train Movements Kafka topic name. An empty value would deploy a trust-consumer that never connects." }}
+{{- end }}
+{{- if not .Values.trustConsumer.kafka.saslMechanism }}
+{{- fail "trustConsumer.kafka.saslMechanism is empty. Set it to the confirmed RDM Kafka product's SASL mechanism (e.g. --set trustConsumer.kafka.saslMechanism=PLAIN or SCRAM-SHA-512). crates/trust-consumer/src/config.rs's doc comment flags this as GAP: unconfirmed whether RDM's Kafka product uses PLAIN or a SCRAM variant -- an empty value would deploy a trust-consumer that silently guesses wrong and never connects." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-trust-consumer" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "trust-consumer") | nindent 4 }}
+spec:
+  # Fixed at 1: this plan's v1 uses one fixed consumer-group id per
+  # deployment (crates/trust-consumer/src/config.rs's doc comment on
+  # kafka_consumer_group) -- horizontal scaling via multiple replicas
+  # sharing the group is a real future option, not implemented here.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "trust-consumer") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "trust-consumer") | nindent 8 }}
+      {{- with .Values.trustConsumer.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.trustConsumer.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: trust-consumer
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.trustConsumer.image) | quote }}
+          imagePullPolicy: {{ .Values.trustConsumer.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.trustConsumer.healthPort }}
+              protocol: TCP
+          # Real connected/disconnected semantics, unlike every poller and
+          # unlike enricher's "no probes" -- see this plan's Task 16 intro.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6 # tolerate a real reconnect cycle before restarting the pod
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ .Values.trustConsumer.kafka.brokers | quote }}
+            - name: KAFKA_TOPIC
+              value: {{ .Values.trustConsumer.kafka.topic | quote }}
+            - name: KAFKA_CONSUMER_GROUP
+              value: {{ .Values.trustConsumer.kafka.consumerGroup | quote }}
+            - name: KAFKA_SASL_MECHANISM
+              value: {{ .Values.trustConsumer.kafka.saslMechanism | quote }}
+            - name: KAFKA_SASL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "distant-signal.secretName" .) .Values.trustConsumer.kafka.existingSecret }}
+                  key: {{ .Values.trustConsumer.kafka.existingSecretUsernameKey }}
+            - name: KAFKA_SASL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "distant-signal.secretName" .) .Values.trustConsumer.kafka.existingSecret }}
+                  key: {{ .Values.trustConsumer.kafka.existingSecretPasswordKey }}
+            - name: API_INGEST_URL
+              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/train-events" | quote }}
+            - name: API_TRACKED_TRAINS_URL
+              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/tracked-trains" | quote }}
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.internalTokenSecretName" . }}
+                  key: {{ include "distant-signal.internalTokenSecretKey" . }}
+            - name: REFERENCE_RELOAD_SECS
+              value: {{ .Values.trustConsumer.referenceReloadSecs | quote }}
+            - name: RETENTION_DAYS
+              value: {{ .Values.trustConsumer.retentionDays | quote }}
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.trustConsumer.healthPort) | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.trustConsumer.logLevel | quote }}
+            {{- with .Values.trustConsumer.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.trustConsumer.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.trustConsumer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trustConsumer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trustConsumer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
