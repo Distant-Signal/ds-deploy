@@ -141,10 +141,27 @@ entries:
   # default-authentication-identification stage, and it is NOT settable via
   # the Brand model -- only here, at the stage level.
   #
+  # user_fields MUST be restated here, not just enrollment_flow: Authentik's
+  # blueprint importer replaces this stage's full attrs on apply, it does
+  # not merge onto the existing object -- an attrs block that only names
+  # enrollment_flow resets every other field (user_fields included) to the
+  # serializer's own empty default. With user_fields=[] and no `sources`
+  # set either, IdentificationStageSerializer's cross-field validator
+  # rejects the whole entry ("When no user fields are selected, at least
+  # one source must be selected"), confirmed live against a real Authentik
+  # 2026.8.0 instance. [email, username] is copied verbatim from
+  # Authentik's own shipped default for this exact stage
+  # (github.com/goauthentik/authentik/blob/main/blueprints/default/flow-default-authentication-flow.yaml),
+  # not invented -- this entry only adds enrollment_flow on top of that
+  # default, it doesn't change what fields a user can log in with.
+  #
   # MUST stay the LAST entry: entries apply in list order, so the flow it
   # looks up via !Find must already have been created by the entries above.
   - model: authentik_stages_identification.identificationstage
     identifiers:
       name: default-authentication-identification
     attrs:
+      user_fields:
+        - email
+        - username
       enrollment_flow: !Find [authentik_flows.flow, [slug, distant-signal-dev-enrollment]]
