@@ -1,30 +1,42 @@
 {{/*
-Fail-fast on an unusable SSO config, same pattern as
-enricher-deployment.yaml's empty-baseUrl/model guard.
+Fail-fast on an unusable SSO config -- same pattern as before, EXCEPT an
+empty api.sso.* value is no longer automatically fatal when
+devAuthentik.enabled: true. In that case the value is computed instead,
+from devAuthentik.* and the fixed blueprint-provisioned client id/secret
+(charts/nr-status/templates/_helpers.tpl's nr-status.devAuthentik* helpers)
+-- see docs/superpowers/specs/2026-08-29-dev-oidc-server-design.md's Helm
+chart support section. An operator's explicit api.sso.* value ALWAYS wins
+over the computed default; devAuthentik never overrides one.
 
-crates/api/src/data/config.rs declares all five SSO_* fields with
-`#[arg(long, env)]` and NO default, so an api container missing any of them
-never gets as far as `main` -- clap exits with "the following required
-arguments were not provided" and the pod CrashLoopBackOffs. An empty-string
-value is worse still: it satisfies clap, then fails either the
-`ensure!(!config.sso_client_secret.is_empty())` in AppState::init or
-`IssuerUrl::new("")` immediately after, with the same outcome and a less
-obvious cause. Refusing to render is strictly better than either.
+When no value is available from either source, refusing to render is still
+strictly better than rendering an empty one. crates/api/src/data/config.rs
+declares all five SSO_* fields with `#[arg(long, env)]` and NO default, so
+an api container missing any of them never gets as far as `main` -- clap
+exits with "the following required arguments were not provided" and the pod
+CrashLoopBackOffs. An empty-string value is worse still: it satisfies clap,
+then fails either the `ensure!(!config.sso_client_secret.is_empty())` in
+AppState::init or `IssuerUrl::new("")` immediately after, with the same
+outcome and a less obvious cause.
 */}}
-{{- if not .Values.api.sso.issuerUrl }}
-{{- fail "api.sso.issuerUrl is empty. Set it to your OIDC provider's issuer base URL (e.g. --set api.sso.issuerUrl=https://sso.example.com/realms/rail). The api requires SSO_ISSUER_URL and will not start without it." }}
+{{- $issuerUrl := .Values.api.sso.issuerUrl | default (and .Values.devAuthentik.enabled (include "nr-status.devAuthentikIssuerUrl" .)) -}}
+{{- $clientId := .Values.api.sso.clientId | default (and .Values.devAuthentik.enabled (include "nr-status.devAuthentikClientId" .)) -}}
+{{- $redirectUrl := .Values.api.sso.redirectUrl | default (and .Values.devAuthentik.enabled (include "nr-status.devAuthentikRedirectUrl" .)) -}}
+{{- $postLoginRedirectUrl := .Values.api.sso.postLoginRedirectUrl | default (and .Values.devAuthentik.enabled (include "nr-status.devAuthentikPostLoginRedirectUrl" .)) -}}
+{{- $clientSecretAvailable := or .Values.api.sso.clientSecret .Values.api.sso.existingSecret .Values.devAuthentik.enabled -}}
+{{- if not $issuerUrl }}
+{{- fail "api.sso.issuerUrl is empty and devAuthentik.enabled is false. Set api.sso.issuerUrl to your OIDC provider's issuer base URL (e.g. --set api.sso.issuerUrl=https://sso.example.com/realms/rail), or set devAuthentik.enabled=true to use the bundled local dev IdP instead." }}
 {{- end }}
-{{- if not .Values.api.sso.clientId }}
-{{- fail "api.sso.clientId is empty. Set it to the OIDC client id this deployment is registered as (e.g. --set api.sso.clientId=nr-status). The api requires SSO_CLIENT_ID and will not start without it." }}
+{{- if not $clientId }}
+{{- fail "api.sso.clientId is empty and devAuthentik.enabled is false. Set api.sso.clientId, or set devAuthentik.enabled=true." }}
 {{- end }}
-{{- if and (not .Values.api.sso.clientSecret) (not .Values.api.sso.existingSecret) }}
-{{- fail "api.sso.clientSecret is empty and no api.sso.existingSecret was given. Set one of them (e.g. --set api.sso.clientSecret=... , or api.sso.existingSecret pointing at a Secret holding it). The api refuses to start on an empty client secret." }}
+{{- if not $clientSecretAvailable }}
+{{- fail "api.sso.clientSecret is empty, no api.sso.existingSecret was given, and devAuthentik.enabled is false. Set one of them, or set devAuthentik.enabled=true." }}
 {{- end }}
-{{- if not .Values.api.sso.redirectUrl }}
-{{- fail "api.sso.redirectUrl is empty. Set it to the FRONTEND origin's callback URL registered with your SSO server (e.g. --set api.sso.redirectUrl=https://status.example.com/api/auth/callback) -- not the api's own origin, or the session cookie is scoped to the wrong host. The api requires SSO_REDIRECT_URL and will not start without it." }}
+{{- if not $redirectUrl }}
+{{- fail "api.sso.redirectUrl is empty and devAuthentik.enabled is false. Set api.sso.redirectUrl (not the api's own origin -- see this chart's README), or set devAuthentik.enabled=true." }}
 {{- end }}
-{{- if not .Values.api.sso.postLoginRedirectUrl }}
-{{- fail "api.sso.postLoginRedirectUrl is empty. Set it to the frontend's root URL (e.g. --set api.sso.postLoginRedirectUrl=https://status.example.com/). The api requires SSO_POST_LOGIN_REDIRECT_URL and will not start without it." }}
+{{- if not $postLoginRedirectUrl }}
+{{- fail "api.sso.postLoginRedirectUrl is empty and devAuthentik.enabled is false. Set api.sso.postLoginRedirectUrl, or set devAuthentik.enabled=true." }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -55,6 +67,19 @@ spec:
     spec:
       serviceAccountName: {{ include "nr-status.serviceAccountName" . }}
       automountServiceAccountToken: false
+      {{- $hostAliasIP := include "nr-status.devAuthentikHostAliasIP" . }}
+      {{- if and .Values.devAuthentik.enabled $hostAliasIP }}
+      # Makes this Pod's own outbound OIDC discovery request present the
+      # SAME Host header the developer's browser sends via the NodePort --
+      # see "Discovery reachability under Kubernetes" in the design doc. On
+      # a from-scratch helm install this may be ABSENT (see
+      # nr-status.devAuthentikHostAliasIP's own comment) -- that is a known,
+      # documented gap requiring one `helm upgrade`, not a bug.
+      hostAliases:
+        - ip: {{ $hostAliasIP }}
+          hostnames:
+            - {{ .Values.devAuthentik.hostname }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -101,18 +126,18 @@ spec:
             # URLs/identifiers that are public by construction (the browser
             # sees the issuer and redirect URLs on every sign-in anyway).
             - name: SSO_ISSUER_URL
-              value: {{ .Values.api.sso.issuerUrl | quote }}
+              value: {{ $issuerUrl | quote }}
             - name: SSO_CLIENT_ID
-              value: {{ .Values.api.sso.clientId | quote }}
+              value: {{ $clientId | quote }}
             - name: SSO_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nr-status.ssoClientSecretName" . }}
                   key: {{ include "nr-status.ssoClientSecretKey" . }}
             - name: SSO_REDIRECT_URL
-              value: {{ .Values.api.sso.redirectUrl | quote }}
+              value: {{ $redirectUrl | quote }}
             - name: SSO_POST_LOGIN_REDIRECT_URL
-              value: {{ .Values.api.sso.postLoginRedirectUrl | quote }}
+              value: {{ $postLoginRedirectUrl | quote }}
             - name: SESSION_TTL_DAYS
               value: {{ .Values.api.sessionTtlDays | quote }}
             # LINES_DIR is deliberately NOT set: crates/api/src/data/config.rs

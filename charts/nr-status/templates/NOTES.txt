@@ -45,6 +45,55 @@ Read the internal token (generated on first install, preserved on upgrade):
   kubectl get secret -n {{ .Release.Namespace }} {{ include "nr-status.secretName" . }} -o jsonpath='{.data.internal-token}' | base64 -d; echo
 {{- end }}
 
+{{- if .Values.devAuthentik.enabled }}
+
+############################################################################
+# Local dev identity provider (devAuthentik) is ENABLED.
+############################################################################
+
+This is a throwaway, unhardened local Authentik instance for exercising
+this app's own login flow -- see charts/nr-status/README.md's "Local dev
+identity provider" section and
+docs/superpowers/specs/2026-08-29-dev-oidc-server-design.md for the full
+design and its OPEN RISKS, not fully verified against a real cluster as of
+this writing:
+
+1. Your local cluster tool must forward NodePort
+   {{ .Values.devAuthentik.service.nodePort }} to your machine's loopback
+   interface, AT THE SAME PORT NUMBER, or your browser cannot reach
+   Authentik at all. This is outside this chart's control -- see the
+   worked examples in charts/nr-status/README.md (kind's
+   extraPortMappings, `minikube tunnel`, k3d's `--port`).
+
+2. If this is your FIRST `helm install` with devAuthentik.enabled=true, and
+   you did not set devAuthentik.hostAliasIP explicitly, the api
+   Deployment's hostAliases entry could not be written yet --
+   devauthentik-service did not exist when api was rendered in this same
+   release. Run:
+
+     helm upgrade {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} --reuse-values
+
+   once, immediately, so api picks up the now-existing Service's
+   ClusterIP. This is a known, documented gap, not a bug you're hitting by
+   accident.
+
+Once both of the above are done, reach Authentik itself at:
+
+  http://{{ .Values.devAuthentik.hostname }}:{{ .Values.devAuthentik.service.nodePort }}/
+
+There is NO default admin account (deliberately -- see the design doc's
+Bootstrap section). Sign in through THIS APP's own login flow --
+devAuthentik provisions open, self-service signup. To get into Authentik's
+OWN admin UI instead, use its interactive first-run flow:
+
+  http://{{ .Values.devAuthentik.hostname }}:{{ .Values.devAuthentik.service.nodePort }}/if/flow/initial-setup/
+
+api.sso.redirectUrl/postLoginRedirectUrl were computed assuming the
+frontend is reachable at exactly http://localhost:3000, e.g.:
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "nr-status.frontendFullname" . }} 3000:{{ .Values.frontend.service.port }}
+{{- end }}
+
 {{- $anyPoller := false }}
 {{- range $name, $poller := .Values.pollers }}{{- if $poller.enabled }}{{- $anyPoller = true }}{{- end }}{{- end }}
 {{- if not $anyPoller }}

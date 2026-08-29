@@ -1,0 +1,31 @@
+{{- if .Values.devAuthentik.enabled }}
+{{/*
+port and nodePort MUST be identical -- see "Discovery reachability under
+Kubernetes" in the design doc: an in-cluster caller (the api Pod, via
+hostAliases) and a caller on the node's published NodePort must reach
+Authentik on the exact same port number, or the Host header the two send
+diverges and Authentik's Host-header-derived discovery document breaks for
+one side or the other. This is a direct, cheap application of this chart's
+existing fail-fast posture (poller baseUrl, api.sso.*, redis.externalUrl)
+to an invariant the design doc states is load-bearing.
+*/}}
+{{- if ne (.Values.devAuthentik.service.port | int) (.Values.devAuthentik.service.nodePort | int) }}
+{{- fail "devAuthentik.service.port and devAuthentik.service.nodePort must be equal. See the design doc's Discovery reachability under Kubernetes section." }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nr-status.devAuthentikFullname" . }}
+  labels:
+    {{- include "nr-status.labels" (dict "root" . "component" "devauthentik-server") | nindent 4 }}
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: {{ .Values.devAuthentik.service.port }}
+      nodePort: {{ .Values.devAuthentik.service.nodePort }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "nr-status.selectorLabels" (dict "root" . "component" "devauthentik-server") | nindent 4 }}
+{{- end }}

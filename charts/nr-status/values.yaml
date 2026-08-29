@@ -377,6 +377,94 @@ api:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
+# devAuthentik -- OPT-IN local dev-only OIDC identity provider
+# (docs/superpowers/specs/2026-08-29-dev-oidc-server-design.md)
+# ---------------------------------------------------------------------------
+# A hand-rolled (NOT the goauthentik/helm subchart -- see the design doc's
+# Non-goals) Authentik deployment for exercising this app's own login flow
+# against a local/dev Kubernetes cluster with zero manual IdP-side setup,
+# mirroring docker-compose.authentik.yml's job for the compose path.
+# Strictly a dev convenience: no HA, no TLS automation, no backup/restore --
+# see the design doc's Non-goals, which apply with equal force here.
+#
+# When enabled AND api.sso.* is left at its empty default, the chart
+# computes api.sso.issuerUrl/clientId/clientSecret/redirectUrl/
+# postLoginRedirectUrl from the values below and the fixed blueprint-
+# provisioned client_id/client_secret in
+# charts/nr-status/files/devauthentik-blueprints/oauth2-client.yaml (the
+# SAME fixed values docker-compose.authentik.yml's blueprint uses -- see
+# authentik-blueprints/oauth2-client.yaml). An operator who sets any
+# api.sso.* value explicitly keeps it; devAuthentik never overrides an
+# explicit value.
+devAuthentik:
+  # -- Opt-in; false by default. An install that already points api.sso.*
+  # at a real external IdP is completely unaffected either way.
+  enabled: false
+  # -- The ONE hostname both the developer's browser and the api Pod must
+  # resolve identically -- see "Discovery reachability under Kubernetes" in
+  # the design doc. Resolves to loopback with no /etc/hosts entry needed in
+  # modern browsers (RFC 6761 .localhost handling), the same trick
+  # docker-compose.authentik.yml uses.
+  hostname: authentik.localhost
+  image:
+    repository: ghcr.io/goauthentik/server
+    # -- Pinned, same rationale/finite-shelf-life caveat as the compose
+    # path's tag (design doc Research + Open questions: Authentik's
+    # 3-month release cadence and 2-version support window mean this needs
+    # periodic bumping -- not automated by this chart).
+    tag: "2026.8.0"
+    pullPolicy: IfNotPresent
+  # -- AUTHENTIK_SECRET_KEY. Chart-generated via the same lookup-then-
+  # randAlphaNum pattern secret.yaml already uses for postgres-password/
+  # internal-token when left empty, so it survives `helm upgrade`. No
+  # existingSecret override -- this is a throwaway dev IdP, not a value an
+  # operator would reasonably already have externally managed.
+  secretKey: ""
+  service:
+    # -- ClusterIP-facing port AND NodePort. MUST be the same number as
+    # nodePort below -- see "Discovery reachability under Kubernetes" in
+    # the design doc: an in-cluster caller and a caller on the node's
+    # published port must reach Authentik on an identical port number.
+    # devauthentik-service.yaml aborts the render if these two ever differ.
+    port: 30900
+    # -- Must equal `port` above. Default 30900 is inside Kubernetes'
+    # default 30000-32767 NodePort range (a nodePort can't be an arbitrary
+    # value like the compose path's 9000 without a nonstandard
+    # --service-node-port-range on the apiserver).
+    nodePort: 30900
+  # -- Explicit override for the IP the api Deployment's hostAliases entry
+  # points devAuthentik.hostname at. Leave empty to use `lookup` against
+  # devauthentik-service's live ClusterIP at render time (the chart's usual
+  # pattern) -- BUT on a from-scratch `helm install`, devauthentik-service
+  # doesn't exist yet when api is first rendered in the SAME release, so
+  # `lookup` returns nothing and NO hostAliases entry is written at all.
+  # Either set this explicitly on first install (predictable on e.g. kind's
+  # commonly-default 10.96.0.0/12 service CIDR), or run `helm upgrade` once
+  # immediately after the first `helm install` -- see NOTES.txt and the
+  # chart README. THIS IS THE SINGLE BIGGEST GAP BETWEEN "DESIGNED" AND
+  # "KNOWN TO WORK" ON THIS PATH, per the design doc's Open questions /
+  # risks, Helm path section -- not resolved by this chart.
+  hostAliasIP: ""
+  # -- Dedicated Postgres for Authentik's own state -- NOT a second
+  # database on this chart's own bundled `postgresql`. Same reasoning as
+  # the compose path (design doc's Data services section): independent
+  # migration lifecycles, reset-friendliness. Always rendered when
+  # devAuthentik.enabled -- unlike the app's own postgresql/externalDatabase
+  # pair there is no external-database escape hatch here, because this is a
+  # throwaway dev-only database with no production posture to accommodate.
+  postgresql:
+    image: postgres:16-alpine
+    persistence:
+      enabled: true
+      size: 1Gi
+      storageClass: ""
+    resources: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------
 # aggregator (crates/aggregator/src/config.rs: Config)
 # ---------------------------------------------------------------------------
 # There is intentionally no `replicaCount` here. The aggregator is a

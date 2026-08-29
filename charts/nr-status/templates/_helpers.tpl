@@ -274,3 +274,110 @@ the default path is never affected.
 {{- fail "postgresql.enabled is false but no external database is configured. Set externalDatabase.existingSecret (preferred) together with externalDatabase.existingSecretUrlKey, or set externalDatabase.url, or re-enable the bundled database with postgresql.enabled=true." -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Per-component devAuthentik object names. Each takes root. The server
+Deployment and the NodePort Service in front of it share ONE name (matching
+how api's Deployment and Service already share nr-status.apiFullname); the
+worker Deployment and dedicated Postgres each get their own.
+*/}}
+{{- define "nr-status.devAuthentikFullname" -}}
+{{- printf "%s-devauthentik" (include "nr-status.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "nr-status.devAuthentikWorkerFullname" -}}
+{{- printf "%s-devauthentik-worker" (include "nr-status.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "nr-status.devAuthentikPostgresFullname" -}}
+{{- printf "%s-devauthentik-postgres" (include "nr-status.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Resolved Secret name/keys for devAuthentik's own AUTHENTIK_SECRET_KEY and
+its dedicated Postgres password. Takes root. Unlike the chart's other
+secret pairs there is no existingSecret override -- see values.yaml's
+devAuthentik.secretKey comment for why. Always the chart-rendered Secret,
+devauthentik-secret.yaml.
+*/}}
+{{- define "nr-status.devAuthentikSecretName" -}}
+{{- printf "%s-devauthentik" (include "nr-status.secretName" .) }}
+{{- end }}
+
+{{- define "nr-status.devAuthentikSecretKeySecretKey" -}}
+{{- print "authentik-secret-key" }}
+{{- end }}
+
+{{- define "nr-status.devAuthentikPostgresSecretKey" -}}
+{{- print "authentik-postgres-password" }}
+{{- end }}
+
+{{/*
+Fixed, blueprint-provisioned OIDC client id/secret for the local dev IdP --
+IDENTICAL literal values to authentik-blueprints/oauth2-client.yaml (the
+compose path's blueprint, Task 1) and its byte-for-byte chart copy at
+charts/nr-status/files/devauthentik-blueprints/oauth2-client.yaml (Task 6).
+Not secret in any meaningful sense -- known-in-advance, dev-only, committed
+to git in both places -- but still routed through secret.yaml's
+sso-client-secret entry for clientSecret rather than inlined directly in a
+Deployment spec, matching this chart's usual posture for anything named
+"secret" even when its value isn't sensitive.
+*/}}
+{{- define "nr-status.devAuthentikClientId" -}}
+{{- print "nr-status-dev" }}
+{{- end }}
+
+{{- define "nr-status.devAuthentikClientSecret" -}}
+{{- print "nr-status-dev-local-only-not-a-real-secret" }}
+{{- end }}
+
+{{/*
+Computed api.sso.* defaults for when devAuthentik.enabled is true and the
+corresponding api.sso.* value is left empty. Takes root. Consumed by
+api-deployment.yaml's top-of-file local-variable block (Task 11), the only
+caller.
+
+redirectUrl/postLoginRedirectUrl assume the developer reaches the frontend
+at exactly http://localhost:3000 -- e.g. via
+`kubectl port-forward svc/<release>-frontend 3000:3000` -- the SAME fixed
+strings docker-compose.authentik.yml's blueprint (Task 1) already commits
+the redirect_uris to, since the blueprint's redirect_uris list is a fixed
+literal either way. The design doc describes the computed-defaults
+MECHANISM for the Helm path but does not spell out these two literal
+strings; this plan resolves that gap by reusing the compose path's own
+fixed values verbatim, so both deployment paths are interchangeable in a
+developer's head -- matching the design's stated intent for the client
+id/secret pair.
+*/}}
+{{- define "nr-status.devAuthentikIssuerUrl" -}}
+{{- printf "http://%s:%d/application/o/nr-status/" .Values.devAuthentik.hostname (int .Values.devAuthentik.service.port) }}
+{{- end }}
+
+{{- define "nr-status.devAuthentikRedirectUrl" -}}
+{{- print "http://localhost:3000/api/auth/callback" }}
+{{- end }}
+
+{{- define "nr-status.devAuthentikPostLoginRedirectUrl" -}}
+{{- print "http://localhost:3000/" }}
+{{- end }}
+
+{{/*
+IP for the api Deployment's hostAliases entry mapping devAuthentik.hostname
+straight to devauthentik-service's ClusterIP. Takes root.
+devAuthentik.hostAliasIP wins when set; otherwise `lookup`s the live
+Service. Returns an empty string (NEVER a wrong value) when neither is
+available -- see values.yaml's devAuthentik.hostAliasIP comment for the
+from-scratch-install ordering gap this reflects. api-deployment.yaml (Task
+11) omits the whole hostAliases entry when this returns empty, rather than
+writing an IP of "".
+*/}}
+{{- define "nr-status.devAuthentikHostAliasIP" -}}
+{{- if .Values.devAuthentik.hostAliasIP -}}
+{{- .Values.devAuthentik.hostAliasIP -}}
+{{- else -}}
+{{- $svc := lookup "v1" "Service" .Release.Namespace (include "nr-status.devAuthentikFullname" .) -}}
+{{- if $svc -}}
+{{- $svc.spec.clusterIP -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

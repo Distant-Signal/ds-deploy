@@ -237,6 +237,72 @@ it is rendered into the chart Secret as `sso-client-secret`, or point
 it. Unlike `internal-token` and the postgres password it is **never
 auto-generated**: a random value would simply be rejected by the issuer.
 
+## Local dev identity provider (devAuthentik)
+
+For a local/dev Kubernetes cluster (kind, minikube, k3d) only — set
+`devAuthentik.enabled: true` to bring up a throwaway local Authentik
+instance and skip registering this app with a real external IdP entirely.
+Mirrors `docker-compose.authentik.yml`'s job for the `docker compose`
+deployment path. **Off by default; an install pointed at a real external
+IdP is completely unaffected.**
+
+When enabled and `api.sso.*` is left at its empty default, the chart
+computes it from `devAuthentik.*` and the fixed, blueprint-provisioned
+dev-only OIDC client (`client_id: nr-status-dev`) — no manual IdP-side
+setup, matching `docker-compose.authentik.yml`'s own zero-click bootstrap.
+An explicit `api.sso.*` value always wins.
+
+```yaml
+devAuthentik:
+  enabled: true
+```
+
+**Two manual steps this chart cannot do for you:**
+
+1. **Forward `devAuthentik.service.nodePort` (default `30900`) to your
+   machine's loopback interface**, using whatever mechanism your cluster
+   tool provides:
+   - kind: an `extraPortMappings` entry in your cluster config, e.g.
+     ```yaml
+     nodes:
+       - role: control-plane
+         extraPortMappings:
+           - containerPort: 30900
+             hostPort: 30900
+     ```
+   - minikube: `minikube tunnel`
+   - k3d: `k3d cluster create --port 30900:30900@loadbalancer`
+
+   This step lives in your cluster-creation config, not in this chart —
+   see the design doc's Research for why a Helm chart cannot bind a port
+   on the host machine itself.
+
+2. **On your very first `helm install` with `devAuthentik.enabled: true`**
+   (unless you also set `devAuthentik.hostAliasIP` explicitly), run `helm
+   upgrade` once immediately afterward. `NOTES.txt` reminds you of this
+   after every install/upgrade where `devAuthentik.enabled` is `true`.
+
+**Known limitations / unverified, stated plainly rather than assumed
+solved:**
+
+- The `hostAliases`-vs-`lookup` first-install ordering gap above has no
+  fully graceful degradation — it requires the one-time `helm upgrade`
+  workaround, not a design this chart claims to have fully closed.
+- The NodePort-forwarding step is entirely outside this chart's control and
+  cannot be verified from inside a `helm template`/`helm install` run — if
+  you skip it, the chart installs cleanly and the failure only shows up as
+  "the browser can't reach Authentik," with no render-time signal.
+- None of the above has been smoke-tested by this chart's own authors
+  against a real kind/minikube/k3d cluster as of this writing — see
+  `docs/superpowers/plans/2026-08-29-dev-oidc-server.md`'s Task 13 for
+  what was and wasn't actually verified.
+
+See `docs/superpowers/specs/2026-08-29-dev-oidc-server-design.md` for the
+full design, including why `AUTHENTIK_BOOTSTRAP_*` is deliberately never
+set (no default admin — see its Bootstrap section) and why this is a
+hand-rolled deployment rather than the official `goauthentik/helm` chart
+(see its Non-goals).
+
 ## Using an external database
 
 Set `postgresql.enabled: false` and configure `externalDatabase`. Provide
@@ -502,6 +568,32 @@ Used only when `postgresql.enabled` is `false`.
 | `api.affinity` | `{}` | Pod affinity rules. |
 | `api.podAnnotations` | `{}` | Pod annotations. |
 | `api.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
+### devAuthentik
+
+See "Local dev identity provider (devAuthentik)" above. Always off by
+default; nothing here is rendered unless `devAuthentik.enabled` is `true`.
+
+| Key | Default | Description |
+|---|---|---|
+| `devAuthentik.enabled` | `false` | Deploy a throwaway local Authentik instance for exercising this app's own login flow. An install pointing `api.sso.*` at a real external IdP is unaffected either way. |
+| `devAuthentik.hostname` | `authentik.localhost` | The one hostname both the developer's browser and the api Pod must resolve identically. Resolves to loopback with no `/etc/hosts` entry needed in modern browsers (RFC 6761). |
+| `devAuthentik.image.repository` | `ghcr.io/goauthentik/server` | Authentik server image repository. |
+| `devAuthentik.image.tag` | `2026.8.0` | Pinned; Authentik's ~3-month release cadence and 2-version support window mean this needs periodic bumping, not automated by this chart. |
+| `devAuthentik.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `devAuthentik.secretKey` | `""` | `AUTHENTIK_SECRET_KEY`. Chart-generated (lookup-then-`randAlphaNum`) when empty, same pattern as `postgres-password`/`internal-token`, so it survives `helm upgrade`. No `existingSecret` override — throwaway dev IdP only. |
+| `devAuthentik.service.port` | `30900` | ClusterIP-facing port. Must equal `service.nodePort` — the render aborts if they differ. |
+| `devAuthentik.service.nodePort` | `30900` | NodePort. Must equal `service.port`; default sits inside Kubernetes' default 30000-32767 NodePort range. |
+| `devAuthentik.hostAliasIP` | `""` | Explicit override for the IP the api Deployment's `hostAliases` entry points `devAuthentik.hostname` at. Empty uses `lookup` against the live Service's ClusterIP at render time — unresolvable on a from-scratch `helm install` (see the "Two manual steps" note above and NOTES.txt). |
+| `devAuthentik.postgresql.image` | `postgres:16-alpine` | Image for Authentik's own dedicated Postgres — independent of, and not a second database on, this chart's bundled `postgresql`. |
+| `devAuthentik.postgresql.persistence.enabled` | `true` | Attach a PVC for Authentik's Postgres. |
+| `devAuthentik.postgresql.persistence.size` | `1Gi` | Requested volume size. |
+| `devAuthentik.postgresql.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
+| `devAuthentik.postgresql.resources` | `{}` | Authentik Postgres container resource requests/limits. |
+| `devAuthentik.resources` | `{}` | Authentik server container resource requests/limits. |
+| `devAuthentik.nodeSelector` | `{}` | Pod node selector. |
+| `devAuthentik.tolerations` | `[]` | Pod tolerations. |
+| `devAuthentik.affinity` | `{}` | Pod affinity rules. |
 
 ### aggregator
 
