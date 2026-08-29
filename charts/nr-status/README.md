@@ -70,19 +70,31 @@ Then point each `*.image.repository` value at `$REG/...`. An empty
 ```bash
 helm install nr-status ./charts/nr-status -n nr-status --create-namespace \
   --set enricher.llm.baseUrl=https://llm.example.com/v1 \
-  --set enricher.llm.model=your-model-name
+  --set enricher.llm.model=your-model-name \
+  --set api.sso.issuerUrl=https://sso.example.com/realms/rail \
+  --set api.sso.clientId=nr-status \
+  --set api.sso.clientSecret=your-oidc-client-secret \
+  --set api.sso.redirectUrl=https://status.example.com/api/auth/callback \
+  --set api.sso.postLoginRedirectUrl=https://status.example.com/
 ```
 
 An install brings up **postgres + redis + api + aggregator + enricher +
 frontend**, with **all five pollers off**. See "Enabling the pollers" below
 for why.
 
-`enricher.llm.baseUrl` and `enricher.llm.model` are the chart's only two
-**required** values — the enricher has no `enabled` toggle, and both become
-plain (non-optional) env vars on its binary, so an empty value would deploy
-a pod that fails every extraction request forever with nothing but log noise
-to show for it. Leaving either empty **aborts the render** with an explicit
-message rather than deploying that. Everything else has a working default.
+`enricher.llm.baseUrl`, `enricher.llm.model` and the five `api.sso.*`
+values above are the chart's **required** values; everything else has a
+working default. Leaving any of them empty **aborts the render** with an
+explicit message rather than deploying a pod that cannot work:
+
+- The enricher has no `enabled` toggle, and `baseUrl`/`model` become plain
+  (non-optional) env vars on its binary, so an empty value would deploy a
+  pod that fails every extraction request forever with nothing but log
+  noise to show for it.
+- The api's five `SSO_*` env vars are declared with no defaults in
+  `crates/api/src/data/config.rs`, so an api container missing any of them
+  exits immediately with "the following required arguments were not
+  provided" and `CrashLoopBackOff`s. See "Single sign-on (OIDC)" below.
 
 The enricher is a strictly additive signal: it only ever *demotes* a
 severity a line already has, and never suppresses one. A missing, failed or
@@ -178,12 +190,52 @@ enricher:
     model: your-model-name
     existingSecret: nr-status-llm
     existingSecretApiKeyKey: llm-api-key
+
+api:
+  sso:
+    issuerUrl: https://sso.example.com/realms/rail
+    clientId: nr-status
+    existingSecret: nr-status-sso
+    existingSecretClientSecretKey: client-secret
+    redirectUrl: https://status.example.com/api/auth/callback
+    postLoginRedirectUrl: https://status.example.com/
 ```
 
 The Postgres StatefulSet and its api/aggregator/enricher consumers resolve
 the password reference through the *same* template helper, so an
 `existingSecret` override can never leave them disagreeing about which
 Secret holds the password.
+
+## Single sign-on (OIDC)
+
+The api authenticates users against an external OIDC provider (Keycloak,
+Authentik, Authelia, Entra ID, Okta, …) — this chart deploys no identity
+provider of its own. Sign-in gates the **per-user** features only (pinning
+lines and stations, creating and editing custom lines); the line-status
+pages themselves stay readable without signing in.
+
+All five `api.sso.*` values are **required** and the render aborts if any
+is missing, because `crates/api` declares its `SSO_*` env vars with no
+defaults — an api container without them exits before `main` runs.
+
+Two details that are easy to get wrong:
+
+- **`redirectUrl` is the frontend's origin, not the api's.** Register
+  `https://<frontend-host>/api/auth/callback` with your provider and put
+  that same string here. The callback issues the session cookie, and a
+  cookie set on the api's origin would never be sent back by the browser,
+  which talks to the frontend for everything else. The frontend's
+  `/api/*` catch-all proxies the request through to the api's
+  `/public/auth/callback` and forwards the `Set-Cookie` back unmodified.
+- **The session cookie is `Secure`**, so sign-in only works over HTTPS.
+  Terminate TLS at the ingress (see "Ingress" below) before expecting
+  login to work.
+
+`clientSecret` follows the chart's usual secret rule — supply it inline and
+it is rendered into the chart Secret as `sso-client-secret`, or point
+`api.sso.existingSecret` at a Secret you manage and the chart never sees
+it. Unlike `internal-token` and the postgres password it is **never
+auto-generated**: a random value would simply be rejected by the issuer.
 
 ## Using an external database
 
@@ -413,6 +465,14 @@ Used only when `postgresql.enabled` is `false`.
 | `api.service.type` | `ClusterIP` | Service type. |
 | `api.service.port` | `8080` | Service and container port; also sets `BIND_URL`. |
 | `api.logLevel` | `info` | `RUST_LOG` value (tracing-subscriber EnvFilter syntax). |
+| `api.sso.issuerUrl` | `""` | **Required.** OIDC issuer base URL; everything else is discovered from its `.well-known/openid-configuration`. |
+| `api.sso.clientId` | `""` | **Required.** OIDC client id this deployment is registered as. |
+| `api.sso.clientSecret` | `""` | **Required** unless `api.sso.existingSecret` is set. Rendered into the chart Secret as `sso-client-secret`. Never auto-generated. |
+| `api.sso.existingSecret` | `""` | Read the client secret from this pre-existing Secret instead. |
+| `api.sso.existingSecretClientSecretKey` | `sso-client-secret` | Key within `api.sso.existingSecret`. |
+| `api.sso.redirectUrl` | `""` | **Required.** Callback URI registered with the SSO server — the *frontend's* origin plus `/api/auth/callback`, not the api's. |
+| `api.sso.postLoginRedirectUrl` | `""` | **Required.** Where sign-in and sign-out send the browser afterwards — the frontend's root URL. |
+| `api.sessionTtlDays` | `14` | Session lifetime in days. A fixed expiry stamped at sign-in, not a sliding window. |
 | `api.probes.path` | `/public/health` | Path all three probes and the `helm test` pod hit. |
 | `api.probes.startup.periodSeconds` | `2` | Startup probe period. |
 | `api.probes.startup.failureThreshold` | `30` | Startup probe failures allowed (30 x 2s = 60s for in-process migrations). |

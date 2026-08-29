@@ -16,6 +16,21 @@ api:
     tag: "0.1.0"
   replicaCount: 2
   logLevel: info
+  # Required -- the api will not render, let alone start, without these.
+  # Note redirectUrl points at the FRONTEND host (status.example.com, the
+  # same host the ingress section below publishes), not at the api: the
+  # session cookie the callback sets must be scoped to the origin the
+  # browser uses for everything else.
+  sso:
+    issuerUrl: https://sso.example.com/realms/rail
+    clientId: nr-status
+    # Prefer an existingSecret in a real deployment (External Secrets
+    # Operator, Vault, SOPS) over an inline value in a values file:
+    #   existingSecret: nr-status-sso
+    clientSecret: replace-with-your-oidc-client-secret
+    redirectUrl: https://status.example.com/api/auth/callback
+    postLoginRedirectUrl: https://status.example.com/
+  sessionTtlDays: 14
   resources:
     requests:
       cpu: 100m

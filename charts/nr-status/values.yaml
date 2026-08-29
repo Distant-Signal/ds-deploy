@@ -296,6 +296,55 @@ api:
     port: 8080
   # -- tracing-subscriber EnvFilter syntax: "info", "api=debug", "warn", ...
   logLevel: info
+  # OIDC single sign-on. REQUIRED -- there is no `enabled` toggle and no
+  # anonymous fallback: `crates/api`'s clap config declares all five SSO_*
+  # fields with no default, so an api pod without them exits immediately
+  # with "required arguments were not provided" and CrashLoopBackOffs.
+  # Leaving any of the four non-secret values (or `clientSecret`, unless an
+  # `existingSecret` supplies it) empty therefore ABORTS THE RENDER with an
+  # explicit message, the same fail-fast posture `enricher.llm.baseUrl`
+  # and the pollers' `baseUrl` already use, rather than deploying a pod
+  # that cannot start.
+  #
+  # Sign-in is only needed for per-user features (pinning, authoring custom
+  # lines); the line-status pages themselves stay readable anonymously.
+  sso:
+    # -- OIDC issuer base URL, e.g. https://sso.example.com/realms/rail.
+    # Everything else (authorization, token and JWKS endpoints) is
+    # discovered from this URL's .well-known/openid-configuration. Required.
+    issuerUrl: ""
+    # -- OIDC client id this deployment is registered as with the issuer.
+    # Required.
+    clientId: ""
+    # -- OIDC client secret paired with `clientId`. Follows the chart's
+    # normal secrets rule -- an `existingSecret` takes priority; otherwise
+    # this value is rendered into the chart Secret as `sso-client-secret`.
+    # Never auto-generated: a random value would be rejected by the issuer,
+    # unlike `secrets.internalToken` whose only peer is this chart itself.
+    # Required (the api refuses to start on an empty client secret --
+    # crates/api/src/app.rs).
+    clientSecret: ""
+    # -- Read `sso-client-secret` from this pre-existing Secret instead.
+    existingSecret: ""
+    # -- Key within `existingSecret` holding the client secret.
+    existingSecretClientSecretKey: sso-client-secret
+    # -- The exact redirect URI registered with the SSO server, e.g.
+    # https://status.example.com/api/auth/callback. This must be the
+    # FRONTEND's public origin, not the api's: the callback's Set-Cookie
+    # has to be scoped to the origin the browser talks to for everything
+    # else, or the session cookie never comes back. `/api/auth/callback` is
+    # proxied through to the api by frontend/app/api/[...path]/route.ts.
+    # Required.
+    redirectUrl: ""
+    # -- Where the callback and logout handlers send the browser once
+    # they're done -- the frontend's own root URL, e.g.
+    # https://status.example.com/. One fixed target, not a round-tripped
+    # "return to the page you were on". Required.
+    postLoginRedirectUrl: ""
+  # -- How long a session stays valid after sign-in, in days. A fixed
+  # expiry stamped at login, not a sliding window refreshed by activity.
+  # Matches the binary's own default.
+  sessionTtlDays: 14
   probes:
     # -- Path served by crates/api/src/routes/health.rs, nested under /public
     # by main.rs. Changing this must be matched in tests/test-api-health.yaml.

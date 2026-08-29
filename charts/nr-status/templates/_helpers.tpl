@@ -196,6 +196,26 @@ Used by api-deployment.yaml and by all four poller deployments.
 {{- end }}
 
 {{/*
+Resolved Secret name/key for the OIDC client secret. Takes root.
+Used by api-deployment.yaml (SSO_CLIENT_SECRET) and, for the name, by
+secret.yaml's decision on whether to render the key at all. Same shape as
+the internal-token pair above, except this one is never auto-generated -- a
+random OAuth2 client secret would simply be rejected by the issuer, so it
+is closer to the rdm-*-api-key / llm-api-key entries in that respect.
+*/}}
+{{- define "nr-status.ssoClientSecretName" -}}
+{{- default (include "nr-status.secretName" .) .Values.api.sso.existingSecret }}
+{{- end }}
+
+{{- define "nr-status.ssoClientSecretKey" -}}
+{{- if .Values.api.sso.existingSecret }}
+{{- .Values.api.sso.existingSecretClientSecretKey }}
+{{- else }}
+{{- print "sso-client-secret" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Resolved Secret name/key for one poller's RDM API key. Call as:
   {{ include "nr-status.pollerSecretName" (dict "root" $ "poller" $p) }}
   {{ include "nr-status.pollerSecretKey" (dict "root" $ "name" $name "poller" $p) }}
