@@ -1,4 +1,11 @@
 {{- if .Values.devAuthentik.enabled }}
+{{/*
+See devauthentik-server-deployment.yaml's identical comment: this is the
+container that actually applies blueprints, so it's the one that genuinely
+needs SSO_REDIRECT_URL at runtime for oauth2-client.yaml's
+`!Env [SSO_REDIRECT_URL, ...]` to resolve correctly.
+*/}}
+{{- $redirectUrl := .Values.api.sso.redirectUrl | default (include "distant-signal.devAuthentikRedirectUrl" .) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -67,6 +74,8 @@ spec:
               value: "false"
             - name: AUTHENTIK_DISABLE_UPDATE_CHECK
               value: "true"
+            - name: SSO_REDIRECT_URL
+              value: {{ $redirectUrl | quote }}
           volumeMounts:
             - name: blueprints
               mountPath: /blueprints/local

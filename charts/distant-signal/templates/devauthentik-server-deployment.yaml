@@ -1,4 +1,15 @@
 {{- if .Values.devAuthentik.enabled }}
+{{/*
+Same $redirectUrl computation api-deployment.yaml uses (an operator's
+explicit api.sso.redirectUrl always wins over the devAuthentik-computed
+default) -- passed through below as SSO_REDIRECT_URL so the
+oauth2-client.yaml blueprint's `!Env [SSO_REDIRECT_URL, ...]` registers
+the SAME redirect_uris value crates/api itself uses, rather than a second,
+independently-fixed copy that can silently drift from it (confirmed live:
+this is exactly what broke when SSO_REDIRECT_URL was pointed at a real
+remote-access hostname instead of the devAuthentik default).
+*/}}
+{{- $redirectUrl := .Values.api.sso.redirectUrl | default (include "distant-signal.devAuthentikRedirectUrl" .) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -77,6 +88,8 @@ spec:
               value: "false"
             - name: AUTHENTIK_DISABLE_UPDATE_CHECK
               value: "true"
+            - name: SSO_REDIRECT_URL
+              value: {{ $redirectUrl | quote }}
           volumeMounts:
             - name: blueprints
               mountPath: /blueprints/local

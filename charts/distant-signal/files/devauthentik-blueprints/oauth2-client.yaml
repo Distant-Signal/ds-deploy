@@ -43,8 +43,24 @@ entries:
       client_type: confidential
       client_id: distant-signal-dev
       client_secret: distant-signal-dev-local-only-not-a-real-secret
+      # Driven by the same SSO_REDIRECT_URL env var crates/api itself reads
+      # (see routes/auth.rs's login handler), not a second, independently
+      # hardcoded copy of it -- the two used to drift on purpose (this file
+      # said "fixed", dev.env.example said "already matches, no change
+      # needed") until a real remote-access setup (an app reached over a
+      # Tailscale hostname rather than plain localhost) proved that
+      # assumption wrong: SSO_REDIRECT_URL got updated to the real
+      # browser-facing callback URL, Authentik kept rejecting it because
+      # this list still only had the literal `localhost` string, and
+      # "matching_mode: strict" means no partial/wildcard match saves you.
+      # docker-compose.authentik.yml's `&authentik-env` anchor and the
+      # Helm chart's devauthentik deployments both now pass SSO_REDIRECT_URL
+      # through so this stays in sync automatically. authentik-worker
+      # applies blueprints, so it's the one that actually needs this var at
+      # runtime -- authentik-server gets it too for consistency, since it's
+      # cheap and keeps both containers' env blocks identical.
       redirect_uris:
-        - url: "http://localhost:3000/api/auth/callback"
+        - url: !Env [SSO_REDIRECT_URL, "http://localhost:3000/api/auth/callback"]
           matching_mode: strict
       signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
       authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
