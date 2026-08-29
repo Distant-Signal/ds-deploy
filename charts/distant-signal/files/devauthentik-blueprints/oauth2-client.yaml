@@ -62,6 +62,20 @@ entries:
       redirect_uris:
         - url: !Env [SSO_REDIRECT_URL, "http://localhost:3000/api/auth/callback"]
           matching_mode: strict
+      # OAuth2Provider.grant_types (authentik/providers/oauth2/models.py)
+      # defaults to an EMPTY list, not "all" -- confirmed against the real
+      # model source, not assumed. Omitting it here (as this entry
+      # originally did) doesn't mean "allow the usual ones"; it means "allow
+      # none at all", which is why every real authorize attempt failed with
+      # "Invalid grant_type for provider" / "The request is otherwise
+      # malformed" regardless of how correct redirect_uris/client_id were.
+      # This app only ever does Authorization Code + PKCE (see
+      # crates/api/src/auth/oidc.rs), so that's the only grant type enabled
+      # -- not the full GrantType enum (which also has IMPLICIT, HYBRID,
+      # REFRESH_TOKEN, CLIENT_CREDENTIALS, PASSWORD, DEVICE_CODE,
+      # TOKEN_EXCHANGE), none of which this app's flow uses or should accept.
+      grant_types:
+        - authorization_code
       signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
       authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
       invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
