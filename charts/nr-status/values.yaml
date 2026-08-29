@@ -486,6 +486,44 @@ enricher:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
+# trust-consumer (crates/trust-consumer/src/config.rs)
+#
+# Unlike every poller and unlike enricher, this is a persistent Kafka
+# consumer with real connected/disconnected liveness semantics -- see
+# templates/trust-consumer-deployment.yaml's probes.
+# ---------------------------------------------------------------------------
+trustConsumer:
+  image:
+    repository: nr-status/trust-consumer
+    tag: ""
+    pullPolicy: IfNotPresent
+  kafka:
+    brokers: ""
+    topic: ""
+    consumerGroup: nr-status-trust-consumer
+    saslMechanism: ""
+    # -- Consumer key/secret. Follows the chart's normal secrets rule: an
+    # existingSecret takes priority; otherwise these values (possibly
+    # empty pre-subscription) are rendered as-is -- never auto-generated,
+    # a random Kafka credential is meaningless.
+    saslUsername: ""
+    saslPassword: ""
+    existingSecret: ""
+    existingSecretUsernameKey: kafka-sasl-username
+    existingSecretPasswordKey: kafka-sasl-password
+  referenceReloadSecs: 60
+  retentionDays: 90
+  healthPort: 8081
+  logLevel: info
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
 # frontend (frontend/lib/api.ts)
 # ---------------------------------------------------------------------------
 frontend:
