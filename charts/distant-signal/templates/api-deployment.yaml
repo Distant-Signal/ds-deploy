@@ -140,6 +140,12 @@ spec:
               value: {{ $postLoginRedirectUrl | quote }}
             - name: SESSION_TTL_DAYS
               value: {{ .Values.api.sessionTtlDays | quote }}
+            # Must equal the aggregator Deployment's own HISTORY_RETENTION_DAYS
+            # -- sourced from the SAME value (not a separate api.* setting)
+            # so the two can't drift apart. See
+            # crates/api/src/data/config.rs's history_retention_days doc.
+            - name: HISTORY_RETENTION_DAYS
+              value: {{ .Values.aggregator.historyRetentionDays | quote }}
             # LINES_DIR is deliberately NOT set: crates/api/src/data/config.rs
             # already defaults it to /app/lines, which is exactly where
             # docker/api.Dockerfile bakes the line catalogue.

@@ -479,7 +479,11 @@ aggregator:
     pullPolicy: IfNotPresent
   # -- DESIGN.md section 4 targets every 30-60s; 60 is the conservative end.
   pollIntervalSecs: 60
-  # -- How long line_status_history rows are kept before being pruned.
+  # -- How long line_status_history rows are kept before being pruned. Also
+  # sourced by the api Deployment (api-deployment.yaml's own
+  # HISTORY_RETENTION_DAYS) so it can report the real ceiling to the
+  # frontend's history range picker -- deliberately one value, not a
+  # separate api.historyRetentionDays, so the two can't drift apart.
   historyRetentionDays: 7
   logLevel: info
   extraEnv: []
