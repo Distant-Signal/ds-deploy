@@ -728,7 +728,24 @@ scheduleFeed:
   tolerations: []
   affinity: {}
   podAnnotations: {}
-  podSecurityContext: {}
+  # -- fsGroup: 1000 is load-bearing, not a stylistic default -- confirmed
+  # against a real deployment (docker-compose, same underlying image) that
+  # drakkan/sftpgo's official image runs as a fixed non-root `USER
+  # 1000:1000` (its own Dockerfile), and does NOT chown a freshly-mounted
+  # empty volume for you. Without this, sftpgo's own attempt to create the
+  # DTD account's home_dir (destinationFolder/folderPath above) on first
+  # login fails with a plain OS-level "permission denied" -- reproduced for
+  # real: "error creating root directory ... mkdir ...: permission denied"
+  # -- because a fresh PVC/volume is root-owned by default and UID 1000
+  # cannot mkdir under it. Kubernetes' fsGroup mechanism recursively
+  # chgrp's the mounted volume to this GID (and adds it as a supplementary
+  # group to every container in the pod, including `ingest`, which also
+  # needs write access to the same shared volume) before either container
+  # starts, which is exactly the standard fix for this exact class of
+  # problem. Merged over (not replacing) the chart-wide pod securityContext
+  # defaults (runAsNonRoot: true, seccompProfile: RuntimeDefault).
+  podSecurityContext:
+    fsGroup: 1000
 
 # ---------------------------------------------------------------------------
 # frontend (frontend/lib/api.ts)
