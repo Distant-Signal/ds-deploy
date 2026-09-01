@@ -485,6 +485,15 @@ aggregator:
   # frontend's history range picker -- deliberately one value, not a
   # separate api.historyRetentionDays, so the two can't drift apart.
   historyRetentionDays: 7
+  # -- How long line_status_daily_stats rows (LDBWS-derived daily rollups)
+  # are kept before being pruned. Must stay strictly under 365: RDM's Live
+  # Departure Board licence (Schedule 1 §9) requires deleting all data
+  # received within 1 year, and unlike historyRetentionDays this is the
+  # gap that actually closes the production compliance risk -- an
+  # unset/omitted value here previously meant "never pruned" (see
+  # docs/superpowers/plans/2026-09-01-ldbws-data-retention.md). Matches
+  # crates/aggregator/src/config.rs's own default_value_t.
+  dailyStatsRetentionDays: 300
   logLevel: info
   extraEnv: []
   resources: {}

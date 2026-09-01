@@ -78,6 +78,8 @@ spec:
               value: {{ .Values.aggregator.pollIntervalSecs | quote }}
             - name: HISTORY_RETENTION_DAYS
               value: {{ .Values.aggregator.historyRetentionDays | quote }}
+            - name: DAILY_STATS_RETENTION_DAYS
+              value: {{ .Values.aggregator.dailyStatsRetentionDays | quote }}
             - name: RUST_LOG
               value: {{ .Values.aggregator.logLevel | quote }}
             {{- with .Values.aggregator.extraEnv }}
