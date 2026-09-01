@@ -646,18 +646,24 @@ scheduleFeed:
     # it down separately. Leave empty to have NOTES.txt tell you to fill it
     # in once known.
     publicHostname: ""
-    # -- DTD's push account username on THIS app's server. Required when
-    # enabled; no default possible. See Task 1 -- unconfirmed whether DTD's
-    # push client even needs a value here at all until push-side
-    # configuration mechanics are known.
-    username: ""
+    # -- The push account's username on THIS app's server. This app mints
+    # this account, not DTD -- so unlike a genuinely external credential
+    # there's nothing to look up, and a fixed default is fine. Communicate
+    # this (and the auto-generated password below) to DTD once its push
+    # configuration is known -- see NOTES.txt.
+    username: dtd-push
     # -- "password" or "public-key". NO DEFAULT: RSPS5046 states neither
     # mechanism for either delivery direction (design doc's own primary-
     # source re-check). Enabling without setting this aborts rendering.
     authMethod: ""
-    # -- Used when authMethod=password. NEVER auto-generated -- same rule as
-    # pollers.*.apiKey. Rendered into the chart Secret when existingSecret
-    # is empty.
+    # -- Used when authMethod=password. Auto-generated and preserved across
+    # `helm upgrade`s when left empty -- CORRECTED 2026-09-01 from an
+    # earlier "never auto-generated" rule that wrongly treated this like an
+    # externally-assigned credential (see schedulefeed-secret.yaml's own
+    # corrected comment): this app mints the account, so there's nothing
+    # external for a random value to fail to match. Set explicitly only if
+    # you need a specific value; otherwise see NOTES.txt for how to read
+    # back what was generated, to hand to DTD.
     password: ""
     # -- DTD's public key, used when authMethod=public-key AND DTD's push
     # configuration turns out to support supplying one (unconfirmed).

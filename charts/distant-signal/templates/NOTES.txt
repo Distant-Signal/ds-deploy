@@ -130,6 +130,15 @@ Connection details to give to DTD for pushing the schedule feed:
   LoadBalancer/DNS is provisioned. Destination is relative to DTD's SFTP
   account's own home directory, not this cluster's filesystem.)
 
+{{- if eq .Values.scheduleFeed.sftp.authMethod "password" }}
+
+This app mints the account above itself, so unless you set
+scheduleFeed.sftp.password explicitly, a random password was generated on
+first install and preserved across upgrades. Read it back to give to DTD:
+
+  kubectl get secret {{ include "distant-signal.scheduleFeedDtdPasswordSecretName" . }} -n {{ .Release.Namespace }} -o jsonpath="{.data['{{ include "distant-signal.scheduleFeedDtdPasswordSecretKey" . }}']}" | base64 -d; echo
+{{- end }}
+
 schedule-feed's SFTP server generated a new host key on first install.
 Its fingerprint must be communicated to DTD (via whatever channel push
 configuration turns out to require -- see
