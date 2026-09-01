@@ -757,6 +757,82 @@ scheduleFeed:
     fsGroup: 1000
 
 # ---------------------------------------------------------------------------
+# railMcp: the derived MCP service ("distant-signal-mcp"), a fork of
+# train-mcp living in its own repository -- this chart deploys it, it does
+# not build it. See
+# docs/superpowers/specs/2026-09-01-train-mcp-integration-design.md
+# Decision 1/6 and docs/superpowers/plans/2026-09-01-train-mcp-integration.md
+# Task 7.
+# ---------------------------------------------------------------------------
+railMcp:
+  # -- Opt-in; false by default, matching scheduleFeed.enabled's own
+  # pattern. This chart never builds this image itself -- its source lives
+  # in the derived service's own repository (a fork of train-mcp), not
+  # anywhere under crates/ -- see the design doc's Decision 1.
+  enabled: false
+  image:
+    # -- Full external registry path, like devAuthentik.image.repository
+    # (ghcr.io/goauthentik/server) -- NOT a bare distant-signal/<name>
+    # short name, since this repo's own CI/CD does not build or publish
+    # this image (Decision 1/6).
+    repository: ghcr.io/CHANGE-ME/distant-signal-mcp
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 3000
+  # -- The MCP service's own PUBLIC_URL (its OAuth discovery metadata needs
+  # a real, reachable origin -- see the fork's own src/config.ts). Left
+  # blank by default; an operator enabling railMcp must set this to
+  # wherever they expose the railmcp Service. No Ingress/TLS is sketched by
+  # this chart for it -- see Decision 6's own shallow deployment depth and
+  # this plan's Task 7 "Explicitly out of scope".
+  publicUrl: ""
+  # -- The Discord application this MCP server's OAuth resource-server
+  # verification checks tokens against -- the fork's own DISCORD_CLIENT_ID/
+  # DISCORD_ALLOWED_USER_IDS. Neither has a sensible chart-wide default;
+  # both are required by the fork's own src/config.ts at boot.
+  discord:
+    clientId: ""
+    allowedUserIds: ""
+  # -- LDBWS/Rail Data Marketplace credentials the fork's board/service-
+  # detail tools still call directly (Decision 5 of the design doc --
+  # unchanged by this integration, board tools are not routed through DS).
+  # Six required values, unchanged from the fork's own README.md
+  # Configuration table.
+  ldbws:
+    departuresUrl: ""
+    departuresKey: ""
+    arrivalsUrl: ""
+    arrivalsKey: ""
+    serviceUrl: ""
+    serviceKey: ""
+  # -- Read the eight values above from this pre-existing Secret instead
+  # (see the existingSecret*Key overrides below for each key's name within
+  # it). Every field is a genuinely external credential this chart cannot
+  # generate -- same posture as api.sso.existingSecret/pollers'
+  # existingSecret, never auto-generated.
+  existingSecret: ""
+  existingSecretDiscordClientIdKey: discord-client-id
+  existingSecretDiscordAllowedUserIdsKey: discord-allowed-user-ids
+  existingSecretLdbwsDeparturesUrlKey: ldbws-departures-url
+  existingSecretLdbwsDeparturesKeyKey: ldbws-departures-key
+  existingSecretLdbwsArrivalsUrlKey: ldbws-arrivals-url
+  existingSecretLdbwsArrivalsKeyKey: ldbws-arrivals-key
+  existingSecretLdbwsServiceUrlKey: ldbws-service-url
+  existingSecretLdbwsServiceKeyKey: ldbws-service-key
+  # -- How long Task 5's DS line-catalogue cache (in the derived service)
+  # trusts one fetch before refetching -- DS_LINE_CATALOGUE_TTL_MS, an
+  # unresearched starting figure per the design doc's Decision 3d Open
+  # questions/risks entry.
+  lineCatalogueTtlMs: 900000
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
 # frontend (frontend/lib/api.ts)
 # ---------------------------------------------------------------------------
 frontend:

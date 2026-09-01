@@ -1,0 +1,24 @@
+{{/*
+ClusterIP for the derived MCP service's HTTP transport -- no external
+Ingress/TLS is sketched here, matching Decision 6's own shallow deployment
+depth (see the design doc's Explicitly out of scope and this plan's
+own Task 7). An operator who wants to expose this externally fronts it
+with their own Ingress/LoadBalancer, the same way this chart leaves that
+choice to the operator for every other internal-only Service.
+*/}}
+{{- if .Values.railMcp.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "distant-signal.railMcpFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "railmcp") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "distant-signal.selectorLabels" (dict "root" . "component" "railmcp") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.railMcp.service.port }}
+      targetPort: http
+{{- end }}

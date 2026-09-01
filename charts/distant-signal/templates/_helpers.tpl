@@ -468,3 +468,86 @@ added. */}}
 {{- $folder -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+railMcp: the derived MCP service (Task 1: forked from train-mcp, own
+repository, own CI/tests -- see
+docs/superpowers/specs/2026-09-01-train-mcp-integration-design.md
+Decision 1). Object names and Secret name/key resolution, same shape as
+devAuthentikFullname/devAuthentikSecretName above. Every key helper below
+follows the same existingSecret/existingSecretXKey pattern as
+internalTokenSecretKey/pollerSecretKey -- one existingSecret toggle for
+the whole component (railMcp.existingSecret), each key individually
+overridable within it.
+*/}}
+{{- define "distant-signal.railMcpFullname" -}}
+{{- printf "%s-railmcp" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "distant-signal.railMcpSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.railMcp.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.railMcpDiscordClientIdSecretKey" -}}
+{{- if .Values.railMcp.existingSecret }}
+{{- .Values.railMcp.existingSecretDiscordClientIdKey }}
+{{- else }}
+{{- print "discord-client-id" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.railMcpDiscordAllowedUserIdsSecretKey" -}}
+{{- if .Values.railMcp.existingSecret }}
+{{- .Values.railMcp.existingSecretDiscordAllowedUserIdsKey }}
+{{- else }}
+{{- print "discord-allowed-user-ids" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.railMcpLdbwsDeparturesUrlSecretKey" -}}
+{{- if .Values.railMcp.existingSecret }}
+{{- .Values.railMcp.existingSecretLdbwsDeparturesUrlKey }}
+{{- else }}
+{{- print "ldbws-departures-url" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.railMcpLdbwsDeparturesKeySecretKey" -}}
+{{- if .Values.railMcp.existingSecret }}
+{{- .Values.railMcp.existingSecretLdbwsDeparturesKeyKey }}
+{{- else }}
+{{- print "ldbws-departures-key" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.railMcpLdbwsArrivalsUrlSecretKey" -}}
+{{- if .Values.railMcp.existingSecret }}
+{{- .Values.railMcp.existingSecretLdbwsArrivalsUrlKey }}
+{{- else }}
+{{- print "ldbws-arrivals-url" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.railMcpLdbwsArrivalsKeySecretKey" -}}
+{{- if .Values.railMcp.existingSecret }}
+{{- .Values.railMcp.existingSecretLdbwsArrivalsKeyKey }}
+{{- else }}
+{{- print "ldbws-arrivals-key" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.railMcpLdbwsServiceUrlSecretKey" -}}
+{{- if .Values.railMcp.existingSecret }}
+{{- .Values.railMcp.existingSecretLdbwsServiceUrlKey }}
+{{- else }}
+{{- print "ldbws-service-url" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.railMcpLdbwsServiceKeySecretKey" -}}
+{{- if .Values.railMcp.existingSecret }}
+{{- .Values.railMcp.existingSecretLdbwsServiceKeyKey }}
+{{- else }}
+{{- print "ldbws-service-key" }}
+{{- end }}
+{{- end }}

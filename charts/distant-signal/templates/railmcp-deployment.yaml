@@ -1,0 +1,124 @@
+{{/*
+The derived MCP service ("distant-signal-mcp") -- Task 1: forked from
+train-mcp, own repository, own CI/tests -- see
+docs/superpowers/specs/2026-09-01-train-mcp-integration-design.md
+Decision 1. ONE container, unlike schedulefeed-deployment.yaml's paired
+sftp/ingest pod -- this service has no verifier counterpart.
+*/}}
+{{- if .Values.railMcp.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "distant-signal.railMcpFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "railmcp") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "railmcp") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "railmcp") | nindent 8 }}
+      {{- with .Values.railMcp.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.railMcp.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: railmcp
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.railMcp.image) | quote }}
+          imagePullPolicy: {{ .Values.railMcp.image.pullPolicy }}
+          securityContext:
+            # This is a third-party-built image (from this chart's own
+            # perspective -- it is this repo's derived service, but not
+            # built by this repo's CI) this chart's own security posture
+            # cannot verify at render time -- same readOnlyRootFilesystem:
+            # false stance devauthentik-server-deployment.yaml takes for
+            # ghcr.io/goauthentik/server, for the same reason (the fork's
+            # own Node process may write beyond what this chart controls;
+            # not independently verified against a real running container
+            # this pass).
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" false) | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.railMcp.service.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.railMcp.service.port | quote }}
+            - name: PUBLIC_URL
+              value: {{ .Values.railMcp.publicUrl | quote }}
+            # In-cluster DNS name for this chart's own `api` Service -- no
+            # new DS-side route or auth needed (Decision 4: every DS call
+            # this service makes is anonymous).
+            - name: DS_API_BASE_URL
+              value: {{ include "distant-signal.apiBaseUrl" . | quote }}
+            - name: DS_LINE_CATALOGUE_TTL_MS
+              value: {{ .Values.railMcp.lineCatalogueTtlMs | quote }}
+            - name: DISCORD_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.railMcpSecretName" . }}
+                  key: {{ include "distant-signal.railMcpDiscordClientIdSecretKey" . }}
+            - name: DISCORD_ALLOWED_USER_IDS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.railMcpSecretName" . }}
+                  key: {{ include "distant-signal.railMcpDiscordAllowedUserIdsSecretKey" . }}
+            - name: LDBWS_DEPARTURES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.railMcpSecretName" . }}
+                  key: {{ include "distant-signal.railMcpLdbwsDeparturesUrlSecretKey" . }}
+            - name: LDBWS_DEPARTURES_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.railMcpSecretName" . }}
+                  key: {{ include "distant-signal.railMcpLdbwsDeparturesKeySecretKey" . }}
+            - name: LDBWS_ARRIVALS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.railMcpSecretName" . }}
+                  key: {{ include "distant-signal.railMcpLdbwsArrivalsUrlSecretKey" . }}
+            - name: LDBWS_ARRIVALS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.railMcpSecretName" . }}
+                  key: {{ include "distant-signal.railMcpLdbwsArrivalsKeySecretKey" . }}
+            - name: LDBWS_SERVICE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.railMcpSecretName" . }}
+                  key: {{ include "distant-signal.railMcpLdbwsServiceUrlSecretKey" . }}
+            - name: LDBWS_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.railMcpSecretName" . }}
+                  key: {{ include "distant-signal.railMcpLdbwsServiceKeySecretKey" . }}
+          {{- with .Values.railMcp.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.railMcp.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.railMcp.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.railMcp.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
