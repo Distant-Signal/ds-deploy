@@ -616,6 +616,108 @@ trustConsumer:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
+# scheduleFeed -- OPT-IN CIF SCHEDULE feed SFTP-push receiver
+# (docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md)
+# ---------------------------------------------------------------------------
+# Renders ONE Deployment with TWO containers (an SFTP server and this app's
+# own schedule-ingest verifier) sharing one ReadWriteOnce PVC -- see the
+# design doc's "The reader/writer problem push introduces" for why this is
+# one Pod, not two. Off by default: enabling this without a real DTD push
+# account configured (see docs/superpowers/plans/2026-09-01-schedule-feed-push-ingestion.md
+# Task 1) stands up infrastructure nothing can reach yet, which is a
+# legitimate thing to do ahead of time but not silently assumed to be "done."
+scheduleFeed:
+  enabled: false
+  sftp:
+    image:
+      repository: drakkan/sftpgo
+      tag: ""
+      pullPolicy: IfNotPresent
+    # -- SFTPGo's own default container port -- not independently
+    # re-verified against a real deployed instance by this plan.
+    port: 2022
+    # -- Purely informational: the public hostname/DNS name an operator has
+    # pointed at this Service's LoadBalancer, i.e. what actually gets
+    # handed to DTD alongside the port/username/destination below. This
+    # chart cannot set a Service's externally-visible hostname itself (that
+    # comes from wherever the LoadBalancer/DNS is provisioned) -- setting
+    # this value only makes it show up in `helm install`'s NOTES.txt output
+    # as a single place to review everything DTD needs, instead of hunting
+    # it down separately. Leave empty to have NOTES.txt tell you to fill it
+    # in once known.
+    publicHostname: ""
+    # -- DTD's push account username on THIS app's server. Required when
+    # enabled; no default possible. See Task 1 -- unconfirmed whether DTD's
+    # push client even needs a value here at all until push-side
+    # configuration mechanics are known.
+    username: ""
+    # -- "password" or "public-key". NO DEFAULT: RSPS5046 states neither
+    # mechanism for either delivery direction (design doc's own primary-
+    # source re-check). Enabling without setting this aborts rendering.
+    authMethod: ""
+    # -- Used when authMethod=password. NEVER auto-generated -- same rule as
+    # pollers.*.apiKey. Rendered into the chart Secret when existingSecret
+    # is empty.
+    password: ""
+    # -- DTD's public key, used when authMethod=public-key AND DTD's push
+    # configuration turns out to support supplying one (unconfirmed).
+    publicKey: ""
+    existingSecret: ""
+    existingSecretPasswordKey: schedule-sftp-password
+    existingSecretPublicKeyKey: schedule-sftp-dtd-public-key
+    # -- This app's OWN generated SSH host key, NOT DTD's -- inverted from
+    # the (superseded) pull design's dtd_sftp_host_key_fingerprint. Leave
+    # empty to have the chart generate and preserve one (Task 6).
+    existingSecretHostKey: ""
+    # -- The folder DTD's account lands files in, relative to its SFTP
+    # home directory -- e.g. "incoming" means DTD sees itself uploading to
+    # "/incoming" once connected. Rendered into both the ingest container's
+    # WATCH_DIR (schedulefeed-deployment.yaml) and NOTES.txt's connection
+    # summary, so the two stay in sync -- there's exactly one place this is
+    # set. SFTPGo's own home-directory/virtual-folder provisioning for a
+    # single chrooted account remains UNVERIFIED against a real deployed
+    # instance (same caveat as the account env vars below); this value is
+    # what gets threaded through once that's confirmed, not a guarantee
+    # SFTPGo already honors it.
+    destinationFolder: incoming
+    # -- Optional deeper subfolder within destinationFolder, e.g. "2026"
+    # for DTD to land files in "/incoming/2026". Empty by default: RSPS5046
+    # does not call for one, and neither push design doc's own manifest
+    # research found any need for date/version subfolders -- this exists
+    # only in case the real end-to-end test in an internet-exposed
+    # environment finds DTD's push client wants one.
+    folderPath: ""
+  ingest:
+    image:
+      repository: distant-signal/schedule-ingest
+      tag: ""
+      pullPolicy: IfNotPresent
+    checkTimes: "22:00,22:30,23:00,23:30,00:00,00:30,01:00,01:30,16:00"
+    retentionKeepSequences: 2
+    stabilityCycles: 2
+  service:
+    # -- LoadBalancer or NodePort + an operator-managed external LB/DNS --
+    # NOT an Ingress (HTTP(S)-only by spec, cannot carry SFTP). Actually
+    # exposing this to DTD is gated behind Task 1's outcome, per this
+    # plan's own Task 1 -- rendering/lint-checking it is not.
+    type: LoadBalancer
+    annotations: {}
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    existingClaim: ""
+  logLevel: info
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
 # frontend (frontend/lib/api.ts)
 # ---------------------------------------------------------------------------
 frontend:

@@ -44,6 +44,9 @@ spec:
           - poller-{{ $name }}
           {{- end }}
           {{- end }}
+          {{- if .Values.scheduleFeed.enabled }}
+          - schedulefeed
+          {{- end }}
   podMetricsEndpoints:
     - port: http
       path: /metrics

@@ -1,0 +1,209 @@
+{{/*
+The first MULTI-CONTAINER Deployment in this chart -- every other
+Deployment here (api, frontend, aggregator, enricher, trust-consumer, every
+poller) runs exactly one container. scheduleFeed pairs an SFTP receiver
+(the `sftp` container, a third-party image DTD pushes files into) with this
+app's own verifier/uploader (the `ingest` container, crates/schedule-ingest)
+sharing one PVC -- see docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md.
+*/}}
+{{- if .Values.scheduleFeed.enabled }}
+{{- if not .Values.scheduleFeed.sftp.authMethod }}
+{{- fail "scheduleFeed.sftp.authMethod must be set (\"password\" or \"public-key\") when scheduleFeed.enabled -- see docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md, Credentials" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "distant-signal.scheduleFeedFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
+spec:
+  # Fixed at 1, like aggregator: a rolling update would briefly run two SFTP
+  # receivers (or two ingest verifiers) against the same PVC, so this uses
+  # Recreate for the same reason aggregator-deployment.yaml does.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "schedulefeed") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 8 }}
+      {{- if or .Values.metrics.enabled .Values.scheduleFeed.podAnnotations }}
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.scheduleFeed.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.scheduleFeed.podSecurityContext) | nindent 8 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ default (include "distant-signal.scheduleFeedFullname" .) .Values.scheduleFeed.persistence.existingClaim }}
+        - name: host-key
+          secret:
+            secretName: {{ default (include "distant-signal.scheduleFeedSecretName" .) .Values.scheduleFeed.sftp.existingSecretHostKey }}
+            items:
+              - key: {{ include "distant-signal.scheduleFeedHostKeySecretKey" . }}
+                path: {{ include "distant-signal.scheduleFeedHostKeySecretKey" . }}
+                mode: 0600
+      containers:
+        - name: sftp
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.scheduleFeed.sftp.image) | quote }}
+          imagePullPolicy: {{ .Values.scheduleFeed.sftp.image.pullPolicy }}
+          # readOnlyRootFilesystem is left false here, unlike every
+          # single-purpose Rust binary elsewhere in this chart: SFTPGo's own
+          # runtime writes (config dir, its own SQLite metadata store unless
+          # configured otherwise, PID/lock files) are UNVERIFIED against a
+          # real deployed image in this pass (Open question 5) -- flip this
+          # to true once that's confirmed safe.
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" false) | nindent 12 }}
+          ports:
+            - name: sftp
+              containerPort: {{ .Values.scheduleFeed.sftp.port }}
+          # UNVERIFIED (Open question 5, docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md):
+          # this env block, the host-key mount path below, and SFTPGo's
+          # exact env-var contract for a single chrooted virtual user have
+          # NOT been checked against a real deployed drakkan/sftpgo
+          # container/entrypoint in this pass -- confirm against SFTPGo's
+          # own docs/a real cluster and adjust rather than trusting this as
+          # exact.
+          #
+          # ALSO UNVERIFIED / LIKELY A MISMATCH: the mounted host key
+          # (distant-signal.scheduleFeedHostKeySecretKey, rendered by
+          # schedulefeed-secret.yaml via Helm's `genPrivateKey "ed25519"`)
+          # is stored as a PKCS8 PEM blob ("-----BEGIN PRIVATE KEY-----"),
+          # NOT the OpenSSH-native "-----BEGIN OPENSSH PRIVATE KEY-----"
+          # container format that SFTPGo (like most sshd-alikes, e.g.
+          # atmoz/sftp) may expect at a raw host-key file path. Whether
+          # SFTPGo's loader accepts PKCS8 PEM directly, or needs a
+          # conversion step (e.g. an initContainer running
+          # `ssh-keygen -p -m PEM`/similar) has NOT been confirmed in this
+          # pass -- treat this as an open verification item, not a
+          # working default.
+          env:
+            - name: SFTPGO_SFTPD__BINDINGS__0__PORT
+              value: {{ .Values.scheduleFeed.sftp.port | quote }}
+            # DTD's push account username/password on this server. SFTPGo's
+            # real provisioning mechanism for a single chrooted virtual user
+            # (env vars vs a loaded JSON dump vs its REST API) is UNVERIFIED
+            # -- SFTPGO_DEFAULT_ADMIN_USERNAME/PASSWORD below name SFTPGo's
+            # documented *admin* bootstrap vars as a placeholder shape only,
+            # NOT confirmed to be how a scoped DTD virtual user is actually
+            # created; do not treat this pair as correct without checking
+            # against a real deployed image.
+            - name: SFTPGO_DEFAULT_ADMIN_USERNAME
+              value: {{ .Values.scheduleFeed.sftp.username | quote }}
+            {{- if eq .Values.scheduleFeed.sftp.authMethod "password" }}
+            - name: SFTPGO_DEFAULT_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleFeedDtdPasswordSecretName" . }}
+                  key: {{ include "distant-signal.scheduleFeedDtdPasswordSecretKey" . }}
+            {{- end }}
+          # STILL UNWIRED (same "confirm against a real deployed instance"
+          # caveat as the account env vars above): DTD's files should land
+          # under {{ include "distant-signal.scheduleFeedDestinationPath" . }}
+          # relative to its account's home directory (values.yaml's
+          # scheduleFeed.sftp.destinationFolder/folderPath, assembled by
+          # the distant-signal.scheduleFeedDestinationPath helper -- see
+          # WATCH_DIR on the ingest container below, which the ingest side
+          # already resolves consistently with this value). Whatever
+          # SFTPGo's real provisioning mechanism turns out to be (env var,
+          # loaded JSON dump, REST API call), it needs to set that account's
+          # home/virtual-folder to this path -- deliberately left as a
+          # pointer rather than a guessed SFTPGO_* env var name, since
+          # inventing one here would look more confirmed than it is.
+          volumeMounts:
+            - name: data
+              mountPath: /data/schedule-feed
+            - name: host-key
+              mountPath: /srv/sftpgo/host_keys
+              readOnly: true
+          {{- with .Values.scheduleFeed.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        - name: ingest
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.scheduleFeed.ingest.image) | quote }}
+          imagePullPolicy: {{ .Values.scheduleFeed.ingest.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          {{- end }}
+          # Env var names below are the uppercase-snake-case clap `env`
+          # names crates/schedule-ingest/src/config.rs actually declares
+          # (#[arg(long, env)] with no explicit override) -- checked
+          # directly against that file, not guessed: watch_dir, storage_dir,
+          # check_times, retention_keep_sequences, stability_cycles,
+          # api_ingest_url, internal_token, metrics_port, metrics_enabled.
+          env:
+            - name: WATCH_DIR
+              value: {{ printf "/data/schedule-feed/%s" (include "distant-signal.scheduleFeedDestinationPath" .) | quote }}
+            - name: STORAGE_DIR
+              value: /data/schedule-feed
+            - name: CHECK_TIMES
+              value: {{ .Values.scheduleFeed.ingest.checkTimes | quote }}
+            - name: RETENTION_KEEP_SEQUENCES
+              value: {{ .Values.scheduleFeed.ingest.retentionKeepSequences | quote }}
+            - name: STABILITY_CYCLES
+              value: {{ .Values.scheduleFeed.ingest.stabilityCycles | quote }}
+            - name: API_INGEST_URL
+              value: {{ printf "%s/private/schedule-feed-ingests" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.internalTokenSecretName" . }}
+                  key: {{ include "distant-signal.internalTokenSecretKey" . }}
+            # METRICS_ENABLED is always rendered (matching aggregator's/
+            # every poller's convention) -- this is the actual Rust-side
+            # toggle that stops the /metrics listener from starting.
+            # Omitting the containerPort/annotations above alone would not,
+            # since Kubernetes container ports are purely declarative.
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.scheduleFeed.logLevel | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/schedule-feed
+          {{- with .Values.scheduleFeed.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.scheduleFeed.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduleFeed.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduleFeed.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

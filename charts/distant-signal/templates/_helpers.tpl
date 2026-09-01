@@ -381,3 +381,90 @@ writing an IP of "".
 {{- end -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Per-component scheduleFeed object names. Takes root. scheduleFeed is an
+independent, fully opt-in subsystem (like devAuthentik above) that renders
+ONE Deployment (an SFTP receiver + this app's own verifier, sharing a PVC --
+see schedulefeed-deployment.yaml, Task 8) and its own Secret, so it gets its
+own name/secret-name pair following devAuthentikFullname/
+devAuthentikSecretName's exact pattern.
+*/}}
+{{- define "distant-signal.scheduleFeedFullname" -}}
+{{- printf "%s-schedulefeed" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "distant-signal.scheduleFeedSecretName" -}}
+{{- printf "%s-schedulefeed" (include "distant-signal.secretName" .) }}
+{{- end }}
+
+{{/*
+Key name for THIS APP's own generated SSH host key within whichever Secret
+holds it. Always the chart-rendered scheduleFeedSecretName's Secret UNLESS
+an operator overrides the whole Secret by NAME via
+scheduleFeed.sftp.existingSecretHostKey (a different Secret object
+entirely, not a key-within-this-Secret override like the DTD credential
+pair below) -- consuming that override is schedulefeed-deployment.yaml's
+job (Task 8), so this helper only names the key, taking no root/dict
+argument since the key name itself never varies.
+*/}}
+{{- define "distant-signal.scheduleFeedHostKeySecretKey" -}}
+{{- print "ssh_host_ed25519_key" }}
+{{- end }}
+
+{{/*
+Resolved Secret name/keys for the DTD account credential (password and/or
+public key). Takes root. Same shape as distant-signal.pollerSecretName/
+pollerSecretKey above: an operator-supplied scheduleFeed.sftp.existingSecret
+wins for BOTH the password and the public key (they always live together in
+one Secret, unlike the per-poller map, so no extra "name"/"poller" dict
+indirection is needed -- root alone is enough, matching
+distant-signal.postgresSecretName's simpler single-value shape instead).
+*/}}
+{{- define "distant-signal.scheduleFeedDtdPasswordSecretName" -}}
+{{- default (include "distant-signal.scheduleFeedSecretName" .) .Values.scheduleFeed.sftp.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.scheduleFeedDtdPasswordSecretKey" -}}
+{{- if .Values.scheduleFeed.sftp.existingSecret }}
+{{- .Values.scheduleFeed.sftp.existingSecretPasswordKey }}
+{{- else }}
+{{- print "schedule-sftp-password" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.scheduleFeedDtdPublicKeySecretName" -}}
+{{- default (include "distant-signal.scheduleFeedSecretName" .) .Values.scheduleFeed.sftp.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.scheduleFeedDtdPublicKeySecretKey" -}}
+{{- if .Values.scheduleFeed.sftp.existingSecret }}
+{{- .Values.scheduleFeed.sftp.existingSecretPublicKeyKey }}
+{{- else }}
+{{- print "schedule-sftp-dtd-public-key" }}
+{{- end }}
+{{- end }}
+
+{{/*
+DTD's landing folder, relative to its SFTP account's home directory --
+scheduleFeed.sftp.destinationFolder, plus scheduleFeed.sftp.folderPath if
+set. Takes root. One single place this path is assembled, consumed by both
+schedulefeed-deployment.yaml (the ingest container's WATCH_DIR, which must
+resolve to the same absolute path under /data/schedule-feed) and NOTES.txt
+(the human-readable connection summary) -- so the two can never drift
+apart the way two independently-written printf calls could.
+*/}}
+{{- define "distant-signal.scheduleFeedDestinationPath" -}}
+{{/* toString first: an unquoted numeric-looking value (e.g. folderPath:
+2026 for a year-based subfolder) parses as an int in both plain YAML and
+`--set`, and Sprig's trimAll requires a real string -- confirmed by
+`helm template` erroring on exactly this shape before this guard was
+added. */}}
+{{- $folder := .Values.scheduleFeed.sftp.destinationFolder | toString | trimAll "/" -}}
+{{- $sub := .Values.scheduleFeed.sftp.folderPath | toString | trimAll "/" -}}
+{{- if $sub -}}
+{{- printf "%s/%s" $folder $sub -}}
+{{- else -}}
+{{- $folder -}}
+{{- end -}}
+{{- end }}

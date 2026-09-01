@@ -1,0 +1,28 @@
+{{/*
+Sibling to ingress.yaml, not an extension of it -- Ingress is HTTP(S)-only
+and cannot carry SFTP traffic. This Service is what an operator points a
+cloud LoadBalancer (or a NodePort + external LB/DNS) at to actually expose
+scheduleFeed's SFTP receiver to DTD; see values.yaml's scheduleFeed.service
+comment for why LoadBalancer is the default here, unlike every HTTP
+workload in this chart.
+*/}}
+{{- if .Values.scheduleFeed.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "distant-signal.scheduleFeedFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
+  {{- with .Values.scheduleFeed.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.scheduleFeed.service.type }}
+  selector:
+    {{- include "distant-signal.selectorLabels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
+  ports:
+    - name: sftp
+      port: {{ .Values.scheduleFeed.sftp.port }}
+      targetPort: sftp
+{{- end }}

@@ -114,3 +114,32 @@ Verify the api is serving:
 
   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
 {{- end }}
+
+{{- if .Values.scheduleFeed.enabled }}
+
+Connection details to give to DTD for pushing the schedule feed:
+
+  Host:        {{ .Values.scheduleFeed.sftp.publicHostname | default "<not set -- fill in scheduleFeed.sftp.publicHostname once you know the LoadBalancer's public hostname/IP>" }}
+  Port:        {{ .Values.scheduleFeed.sftp.port }}
+  Username:    {{ .Values.scheduleFeed.sftp.username | default "<not set -- scheduleFeed.sftp.username>" }}
+  Auth method: {{ .Values.scheduleFeed.sftp.authMethod | default "<not set -- scheduleFeed.sftp.authMethod>" }}
+  Destination: /{{ include "distant-signal.scheduleFeedDestinationPath" . }}
+
+  (Host is informational only -- this chart cannot set a Service's
+  externally-visible hostname itself; it comes from wherever the
+  LoadBalancer/DNS is provisioned. Destination is relative to DTD's SFTP
+  account's own home directory, not this cluster's filesystem.)
+
+schedule-feed's SFTP server generated a new host key on first install.
+Its fingerprint must be communicated to DTD (via whatever channel push
+configuration turns out to require -- see
+docs/superpowers/plans/2026-09-01-schedule-feed-push-ingestion.md Task 1)
+so DTD's push client can trust it:
+
+  kubectl get secret {{ include "distant-signal.scheduleFeedSecretName" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.ssh_host_ed25519_key}' | base64 -d | ssh-keygen -lf /dev/stdin
+
+  # NOTE: the stored key is PKCS8 PEM ("-----BEGIN PRIVATE KEY-----"), not
+  # OpenSSH's native container format -- whether `ssh-keygen -lf` actually
+  # parses PKCS8 PEM directly from stdin like this has NOT been verified
+  # against a real key in this pass; a conversion step may be required.
+{{- end }}

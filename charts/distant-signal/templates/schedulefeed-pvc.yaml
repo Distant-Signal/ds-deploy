@@ -1,0 +1,25 @@
+{{/*
+The first standalone PersistentVolumeClaim in this chart -- every other
+stateful workload here (postgres, redis) uses a StatefulSet's
+volumeClaimTemplates instead. scheduleFeed's Deployment (schedulefeed-
+deployment.yaml, Task 8 Step 2) is a fixed-replicas:1 singleton with no
+per-replica identity to preserve, so a plain PVC referenced by name is
+enough -- no volumeClaimTemplate machinery needed.
+*/}}
+{{- if and .Values.scheduleFeed.enabled .Values.scheduleFeed.persistence.enabled (not .Values.scheduleFeed.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "distant-signal.scheduleFeedFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.scheduleFeed.persistence.accessModes | nindent 4 }}
+  {{- with .Values.scheduleFeed.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.scheduleFeed.persistence.size }}
+{{- end }}

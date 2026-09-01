@@ -239,4 +239,40 @@ spec:
   {{- end }}
 {{- end }}
 {{- end }}
+{{- if .Values.scheduleFeed.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "distant-signal.scheduleFeedFullname" . }}-metrics
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "schedulefeed") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- if .Values.metrics.enabled }}
+  ingress:
+    # scheduleFeed's ingest container's own /metrics listener -- scoped to
+    # whatever namespace runs Prometheus (or another scraper), matching
+    # every other workload's block above. Only the IN-CLUSTER metrics-scrape
+    # allow is this chart's job: inbound SFTP-from-the-internet on the sftp
+    # container is entirely outside what NetworkPolicy can express (a cloud
+    # LB/security-group layer, a manual operator step -- see
+    # docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+  {{- else }}
+  # Default-deny: the ingest container exposes no listener when
+  # metrics.enabled is false. (Inbound SFTP is never governed by this
+  # NetworkPolicy at all -- see comment above.)
+  {{- end }}
+{{- end }}
 {{- end }}
