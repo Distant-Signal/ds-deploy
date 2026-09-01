@@ -1,0 +1,241 @@
+name: CI
+
+# Lint, build and test the Rust workspace, the frontend and the Helm chart.
+#
+# Runs on every pull request targeting main/dev, and on every push to
+# main/master/dev. This is a superset of the "push validation" bullet in
+# the CI design doc: pushes and PRs run the same job set, there is no
+# reduced subset, because none of these jobs are slow/expensive enough to
+# warrant skipping on push (the container build/publish pipeline, which IS
+# expensive, lives in containers.yml instead).
+#
+# `clippy` and `actionlint` call FasterSpeeding/Piped's own reusable
+# `workflow_call` workflows directly (see the comment on each job). Piped's
+# remaining workflows (rustfmt.yml, lint.yml, type-check.yml, py-test.yml,
+# verify-types.yml, freeze-for-pr.yml, ...) are not used here: they are
+# either Python/nox-oriented (this repo has no Python code) or depend on a
+# `justfile` + `mise.toml` vendored from the `piped` git submodule via the
+# `just-jobs`/`handle-diff-file` composite actions in Piped-actions, which
+# this repo does not have and this change does not introduce. See the PR
+# description this workflow shipped with for the fuller "what was checked
+# and why" writeup, including upstream-gap notes for Piped/Piped-actions.
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [main, master, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  # Reusable workflow_call from FasterSpeeding/Piped: mise-installs a Rust
+  # toolchain and runs `auguwu/clippy-action` (cargo clippy --all-features)
+  # with inline PR annotations. This one is self-contained (no justfile
+  # dependency) and operates workspace-wide by default since this repo's
+  # root Cargo.toml is a virtual manifest, so it's a clean fit as-is.
+  #
+  # Caveat: this reusable workflow takes no inputs, so there is no way to
+  # add `--all-targets` from the caller side -- it lints lib/bin targets
+  # only, not test code. See the report for the suggested upstream tweak.
+  clippy:
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    uses: FasterSpeeding/Piped/.github/workflows/clippy.yml@5bbddb5d32d5bde939b18f6c6bcfa0e36779412f # master @ 2026-09-01
+
+  # Reusable workflow_call from FasterSpeeding/Piped: runs actionlint over
+  # this repo's own .github/workflows/*.yml via reviewdog. Self-contained
+  # (checkout + one third-party action), no justfile dependency -- a clean
+  # fit for validating the workflow files this change adds.
+  actionlint:
+    uses: FasterSpeeding/Piped/.github/workflows/lint-actions.yml@5bbddb5d32d5bde939b18f6c6bcfa0e36779412f # master @ 2026-09-01
+
+  # Custom step: Piped's rustfmt.yml exists but pipes its diff through the
+  # `handle-diff-file` composite action, which shells out to `just
+  # check-diff-file` -- i.e. it assumes the `piped` submodule's justfile is
+  # vendored into the repo. This repo has no justfile/mise.toml and this
+  # change deliberately does not add the Piped submodule just to satisfy
+  # one check, so a plain `cargo fmt --check` step is used instead.
+  #
+  # `continue-on-error: true`: `cargo fmt --check` is NOT clean on `main`
+  # today (confirmed by running it locally -- widespread pre-existing
+  # formatting drift in crates/aggregator/src/aggregation.rs and others,
+  # predating this change). Gating on it now would turn every PR red for a
+  # problem this change didn't create. The check still runs and reports so
+  # the drift is visible, it just doesn't block merges. Flip this to a hard
+  # gate once someone runs `cargo fmt` across the whole workspace.
+  rustfmt:
+    name: cargo fmt --check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --check
+        continue-on-error: true
+        run: cargo fmt --all --check
+
+  # Custom: cargo build/test across the whole workspace, plus the
+  # DATABASE_URL-gated `#[ignore]`d integration tests in `api` and
+  # `aggregator` (the only two crates whose ignored tests need a live
+  # Postgres -- confirmed by grepping every `#[ignore = "..."]` reason in
+  # the workspace; `enricher`'s four ignored tests need a live LLM_BASE_URL
+  # instead and are deliberately left ignored here).
+  rust-test:
+    name: cargo build & test
+    runs-on: ubuntu-24.04
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Cache cargo registry/target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --workspace
+        run: cargo build --workspace
+
+      - name: cargo test --workspace (ignored tests skipped)
+        run: cargo test --workspace
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
+
+      - name: Run api migrations
+        working-directory: crates/api
+        run: sqlx migrate run
+
+      - name: cargo test -p api -p aggregator -- --ignored (DB-backed tests)
+        run: cargo test -p api -p aggregator -- --ignored --test-threads=1
+
+  # Custom: no reusable Piped workflow covers Node/npm at all (its
+  # ecosystem coverage is Python + Rust). frontend/package.json has no
+  # `lint` script and there is no eslint.config.* in frontend/, so "lint"
+  # here is `tsc --noEmit` against the existing strict tsconfig.json --
+  # that's the real typecheck this repo has, not a stand-in for a missing
+  # eslint setup.
+  #
+  # frontend/e2e does not exist yet, so `npm run test:e2e` (playwright,
+  # testDir: ./e2e) has nothing to run -- deliberately omitted rather than
+  # added as a guaranteed-failing step. Add a job for it once e2e specs
+  # exist.
+  frontend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Typecheck (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      - name: npm test (vitest)
+        run: npm test
+
+      - name: npm run build (next build)
+        run: npm run build
+
+  # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
+  # `helm lint` + `helm template` against both the chart's own defaults and
+  # values-example.yaml (which turns on the optional pollers/devAuthentik
+  # sections) gives real template-rendering coverage without needing a
+  # cluster.
+  helm-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.2.3
+
+      - name: helm lint (default values)
+        run: helm lint charts/distant-signal
+
+      - name: helm lint (values-example.yaml)
+        run: helm lint charts/distant-signal -f charts/distant-signal/values-example.yaml
+
+      # `enricher` and `trustConsumer` (unlike the pollers) have no
+      # `enabled` toggle and their templates `fail()` at render time if
+      # their required connection settings are left empty -- confirmed
+      # locally: `helm template` with no overrides exits 1 on
+      # `trustConsumer.kafka.brokers` (and llm/sso) being unset, even
+      # though `helm lint` itself tolerates it. These --set dummy values
+      # exist only to satisfy the guard rails for this smoke test; they
+      # are not meant to be real settings.
+      - name: helm template (default values)
+        run: |
+          helm template distant-signal charts/distant-signal \
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
+            --set trustConsumer.kafka.topic=test-topic \
+            --set trustConsumer.kafka.saslMechanism=PLAIN \
+            --set enricher.llm.baseUrl=http://llm.example.com/v1 \
+            --set enricher.llm.model=test-model \
+            --set api.sso.issuerUrl=https://sso.example.com \
+            --set api.sso.clientId=test-client \
+            --set api.sso.clientSecret=test-secret \
+            --set api.sso.redirectUrl=https://app.example.com/callback \
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
+            > /dev/null
+
+      - name: helm template (values-example.yaml)
+        run: |
+          helm template distant-signal charts/distant-signal -f charts/distant-signal/values-example.yaml \
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
+            --set trustConsumer.kafka.topic=test-topic \
+            --set trustConsumer.kafka.saslMechanism=PLAIN \
+            --set enricher.llm.baseUrl=http://llm.example.com/v1 \
+            --set enricher.llm.model=test-model \
+            --set api.sso.issuerUrl=https://sso.example.com \
+            --set api.sso.clientId=test-client \
+            --set api.sso.clientSecret=test-secret \
+            --set api.sso.redirectUrl=https://app.example.com/callback \
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
+            > /dev/null
