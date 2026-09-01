@@ -133,6 +133,9 @@ jobs:
           - service: trust-consumer
             dockerfile: docker/trust-consumer.Dockerfile
             target: ""
+          - service: schedule-ingest
+            dockerfile: docker/schedule-ingest.Dockerfile
+            target: ""
           # The only image needing an explicit target: frontend/Dockerfile's
           # last stage is `runtime-dev`; the image this repo wants published
           # is the earlier `runtime-prod` stage (optimized `next build` +
