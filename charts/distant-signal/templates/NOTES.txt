@@ -123,12 +123,17 @@ Connection details to give to DTD for pushing the schedule feed:
   Port:        {{ .Values.scheduleFeed.sftp.port }}
   Username:    {{ .Values.scheduleFeed.sftp.username | default "<not set -- scheduleFeed.sftp.username>" }}
   Auth method: {{ .Values.scheduleFeed.sftp.authMethod | default "<not set -- scheduleFeed.sftp.authMethod>" }}
-  Destination: /{{ include "distant-signal.scheduleFeedDestinationPath" . }}
+  Destination: / (DTD's account is chrooted directly to this path -- see
+               below)
 
   (Host is informational only -- this chart cannot set a Service's
   externally-visible hostname itself; it comes from wherever the
-  LoadBalancer/DNS is provisioned. Destination is relative to DTD's SFTP
-  account's own home directory, not this cluster's filesystem.)
+  LoadBalancer/DNS is provisioned. DTD's push client sees its whole SFTP
+  session rooted at "/" -- it should upload there directly, with no
+  subfolder to navigate into. On this cluster's own filesystem those
+  uploads land at /data/schedule-feed/{{ include "distant-signal.scheduleFeedDestinationPath" . }},
+  since that path is set as this account's home directory/chroot root
+  itself, not a subfolder within some other home directory.)
 
 {{- if eq .Values.scheduleFeed.sftp.authMethod "password" }}
 

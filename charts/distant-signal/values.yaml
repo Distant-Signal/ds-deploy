@@ -675,16 +675,23 @@ scheduleFeed:
     # the (superseded) pull design's dtd_sftp_host_key_fingerprint. Leave
     # empty to have the chart generate and preserve one (Task 6).
     existingSecretHostKey: ""
-    # -- The folder DTD's account lands files in, relative to its SFTP
-    # home directory -- e.g. "incoming" means DTD sees itself uploading to
-    # "/incoming" once connected. Rendered into both the ingest container's
-    # WATCH_DIR (schedulefeed-deployment.yaml) and NOTES.txt's connection
-    # summary, so the two stay in sync -- there's exactly one place this is
-    # set. SFTPGo's own home-directory/virtual-folder provisioning for a
-    # single chrooted account remains UNVERIFIED against a real deployed
-    # instance (same caveat as the account env vars below); this value is
-    # what gets threaded through once that's confirmed, not a guarantee
-    # SFTPGo already honors it.
+    # -- The folder DTD's account lands files in. CORRECTED 2026-09-01
+    # (this task): this account's SFTP home/chroot directory is set to
+    # EXACTLY /data/schedule-feed/<this value+folderPath> (see
+    # schedulefeed-deployment.yaml's SCHEDULE_SFTP_HOME_DIR and
+    # schedulefeed-configmap.yaml's provisioning script), so DTD's push
+    # client actually sees itself uploading to "/" once connected --
+    # "incoming" here just names where that lands on this app's own
+    # filesystem, not a subfolder DTD navigates into. Rendered into both
+    # the ingest container's WATCH_DIR (schedulefeed-deployment.yaml) and
+    # NOTES.txt's connection summary, so the two stay in sync -- there's
+    # exactly one place this is set. SFTPGo's own account-provisioning
+    # mechanism (--loaddata-from) is now confirmed against SFTPGo's real Go
+    # source (see schedulefeed-configmap.yaml's header comment for the
+    # citations); what remains unverified is only whether this exact
+    # chart, deployed to a real cluster, behaves as that source reading
+    # predicts (docker/podman were not available to test this in this
+    # pass -- see this task's own report).
     destinationFolder: incoming
     # -- Optional deeper subfolder within destinationFolder, e.g. "2026"
     # for DTD to land files in "/incoming/2026". Empty by default: RSPS5046

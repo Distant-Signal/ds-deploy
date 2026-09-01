@@ -1,0 +1,90 @@
+{{- if .Values.scheduleFeed.enabled }}
+{{/*
+Static shell script -- no Go-template interpolation happens inside it, and
+none is needed: every value it reads (username, password/public key, home
+directory) comes from the `sftp` container's own env vars, set by
+schedulefeed-deployment.yaml from Values/Secrets in the normal way. Kept as
+its own ConfigMap, rather than inlined into the Deployment's `command:`,
+so it reads like an ordinary shell script and is independently diffable
+(`kubectl diff`/`helm diff`) from the Deployment's own churn. This chart
+has no prior initContainer/ConfigMap-script precedent to mirror (checked:
+no template under charts/distant-signal/templates currently renders an
+initContainer at all) -- this is the first one, following the shape of
+docker-compose.yml's docker/schedule-sftp-entrypoint.sh as closely as a
+bind-mounted host file and a ConfigMap-mounted file reasonably can. Keep
+the two scripts in sync by hand: Helm's `.Files.Get` cannot read outside
+this chart's own directory, so there is no way to share one literal copy
+of the script between the chart and docker-compose.yml.
+
+WHY THIS SCRIPT EXISTS (see schedulefeed-deployment.yaml's own `sftp`
+container comment for the full version): SFTPGO_DEFAULT_ADMIN_USERNAME/
+PASSWORD -- this chart's own earlier approach -- only ever bootstrap
+SFTPGo's web-UI/REST-API *admin* account (confirmed against SFTPGo's real
+Go source: internal/dataprovider/admin.go's Admin.setFromEnv()), never an
+SFTP-login *user*, which is what DTD's push client actually needs to
+authenticate as. SFTPGo's real, documented mechanism for provisioning that
+user declaratively at startup is `--loaddata-from` / SFTPGO_LOADDATA_FROM
+(confirmed against internal/cmd/root.go, internal/service/service.go, and
+internal/httpd/api_maintenance.go -- see the deployment's comment for the
+exact citations), which this script drives directly.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "distant-signal.scheduleFeedFullname" . }}-sftp-entrypoint
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
+data:
+  entrypoint.sh: |
+    #!/bin/sh
+    # Provisions the DTD push account via SFTPGo's real --loaddata-from
+    # startup mechanism, then execs `sftpgo serve` itself. See this
+    # ConfigMap's own header comment (kubectl describe configmap/get -o
+    # yaml on the object this renders) for the full "why" and source
+    # citations, and docker/schedule-sftp-entrypoint.sh in this repo for
+    # the byte-for-byte-intended local-dev equivalent.
+    set -eu
+
+    : "${SCHEDULE_SFTP_USERNAME:?SCHEDULE_SFTP_USERNAME must be set}"
+    : "${SCHEDULE_SFTP_HOME_DIR:?SCHEDULE_SFTP_HOME_DIR must be set}"
+
+    LOADDATA_FILE="/tmp/schedule-sftp-loaddata.json"
+
+    # authMethod=public-key uses SFTPGo's own "public_keys" user field
+    # instead of a password; authMethod=password (the only other value
+    # schedulefeed-deployment.yaml's own `fail` guard allows) requires
+    # SCHEDULE_SFTP_PASSWORD. Exactly one of the two env vars below is set
+    # by the Deployment, matching its own scheduleFeed.sftp.authMethod
+    # conditional.
+    if [ -n "${SCHEDULE_SFTP_PUBLIC_KEY:-}" ]; then
+      AUTH_FIELD="\"public_keys\": [\"${SCHEDULE_SFTP_PUBLIC_KEY}\"]"
+    else
+      : "${SCHEDULE_SFTP_PASSWORD:?SCHEDULE_SFTP_PASSWORD must be set when SCHEDULE_SFTP_PUBLIC_KEY is not}"
+      AUTH_FIELD="\"password\": \"${SCHEDULE_SFTP_PASSWORD}\""
+    fi
+
+    # NOTE: no JSON-escaping is done on username/password/public-key below.
+    # Fine for this chart's actual values (username defaults to a fixed
+    # string, password is either operator-set or the chart's own
+    # randAlphaNum-generated value -- neither plausibly contains '"' or
+    # '\') -- flagged here rather than silently assumed safe for every
+    # possible operator override.
+    cat > "$LOADDATA_FILE" <<EOF
+    {
+      "version": 17,
+      "users": [
+        {
+          "status": 1,
+          "username": "${SCHEDULE_SFTP_USERNAME}",
+          "home_dir": "${SCHEDULE_SFTP_HOME_DIR}",
+          "permissions": {
+            "/": ["*"]
+          },
+          ${AUTH_FIELD}
+        }
+      ]
+    }
+    EOF
+
+    exec sftpgo serve --loaddata-from "$LOADDATA_FILE" --loaddata-mode 1
+{{- end }}

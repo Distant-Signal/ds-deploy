@@ -61,28 +61,55 @@ spec:
               - key: {{ include "distant-signal.scheduleFeedHostKeySecretKey" . }}
                 path: {{ include "distant-signal.scheduleFeedHostKeySecretKey" . }}
                 mode: 0600
+        - name: sftp-entrypoint
+          configMap:
+            name: {{ include "distant-signal.scheduleFeedFullname" . }}-sftp-entrypoint
+            defaultMode: 0555
       containers:
         - name: sftp
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.scheduleFeed.sftp.image) | quote }}
           imagePullPolicy: {{ .Values.scheduleFeed.sftp.image.pullPolicy }}
           # readOnlyRootFilesystem is left false here, unlike every
           # single-purpose Rust binary elsewhere in this chart: SFTPGo's own
-          # runtime writes (config dir, its own SQLite metadata store unless
-          # configured otherwise, PID/lock files) are UNVERIFIED against a
-          # real deployed image in this pass (Open question 5) -- flip this
-          # to true once that's confirmed safe.
+          # runtime writes (its own SQLite metadata store at
+          # /var/lib/sftpgo/sftpgo.db by default -- confirmed against
+          # SFTPGo's own shipped sftpgo.json, data_provider.driver: "sqlite"
+          # -- plus the loaddata JSON the sftp-entrypoint ConfigMap's script
+          # writes to /tmp) genuinely need a writable root filesystem with
+          # the mechanism this chart now uses. Note this also means the
+          # SQLite user database is NOT on the persistent PVC (only
+          # /data/schedule-feed is) -- it is rebuilt from scratch by the
+          # loaddata script on every pod restart, which is fine (arguably
+          # correct for this chart's "config as code" convention): the
+          # account's credentials come from values/Secrets, not from any
+          # state a human might have changed via SFTPGo's own admin UI
+          # (which this chart never provisions an admin for at all).
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" false) | nindent 12 }}
           ports:
             - name: sftp
               containerPort: {{ .Values.scheduleFeed.sftp.port }}
-          # UNVERIFIED (Open question 5, docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md):
-          # this env block, the host-key mount path below, and SFTPGo's
-          # exact env-var contract for a single chrooted virtual user have
-          # NOT been checked against a real deployed drakkan/sftpgo
-          # container/entrypoint in this pass -- confirm against SFTPGo's
-          # own docs/a real cluster and adjust rather than trusting this as
-          # exact.
+          # Overrides the image's own `CMD ["sftpgo", "serve"]` (no
+          # ENTRYPOINT is set upstream, so this replaces it outright) to run
+          # the sftp-entrypoint ConfigMap's script first -- see that
+          # ConfigMap (schedulefeed-configmap.yaml) for the full mechanism
+          # and source citations for why this replaced
+          # SFTPGO_DEFAULT_ADMIN_USERNAME/PASSWORD (that pair only ever
+          # bootstraps SFTPGo's web-UI/REST-API *admin* account, confirmed
+          # against SFTPGo's real Go source -- never the SFTP-login *user*
+          # DTD's push client needs).
+          command: ["/bin/sh", "/scripts/entrypoint.sh"]
+          # This env block, the host-key mount path below, and SFTPGo's
+          # sftpd port-binding env var name are otherwise unchanged from
+          # this chart's earlier version -- still UNVERIFIED against a real
+          # deployed drakkan/sftpgo container/entrypoint in this pass
+          # (docker/podman are not available in this sandbox -- see this
+          # task's own implementation report) beyond what the
+          # source-code-level confirmation below establishes; the
+          # SFTPGO_SFTPD__BINDINGS__0__PORT env var name itself (viper's
+          # `__`-delimited nested-config convention, confirmed against
+          # config.go's SetEnvKeyReplacer/AutomaticEnv wiring) was not
+          # independently re-verified in this pass either.
           #
           # ALSO UNVERIFIED / LIKELY A MISMATCH: the mounted host key
           # (distant-signal.scheduleFeedHostKeySecretKey, rendered by
@@ -95,45 +122,53 @@ spec:
           # conversion step (e.g. an initContainer running
           # `ssh-keygen -p -m PEM`/similar) has NOT been confirmed in this
           # pass -- treat this as an open verification item, not a
-          # working default.
+          # working default. Out of scope for this task (SFTP account
+          # provisioning), not touched here.
           env:
             - name: SFTPGO_SFTPD__BINDINGS__0__PORT
               value: {{ .Values.scheduleFeed.sftp.port | quote }}
-            # DTD's push account username/password on this server. SFTPGo's
-            # real provisioning mechanism for a single chrooted virtual user
-            # (env vars vs a loaded JSON dump vs its REST API) is UNVERIFIED
-            # -- SFTPGO_DEFAULT_ADMIN_USERNAME/PASSWORD below name SFTPGo's
-            # documented *admin* bootstrap vars as a placeholder shape only,
-            # NOT confirmed to be how a scoped DTD virtual user is actually
-            # created; do not treat this pair as correct without checking
-            # against a real deployed image.
-            - name: SFTPGO_DEFAULT_ADMIN_USERNAME
+            # DTD's push account username/password/home-dir, consumed by
+            # the sftp-entrypoint ConfigMap's script (mounted below) via
+            # SFTPGo's real --loaddata-from mechanism -- CORRECTED
+            # 2026-09-01 (this task) from the previous
+            # SFTPGO_DEFAULT_ADMIN_USERNAME/PASSWORD pair, proven wrong by a
+            # real running container's log ("error authenticating user...
+            # not found: sql: no rows in result set": those vars only ever
+            # create SFTPGo's admin account, never an SFTP-login user).
+            - name: SCHEDULE_SFTP_USERNAME
               value: {{ .Values.scheduleFeed.sftp.username | quote }}
+            # This account's home_dir IS its SFTP chroot root (SFTPGo's own
+            # local-filesystem-provider behaviour), set to the SAME
+            # absolute path the `ingest` container's WATCH_DIR below
+            # resolves to, so DTD's push client -- which will see itself
+            # uploading to "/" once connected, since home_dir already
+            # points at the destination -- lands files exactly where
+            # schedule-ingest looks for them. SFTPGo creates home_dir
+            # itself if missing (vfs/osfs.go's CheckRootPath), so this
+            # doesn't need to pre-exist on the PVC.
+            - name: SCHEDULE_SFTP_HOME_DIR
+              value: {{ printf "/data/schedule-feed/%s" (include "distant-signal.scheduleFeedDestinationPath" .) | quote }}
             {{- if eq .Values.scheduleFeed.sftp.authMethod "password" }}
-            - name: SFTPGO_DEFAULT_ADMIN_PASSWORD
+            - name: SCHEDULE_SFTP_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "distant-signal.scheduleFeedDtdPasswordSecretName" . }}
                   key: {{ include "distant-signal.scheduleFeedDtdPasswordSecretKey" . }}
+            {{- else }}
+            - name: SCHEDULE_SFTP_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretName" . }}
+                  key: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretKey" . }}
             {{- end }}
-          # STILL UNWIRED (same "confirm against a real deployed instance"
-          # caveat as the account env vars above): DTD's files should land
-          # under {{ include "distant-signal.scheduleFeedDestinationPath" . }}
-          # relative to its account's home directory (values.yaml's
-          # scheduleFeed.sftp.destinationFolder/folderPath, assembled by
-          # the distant-signal.scheduleFeedDestinationPath helper -- see
-          # WATCH_DIR on the ingest container below, which the ingest side
-          # already resolves consistently with this value). Whatever
-          # SFTPGo's real provisioning mechanism turns out to be (env var,
-          # loaded JSON dump, REST API call), it needs to set that account's
-          # home/virtual-folder to this path -- deliberately left as a
-          # pointer rather than a guessed SFTPGO_* env var name, since
-          # inventing one here would look more confirmed than it is.
           volumeMounts:
             - name: data
               mountPath: /data/schedule-feed
             - name: host-key
               mountPath: /srv/sftpgo/host_keys
+              readOnly: true
+            - name: sftp-entrypoint
+              mountPath: /scripts
               readOnly: true
           {{- with .Values.scheduleFeed.resources }}
           resources:
