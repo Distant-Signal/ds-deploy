@@ -613,6 +613,13 @@ trustConsumer:
     existingSecretUsernameKey: kafka-sasl-username
     existingSecretPasswordKey: kafka-sasl-password
   referenceReloadSecs: 60
+  # -- How often trust-consumer reloads the live STANOX->CRS table from
+  # api's /private/stanox-crs. Deliberately coarser than
+  # referenceReloadSecs -- see
+  # docs/superpowers/specs/2026-09-01-schedule-ingest-stanox-crs-table-design.md
+  # Decision 4. UNRESEARCHED starting figure (see that design's Open
+  # Questions #1).
+  stanoxCrsReloadSecs: 3600
   retentionDays: 90
   healthPort: 8081
   logLevel: info
@@ -717,6 +724,22 @@ scheduleFeed:
     checkTimes: "22:00,22:30,23:00,23:30,00:00,00:30,01:00,01:30,16:00"
     retentionKeepSequences: 2
     stabilityCycles: 2
+  # -- Third sibling container in this same Pod (crates/schedule-reference):
+  # once `ingest` has moved a verified-complete delivery into
+  # storage_dir/<n>/, parses that sequence's TI/A records into the
+  # STANOX->CRS table and POSTs it to api's /private/stanox-crs. See
+  # docs/superpowers/specs/2026-09-01-schedule-ingest-stanox-crs-table-design.md.
+  reference:
+    image:
+      repository: distant-signal/schedule-reference
+      tag: ""
+      pullPolicy: IfNotPresent
+    pollIntervalSecs: 1800
+    # -- MUST differ from metrics.port: this container shares the
+    # schedulefeed Pod's network namespace with `ingest`, which already
+    # binds metrics.port for its own listener -- see
+    # schedulefeed-deployment.yaml's own comment on this.
+    metricsPort: 9092
   service:
     # -- LoadBalancer or NodePort + an operator-managed external LB/DNS --
     # NOT an Ingress (HTTP(S)-only by spec, cannot carry SFTP). Actually

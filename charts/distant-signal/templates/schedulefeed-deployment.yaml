@@ -33,6 +33,15 @@ spec:
       {{- if or .Values.metrics.enabled .Values.scheduleFeed.podAnnotations }}
       annotations:
         {{- if .Values.metrics.enabled }}
+        # NOTE: this plain-annotation scrape fallback can only advertise
+        # one port per Pod, so it still only ever advertises `ingest`'s
+        # metrics.port -- the `reference` container's own distinct
+        # ref-metrics port (scheduleFeed.reference.metricsPort) is NOT
+        # scraped via this mechanism. It is scrapeable via a
+        # per-container-aware mechanism (e.g. a PodMonitor), if this
+        # chart adds one -- a known, accepted limitation, not an
+        # oversight (see docs/superpowers/plans/2026-09-01-schedule-ingest-stanox-crs-table.md
+        # Task 7).
         prometheus.io/scrape: "true"
         prometheus.io/port: {{ .Values.metrics.port | quote }}
         prometheus.io/path: "/metrics"
@@ -225,6 +234,53 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data/schedule-feed
+          {{- with .Values.scheduleFeed.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        - name: reference
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.scheduleFeed.reference.image) | quote }}
+          imagePullPolicy: {{ .Values.scheduleFeed.reference.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: ref-metrics
+              containerPort: {{ .Values.scheduleFeed.reference.metricsPort }}
+              protocol: TCP
+          {{- end }}
+          # Env var names below are the uppercase-snake-case clap `env`
+          # names crates/schedule-reference/src/config.rs actually declares:
+          # storage_dir, poll_interval_secs, api_ingest_url, internal_token,
+          # metrics_port, metrics_enabled.
+          env:
+            - name: STORAGE_DIR
+              value: /data/schedule-feed
+            - name: POLL_INTERVAL_SECS
+              value: {{ .Values.scheduleFeed.reference.pollIntervalSecs | quote }}
+            - name: API_INGEST_URL
+              value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.internalTokenSecretName" . }}
+                  key: {{ include "distant-signal.internalTokenSecretKey" . }}
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.scheduleFeed.reference.metricsPort | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.scheduleFeed.logLevel | quote }}
+          # READ-ONLY: this container never writes to the shared PVC --
+          # see this design's Decision 1(c) and this plan's Global
+          # Constraints ("never writes to storage_dir, never renames/
+          # deletes anything schedule-ingest placed there").
+          volumeMounts:
+            - name: data
+              mountPath: /data/schedule-feed
+              readOnly: true
           {{- with .Values.scheduleFeed.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

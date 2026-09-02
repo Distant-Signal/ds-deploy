@@ -107,6 +107,10 @@ spec:
                   key: {{ include "distant-signal.internalTokenSecretKey" . }}
             - name: REFERENCE_RELOAD_SECS
               value: {{ .Values.trustConsumer.referenceReloadSecs | quote }}
+            - name: STANOX_CRS_RELOAD_SECS
+              value: {{ .Values.trustConsumer.stanoxCrsReloadSecs | quote }}
+            - name: STANOX_CRS_URL
+              value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: RETENTION_DAYS
               value: {{ .Values.trustConsumer.retentionDays | quote }}
             - name: HEALTH_BIND_URL
