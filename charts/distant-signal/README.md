@@ -640,11 +640,11 @@ Used only when `postgresql.enabled` is `false`.
 | `api.sessionTtlDays` | `14` | Session lifetime in days. A fixed expiry stamped at sign-in, not a sliding window. |
 | `api.internalOauth.issuerUrl` | `""` | **Required.** OIDC issuer base URL for the internal-service OAuth2 provider (may be the same Authentik instance as `api.sso.*`, a different Application/Provider). |
 | `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token — same value as the top-level `internalOauth.clientId`. |
-| `api.internalOauth.groups.pollerIncidents` | `svc-poller-incidents` | Required Authentik group for the incidents poller. Not secret. |
-| `api.internalOauth.groups.pollerStations` | `svc-poller-stations` | Required Authentik group for the stations poller. Not secret. |
-| `api.internalOauth.groups.pollerTocs` | `svc-poller-tocs` | Required Authentik group for the TOCs poller. Not secret. |
-| `api.internalOauth.groups.pollerLdbws` | `svc-poller-ldbws` | Required Authentik group for the LDBWS poller. Not secret. |
-| `api.internalOauth.groups.pollerTfl` | `svc-poller-tfl` | Required Authentik group for the TfL poller. Not secret. |
+| `api.internalOauth.groups.incidents` | `svc-poller-incidents` | Required Authentik group for the incidents poller. Not secret. |
+| `api.internalOauth.groups.stations` | `svc-poller-stations` | Required Authentik group for the stations poller. Not secret. |
+| `api.internalOauth.groups.tocs` | `svc-poller-tocs` | Required Authentik group for the TOCs poller. Not secret. |
+| `api.internalOauth.groups.ldbws` | `svc-poller-ldbws` | Required Authentik group for the LDBWS poller. Not secret. |
+| `api.internalOauth.groups.tfl` | `svc-poller-tfl` | Required Authentik group for the TfL poller. Not secret. |
 | `api.internalOauth.groups.trustConsumer` | `svc-trust-consumer` | Required Authentik group for trust-consumer (also accepted on `GET /private/stanox-crs`). Not secret. |
 | `api.internalOauth.groups.scheduleIngest` | `svc-schedule-ingest` | Required Authentik group for schedule-ingest. Not secret. |
 | `api.internalOauth.groups.scheduleReference` | `svc-schedule-reference` | Required Authentik group for schedule-reference (also accepted on `POST /private/stanox-crs`). Not secret. |

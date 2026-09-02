@@ -430,11 +430,11 @@ api:
     # -- Required Authentik group name per real caller (Decision 3). Not
     # secret. Suggested defaults only.
     groups:
-      pollerIncidents: svc-poller-incidents
-      pollerStations: svc-poller-stations
-      pollerTocs: svc-poller-tocs
-      pollerLdbws: svc-poller-ldbws
-      pollerTfl: svc-poller-tfl
+      incidents: svc-poller-incidents
+      stations: svc-poller-stations
+      tocs: svc-poller-tocs
+      ldbws: svc-poller-ldbws
+      tfl: svc-poller-tfl
       trustConsumer: svc-trust-consumer
       scheduleIngest: svc-schedule-ingest
       scheduleReference: svc-schedule-reference

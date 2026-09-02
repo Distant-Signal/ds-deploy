@@ -106,16 +106,16 @@ spec:
               value: {{ .Values.api.internalOauth.issuerUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID
               value: {{ .Values.api.internalOauth.clientId | quote }}
-            - name: INTERNAL_OAUTH_GROUP_POLLER_INCIDENTS
-              value: {{ .Values.api.internalOauth.groups.pollerIncidents | quote }}
-            - name: INTERNAL_OAUTH_GROUP_POLLER_STATIONS
-              value: {{ .Values.api.internalOauth.groups.pollerStations | quote }}
-            - name: INTERNAL_OAUTH_GROUP_POLLER_TOCS
-              value: {{ .Values.api.internalOauth.groups.pollerTocs | quote }}
-            - name: INTERNAL_OAUTH_GROUP_POLLER_LDBWS
-              value: {{ .Values.api.internalOauth.groups.pollerLdbws | quote }}
-            - name: INTERNAL_OAUTH_GROUP_POLLER_TFL
-              value: {{ .Values.api.internalOauth.groups.pollerTfl | quote }}
+            - name: INTERNAL_OAUTH_GROUP_INCIDENTS
+              value: {{ .Values.api.internalOauth.groups.incidents | quote }}
+            - name: INTERNAL_OAUTH_GROUP_STATIONS
+              value: {{ .Values.api.internalOauth.groups.stations | quote }}
+            - name: INTERNAL_OAUTH_GROUP_TOCS
+              value: {{ .Values.api.internalOauth.groups.tocs | quote }}
+            - name: INTERNAL_OAUTH_GROUP_LDBWS
+              value: {{ .Values.api.internalOauth.groups.ldbws | quote }}
+            - name: INTERNAL_OAUTH_GROUP_TFL
+              value: {{ .Values.api.internalOauth.groups.tfl | quote }}
             - name: INTERNAL_OAUTH_GROUP_TRUST_CONSUMER
               value: {{ .Values.api.internalOauth.groups.trustConsumer | quote }}
             - name: INTERNAL_OAUTH_GROUP_SCHEDULE_INGEST
