@@ -587,13 +587,19 @@ aggregator:
   # docs/superpowers/plans/2026-09-01-ldbws-data-retention.md). Matches
   # crates/aggregator/src/config.rs's own default_value_t.
   dailyStatsRetentionDays: 300
-  # -- Retention for the new hourly rollup table (line_status_hourly_stats) --
-  # a much shorter window than either historyRetentionDays or
-  # dailyStatsRetentionDays, since only the line-info-page's rolling
-  # 24-hour embed ever reads it. See
+  # -- Retention for the half-hourly rollup table (line_status_half_hourly_stats,
+  # 30-minute buckets since the trend-chart granularity was doubled -- formerly
+  # line_status_hourly_stats, 1-hour buckets) -- a much shorter window than
+  # either historyRetentionDays or dailyStatsRetentionDays, since only the
+  # line-info-page's rolling 24-hour embed ever reads it. Measured in
+  # wall-clock hours, unchanged from the table's original hourly-bucket era:
+  # 48 hours of real time is still 48 hours of real time regardless of bucket
+  # size, it just now covers roughly twice as many rows per line (~96 instead
+  # of ~48), a trivial row count for Postgres. See
   # docs/superpowers/specs/2026-09-02-trend-chart-granularity-design.md
-  # Decision 5.
-  hourlyStatsRetentionHours: 48
+  # Decision 5 (written for the original 1-hour-bucket default, still the
+  # basis for this value).
+  halfHourlyStatsRetentionHours: 48
   logLevel: info
   extraEnv: []
   resources: {}
