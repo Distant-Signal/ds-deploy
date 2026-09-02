@@ -100,11 +100,22 @@ spec:
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/train-events" | quote }}
             - name: API_TRACKED_TRAINS_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/tracked-trains" | quote }}
-            - name: INTERNAL_TOKEN
+            - name: INTERNAL_OAUTH_TOKEN_URL
+              value: {{ .Values.internalOauth.tokenUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ .Values.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_SCOPE
+              value: {{ .Values.internalOauth.scope | quote }}
+            - name: INTERNAL_OAUTH_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "distant-signal.internalTokenSecretName" . }}
-                  key: {{ include "distant-signal.internalTokenSecretKey" . }}
+                  name: {{ include "distant-signal.trustConsumerSecretName" . }}
+                  key: {{ include "distant-signal.trustConsumerOauthUsernameSecretKey" . }}
+            - name: INTERNAL_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.trustConsumerSecretName" . }}
+                  key: {{ include "distant-signal.trustConsumerOauthPasswordSecretKey" . }}
             - name: REFERENCE_RELOAD_SECS
               value: {{ .Values.trustConsumer.referenceReloadSecs | quote }}
             - name: STANOX_CRS_RELOAD_SECS

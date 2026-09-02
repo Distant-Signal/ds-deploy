@@ -94,11 +94,22 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.pollerSecretName" (dict "root" $root "poller" $poller) }}
                   key: {{ include "distant-signal.pollerSecretKey" (dict "root" $root "name" $name "poller" $poller) }}
-            - name: INTERNAL_TOKEN
+            - name: INTERNAL_OAUTH_TOKEN_URL
+              value: {{ $root.Values.internalOauth.tokenUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ $root.Values.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_SCOPE
+              value: {{ $root.Values.internalOauth.scope | quote }}
+            - name: INTERNAL_OAUTH_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "distant-signal.internalTokenSecretName" $root }}
-                  key: {{ include "distant-signal.internalTokenSecretKey" $root }}
+                  name: {{ include "distant-signal.pollerSecretName" (dict "root" $root "poller" $poller) }}
+                  key: {{ include "distant-signal.pollerOauthUsernameSecretKey" (dict "root" $root "name" $name "poller" $poller) }}
+            - name: INTERNAL_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerSecretName" (dict "root" $root "poller" $poller) }}
+                  key: {{ include "distant-signal.pollerOauthPasswordSecretKey" (dict "root" $root "name" $name "poller" $poller) }}
             - name: API_INGEST_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" $root) $poller.ingestPath | quote }}
             {{- if $poller.sampleStationsPath }}

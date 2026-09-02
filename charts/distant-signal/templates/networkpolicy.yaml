@@ -133,8 +133,8 @@ spec:
                   {{- end }}
       {{- if and .Values.ingress.enabled .Values.ingress.api.enabled }}
         # The api is published externally, so the ingress controller must
-        # reach it too. SECURITY: this also exposes /private/*, guarded only
-        # by the X-Internal-Token shared secret.
+        # reach it too. SECURITY: this also exposes /private/*, guarded by
+        # internal-service OAuth2 (require_internal_oauth).
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace | quote }}

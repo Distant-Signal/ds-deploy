@@ -31,6 +31,13 @@ api:
     redirectUrl: https://status.example.com/api/auth/callback
     postLoginRedirectUrl: https://status.example.com/
   sessionTtlDays: 14
+  # Internal-service OAuth2 (machine-to-machine, distinct from sso above):
+  # every real internal caller authenticates to /private/* with its own
+  # Authentik service-account credential -- see internalOauth below and
+  # each poller's own internalOauthUsername/Password.
+  internalOauth:
+    issuerUrl: https://sso.example.com/application/o/distant-signal-internal/
+    clientId: distant-signal-internal
   resources:
     requests:
       cpu: 100m
@@ -110,9 +117,14 @@ postgresql:
     limits:
       memory: 2Gi
 
-secrets:
-  # Left empty on purpose: generated on first install, preserved on upgrade.
-  internalToken: ""
+# Shared, non-secret OAuth2 client-credentials config every real caller
+# below (the 5 pollers here, plus trust-consumer/schedule-ingest/
+# schedule-reference if enabled) uses to obtain its own access token. Must
+# match api.internalOauth.clientId above.
+internalOauth:
+  tokenUrl: https://sso.example.com/application/o/token/
+  clientId: distant-signal-internal
+  scope: groups
 
 pollers:
   incidents:
@@ -123,6 +135,8 @@ pollers:
     baseUrl: https://rdm.example.com/incidents
     apiKey: replace-me-rdm-incidents-key
     pollIntervalSecs: 300
+    internalOauthUsername: svc-poller-incidents
+    internalOauthPassword: replace-me-poller-incidents-app-password
   stations:
     enabled: true
     image:
@@ -131,6 +145,8 @@ pollers:
     baseUrl: https://rdm.example.com/json/1.0
     apiKey: replace-me-rdm-stations-key
     pollIntervalSecs: 86400
+    internalOauthUsername: svc-poller-stations
+    internalOauthPassword: replace-me-poller-stations-app-password
   tocs:
     enabled: true
     image:
@@ -139,6 +155,8 @@ pollers:
     baseUrl: https://rdm.example.com/tocs
     apiKey: replace-me-rdm-tocs-key
     pollIntervalSecs: 86400
+    internalOauthUsername: svc-poller-tocs
+    internalOauthPassword: replace-me-poller-tocs-app-password
   ldbws:
     enabled: true
     image:
@@ -148,6 +166,8 @@ pollers:
     apiKey: replace-me-rdm-ldbws-key
     numRows: 10
     pollIntervalSecs: 60
+    internalOauthUsername: svc-poller-ldbws
+    internalOauthPassword: replace-me-poller-ldbws-app-password
   tfl:
     enabled: true
     image:
@@ -158,6 +178,8 @@ pollers:
     # `values.yaml`'s default (`https://api.tfl.gov.uk`) is already correct.
     apiKey: replace-me-tfl-app-key
     pollIntervalSecs: 300
+    internalOauthUsername: svc-poller-tfl
+    internalOauthPassword: replace-me-poller-tfl-app-password
 
 ingress:
   enabled: true
@@ -169,7 +191,7 @@ ingress:
     host: status.example.com
   api:
     # Left off deliberately: enabling it publishes /private/*, which is
-    # guarded only by the X-Internal-Token shared secret.
+    # guarded only by internal-service OAuth2 (require_internal_oauth).
     enabled: false
     host: ""
   tls:

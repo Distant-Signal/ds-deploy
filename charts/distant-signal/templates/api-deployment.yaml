@@ -102,11 +102,26 @@ spec:
             # PGPASSWORD must stay immediately before DATABASE_URL -- the
             # kubelet only expands $(VAR) from EARLIER entries in this list.
             {{- include "distant-signal.databaseEnv" . | nindent 12 }}
-            - name: INTERNAL_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.internalTokenSecretName" . }}
-                  key: {{ include "distant-signal.internalTokenSecretKey" . }}
+            - name: INTERNAL_OAUTH_ISSUER_URL
+              value: {{ .Values.api.internalOauth.issuerUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ .Values.api.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_GROUP_POLLER_INCIDENTS
+              value: {{ .Values.api.internalOauth.groups.pollerIncidents | quote }}
+            - name: INTERNAL_OAUTH_GROUP_POLLER_STATIONS
+              value: {{ .Values.api.internalOauth.groups.pollerStations | quote }}
+            - name: INTERNAL_OAUTH_GROUP_POLLER_TOCS
+              value: {{ .Values.api.internalOauth.groups.pollerTocs | quote }}
+            - name: INTERNAL_OAUTH_GROUP_POLLER_LDBWS
+              value: {{ .Values.api.internalOauth.groups.pollerLdbws | quote }}
+            - name: INTERNAL_OAUTH_GROUP_POLLER_TFL
+              value: {{ .Values.api.internalOauth.groups.pollerTfl | quote }}
+            - name: INTERNAL_OAUTH_GROUP_TRUST_CONSUMER
+              value: {{ .Values.api.internalOauth.groups.trustConsumer | quote }}
+            - name: INTERNAL_OAUTH_GROUP_SCHEDULE_INGEST
+              value: {{ .Values.api.internalOauth.groups.scheduleIngest | quote }}
+            - name: INTERNAL_OAUTH_GROUP_SCHEDULE_REFERENCE
+              value: {{ .Values.api.internalOauth.groups.scheduleReference | quote }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             # Always rendered, so it reflects the real value either way.
@@ -121,10 +136,13 @@ spec:
             # OIDC SSO (crates/api/src/data/config.rs: ServiceArguments).
             # All five are required with no defaults -- see the guards at
             # the top of this file. The client secret is the only one that
-            # is a credential, so it alone goes through a secretKeyRef,
-            # exactly like INTERNAL_TOKEN above; the other four are plain
-            # URLs/identifiers that are public by construction (the browser
-            # sees the issuer and redirect URLs on every sign-in anyway).
+            # is a credential, so it alone goes through a secretKeyRef; the
+            # other four are plain URLs/identifiers that are public by
+            # construction (the browser sees the issuer and redirect URLs
+            # on every sign-in anyway) -- same posture as every
+            # INTERNAL_OAUTH_* value above, none of which is a
+            # secretKeyRef either (Decision 6: api never holds any of the
+            # 8 real callers' own credentials).
             - name: SSO_ISSUER_URL
               value: {{ $issuerUrl | quote }}
             - name: SSO_CLIENT_ID

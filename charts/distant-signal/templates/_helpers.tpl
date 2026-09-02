@@ -180,29 +180,14 @@ sides call these, an `existingSecret` override can never desynchronise them.
 {{- end }}
 
 {{/*
-Resolved Secret name/key for the shared internal token. Takes root.
-Used by api-deployment.yaml and by all four poller deployments.
-*/}}
-{{- define "distant-signal.internalTokenSecretName" -}}
-{{- default (include "distant-signal.secretName" .) .Values.secrets.existingSecret }}
-{{- end }}
-
-{{- define "distant-signal.internalTokenSecretKey" -}}
-{{- if .Values.secrets.existingSecret }}
-{{- .Values.secrets.existingSecretInternalTokenKey }}
-{{- else }}
-{{- print "internal-token" }}
-{{- end }}
-{{- end }}
-
-{{/*
 Resolved Secret name/key for the VAPID public/private keypair. Takes root.
 Used by notifier-deployment.yaml (both keys) and api-deployment.yaml (the
 public key only -- api serves it via /public/notifications/vapid-public-key
 but never signs a push itself, so it never needs the private key). Same
-shape as the internal-token pair above, except -- like sso-client-secret
-and kafka-sasl-* -- never auto-generated: a random VAPID keypair would not
-be a genuine matched EC keypair (see secret.yaml's own comment).
+existingSecret/name/key shape as the trust-consumer/poller-oauth pairs
+below, except -- like sso-client-secret and kafka-sasl-* -- never
+auto-generated: a random VAPID keypair would not be a genuine matched EC
+keypair (see secret.yaml's own comment).
 */}}
 {{- define "distant-signal.vapidPublicKeySecretName" -}}
 {{- default (include "distant-signal.secretName" .) .Values.notifier.vapid.existingSecret }}
@@ -231,10 +216,11 @@ be a genuine matched EC keypair (see secret.yaml's own comment).
 {{/*
 Resolved Secret name/key for the OIDC client secret. Takes root.
 Used by api-deployment.yaml (SSO_CLIENT_SECRET) and, for the name, by
-secret.yaml's decision on whether to render the key at all. Same shape as
-the internal-token pair above, except this one is never auto-generated -- a
-random OAuth2 client secret would simply be rejected by the issuer, so it
-is closer to the rdm-*-api-key / llm-api-key entries in that respect.
+secret.yaml's decision on whether to render the key at all. Same
+existingSecret/name/key shape as the poller-oauth pair below, except this
+one is never auto-generated -- a random OAuth2 client secret would simply
+be rejected by the issuer, so it is closer to the rdm-*-api-key /
+llm-api-key / internal-oauth-* entries in that respect.
 */}}
 {{- define "distant-signal.ssoClientSecretName" -}}
 {{- default (include "distant-signal.secretName" .) .Values.api.sso.existingSecret }}
@@ -262,6 +248,98 @@ Resolved Secret name/key for one poller's RDM API key. Call as:
 {{- .poller.existingSecretApiKeyKey }}
 {{- else }}
 {{- printf "rdm-%s-api-key" .name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Resolved Secret name/key for one poller's own OAuth2 username/password
+(distinct from its RDM apiKey, same Secret object, same existingSecret
+toggle). Call as:
+  {{ include "distant-signal.pollerSecretName" (dict "root" $ "poller" $p) }}
+  {{ include "distant-signal.pollerOauthUsernameSecretKey" (dict "root" $ "name" $name "poller" $p) }}
+  {{ include "distant-signal.pollerOauthPasswordSecretKey" (dict "root" $ "name" $name "poller" $p) }}
+*/}}
+{{- define "distant-signal.pollerOauthUsernameSecretKey" -}}
+{{- if .poller.existingSecret }}
+{{- .poller.existingSecretInternalOauthUsernameKey }}
+{{- else }}
+{{- printf "internal-oauth-username-poller-%s" .name }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.pollerOauthPasswordSecretKey" -}}
+{{- if .poller.existingSecret }}
+{{- .poller.existingSecretInternalOauthPasswordKey }}
+{{- else }}
+{{- printf "internal-oauth-password-poller-%s" .name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Resolved Secret name/key for trust-consumer's own OAuth2 credential.
+*/}}
+{{- define "distant-signal.trustConsumerSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.trustConsumer.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.trustConsumerOauthUsernameSecretKey" -}}
+{{- if .Values.trustConsumer.existingSecret }}
+{{- .Values.trustConsumer.existingSecretInternalOauthUsernameKey }}
+{{- else }}
+{{- print "internal-oauth-username-trust-consumer" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.trustConsumerOauthPasswordSecretKey" -}}
+{{- if .Values.trustConsumer.existingSecret }}
+{{- .Values.trustConsumer.existingSecretInternalOauthPasswordKey }}
+{{- else }}
+{{- print "internal-oauth-password-trust-consumer" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Resolved Secret name/key for schedule-ingest's / schedule-reference's own
+OAuth2 credentials -- two independent service accounts sharing one Pod,
+each with its own existingSecret toggle.
+*/}}
+{{- define "distant-signal.scheduleIngestSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.scheduleFeed.ingest.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.scheduleIngestOauthUsernameSecretKey" -}}
+{{- if .Values.scheduleFeed.ingest.existingSecret }}
+{{- .Values.scheduleFeed.ingest.existingSecretInternalOauthUsernameKey }}
+{{- else }}
+{{- print "internal-oauth-username-schedule-ingest" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.scheduleIngestOauthPasswordSecretKey" -}}
+{{- if .Values.scheduleFeed.ingest.existingSecret }}
+{{- .Values.scheduleFeed.ingest.existingSecretInternalOauthPasswordKey }}
+{{- else }}
+{{- print "internal-oauth-password-schedule-ingest" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.scheduleReferenceSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.scheduleFeed.reference.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.scheduleReferenceOauthUsernameSecretKey" -}}
+{{- if .Values.scheduleFeed.reference.existingSecret }}
+{{- .Values.scheduleFeed.reference.existingSecretInternalOauthUsernameKey }}
+{{- else }}
+{{- print "internal-oauth-username-schedule-reference" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.scheduleReferenceOauthPasswordSecretKey" -}}
+{{- if .Values.scheduleFeed.reference.existingSecret }}
+{{- .Values.scheduleFeed.reference.existingSecretInternalOauthPasswordKey }}
+{{- else }}
+{{- print "internal-oauth-password-schedule-reference" }}
 {{- end }}
 {{- end }}
 
@@ -509,9 +587,9 @@ docs/superpowers/specs/2026-09-01-train-mcp-integration-design.md
 Decision 1). Object names and Secret name/key resolution, same shape as
 devAuthentikFullname/devAuthentikSecretName above. Every key helper below
 follows the same existingSecret/existingSecretXKey pattern as
-internalTokenSecretKey/pollerSecretKey -- one existingSecret toggle for
-the whole component (railMcp.existingSecret), each key individually
-overridable within it.
+trustConsumerOauthUsernameSecretKey/pollerSecretKey -- one existingSecret
+toggle for the whole component (railMcp.existingSecret), each key
+individually overridable within it.
 */}}
 {{- define "distant-signal.railMcpFullname" -}}
 {{- printf "%s-railmcp" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" -}}

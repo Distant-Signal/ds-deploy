@@ -202,30 +202,33 @@ default-name-migration steps above.
 
 ## Generated secrets and the `lookup` limitation
 
-`postgres-password` and `internal-token` are generated with
-`randAlphaNum 32` when their values are left empty and no `existingSecret`
-is given.
+`postgres-password` is generated with `randAlphaNum 32` when its value is
+left empty and no `existingSecret` is given. It is the only chart-generated
+secret today — every internal caller's own OAuth2 credential (see
+"Internal-service OAuth2" below) is assigned by Authentik, an external
+system, so a randomly generated value would just be rejected by it; those
+follow the same never-auto-generated posture as each poller's own RDM
+`apiKey`.
 
-They are **preserved across `helm upgrade`**: `templates/secret.yaml` reads
-the live Secret back out of the cluster with Helm's `lookup` function and
-reuses whatever is already there, rather than generating a fresh password
-and rotating it out from under the running database's PVC.
+`postgres-password` is **preserved across `helm upgrade`**:
+`templates/secret.yaml` reads the live Secret back out of the cluster with
+Helm's `lookup` function and reuses whatever is already there, rather than
+generating a fresh password and rotating it out from under the running
+database's PVC.
 
 **Limitation:** `lookup` returns nothing during `helm template` and
 `--dry-run`, so an offline render shows a **different** generated value
 every time you run it. That is cosmetic for dry runs, but it does mean
 **`helm template | kubectl apply` is not a supported install path when you
-rely on generated secrets** — the applied password would differ from the one
-already in the cluster. For that workflow, set explicit values
-(`postgresql.auth.password`, `secrets.internalToken`) or use `existingSecret`.
+rely on the generated postgres password** — the applied password would
+differ from the one already in the cluster. For that workflow, set an
+explicit value (`postgresql.auth.password`) or use `existingSecret`.
 
-Read the generated values back out:
+Read the generated value back out:
 
 ```bash
 kubectl get secret -n distant-signal distant-signal \
   -o jsonpath='{.data.postgres-password}' | base64 -d; echo
-kubectl get secret -n distant-signal distant-signal \
-  -o jsonpath='{.data.internal-token}' | base64 -d; echo
 ```
 
 ## Using externally-managed secrets
@@ -242,16 +245,17 @@ postgresql:
     existingSecret: distant-signal-db
     existingSecretPasswordKey: password
 
-secrets:
-  existingSecret: distant-signal-shared
-  existingSecretInternalTokenKey: internal-token
-
 pollers:
   incidents:
     enabled: true
     baseUrl: https://rdm.example.com/incidents
     existingSecret: distant-signal-rdm
     existingSecretApiKeyKey: incidents-api-key
+    # A single existingSecret toggle covers both this poller's RDM apiKey
+    # AND its own internal-oauth username/password (all three keys must
+    # live in the same referenced Secret).
+    existingSecretInternalOauthUsernameKey: incidents-oauth-username
+    existingSecretInternalOauthPasswordKey: incidents-oauth-password
   ldbws:
     enabled: true
     baseUrl: https://rdm.example.com/LDBWS/api/20220120
@@ -308,8 +312,9 @@ Two details that are easy to get wrong:
 `clientSecret` follows the chart's usual secret rule — supply it inline and
 it is rendered into the chart Secret as `sso-client-secret`, or point
 `api.sso.existingSecret` at a Secret you manage and the chart never sees
-it. Unlike `internal-token` and the postgres password it is **never
-auto-generated**: a random value would simply be rejected by the issuer.
+it. Unlike the postgres password it is **never auto-generated**: a random
+value would simply be rejected by the issuer — same posture as every
+internal-oauth username/password below.
 
 ## Local dev identity provider (devAuthentik)
 
@@ -470,11 +475,12 @@ values; the `tls` block is shaped for cert-manager's `cluster-issuer`
 annotation but is issuer-agnostic.
 
 > **Security warning.** Enabling `ingress.api.enabled` publishes `/private/*`
-> to the internet as well. Those ingestion endpoints are protected **only**
-> by the `X-Internal-Token` shared secret (`crates/api/src/auth.rs`) — there
-> is no other authentication in front of them. If you do not need external
-> API access, leave `ingress.api.enabled: false`; the frontend reaches the
-> api over the in-cluster Service either way.
+> to the internet as well. Those ingestion endpoints are protected by
+> internal-service OAuth2 (`require_internal_oauth`, `crates/api/src/auth.rs`,
+> delegated to Authentik) — there is no other authentication in front of
+> them. If you do not need external API access, leave
+> `ingress.api.enabled: false`; the frontend reaches the api over the
+> in-cluster Service either way.
 >
 > It publishes the api's `/metrics` endpoint the same way when
 > `metrics.enabled` is true (the default), because api serves `/metrics` on
@@ -560,11 +566,18 @@ helm upgrade distant-signal ./charts/distant-signal -n distant-signal \
 
 ### Shared secrets
 
+`secrets` is currently empty — reserved for any future chart-wide secret
+that isn't tied to one specific service. The shared internal-token header
+this block used to hold is retired; see "internalOauth (shared,
+non-secret)" below for what replaced it.
+
+### internalOauth (shared, non-secret)
+
 | Key | Default | Description |
 |---|---|---|
-| `secrets.internalToken` | `""` | Shared `X-Internal-Token` secret. Generated (32 alphanumeric chars) when empty. |
-| `secrets.existingSecret` | `""` | Read the internal token from this pre-existing Secret instead. |
-| `secrets.existingSecretInternalTokenKey` | `internal-token` | Key within `secrets.existingSecret`. |
+| `internalOauth.tokenUrl` | `""` | Authentik's client-credentials token endpoint. Required whenever any real caller is enabled. |
+| `internalOauth.clientId` | `""` | The shared OAuth2 Provider's client_id — same value as `api.internalOauth.clientId`. Required. |
+| `internalOauth.scope` | `groups` | Scope requested on every client-credentials POST. |
 
 ### postgresql
 
@@ -625,6 +638,16 @@ Used only when `postgresql.enabled` is `false`.
 | `api.sso.redirectUrl` | `""` | **Required.** Callback URI registered with the SSO server — the *frontend's* origin plus `/api/auth/callback`, not the api's. |
 | `api.sso.postLoginRedirectUrl` | `""` | **Required.** Where sign-in and sign-out send the browser afterwards — the frontend's root URL. |
 | `api.sessionTtlDays` | `14` | Session lifetime in days. A fixed expiry stamped at sign-in, not a sliding window. |
+| `api.internalOauth.issuerUrl` | `""` | **Required.** OIDC issuer base URL for the internal-service OAuth2 provider (may be the same Authentik instance as `api.sso.*`, a different Application/Provider). |
+| `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token — same value as the top-level `internalOauth.clientId`. |
+| `api.internalOauth.groups.pollerIncidents` | `svc-poller-incidents` | Required Authentik group for the incidents poller. Not secret. |
+| `api.internalOauth.groups.pollerStations` | `svc-poller-stations` | Required Authentik group for the stations poller. Not secret. |
+| `api.internalOauth.groups.pollerTocs` | `svc-poller-tocs` | Required Authentik group for the TOCs poller. Not secret. |
+| `api.internalOauth.groups.pollerLdbws` | `svc-poller-ldbws` | Required Authentik group for the LDBWS poller. Not secret. |
+| `api.internalOauth.groups.pollerTfl` | `svc-poller-tfl` | Required Authentik group for the TfL poller. Not secret. |
+| `api.internalOauth.groups.trustConsumer` | `svc-trust-consumer` | Required Authentik group for trust-consumer (also accepted on `GET /private/stanox-crs`). Not secret. |
+| `api.internalOauth.groups.scheduleIngest` | `svc-schedule-ingest` | Required Authentik group for schedule-ingest. Not secret. |
+| `api.internalOauth.groups.scheduleReference` | `svc-schedule-reference` | Required Authentik group for schedule-reference (also accepted on `POST /private/stanox-crs`). Not secret. |
 | `api.probes.path` | `/public/health` | Path all three probes and the `helm test` pod hit. |
 | `api.probes.startup.periodSeconds` | `2` | Startup probe period. |
 | `api.probes.startup.failureThreshold` | `30` | Startup probe failures allowed (30 x 2s = 60s for in-process migrations). |
@@ -655,7 +678,7 @@ default; nothing here is rendered unless `devAuthentik.enabled` is `true`.
 | `devAuthentik.image.repository` | `ghcr.io/goauthentik/server` | Authentik server image repository. |
 | `devAuthentik.image.tag` | `2026.8.0` | Pinned; Authentik's ~3-month release cadence and 2-version support window mean this needs periodic bumping, not automated by this chart. |
 | `devAuthentik.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `devAuthentik.secretKey` | `""` | `AUTHENTIK_SECRET_KEY`. Chart-generated (lookup-then-`randAlphaNum`) when empty, same pattern as `postgres-password`/`internal-token`, so it survives `helm upgrade`. No `existingSecret` override — throwaway dev IdP only. |
+| `devAuthentik.secretKey` | `""` | `AUTHENTIK_SECRET_KEY`. Chart-generated (lookup-then-`randAlphaNum`) when empty, same pattern as `postgres-password`, so it survives `helm upgrade`. No `existingSecret` override — throwaway dev IdP only. |
 | `devAuthentik.service.port` | `30900` | ClusterIP-facing port. Must equal `service.nodePort` — the render aborts if they differ. |
 | `devAuthentik.service.nodePort` | `30900` | NodePort. Must equal `service.port`; default sits inside Kubernetes' default 30000-32767 NodePort range. |
 | `devAuthentik.hostAliasIP` | `""` | Explicit override for the IP the api Deployment's `hostAliases` entry points `devAuthentik.hostname` at. Empty uses `lookup` against the live Service's ClusterIP at render time — unresolvable on a from-scratch `helm install` (see the "Two manual steps" note above and NOTES.txt). |
@@ -790,8 +813,12 @@ Keys below exist under each of `pollers.incidents`, `pollers.stations`,
 | `pollers.<name>.ingestPath` | per-poller | Path on the api Service this poller POSTs results to. |
 | `pollers.<name>.pollIntervalSecs` | 300 / 86400 / 86400 / 60 | Poll cadence. |
 | `pollers.<name>.apiKey` | `""` | RDM API key. Rendered into the chart Secret when `existingSecret` is empty. |
-| `pollers.<name>.existingSecret` | `""` | Read the API key from this pre-existing Secret instead. |
+| `pollers.<name>.existingSecret` | `""` | Read the API key AND the internal-oauth username/password below from this pre-existing Secret instead. |
 | `pollers.<name>.existingSecretApiKeyKey` | `rdm-<name>-api-key` | Key within `pollers.<name>.existingSecret`. |
+| `pollers.<name>.internalOauthUsername` | `""` | This poller's own Authentik service-account username. Never auto-generated. |
+| `pollers.<name>.internalOauthPassword` | `""` | This poller's own Authentik app-password. Never auto-generated. |
+| `pollers.<name>.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-poller-<name>` | Key within `pollers.<name>.existingSecret`. |
+| `pollers.<name>.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-<name>` | Key within `pollers.<name>.existingSecret`. |
 | `pollers.<name>.logLevel` | `info` | `RUST_LOG` value. |
 | `pollers.<name>.extraEnv` | `[]` | Extra env vars appended to the container. |
 | `pollers.<name>.resources` | `{}` | Container resource requests/limits. |

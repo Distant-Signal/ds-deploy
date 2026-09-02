@@ -29,19 +29,42 @@ serviceAccount:
 #                               read the named Secret directly. Use this with
 #                               External Secrets Operator, Vault or SOPS.
 #   2. an explicit value set -> the chart renders that value.
-#   3. neither               -> for `internalToken` and the postgres password
-#                               ONLY, a 32-character alphanumeric value is
+#   3. neither               -> for the postgres password ONLY, a
+#                               32-character alphanumeric value is
 #                               generated, and PRESERVED across `helm upgrade`
 #                               by reading the live Secret back (see README).
-secrets:
-  # -- Shared secret the pollers present as `X-Internal-Token` to reach the
-  # api's /private/* endpoints (crates/api/src/auth.rs). Generated when empty.
-  # The api refuses to start if this ends up empty (crates/api/src/app.rs).
-  internalToken: ""
-  # -- Read `internal-token` from this pre-existing Secret instead.
-  existingSecret: ""
-  # -- Key within `existingSecret` holding the internal token.
-  existingSecretInternalTokenKey: internal-token
+#
+# The shared internal-token header this block used to hold is retired --
+# every internal caller now authenticates to api's /private/* routes via
+# its own Authentik service-account OAuth2 credential instead, see
+# internalOauth below. This top-level `secrets` block is kept (rather than
+# removed outright) as the home for any future chart-wide secret that isn't
+# tied to one specific service.
+secrets: {}
+
+# ---------------------------------------------------------------------------
+# internalOauth -- shared, non-secret OAuth2 client-credentials config every
+# real caller of api's /private/* routes uses to obtain its own access
+# token (docs/superpowers/specs/2026-09-02-internal-service-oauth2-design.md
+# Decision 6). One shared Authentik OAuth2 Provider/Application services
+# all 8 real callers (Decision 1). Defining that Provider, its 8 Service
+# Accounts, and their groups is explicitly OUT OF SCOPE for this chart
+# (operator/deployment-time work) -- these values only configure how this
+# chart's own Deployments REACH whatever an operator has already
+# provisioned.
+# ---------------------------------------------------------------------------
+internalOauth:
+  # -- Authentik's client-credentials token endpoint, e.g.
+  # https://sso.example.com/application/o/token/. Required whenever any
+  # real caller is enabled.
+  tokenUrl: ""
+  # -- The shared OAuth2 Provider's client_id -- same value as
+  # api.internalOauth.clientId below (the expected `aud`). Required.
+  clientId: ""
+  # -- Scope requested on every client-credentials POST -- must match
+  # whatever scope mapping the operator attached to the provider to
+  # surface the `groups` claim (Decision 3).
+  scope: groups
 
 # ---------------------------------------------------------------------------
 # postgres
@@ -160,6 +183,15 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-incidents-api-key
+    # -- This poller's own Authentik service-account credential -- see
+    # top-level internalOauth for the shared, non-secret token URL/
+    # client_id/scope. Never auto-generated (Authentik, an external
+    # system, assigns these) -- same posture as apiKey above, not
+    # secrets.internalToken's old auto-generate posture.
+    internalOauthUsername: ""
+    internalOauthPassword: ""
+    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-incidents
+    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-incidents
     logLevel: info
     extraEnv: []
     resources: {}
@@ -182,6 +214,15 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-stations-api-key
+    # -- This poller's own Authentik service-account credential -- see
+    # top-level internalOauth for the shared, non-secret token URL/
+    # client_id/scope. Never auto-generated (Authentik, an external
+    # system, assigns these) -- same posture as apiKey above, not
+    # secrets.internalToken's old auto-generate posture.
+    internalOauthUsername: ""
+    internalOauthPassword: ""
+    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-stations
+    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-stations
     logLevel: info
     extraEnv: []
     resources: {}
@@ -214,6 +255,15 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-tfl-api-key
+    # -- This poller's own Authentik service-account credential -- see
+    # top-level internalOauth for the shared, non-secret token URL/
+    # client_id/scope. Never auto-generated (Authentik, an external
+    # system, assigns these) -- same posture as apiKey above, not
+    # secrets.internalToken's old auto-generate posture.
+    internalOauthUsername: ""
+    internalOauthPassword: ""
+    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-tfl
+    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-tfl
     logLevel: info
     extraEnv:
       - name: TFL_MODES
@@ -238,6 +288,15 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-tocs-api-key
+    # -- This poller's own Authentik service-account credential -- see
+    # top-level internalOauth for the shared, non-secret token URL/
+    # client_id/scope. Never auto-generated (Authentik, an external
+    # system, assigns these) -- same posture as apiKey above, not
+    # secrets.internalToken's old auto-generate posture.
+    internalOauthUsername: ""
+    internalOauthPassword: ""
+    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-tocs
+    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-tocs
     logLevel: info
     extraEnv: []
     resources: {}
@@ -269,6 +328,15 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-ldbws-api-key
+    # -- This poller's own Authentik service-account credential -- see
+    # top-level internalOauth for the shared, non-secret token URL/
+    # client_id/scope. Never auto-generated (Authentik, an external
+    # system, assigns these) -- same posture as apiKey above, not
+    # secrets.internalToken's old auto-generate posture.
+    internalOauthUsername: ""
+    internalOauthPassword: ""
+    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-ldbws
+    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-ldbws
     logLevel: info
     extraEnv: []
     resources: {}
@@ -320,7 +388,7 @@ api:
     # normal secrets rule -- an `existingSecret` takes priority; otherwise
     # this value is rendered into the chart Secret as `sso-client-secret`.
     # Never auto-generated: a random value would be rejected by the issuer,
-    # unlike `secrets.internalToken` whose only peer is this chart itself.
+    # unlike a chart-generated value whose only peer is this chart itself.
     # Required (the api refuses to start on an empty client secret --
     # crates/api/src/app.rs).
     clientSecret: ""
@@ -345,6 +413,31 @@ api:
   # expiry stamped at login, not a sliding window refreshed by activity.
   # Matches the binary's own default.
   sessionTtlDays: 14
+  # Internal-service OAuth2 verification -- see
+  # docs/superpowers/specs/2026-09-02-internal-service-oauth2-design.md.
+  # REQUIRED -- crates/api's clap config declares issuerUrl/clientId/8
+  # group fields with no default for the first two, so a pod without them
+  # exits immediately, same fail-fast posture as sso.* above.
+  internalOauth:
+    # -- OIDC issuer base URL for the internal-service OAuth2 provider.
+    # JWKS is discovered from this URL's .well-known/openid-configuration,
+    # same mechanism as sso.issuerUrl. May be the same Authentik instance
+    # as sso (a different Application/Provider) or a different one.
+    issuerUrl: ""
+    # -- Expected `aud` claim on a verified token -- SAME value as the
+    # top-level internalOauth.clientId above.
+    clientId: ""
+    # -- Required Authentik group name per real caller (Decision 3). Not
+    # secret. Suggested defaults only.
+    groups:
+      pollerIncidents: svc-poller-incidents
+      pollerStations: svc-poller-stations
+      pollerTocs: svc-poller-tocs
+      pollerLdbws: svc-poller-ldbws
+      pollerTfl: svc-poller-tfl
+      trustConsumer: svc-trust-consumer
+      scheduleIngest: svc-schedule-ingest
+      scheduleReference: svc-schedule-reference
   probes:
     # -- Path served by crates/api/src/routes/health.rs, nested under /public
     # by main.rs. Changing this must be matched in tests/test-api-health.yaml.
@@ -664,6 +757,13 @@ trustConsumer:
     existingSecret: ""
     existingSecretUsernameKey: kafka-sasl-username
     existingSecretPasswordKey: kafka-sasl-password
+  # -- Read this service's OAuth2 credential from a pre-existing Secret
+  # instead of the chart-rendered one.
+  existingSecret: ""
+  internalOauthUsername: ""
+  internalOauthPassword: ""
+  existingSecretInternalOauthUsernameKey: internal-oauth-username-trust-consumer
+  existingSecretInternalOauthPasswordKey: internal-oauth-password-trust-consumer
   referenceReloadSecs: 60
   # -- How often trust-consumer reloads the live STANOX->CRS table from
   # api's /private/stanox-crs. Deliberately coarser than
@@ -776,6 +876,11 @@ scheduleFeed:
     checkTimes: "22:00,22:30,23:00,23:30,00:00,00:30,01:00,01:30,16:00"
     retentionKeepSequences: 2
     stabilityCycles: 2
+    existingSecret: ""
+    internalOauthUsername: ""
+    internalOauthPassword: ""
+    existingSecretInternalOauthUsernameKey: internal-oauth-username-schedule-ingest
+    existingSecretInternalOauthPasswordKey: internal-oauth-password-schedule-ingest
   # -- Third sibling container in this same Pod (crates/schedule-reference):
   # once `ingest` has moved a verified-complete delivery into
   # storage_dir/<n>/, parses that sequence's TI/A records into the
@@ -792,6 +897,11 @@ scheduleFeed:
     # binds metrics.port for its own listener -- see
     # schedulefeed-deployment.yaml's own comment on this.
     metricsPort: 9092
+    existingSecret: ""
+    internalOauthUsername: ""
+    internalOauthPassword: ""
+    existingSecretInternalOauthUsernameKey: internal-oauth-username-schedule-reference
+    existingSecretInternalOauthPasswordKey: internal-oauth-password-schedule-reference
   service:
     # -- LoadBalancer or NodePort + an operator-managed external LB/DNS --
     # NOT an Ingress (HTTP(S)-only by spec, cannot carry SFTP). Actually
@@ -1003,10 +1113,11 @@ ingress:
     host: ""
   api:
     # SECURITY: enabling this exposes /private/* to the internet as well.
-    # Those endpoints are protected ONLY by the X-Internal-Token shared
-    # secret (crates/api/src/auth.rs) -- there is no other authentication in
-    # front of them. If you do not need external API access, leave this off;
-    # the frontend reaches the api over the in-cluster Service either way.
+    # Those endpoints are protected by internal-service OAuth2
+    # (require_internal_oauth, crates/api/src/auth.rs) -- there is no other
+    # authentication in front of them. If you do not need external API
+    # access, leave this off; the frontend reaches the api over the
+    # in-cluster Service either way.
     enabled: false
     # -- Hostname for the api, e.g. api.example.com.
     host: ""

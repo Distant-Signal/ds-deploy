@@ -199,7 +199,8 @@ spec:
           # (#[arg(long, env)] with no explicit override) -- checked
           # directly against that file, not guessed: watch_dir, storage_dir,
           # check_times, retention_keep_sequences, stability_cycles,
-          # api_ingest_url, internal_token, metrics_port, metrics_enabled.
+          # api_ingest_url, internal_oauth_token_url/client_id/scope/
+          # username/password, metrics_port, metrics_enabled.
           env:
             - name: WATCH_DIR
               value: {{ printf "/data/schedule-feed/%s" (include "distant-signal.scheduleFeedDestinationPath" .) | quote }}
@@ -213,11 +214,22 @@ spec:
               value: {{ .Values.scheduleFeed.ingest.stabilityCycles | quote }}
             - name: API_INGEST_URL
               value: {{ printf "%s/private/schedule-feed-ingests" (include "distant-signal.apiBaseUrl" .) | quote }}
-            - name: INTERNAL_TOKEN
+            - name: INTERNAL_OAUTH_TOKEN_URL
+              value: {{ .Values.internalOauth.tokenUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ .Values.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_SCOPE
+              value: {{ .Values.internalOauth.scope | quote }}
+            - name: INTERNAL_OAUTH_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "distant-signal.internalTokenSecretName" . }}
-                  key: {{ include "distant-signal.internalTokenSecretKey" . }}
+                  name: {{ include "distant-signal.scheduleIngestSecretName" . }}
+                  key: {{ include "distant-signal.scheduleIngestOauthUsernameSecretKey" . }}
+            - name: INTERNAL_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleIngestSecretName" . }}
+                  key: {{ include "distant-signal.scheduleIngestOauthPasswordSecretKey" . }}
             # METRICS_ENABLED is always rendered (matching aggregator's/
             # every poller's convention) -- this is the actual Rust-side
             # toggle that stops the /metrics listener from starting.
@@ -251,7 +263,8 @@ spec:
           {{- end }}
           # Env var names below are the uppercase-snake-case clap `env`
           # names crates/schedule-reference/src/config.rs actually declares:
-          # storage_dir, poll_interval_secs, api_ingest_url, internal_token,
+          # storage_dir, poll_interval_secs, api_ingest_url,
+          # internal_oauth_token_url/client_id/scope/username/password,
           # metrics_port, metrics_enabled.
           env:
             - name: STORAGE_DIR
@@ -260,11 +273,22 @@ spec:
               value: {{ .Values.scheduleFeed.reference.pollIntervalSecs | quote }}
             - name: API_INGEST_URL
               value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
-            - name: INTERNAL_TOKEN
+            - name: INTERNAL_OAUTH_TOKEN_URL
+              value: {{ .Values.internalOauth.tokenUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ .Values.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_SCOPE
+              value: {{ .Values.internalOauth.scope | quote }}
+            - name: INTERNAL_OAUTH_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "distant-signal.internalTokenSecretName" . }}
-                  key: {{ include "distant-signal.internalTokenSecretKey" . }}
+                  name: {{ include "distant-signal.scheduleReferenceSecretName" . }}
+                  key: {{ include "distant-signal.scheduleReferenceOauthUsernameSecretKey" . }}
+            - name: INTERNAL_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleReferenceSecretName" . }}
+                  key: {{ include "distant-signal.scheduleReferenceOauthPasswordSecretKey" . }}
             - name: METRICS_ENABLED
               value: {{ .Values.metrics.enabled | quote }}
             {{- if .Values.metrics.enabled }}
