@@ -506,6 +506,51 @@ aggregator:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
+# notifier (crates/notifier -- Web Push for pinned-line/tracked-train
+# notifications). Same "no HTTP surface, replicas: 1" shape as aggregator
+# above -- see notifier-deployment.yaml's own comment on why two replicas
+# would double-send every push.
+# ---------------------------------------------------------------------------
+notifier:
+  image:
+    repository: distant-signal/notifier
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- Same "reasonable round number, not load-tested" posture as
+  # aggregator.pollIntervalSecs.
+  pollIntervalSecs: 60
+  # -- Decision 5: how long a de-escalation/lateral notification is
+  # suppressed after the last one sent to this user for this line.
+  cooldownMinutes: 20
+  # -- Decision 4: the delay, in minutes, at or above which a tracked
+  # train's delay reading becomes notify-worthy.
+  trainDelayThresholdMinutes: 15
+  vapid:
+    # -- mailto: or https: contact, required by RFC 8292's VAPID "sub" claim.
+    subject: ""
+    # -- PEM EC private key / uncompressed base64url public key
+    # (openssl ecparam -genkey -name prime256v1). Never auto-generated --
+    # see secret.yaml's own comment on why this differs from
+    # postgres-password/internal-token. The public key is also read by the
+    # api Deployment (api.extraEnv-free, wired directly in
+    # api-deployment.yaml) to serve GET /public/notifications/vapid-public-key.
+    publicKey: ""
+    privateKey: ""
+    existingSecret: ""
+    existingSecretPublicKeyKey: "vapid-public-key"
+    existingSecretPrivateKeyKey: "vapid-private-key"
+  logLevel: info
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # -- Merged over the chart-wide pod securityContext defaults
+  # (runAsNonRoot: true, seccompProfile: RuntimeDefault).
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
 # redis (crates/enricher's trigger queue; crates/api publishes to it)
 # ---------------------------------------------------------------------------
 redis:

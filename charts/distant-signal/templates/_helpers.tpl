@@ -196,6 +196,39 @@ Used by api-deployment.yaml and by all four poller deployments.
 {{- end }}
 
 {{/*
+Resolved Secret name/key for the VAPID public/private keypair. Takes root.
+Used by notifier-deployment.yaml (both keys) and api-deployment.yaml (the
+public key only -- api serves it via /public/notifications/vapid-public-key
+but never signs a push itself, so it never needs the private key). Same
+shape as the internal-token pair above, except -- like sso-client-secret
+and kafka-sasl-* -- never auto-generated: a random VAPID keypair would not
+be a genuine matched EC keypair (see secret.yaml's own comment).
+*/}}
+{{- define "distant-signal.vapidPublicKeySecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.notifier.vapid.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.vapidPublicKeySecretKey" -}}
+{{- if .Values.notifier.vapid.existingSecret }}
+{{- .Values.notifier.vapid.existingSecretPublicKeyKey }}
+{{- else }}
+{{- print "vapid-public-key" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.vapidPrivateKeySecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.notifier.vapid.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.vapidPrivateKeySecretKey" -}}
+{{- if .Values.notifier.vapid.existingSecret }}
+{{- .Values.notifier.vapid.existingSecretPrivateKeyKey }}
+{{- else }}
+{{- print "vapid-private-key" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Resolved Secret name/key for the OIDC client secret. Takes root.
 Used by api-deployment.yaml (SSO_CLIENT_SECRET) and, for the name, by
 secret.yaml's decision on whether to render the key at all. Same shape as

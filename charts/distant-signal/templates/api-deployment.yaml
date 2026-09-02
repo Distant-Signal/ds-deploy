@@ -149,6 +149,18 @@ spec:
             # LINES_DIR is deliberately NOT set: crates/api/src/data/config.rs
             # already defaults it to /app/lines, which is exactly where
             # docker/api.Dockerfile bakes the line catalogue.
+            # VAPID public key (crates/api/src/data/config.rs: ServiceArguments)
+            # -- served unauthenticated via GET /public/notifications/vapid-public-key
+            # (crates/api/src/routes/notifications.rs) for the browser's
+            # PushManager.subscribe() call. Sourced from the SAME secret
+            # key notifier-deployment.yaml reads for its own VAPID_PUBLIC_KEY
+            # -- api never gets VAPID_PRIVATE_KEY, since it only stores
+            # subscriptions, it never sends to them (crates/notifier does).
+            - name: VAPID_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.vapidPublicKeySecretName" . }}
+                  key: {{ include "distant-signal.vapidPublicKeySecretKey" . }}
             {{- with .Values.api.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-notifier" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "notifier") | nindent 4 }}
+spec:
+  # Fixed at 1 -- two replicas would double-send every push notification,
+  # an even more directly user-visible failure mode than aggregator's
+  # double-write risk.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "notifier") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "notifier") | nindent 8 }}
+      {{- with .Values.notifier.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.notifier.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: notifier
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.notifier.image) | quote }}
+          imagePullPolicy: {{ .Values.notifier.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          # No probes: exposes no HTTP surface at all, same as aggregator.
+          env:
+            {{- include "distant-signal.databaseEnv" . | nindent 12 }}
+            - name: POLL_INTERVAL_SECS
+              value: {{ .Values.notifier.pollIntervalSecs | quote }}
+            - name: COOLDOWN_MINUTES
+              value: {{ .Values.notifier.cooldownMinutes | quote }}
+            - name: TRAIN_DELAY_THRESHOLD_MINUTES
+              value: {{ .Values.notifier.trainDelayThresholdMinutes | quote }}
+            - name: VAPID_SUBJECT
+              value: {{ .Values.notifier.vapid.subject | quote }}
+            - name: VAPID_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.vapidPublicKeySecretName" . }}
+                  key: {{ include "distant-signal.vapidPublicKeySecretKey" . }}
+            - name: VAPID_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.vapidPrivateKeySecretName" . }}
+                  key: {{ include "distant-signal.vapidPrivateKeySecretKey" . }}
+            - name: RUST_LOG
+              value: {{ .Values.notifier.logLevel | quote }}
+            {{- with .Values.notifier.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.notifier.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.notifier.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.notifier.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.notifier.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
