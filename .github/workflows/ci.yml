@@ -9,12 +9,17 @@ name: CI
 # warrant skipping on push (the container build/publish pipeline, which IS
 # expensive, lives in containers.yml instead).
 #
-# `clippy` and `actionlint` call FasterSpeeding/Piped's own reusable
-# `workflow_call` workflows directly (see the comment on each job). Piped's
-# remaining workflows (rustfmt.yml, lint.yml, type-check.yml, py-test.yml,
-# verify-types.yml, freeze-for-pr.yml, ...) are not used here: they are
-# either Python/nox-oriented (this repo has no Python code) or depend on a
-# `justfile` + `mise.toml` vendored from the `piped` git submodule via the
+# `actionlint` calls FasterSpeeding/Piped's own reusable `workflow_call`
+# workflow directly (see the comment on that job). `clippy` originally did
+# too, but Piped's clippy.yml passes a broken `args: --all-features` to
+# auguwu/clippy-action (lands after cargo's `--` separator, so it reaches
+# clippy-driver/rustc, not cargo -- see the comment on the `clippy` job for
+# the full trace) so it's now a custom job calling the same clippy-action
+# commit directly with the fix. Piped's remaining workflows (rustfmt.yml,
+# lint.yml, type-check.yml, py-test.yml, verify-types.yml,
+# freeze-for-pr.yml, ...) are not used here: they are either Python/nox-
+# oriented (this repo has no Python code) or depend on a `justfile` +
+# `mise.toml` vendored from the `piped` git submodule via the
 # `just-jobs`/`handle-diff-file` composite actions in Piped-actions, which
 # this repo does not have and this change does not introduce. See the PR
 # description this workflow shipped with for the fuller "what was checked
@@ -34,21 +39,67 @@ permissions:
   contents: read
 
 jobs:
-  # Reusable workflow_call from FasterSpeeding/Piped: mise-installs a Rust
-  # toolchain and runs `auguwu/clippy-action` (cargo clippy --all-features)
-  # with inline PR annotations. This one is self-contained (no justfile
-  # dependency) and operates workspace-wide by default since this repo's
-  # root Cargo.toml is a virtual manifest, so it's a clean fit as-is.
+  # Custom: NOT using FasterSpeeding/Piped's clippy.yml reusable workflow
+  # here, because it is broken -- confirmed by tracing the exact pinned
+  # commit's `auguwu/clippy-action@9817d076b82df0194935be9db6154c56ac07b317`
+  # (v1.5.0) source (src/clippy.ts): the argv it builds is
+  # `['clippy', '--message-format', 'json', ...check-args, (--all-features
+  # if the deprecated boolean input is set), '--', ...args, ...forbid/deny/
+  # warn/allow]` -- i.e. `check-args` land BEFORE the `cargo clippy --`
+  # separator (so cargo sees them), but `args` land AFTER it, meaning they
+  # get passed straight to `clippy-driver`/`rustc`, not to `cargo clippy`.
+  # Piped's clippy.yml (both the pinned commit and current master, verified
+  # via raw.githubusercontent.com) passes `args: --all-features` --
+  # `--all-features` is a cargo-level flag, not a valid rustc/clippy-driver
+  # flag, so it lands on the wrong side of `--` and clippy-driver rejects
+  # it with exactly "error: Unrecognized option: 'all-features'" on the
+  # first crate compiled. This is an upstream Piped bug (should be
+  # `check-args: --all-features`), not something fixable from this repo's
+  # workflow_call site since that reusable workflow takes no inputs.
   #
-  # Caveat: this reusable workflow takes no inputs, so there is no way to
-  # add `--all-targets` from the caller side -- it lints lib/bin targets
-  # only, not test code. See the report for the suggested upstream tweak.
+  # This job calls the same pinned clippy-action commit directly with the
+  # corrected input name, preserving the original behaviour (workspace-wide
+  # since the root Cargo.toml is a virtual manifest, all-features, inline
+  # PR annotations) without the upstream bug. Revert to the Piped reusable
+  # workflow once this is fixed upstream.
+  #
+  # Also installs the same system packages docker/trust-consumer.Dockerfile
+  # documents needing for rdkafka's `cmake-build`/`ssl`/`sasl` features
+  # (trust-consumer is part of this workspace, so `--all-features
+  # --workspace` compiles it too): cmake + libssl-dev + pkg-config to build
+  # vendored librdkafka, libsasl2-dev for the `sasl2-sys` crate's build
+  # script (dynamic linking against a real libsasl2, matching production --
+  # see the `rust-test` job below for the fuller rationale), and
+  # libcurl4-openssl-dev because librdkafka's vendored C source
+  # unconditionally `#include`s <curl/curl.h>.
   clippy:
     permissions:
       contents: read
       checks: write
       pull-requests: write
-    uses: FasterSpeeding/Piped/.github/workflows/clippy.yml@5bbddb5d32d5bde939b18f6c6bcfa0e36779412f # master @ 2026-09-01
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: clippy
+
+      - name: Install rdkafka build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
+
+      - name: Cache cargo registry/target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo clippy --workspace --all-features
+        uses: auguwu/clippy-action@9817d076b82df0194935be9db6154c56ac07b317 # v1.5.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          check-args: --all-features
 
   # Reusable workflow_call from FasterSpeeding/Piped: runs actionlint over
   # this repo's own .github/workflows/*.yml via reviewdog. Self-contained
@@ -121,6 +172,29 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.88.0
+
+      # trust-consumer's `rdkafka` dependency needs a real, dynamically
+      # linked libsasl2 to build+run (see docker/trust-consumer.Dockerfile,
+      # which installs the same packages for the same reason): its `sasl`
+      # feature pulls in the `sasl2-sys` crate, whose build script panics
+      # with "Unable to find libsasl2 on your system" without
+      # libsasl2-dev. `rdkafka` was deliberately left on dynamic linking
+      # (no `vendored`/`gssapi-vendored` feature enabled in
+      # crates/trust-consumer/Cargo.toml) rather than switched to a
+      # vendored/bundled libsasl2, so this needs to match the Dockerfile's
+      # system-package approach rather than diverge from it: this app does
+      # real SASL/SCRAM auth against a live Kafka broker in production (see
+      # charts/distant-signal's trustConsumer.kafka.saslMechanism), so CI
+      # should build against the same kind of libsasl2 production actually
+      # links, not a bundled stand-in that could behave differently.
+      # cmake/libssl-dev/pkg-config are for rdkafka's `cmake-build`/`ssl`
+      # features (vendored librdkafka C library), libcurl4-openssl-dev
+      # because librdkafka's vendored C source unconditionally `#include`s
+      # <curl/curl.h> at build time (not linked at runtime).
+      - name: Install rdkafka build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
 
       - name: Cache cargo registry/target
         uses: Swatinem/rust-cache@v2
