@@ -862,6 +862,26 @@ railMcp:
   # unresearched starting figure per the design doc's Decision 3d Open
   # questions/risks entry.
   lineCatalogueTtlMs: 900000
+  # -- Number of reverse-proxy hops the derived service should trust when
+  # resolving a caller's address from X-Forwarded-For -- TRUST_PROXY_HOPS,
+  # which maps directly onto Express's own `trust proxy` setting (see the
+  # fork's own src/config.ts). This is the ONLY thing standing between the
+  # fork's addressLimiter (src/app.ts) -- which exists specifically to stop
+  # one bad actor's flood of bogus MCP tokens from exhausting shared Redis
+  # lookup capacity -- and req.ip resolving to this chart's own Ingress
+  # controller's Pod IP for every external caller, which would collapse
+  # that per-address limit into one shared quota across every legitimate
+  # client. Default 1 assumes exactly one hop between the caller and this
+  # Pod: the single Ingress controller this chart's own
+  # networkPolicy.ingressControllerNamespace default (ingress-nginx)
+  # implies, terminating TLS and proxying straight to the railmcp Service
+  # with no second load balancer of its own in front rewriting
+  # X-Forwarded-For again. Raise this if you front the Ingress controller
+  # with another proxy/LB that also appends to X-Forwarded-For; the fork's
+  # own config.ts default (0, trust nothing) is deliberately NOT reused
+  # here because this chart's own Ingress is a real, known hop -- leaving
+  # this at 0 behind it is the exact gap this value exists to close.
+  trustProxyHops: 1
   resources: {}
   nodeSelector: {}
   tolerations: []

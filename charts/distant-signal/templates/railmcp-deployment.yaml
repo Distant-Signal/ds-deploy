@@ -73,6 +73,13 @@ spec:
               value: {{ include "distant-signal.apiBaseUrl" . | quote }}
             - name: DS_LINE_CATALOGUE_TTL_MS
               value: {{ .Values.railMcp.lineCatalogueTtlMs | quote }}
+            # See values.yaml's own railMcp.trustProxyHops comment: without
+            # this, the fork's addressLimiter (src/app.ts) keys on this
+            # chart's own Ingress controller's Pod IP for every caller
+            # instead of the real client address, collapsing its per-address
+            # rate limit into one shared quota.
+            - name: TRUST_PROXY_HOPS
+              value: {{ .Values.railMcp.trustProxyHops | quote }}
             # The adapter auth layer (embedded-chatbot-shared-foundation-
             # and-option-c plan, Tasks 1-7) -- replaces the DISCORD_CLIENT_ID/
             # DISCORD_ALLOWED_USER_IDS env vars this block used to render
