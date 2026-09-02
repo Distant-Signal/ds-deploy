@@ -784,8 +784,12 @@ scheduleFeed:
 # train-mcp living in its own repository -- this chart deploys it, it does
 # not build it. See
 # docs/superpowers/specs/2026-09-01-train-mcp-integration-design.md
-# Decision 1/6 and docs/superpowers/plans/2026-09-01-train-mcp-integration.md
-# Task 7.
+# Decision 1/6, docs/superpowers/plans/2026-09-01-train-mcp-integration.md
+# Task 7, and docs/superpowers/plans/2026-09-02-embedded-chatbot-shared-
+# foundation-and-option-c.md Task 8, which retired the Discord-OAuth values
+# this block originally shipped with (railMcp.discord.*, below) in favor of
+# the service's own real OAuth 2.1 adapter -- "superseded, not stacked
+# alongside DS's OIDC" (train-mcp design Decision 4d).
 # ---------------------------------------------------------------------------
 railMcp:
   # -- Opt-in; false by default, matching scheduleFeed.enabled's own
@@ -806,17 +810,27 @@ railMcp:
   # -- The MCP service's own PUBLIC_URL (its OAuth discovery metadata needs
   # a real, reachable origin -- see the fork's own src/config.ts). Left
   # blank by default; an operator enabling railMcp must set this to
-  # wherever they expose the railmcp Service. No Ingress/TLS is sketched by
-  # this chart for it -- see Decision 6's own shallow deployment depth and
-  # this plan's Task 7 "Explicitly out of scope".
+  # wherever they expose the railmcp Service, matching
+  # ingress.railMcp.host below. Also this adapter's own RFC 8707 issuer/
+  # resource identifier -- the fork's own src/config.ts reuses PUBLIC_URL
+  # directly for that rather than a second env var, since the two must
+  # always be identical (embedded-chatbot-shared-foundation-and-option-c
+  # plan, Task 1's own config.ts comment).
   publicUrl: ""
-  # -- The Discord application this MCP server's OAuth resource-server
-  # verification checks tokens against -- the fork's own DISCORD_CLIENT_ID/
-  # DISCORD_ALLOWED_USER_IDS. Neither has a sensible chart-wide default;
-  # both are required by the fork's own src/config.ts at boot.
-  discord:
-    clientId: ""
-    allowedUserIds: ""
+  # -- frontend's own public origin, e.g. https://status.example.com --
+  # where the OAuth consent bridge (frontend/app/connect-claude/authorize/)
+  # lives. Required when railMcp.enabled is true (the fork's own
+  # src/config.ts asserts DS_FRONTEND_ORIGIN is set at boot).
+  frontendOrigin: ""
+  # -- Shared secret between this service and frontend/'s consent bridge --
+  # mirrors secrets.internalToken's exact auto-generate-if-empty pattern
+  # (see secret.yaml). Leave empty to auto-generate. A new,
+  # chart-provisioned credential distinct from secrets.internalToken: they
+  # protect different processes (this one guards frontend/'s server-to-
+  # server calls into the railmcp Service; internalToken guards api's own
+  # /private/* routes).
+  internalCompleteToken: ""
+  existingSecretInternalCompleteTokenKey: internal-complete-token
   # -- LDBWS/Rail Data Marketplace credentials the fork's board/service-
   # detail tools still call directly (Decision 5 of the design doc --
   # unchanged by this integration, board tools are not routed through DS).
@@ -829,14 +843,14 @@ railMcp:
     arrivalsKey: ""
     serviceUrl: ""
     serviceKey: ""
-  # -- Read the eight values above from this pre-existing Secret instead
-  # (see the existingSecret*Key overrides below for each key's name within
-  # it). Every field is a genuinely external credential this chart cannot
-  # generate -- same posture as api.sso.existingSecret/pollers'
-  # existingSecret, never auto-generated.
+  # -- Read the six LDBWS values above, plus internalCompleteToken above,
+  # from this pre-existing Secret instead (see the existingSecret*Key
+  # overrides for each key's name within it). The six LDBWS credentials are
+  # genuinely external and this chart cannot generate them; internalCompleteToken
+  # CAN be chart-generated (secret.yaml) but is still read from here instead
+  # when this is set, same as secrets.existingSecret/internalToken's own
+  # relationship.
   existingSecret: ""
-  existingSecretDiscordClientIdKey: discord-client-id
-  existingSecretDiscordAllowedUserIdsKey: discord-allowed-user-ids
   existingSecretLdbwsDeparturesUrlKey: ldbws-departures-url
   existingSecretLdbwsDeparturesKeyKey: ldbws-departures-key
   existingSecretLdbwsArrivalsUrlKey: ldbws-arrivals-url
@@ -923,6 +937,17 @@ ingress:
     # the frontend reaches the api over the in-cluster Service either way.
     enabled: false
     # -- Hostname for the api, e.g. api.example.com.
+    host: ""
+  railMcp:
+    # -- Public MCP endpoint. Unlike ingress.frontend (default true) and
+    # matching ingress.api's own posture, defaults false: exposing this
+    # publicly is only meaningful once the adapter auth layer (embedded-
+    # chatbot-shared-foundation-and-option-c plan, Tasks 1-7) is actually
+    # running, and per the train-mcp design's own Licensing note, the
+    # NRE-attribution legal question should be resolved before real users
+    # can reach this (that plan's Task 10).
+    enabled: false
+    # -- Hostname for the derived MCP service, e.g. mcp.example.com.
     host: ""
   # -- TLS blocks passed through verbatim. Shaped for cert-manager (pair it
   # with a cluster-issuer annotation above) but issuer-agnostic.

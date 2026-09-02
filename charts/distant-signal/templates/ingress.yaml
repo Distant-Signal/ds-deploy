@@ -5,6 +5,12 @@
 {{- if and .Values.ingress.api.enabled (not .Values.ingress.api.host) }}
 {{- fail "ingress.api.enabled is true but ingress.api.host is empty. Set it to the hostname the api should be served on, or set ingress.api.enabled=false." }}
 {{- end }}
+{{- if and .Values.ingress.railMcp.enabled (not .Values.ingress.railMcp.host) }}
+{{- fail "ingress.railMcp.enabled is true but ingress.railMcp.host is empty. Set it to the hostname the derived MCP service should be served on, or set ingress.railMcp.enabled=false." }}
+{{- end }}
+{{- if and .Values.ingress.railMcp.enabled (not .Values.railMcp.enabled) }}
+{{- fail "ingress.railMcp.enabled is true but railMcp.enabled is false. A public Ingress rule for a service that isn't deployed makes no sense -- set railMcp.enabled=true too." }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -48,5 +54,17 @@ spec:
                 name: {{ include "distant-signal.apiFullname" . }}
                 port:
                   number: {{ .Values.api.service.port }}
+    {{- end }}
+    {{- if and .Values.ingress.railMcp.enabled .Values.ingress.railMcp.host }}
+    - host: {{ .Values.ingress.railMcp.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "distant-signal.railMcpFullname" . }}
+                port:
+                  number: {{ .Values.railMcp.service.port }}
     {{- end }}
 {{- end }}

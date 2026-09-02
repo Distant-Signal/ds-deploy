@@ -1,10 +1,17 @@
 {{/*
-ClusterIP for the derived MCP service's HTTP transport -- no external
-Ingress/TLS is sketched here, matching Decision 6's own shallow deployment
-depth (see the design doc's Explicitly out of scope and this plan's
-own Task 7). An operator who wants to expose this externally fronts it
-with their own Ingress/LoadBalancer, the same way this chart leaves that
-choice to the operator for every other internal-only Service.
+ClusterIP for the derived MCP service's HTTP transport. UPDATED (embedded-
+chatbot-shared-foundation-and-option-c plan, Task 8): this chart now DOES
+formalize an external route for this Service -- see ingress.yaml's own
+railMcp rule (ingress.railMcp.{enabled,host}), the same relationship
+ingress.api already has to api-service.yaml. This Service itself stays
+ClusterIP-only regardless; the Ingress rule is what fronts it publicly, not
+this file. Before this plan's Tasks 1-7 (the adapter auth layer) landed,
+this comment said no external Ingress/TLS was sketched here at all,
+matching Decision 6's own shallow deployment depth -- an operator who
+still doesn't want the chart-managed route can leave ingress.railMcp.enabled
+false and front this Service with their own Ingress/LoadBalancer instead,
+the same way this chart leaves that choice to the operator for every other
+internal-only Service.
 */}}
 {{- if .Values.railMcp.enabled }}
 apiVersion: v1

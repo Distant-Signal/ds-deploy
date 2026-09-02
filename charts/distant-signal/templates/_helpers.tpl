@@ -488,20 +488,24 @@ overridable within it.
 {{- default (include "distant-signal.secretName" .) .Values.railMcp.existingSecret }}
 {{- end }}
 
-{{- define "distant-signal.railMcpDiscordClientIdSecretKey" -}}
+{{/* railmcp-internal-complete-token key resolution -- the two Discord
+helpers this chart used to render here (railMcpDiscordClientIdSecretKey,
+railMcpDiscordAllowedUserIdsSecretKey) are retired along with
+railMcp.discord.* (embedded-chatbot-shared-foundation-and-option-c plan,
+Task 8: "superseded, not stacked"). */}}
+{{- define "distant-signal.railMcpInternalCompleteTokenSecretKey" -}}
 {{- if .Values.railMcp.existingSecret }}
-{{- .Values.railMcp.existingSecretDiscordClientIdKey }}
+{{- .Values.railMcp.existingSecretInternalCompleteTokenKey }}
 {{- else }}
-{{- print "discord-client-id" }}
+{{- print "internal-complete-token" }}
 {{- end }}
 {{- end }}
 
-{{- define "distant-signal.railMcpDiscordAllowedUserIdsSecretKey" -}}
-{{- if .Values.railMcp.existingSecret }}
-{{- .Values.railMcp.existingSecretDiscordAllowedUserIdsKey }}
-{{- else }}
-{{- print "discord-allowed-user-ids" }}
-{{- end }}
+{{/* In-cluster URL for the railmcp Service -- consumed by frontend-
+deployment.yaml's RAILMCP_BASE_URL, mirroring distant-signal.apiBaseUrl's
+own shape exactly. */}}
+{{- define "distant-signal.railMcpInClusterUrl" -}}
+{{- printf "http://%s:%d" (include "distant-signal.railMcpFullname" .) (int .Values.railMcp.service.port) -}}
 {{- end }}
 
 {{- define "distant-signal.railMcpLdbwsDeparturesUrlSecretKey" -}}

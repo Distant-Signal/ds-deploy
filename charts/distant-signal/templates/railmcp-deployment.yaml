@@ -58,23 +58,34 @@ spec:
               value: {{ .Values.railMcp.service.port | quote }}
             - name: PUBLIC_URL
               value: {{ .Values.railMcp.publicUrl | quote }}
-            # In-cluster DNS name for this chart's own `api` Service -- no
-            # new DS-side route or auth needed (Decision 4: every DS call
-            # this service makes is anonymous).
+            # In-cluster DNS name for this chart's own `api` Service.
+            # STALE COMMENT UPDATED (embedded-chatbot-shared-foundation-and-
+            # option-c plan, Task 8): resolve_station/GET /public/lines/
+            # GET /Line/.../Status remain anonymous DS calls (Decision 4,
+            # unchanged), but /Train/by-uid/... is no longer necessarily
+            # anonymous once the sibling train-mcp-integration plan's own
+            # follow-up (flagged, not executed by this chart change) wires
+            # annotateLeg.ts's TRUST-corroboration tier to the session this
+            # adapter now makes available via req.auth.extra.dsSessionCookieValue
+            # (Task 7 of the embedded-chatbot plan) -- see that plan's own
+            # Status note.
             - name: DS_API_BASE_URL
               value: {{ include "distant-signal.apiBaseUrl" . | quote }}
             - name: DS_LINE_CATALOGUE_TTL_MS
               value: {{ .Values.railMcp.lineCatalogueTtlMs | quote }}
-            - name: DISCORD_CLIENT_ID
+            # The adapter auth layer (embedded-chatbot-shared-foundation-
+            # and-option-c plan, Tasks 1-7) -- replaces the DISCORD_CLIENT_ID/
+            # DISCORD_ALLOWED_USER_IDS env vars this block used to render
+            # here (retired, not kept alongside: Task 8).
+            - name: OAUTH_REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            - name: DS_FRONTEND_ORIGIN
+              value: {{ .Values.railMcp.frontendOrigin | quote }}
+            - name: OAUTH_INTERNAL_COMPLETE_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "distant-signal.railMcpSecretName" . }}
-                  key: {{ include "distant-signal.railMcpDiscordClientIdSecretKey" . }}
-            - name: DISCORD_ALLOWED_USER_IDS
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.railMcpSecretName" . }}
-                  key: {{ include "distant-signal.railMcpDiscordAllowedUserIdsSecretKey" . }}
+                  key: {{ include "distant-signal.railMcpInternalCompleteTokenSecretKey" . }}
             - name: LDBWS_DEPARTURES_URL
               valueFrom:
                 secretKeyRef:

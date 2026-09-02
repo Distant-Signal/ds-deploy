@@ -206,6 +206,58 @@ spec:
   # Default-deny: the aggregator exposes no listener at all when
   # metrics.enabled is false.
   {{- end }}
+{{- if .Values.railMcp.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "distant-signal.railMcpFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "railmcp") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "railmcp") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # frontend is the only in-cluster caller: its consent-bridge route
+    # (frontend/app/connect-claude/authorize/route.ts) calls this Service's
+    # /internal/* endpoints server-to-server to complete/deny an OAuth
+    # grant, gated by the OAUTH_INTERNAL_COMPLETE_TOKEN shared secret
+    # (src/oauth/internal.ts, compared in fixed time). Nothing else in this
+    # release ever needs to reach railmcp.
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  - {{ .Release.Name }}
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - frontend
+      {{- if and .Values.ingress.enabled .Values.ingress.railMcp.enabled }}
+        # The MCP protocol endpoints (/mcp, the OAuth discovery/register/
+        # authorize/token routes) are meant to be public, so the ingress
+        # controller must reach this Service too when ingress.railMcp is
+        # enabled. SECURITY: this Service has no separate listener/port for
+        # /internal/* -- everything shares this one port -- so enabling
+        # this also puts /internal/* within reach of the ingress controller
+        # (and, through it, the public internet), same as api's own
+        # /private/* above. That's why /internal/*'s shared-secret check
+        # must be (and is) constant-time: this NetworkPolicy narrows *who
+        # in the cluster* can reach railmcp at all, it cannot restrict
+        # *which path* an already-allowed source requests.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace | quote }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.railMcp.service.port }}
+{{- end }}
 {{- range $name, $poller := .Values.pollers }}
 {{- if $poller.enabled }}
 ---

@@ -43,6 +43,30 @@ spec:
           env:
             - name: API_BASE_URL
               value: {{ default (include "distant-signal.apiBaseUrl" .) .Values.frontend.apiBaseUrl | quote }}
+            {{- if .Values.railMcp.enabled }}
+            # The OAuth consent bridge (frontend/app/connect-claude/authorize/,
+            # embedded-chatbot-shared-foundation-and-option-c plan Task 6) and
+            # Option C's instructional page (Task 9) -- both no-ops, and
+            # correctly absent, when railMcp is disabled. This is the first
+            # component whose config needs to reach the frontend Deployment
+            # at all, so there was no prior existing example of this guard
+            # shape to model on (that plan's own Open questions/risks #5).
+            - name: RAILMCP_BASE_URL
+              value: {{ include "distant-signal.railMcpInClusterUrl" . | quote }}
+            - name: RAILMCP_INTERNAL_COMPLETE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.railMcpSecretName" . }}
+                  key: {{ include "distant-signal.railMcpInternalCompleteTokenSecretKey" . }}
+            # Baked in at container-start-read time, not build time -- this
+            # value is read inside an async Server Component
+            # (app/connect-claude/page.tsx), which executes server-side on
+            # every request the same way API_BASE_URL above does (see this
+            # file's own comment on that), so the NEXT_PUBLIC_ prefix here
+            # does not require a build-time bake for this particular read.
+            - name: NEXT_PUBLIC_RAILMCP_PUBLIC_URL
+              value: {{ .Values.railMcp.publicUrl | quote }}
+            {{- end }}
             {{- with .Values.frontend.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
