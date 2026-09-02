@@ -28,35 +28,46 @@ the two deployment paths do not drift.
 
 ## Building and pushing the images (manual)
 
-There is **no image build or publish pipeline in this repository**, and this
-chart does not add one. The Dockerfiles build locally only; you must build
-and push them yourself before installing.
+`.github/workflows/containers.yml` builds and publishes every image below to
+`ghcr.io/fasterspeeding/distant-signal/<service>` automatically (build-only
+sanity check on PRs; build + push + cosign-sign on push to main/master) — you
+do not need to do this by hand for a normal install. The table and commands
+below are for building and pushing to a registry of your own (e.g. a private
+registry, or testing a local change) without going through that pipeline.
 
 | Dockerfile | Default image repository |
 |---|---|
 | `docker/api.Dockerfile` | `distant-signal/api` |
 | `docker/aggregator.Dockerfile` | `distant-signal/aggregator` |
 | `docker/enricher.Dockerfile` | `distant-signal/enricher` |
+| `docker/notifier.Dockerfile` | `distant-signal/notifier` |
 | `docker/poller-incidents.Dockerfile` | `distant-signal/poller-incidents` |
 | `docker/poller-stations.Dockerfile` | `distant-signal/poller-stations` |
 | `docker/poller-tocs.Dockerfile` | `distant-signal/poller-tocs` |
 | `docker/poller-ldbws.Dockerfile` | `distant-signal/poller-ldbws` |
 | `docker/trust-consumer.Dockerfile` | `distant-signal/trust-consumer` |
 | `docker/poller-tfl.Dockerfile` | `distant-signal/poller-tfl` |
+| `docker/schedule-ingest.Dockerfile` | `distant-signal/schedule-ingest` |
+| `docker/schedule-reference.Dockerfile` | `distant-signal/schedule-reference` |
 | `frontend/Dockerfile` (target `runtime-prod`) | `distant-signal/frontend` |
 
 ```bash
 REG=registry.example.com/distant-signal
 TAG=0.1.0
-docker build -f docker/api.Dockerfile              -t $REG/api:$TAG .
-docker build -f docker/aggregator.Dockerfile       -t $REG/aggregator:$TAG .
-docker build -f docker/enricher.Dockerfile         -t $REG/enricher:$TAG .
-docker build -f docker/poller-incidents.Dockerfile -t $REG/poller-incidents:$TAG .
-docker build -f docker/poller-stations.Dockerfile  -t $REG/poller-stations:$TAG .
-docker build -f docker/poller-tocs.Dockerfile      -t $REG/poller-tocs:$TAG .
-docker build -f docker/poller-ldbws.Dockerfile     -t $REG/poller-ldbws:$TAG .
+docker build -f docker/api.Dockerfile                 -t $REG/api:$TAG .
+docker build -f docker/aggregator.Dockerfile          -t $REG/aggregator:$TAG .
+docker build -f docker/enricher.Dockerfile            -t $REG/enricher:$TAG .
+docker build -f docker/notifier.Dockerfile            -t $REG/notifier:$TAG .
+docker build -f docker/poller-incidents.Dockerfile    -t $REG/poller-incidents:$TAG .
+docker build -f docker/poller-stations.Dockerfile     -t $REG/poller-stations:$TAG .
+docker build -f docker/poller-tocs.Dockerfile         -t $REG/poller-tocs:$TAG .
+docker build -f docker/poller-ldbws.Dockerfile        -t $REG/poller-ldbws:$TAG .
+docker build -f docker/trust-consumer.Dockerfile      -t $REG/trust-consumer:$TAG .
+docker build -f docker/poller-tfl.Dockerfile          -t $REG/poller-tfl:$TAG .
+docker build -f docker/schedule-ingest.Dockerfile     -t $REG/schedule-ingest:$TAG .
+docker build -f docker/schedule-reference.Dockerfile  -t $REG/schedule-reference:$TAG .
 docker build -f frontend/Dockerfile --target runtime-prod -t $REG/frontend:$TAG .
-for i in api aggregator enricher poller-incidents poller-stations poller-tocs poller-ldbws frontend; do
+for i in api aggregator enricher notifier poller-incidents poller-stations poller-tocs poller-ldbws trust-consumer poller-tfl schedule-ingest schedule-reference frontend; do
   docker push $REG/$i:$TAG
 done
 ```
@@ -909,7 +920,10 @@ helm uninstall distant-signal -n distant-signal
 
 ## Not in scope
 
-- **No image build or publish pipeline.** See the manual loop above.
+- **No image build or publish pipeline in this chart itself.** The repo-level
+  `.github/workflows/containers.yml` covers that (see "Building and pushing
+  the images (manual)" above for the fallback path and the full
+  Dockerfile-to-repository mapping it uses).
 - **No HorizontalPodAutoscaler.** The aggregator, the enricher and all four
   pollers are singleton loops that must not be scaled, and the api is
   database-bound.

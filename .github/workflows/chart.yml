@@ -1,7 +1,7 @@
 name: Containers
 
-# Build (and, on push to main/master, publish) all 10 container images this
-# repo defines: the 9 Rust service Dockerfiles under docker/, and
+# Build (and, on push to main/master, publish) all 13 container images this
+# repo defines: the 12 Rust service Dockerfiles under docker/, and
 # frontend/Dockerfile's `runtime-prod` target. This is the "main aim"
 # CI/CD job per the repo owner's request.
 #
@@ -115,6 +115,9 @@ jobs:
           - service: enricher
             dockerfile: docker/enricher.Dockerfile
             target: ""
+          - service: notifier
+            dockerfile: docker/notifier.Dockerfile
+            target: ""
           - service: poller-incidents
             dockerfile: docker/poller-incidents.Dockerfile
             target: ""
@@ -135,6 +138,9 @@ jobs:
             target: ""
           - service: schedule-ingest
             dockerfile: docker/schedule-ingest.Dockerfile
+            target: ""
+          - service: schedule-reference
+            dockerfile: docker/schedule-reference.Dockerfile
             target: ""
           # The only image needing an explicit target: frontend/Dockerfile's
           # last stage is `runtime-dev`; the image this repo wants published
