@@ -280,6 +280,79 @@ the password reference through the *same* template helper, so an
 `existingSecret` override can never leave them disagreeing about which
 Secret holds the password.
 
+## Migrating to per-service internal tokens
+
+See `docs/superpowers/specs/2026-09-01-internal-service-accounts-design.md`
+for the full design and `docs/superpowers/plans/2026-09-01-internal-service-accounts.md`
+for the implementation this section documents the rollout for.
+
+**Background.** Historically every internal caller of `api`'s `/private/*`
+routes (the five pollers, `trust-consumer`, `schedule-ingest`) presented the
+*same* shared secret, `secrets.internalToken` / the `INTERNAL_TOKEN` env
+var. `api` now also mints and recognises a **distinct** token per caller
+(`pollers.<name>.internalToken`, `trustConsumer.internalToken`,
+`scheduleFeed.ingest.internalToken` — see the values reference above), each
+scoped server-side to only the `/private/*` routes that caller legitimately
+needs. A caller presenting a token that resolves to the wrong service gets
+`403 Forbidden`, not `401` — a real, valid credential, just not for that
+route.
+
+**This chart upgrade alone requires no operator action.** `api` accepts
+**both** the legacy shared token (still exactly `secrets.internalToken` /
+`INTERNAL_TOKEN`, unchanged) and all seven new per-service tokens,
+simultaneously, for every route, for as long as `crates/api/src/auth.rs`'s
+`InternalService::Legacy` identity exists. Every poller/service keeps
+sending its existing, unchanged `INTERNAL_TOKEN` and keeps working exactly
+as before. The seven new secret keys are generated and wired into `api`'s
+own Deployment automatically by this chart version — nothing else changes
+until you choose to migrate a caller.
+
+**Migrating one caller (any order, any timeline, independently per
+service):**
+
+1. Point that caller's own `INTERNAL_TOKEN` env var at its new
+   per-service secret key instead of the shared `internal-token` key. As of
+   this chart version each poller's/service's Deployment template still
+   sources `INTERNAL_TOKEN` from `secrets.internalToken` unconditionally —
+   repointing it (e.g. via `existingSecret`/`existingSecretInternalTokenKey`
+   pointed at that service's own generated key, or a values-file override of
+   the relevant `secretKeyRef`) is a deliberate, later, per-operator chart
+   change, not automated by this release, so that flipping the default for
+   every install in one release doesn't itself become the flag-day cutover
+   this design was written to avoid.
+2. Redeploy just that one Deployment. Because `api` already accepts the new
+   token (see above), there is no ordering requirement between this step and
+   any other service's migration.
+3. Confirm in `api`'s logs that the migrated service is no longer
+   triggering the legacy-token warning (next section) for its own route.
+
+**Watching migration progress.** Every request authenticated via the legacy
+shared token logs a `tracing::warn!` line from `crates/api/src/auth.rs`:
+`"legacy shared X-Internal-Token used -- migrate this caller to its own
+per-service token"`, tagged with the request `path`. Grep or dashboard on
+this line per route:
+
+```bash
+kubectl logs -n distant-signal deploy/distant-signal-api | grep "legacy shared"
+```
+
+Its presence for a given route means whichever pod is calling that route is
+still on the shared token; its **sustained absence** (there is no fixed
+number of days this chart enforces — use your own judgement, weighed
+against how long you keep pods that might still be running an older image)
+is the signal that every real caller of that route has migrated. Every
+successful per-service request (not just legacy/rejected ones) is also
+logged at `debug`, tagged with the resolved identity, for general
+auditability.
+
+**Retiring the legacy token.** Once every route's legacy-warning has been
+quiet for as long as you're comfortable with, a **future** chart change can
+remove `secrets.internalToken` / `INTERNAL_TOKEN` and
+`InternalService::Legacy` entirely. That removal is explicitly **not**
+part of this chart version — this version only makes both forms of
+credential available, on purpose, so the two are never coupled to the same
+release.
+
 ## Single sign-on (OIDC)
 
 The api authenticates users against an external OIDC provider (Keycloak,
@@ -562,7 +635,7 @@ helm upgrade distant-signal ./charts/distant-signal -n distant-signal \
 
 | Key | Default | Description |
 |---|---|---|
-| `secrets.internalToken` | `""` | Shared `X-Internal-Token` secret. Generated (32 alphanumeric chars) when empty. |
+| `secrets.internalToken` | `""` | Legacy shared `X-Internal-Token` secret, accepted from every caller on every route during the per-service migration window — see "Migrating to per-service internal tokens" above. Generated (32 alphanumeric chars) when empty. |
 | `secrets.existingSecret` | `""` | Read the internal token from this pre-existing Secret instead. |
 | `secrets.existingSecretInternalTokenKey` | `internal-token` | Key within `secrets.existingSecret`. |
 
@@ -790,8 +863,10 @@ Keys below exist under each of `pollers.incidents`, `pollers.stations`,
 | `pollers.<name>.ingestPath` | per-poller | Path on the api Service this poller POSTs results to. |
 | `pollers.<name>.pollIntervalSecs` | 300 / 86400 / 86400 / 60 | Poll cadence. |
 | `pollers.<name>.apiKey` | `""` | RDM API key. Rendered into the chart Secret when `existingSecret` is empty. |
-| `pollers.<name>.existingSecret` | `""` | Read the API key from this pre-existing Secret instead. |
-| `pollers.<name>.existingSecretApiKeyKey` | `rdm-<name>-api-key` | Key within `pollers.<name>.existingSecret`. |
+| `pollers.<name>.existingSecret` | `""` | Read the API key (and internal token, below) from this pre-existing Secret instead. |
+| `pollers.<name>.existingSecretApiKeyKey` | `rdm-<name>-api-key` | Key within `pollers.<name>.existingSecret` holding the RDM API key. |
+| `pollers.<name>.internalToken` | `""` | This app's own minted `/private/*` credential for this poller. Generated when empty and `existingSecret` unset — see "Migrating to per-service internal tokens" below. |
+| `pollers.<name>.existingSecretInternalTokenKey` | `internal-token-poller-<name>` | Key within `pollers.<name>.existingSecret` holding the internal token. |
 | `pollers.<name>.logLevel` | `info` | `RUST_LOG` value. |
 | `pollers.<name>.extraEnv` | `[]` | Extra env vars appended to the container. |
 | `pollers.<name>.resources` | `{}` | Container resource requests/limits. |

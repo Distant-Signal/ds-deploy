@@ -233,6 +233,50 @@ Resolved Secret name/key for one poller's RDM API key. Call as:
 {{- end }}
 
 {{/*
+Resolved Secret name/key for one poller's OWN internal-token (distinct
+from its RDM apiKey, same Secret object). Call as:
+  {{ include "distant-signal.pollerSecretName" (dict "root" $ "poller" $p) }}
+  {{ include "distant-signal.pollerInternalTokenSecretKey" (dict "root" $ "name" $name "poller" $p) }}
+*/}}
+{{- define "distant-signal.pollerInternalTokenSecretKey" -}}
+{{- if .poller.existingSecret }}
+{{- .poller.existingSecretInternalTokenKey }}
+{{- else }}
+{{- printf "internal-token-poller-%s" .name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Resolved Secret name/key for trust-consumer's own internal-token.
+*/}}
+{{- define "distant-signal.trustConsumerInternalTokenSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.trustConsumer.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.trustConsumerInternalTokenSecretKey" -}}
+{{- if .Values.trustConsumer.existingSecret }}
+{{- .Values.trustConsumer.existingSecretInternalTokenKey }}
+{{- else }}
+{{- print "internal-token-trust-consumer" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Resolved Secret name/key for schedule-ingest's own internal-token.
+*/}}
+{{- define "distant-signal.scheduleIngestInternalTokenSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.scheduleFeed.ingest.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.scheduleIngestInternalTokenSecretKey" -}}
+{{- if .Values.scheduleFeed.ingest.existingSecret }}
+{{- .Values.scheduleFeed.ingest.existingSecretInternalTokenKey }}
+{{- else }}
+{{- print "internal-token-schedule-ingest" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Environment entries giving a workload a working DATABASE_URL. Takes root.
 Used identically by api-deployment.yaml and aggregator-deployment.yaml.
 

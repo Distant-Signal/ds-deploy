@@ -107,6 +107,48 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.internalTokenSecretName" . }}
                   key: {{ include "distant-signal.internalTokenSecretKey" . }}
+            # The seven per-service internal tokens (Decision 1/2 of the
+            # internal-service-accounts design) -- api is the one consumer
+            # that needs every value, to build its InternalServiceRegistry
+            # at startup (crates/api/src/app.rs). Rendered unconditionally
+            # regardless of pollers.<name>.enabled -- see secret.yaml's own
+            # comment on why that block deliberately doesn't reuse
+            # rdm-<name>-api-key's `enabled` gate.
+            - name: INTERNAL_TOKEN_POLLER_INCIDENTS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerSecretName" (dict "root" . "poller" .Values.pollers.incidents) }}
+                  key: {{ include "distant-signal.pollerInternalTokenSecretKey" (dict "root" . "name" "incidents" "poller" .Values.pollers.incidents) }}
+            - name: INTERNAL_TOKEN_POLLER_STATIONS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerSecretName" (dict "root" . "poller" .Values.pollers.stations) }}
+                  key: {{ include "distant-signal.pollerInternalTokenSecretKey" (dict "root" . "name" "stations" "poller" .Values.pollers.stations) }}
+            - name: INTERNAL_TOKEN_POLLER_TOCS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerSecretName" (dict "root" . "poller" .Values.pollers.tocs) }}
+                  key: {{ include "distant-signal.pollerInternalTokenSecretKey" (dict "root" . "name" "tocs" "poller" .Values.pollers.tocs) }}
+            - name: INTERNAL_TOKEN_POLLER_LDBWS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerSecretName" (dict "root" . "poller" .Values.pollers.ldbws) }}
+                  key: {{ include "distant-signal.pollerInternalTokenSecretKey" (dict "root" . "name" "ldbws" "poller" .Values.pollers.ldbws) }}
+            - name: INTERNAL_TOKEN_POLLER_TFL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerSecretName" (dict "root" . "poller" .Values.pollers.tfl) }}
+                  key: {{ include "distant-signal.pollerInternalTokenSecretKey" (dict "root" . "name" "tfl" "poller" .Values.pollers.tfl) }}
+            - name: INTERNAL_TOKEN_TRUST_CONSUMER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.trustConsumerInternalTokenSecretName" . }}
+                  key: {{ include "distant-signal.trustConsumerInternalTokenSecretKey" . }}
+            - name: INTERNAL_TOKEN_SCHEDULE_INGEST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleIngestInternalTokenSecretName" . }}
+                  key: {{ include "distant-signal.scheduleIngestInternalTokenSecretKey" . }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             # Always rendered, so it reflects the real value either way.

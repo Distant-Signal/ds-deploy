@@ -99,6 +99,18 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.internalTokenSecretName" $root }}
                   key: {{ include "distant-signal.internalTokenSecretKey" $root }}
+            # This poller's own per-service credential (Decision 1/2 of the
+            # internal-service-accounts design) -- rendered for every poller
+            # so api's registry can resolve it, but INERT on this side: no
+            # poller's own config.rs reads INTERNAL_TOKEN_POLLER_* today,
+            # only the unchanged INTERNAL_TOKEN above. Retiring the legacy
+            # value in favour of this one is a later, separate chart change
+            # (see the plan's Task 8 runbook).
+            - name: {{ printf "INTERNAL_TOKEN_POLLER_%s" ($name | upper) }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerSecretName" (dict "root" $root "poller" $poller) }}
+                  key: {{ include "distant-signal.pollerInternalTokenSecretKey" (dict "root" $root "name" $name "poller" $poller) }}
             - name: API_INGEST_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" $root) $poller.ingestPath | quote }}
             {{- if $poller.sampleStationsPath }}

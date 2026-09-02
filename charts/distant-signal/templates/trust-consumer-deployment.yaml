@@ -105,6 +105,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.internalTokenSecretName" . }}
                   key: {{ include "distant-signal.internalTokenSecretKey" . }}
+            # trust-consumer's own per-service credential -- see
+            # poller-deployments.yaml's matching entry for why this is
+            # rendered but inert on this side today.
+            - name: INTERNAL_TOKEN_TRUST_CONSUMER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.trustConsumerInternalTokenSecretName" . }}
+                  key: {{ include "distant-signal.trustConsumerInternalTokenSecretKey" . }}
             - name: REFERENCE_RELOAD_SECS
               value: {{ .Values.trustConsumer.referenceReloadSecs | quote }}
             - name: RETENTION_DAYS

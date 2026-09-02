@@ -209,6 +209,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.internalTokenSecretName" . }}
                   key: {{ include "distant-signal.internalTokenSecretKey" . }}
+            # schedule-ingest's own per-service credential -- see
+            # poller-deployments.yaml's matching entry for why this is
+            # rendered but inert on this side today.
+            - name: INTERNAL_TOKEN_SCHEDULE_INGEST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleIngestInternalTokenSecretName" . }}
+                  key: {{ include "distant-signal.scheduleIngestInternalTokenSecretKey" . }}
             # METRICS_ENABLED is always rendered (matching aggregator's/
             # every poller's convention) -- this is the actual Rust-side
             # toggle that stops the /metrics listener from starting.

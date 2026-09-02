@@ -160,6 +160,13 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-incidents-api-key
+    # -- This app's own minted credential for this poller to reach
+    # /private/* (Decision 1/2 of the internal-service-accounts design).
+    # Auto-generated like secrets.internalToken when empty -- unlike
+    # apiKey above, a random value here is NOT meaningless, since this app
+    # is both the issuer and the verifier.
+    internalToken: ""
+    existingSecretInternalTokenKey: internal-token-poller-incidents
     logLevel: info
     extraEnv: []
     resources: {}
@@ -182,6 +189,10 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-stations-api-key
+    # -- This app's own minted credential for this poller to reach
+    # /private/* -- see pollers.incidents.internalToken's comment above.
+    internalToken: ""
+    existingSecretInternalTokenKey: internal-token-poller-stations
     logLevel: info
     extraEnv: []
     resources: {}
@@ -214,6 +225,10 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-tfl-api-key
+    # -- This app's own minted credential for this poller to reach
+    # /private/* -- see pollers.incidents.internalToken's comment above.
+    internalToken: ""
+    existingSecretInternalTokenKey: internal-token-poller-tfl
     logLevel: info
     extraEnv:
       - name: TFL_MODES
@@ -238,6 +253,10 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-tocs-api-key
+    # -- This app's own minted credential for this poller to reach
+    # /private/* -- see pollers.incidents.internalToken's comment above.
+    internalToken: ""
+    existingSecretInternalTokenKey: internal-token-poller-tocs
     logLevel: info
     extraEnv: []
     resources: {}
@@ -269,6 +288,10 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-ldbws-api-key
+    # -- This app's own minted credential for this poller to reach
+    # /private/* -- see pollers.incidents.internalToken's comment above.
+    internalToken: ""
+    existingSecretInternalTokenKey: internal-token-poller-ldbws
     logLevel: info
     extraEnv: []
     resources: {}
@@ -612,6 +635,14 @@ trustConsumer:
     existingSecret: ""
     existingSecretUsernameKey: kafka-sasl-username
     existingSecretPasswordKey: kafka-sasl-password
+  # -- This app's own minted credential for trust-consumer to reach
+  # /private/* (Decision 1/2 of the internal-service-accounts design).
+  # Auto-generated like secrets.internalToken when empty -- unlike
+  # kafka.saslUsername/Password above, a random value here is NOT
+  # meaningless, since this app is both the issuer and the verifier.
+  existingSecret: ""
+  internalToken: ""
+  existingSecretInternalTokenKey: internal-token-trust-consumer
   referenceReloadSecs: 60
   retentionDays: 90
   healthPort: 8081
@@ -717,6 +748,14 @@ scheduleFeed:
     checkTimes: "22:00,22:30,23:00,23:30,00:00,00:30,01:00,01:30,16:00"
     retentionKeepSequences: 2
     stabilityCycles: 2
+    # -- This app's own minted credential for schedule-ingest to reach
+    # /private/* (Decision 1/2 of the internal-service-accounts design).
+    # Auto-generated like secrets.internalToken when empty -- unlike
+    # scheduleFeed.sftp.publicKey above, a random value here is NOT
+    # meaningless, since this app is both the issuer and the verifier.
+    existingSecret: ""
+    internalToken: ""
+    existingSecretInternalTokenKey: internal-token-schedule-ingest
   service:
     # -- LoadBalancer or NodePort + an operator-managed external LB/DNS --
     # NOT an Ingress (HTTP(S)-only by spec, cannot carry SFTP). Actually
