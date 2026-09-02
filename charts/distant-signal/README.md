@@ -382,13 +382,6 @@ set (no default admin — see its Bootstrap section) and why this is a
 hand-rolled deployment rather than the official `goauthentik/helm` chart
 (see its Non-goals).
 
-`../../vault/install.sh` (repo-root `vault/`, a separate ops directory from
-this chart) installs OpenBao into this same cluster via its own official
-Helm chart and configures its `oidc` auth method against this devAuthentik
-instance — see that script's own header comment for the full picture. It
-assumes devAuthentik is already installed and reachable exactly as
-described above.
-
 ## Using an external database
 
 Set `postgresql.enabled: false` and configure `externalDatabase`. Provide
