@@ -80,6 +80,18 @@ spec:
             # rate limit into one shared quota.
             - name: TRUST_PROXY_HOPS
               value: {{ .Values.railMcp.trustProxyHops | quote }}
+            # Plain config values, not secretKeyRefs -- an Authentik
+            # group name is not a credential (Decision 3 of
+            # docs/superpowers/specs/2026-09-02-mcp-server-oauth-access-groups-design.md).
+            # Consumed by the derived MCP service's own adapter (a
+            # separate repository) to enforce the two access-group gates:
+            # mcp-users (whole-server) and mcp-live-boards (the four
+            # metered-Darwin/LDBWS tools) -- this chart only threads the
+            # names through.
+            - name: MCP_USERS_GROUP
+              value: {{ .Values.railMcp.accessGroups.mcpUsersGroup | quote }}
+            - name: MCP_LIVE_BOARDS_GROUP
+              value: {{ .Values.railMcp.accessGroups.mcpLiveBoardsGroup | quote }}
             # The adapter auth layer (embedded-chatbot-shared-foundation-
             # and-option-c plan, Tasks 1-7) -- replaces the DISCORD_CLIENT_ID/
             # DISCORD_ALLOWED_USER_IDS env vars this block used to render

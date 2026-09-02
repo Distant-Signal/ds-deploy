@@ -36,6 +36,20 @@ version: 1
 metadata:
   name: Distant Signal (dev) - OAuth2 client and application
 entries:
+  - model: authentik_providers_oauth2.scopemapping
+    identifiers:
+      name: distant-signal-dev-groups
+    attrs:
+      scope_name: groups
+      description: >-
+        DS's own MCP access-group claim -- Authentik-native ak_groups
+        membership, not a Discord- or DS-owned group system. See
+        docs/superpowers/specs/2026-09-02-mcp-server-oauth-access-groups-design.md
+        Decision 2. This dev instance has no built-in `groups` scope
+        mapping (unlike openid/email/profile, which ship as Authentik
+        defaults) -- this entry defines one.
+      expression: |
+        return {"groups": [group.name for group in request.user.ak_groups.all()]}
   - model: authentik_providers_oauth2.oauth2provider
     identifiers:
       name: distant-signal-dev
@@ -83,6 +97,10 @@ entries:
         - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
         - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
         - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        # Defined earlier in THIS file (not an Authentik default, unlike
+        # the three above) -- see the new authentik_providers_oauth2.
+        # scopemapping entry's own comment.
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, groups]]
   - model: authentik_core.application
     identifiers:
       slug: distant-signal

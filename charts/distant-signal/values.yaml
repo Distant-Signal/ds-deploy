@@ -993,6 +993,21 @@ railMcp:
   # /private/* routes).
   internalCompleteToken: ""
   existingSecretInternalCompleteTokenKey: internal-complete-token
+  # -- Authentik-native access-group names this deployment's operator has
+  # configured (Decision 3 of
+  # docs/superpowers/specs/2026-09-02-mcp-server-oauth-access-groups-design.md):
+  # mcpUsersGroup gates the whole MCP server -- authenticating via DS's own
+  # OIDC login is no longer sufficient on its own, the caller must also be
+  # a member of this Authentik group -- mcpLiveBoardsGroup additionally
+  # gates the four tools that hit metered Darwin/LDBWS product keys
+  # directly (get_departures/get_arrivals/get_service_detail/plan_journey).
+  # Enforced entirely by the derived MCP service's own adapter (a separate
+  # repository); this chart only ever threads these two names through as
+  # plain, non-secret config, the same way it passes any other
+  # operator-chosen string -- an Authentik group name is not a credential.
+  accessGroups:
+    mcpUsersGroup: mcp-users
+    mcpLiveBoardsGroup: mcp-live-boards
   # -- LDBWS/Rail Data Marketplace credentials the fork's board/service-
   # detail tools still call directly (Decision 5 of the design doc --
   # unchanged by this integration, board tools are not routed through DS).
