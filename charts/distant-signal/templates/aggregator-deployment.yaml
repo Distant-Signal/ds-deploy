@@ -80,6 +80,8 @@ spec:
               value: {{ .Values.aggregator.historyRetentionDays | quote }}
             - name: DAILY_STATS_RETENTION_DAYS
               value: {{ .Values.aggregator.dailyStatsRetentionDays | quote }}
+            - name: HOURLY_STATS_RETENTION_HOURS
+              value: {{ .Values.aggregator.hourlyStatsRetentionHours | quote }}
             - name: RUST_LOG
               value: {{ .Values.aggregator.logLevel | quote }}
             {{- with .Values.aggregator.extraEnv }}
