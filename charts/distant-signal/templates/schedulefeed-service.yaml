@@ -25,4 +25,7 @@ spec:
     - name: sftp
       port: {{ .Values.scheduleFeed.sftp.port }}
       targetPort: sftp
+      {{- if .Values.scheduleFeed.service.nodePort }}
+      nodePort: {{ .Values.scheduleFeed.service.nodePort }}
+      {{- end }}
 {{- end }}

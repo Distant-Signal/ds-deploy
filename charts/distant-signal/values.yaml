@@ -958,6 +958,16 @@ scheduleFeed:
     # plan's own Task 1 -- rendering/lint-checking it is not.
     type: LoadBalancer
     annotations: {}
+    # -- Explicit NodePort for the sftp port, e.g. when type is NodePort (or
+    # LoadBalancer on a provider that still allocates one) and an operator
+    # needs a stable, pre-known port to hand to an external LB/DNS or a
+    # firewall rule, rather than whatever Kubernetes auto-assigns. Empty by
+    # default -- Kubernetes auto-assigns from its NodePort range as before;
+    # only rendered onto ports[0] when explicitly set (schedulefeed-
+    # service.yaml), since an empty/0 nodePort in the manifest is invalid
+    # and would break `kubectl apply`. If set, MUST be a real port in the
+    # cluster's NodePort range (default 30000-32767).
+    nodePort: null
   persistence:
     enabled: true
     size: 5Gi
