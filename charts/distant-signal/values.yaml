@@ -923,8 +923,22 @@ scheduleFeed:
       tag: ""
       pullPolicy: IfNotPresent
     checkTimes: "22:00,22:30,23:00,23:30,00:00,00:30,01:00,01:30,16:00"
+    # -- Seconds between watch_dir scans. Replaces checkTimes as the thing
+    # that controls scan *frequency* -- checkTimes' only remaining job is
+    # marking the day's final realistic delivery window (its last entry)
+    # for error-vs-info log severity once a delivery is still incomplete.
+    # scan_incoming is a cheap local read_dir+stat with no network call, so
+    # a short interval costs essentially nothing; this is what fixes a real
+    # delivery landing outside every checkTimes slot sitting unprocessed
+    # for hours.
+    pollIntervalSecs: 120
     retentionKeepSequences: 2
-    stabilityCycles: 2
+    # -- Consecutive stable (unchanged mtime/size) polls before a file is
+    # treated as complete. Raised from this crate's original default of 2
+    # alongside shrinking pollIntervalSecs to 120s, so the time-based
+    # stability window (now 5 * 120s = 10 minutes) stays a meaningful
+    # signal rather than shrinking to 4 minutes.
+    stabilityCycles: 5
     existingSecret: ""
     internalOauthUsername: ""
     internalOauthPassword: ""

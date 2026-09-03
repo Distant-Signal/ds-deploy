@@ -198,9 +198,9 @@ spec:
           # names crates/schedule-ingest/src/config.rs actually declares
           # (#[arg(long, env)] with no explicit override) -- checked
           # directly against that file, not guessed: watch_dir, storage_dir,
-          # check_times, retention_keep_sequences, stability_cycles,
-          # api_ingest_url, internal_oauth_token_url/client_id/scope/
-          # username/password, metrics_port, metrics_enabled.
+          # check_times, poll_interval_secs, retention_keep_sequences,
+          # stability_cycles, api_ingest_url, internal_oauth_token_url/
+          # client_id/scope/username/password, metrics_port, metrics_enabled.
           env:
             - name: WATCH_DIR
               value: {{ printf "/data/schedule-feed/%s" (include "distant-signal.scheduleFeedDestinationPath" .) | quote }}
@@ -208,6 +208,8 @@ spec:
               value: /data/schedule-feed
             - name: CHECK_TIMES
               value: {{ .Values.scheduleFeed.ingest.checkTimes | quote }}
+            - name: POLL_INTERVAL_SECS
+              value: {{ .Values.scheduleFeed.ingest.pollIntervalSecs | quote }}
             - name: RETENTION_KEEP_SEQUENCES
               value: {{ .Values.scheduleFeed.ingest.retentionKeepSequences | quote }}
             - name: STABILITY_CYCLES
