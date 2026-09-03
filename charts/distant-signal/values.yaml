@@ -932,7 +932,12 @@ scheduleFeed:
     # delivery landing outside every checkTimes slot sitting unprocessed
     # for hours.
     pollIntervalSecs: 120
-    retentionKeepSequences: 2
+    # -- How many complete deliveries to retain on disk (current +
+    # fallback). Renamed from retentionKeepSequences: the real delivery is
+    # a single overwritten-in-place zip with no sequence number, so
+    # schedule-ingest now keys retained deliveries by their own timestamp
+    # instead -- see docs/superpowers/specs/2026-09-03-schedule-feed-zip-delivery-correction.md.
+    retentionKeepDeliveries: 2
     # -- Consecutive stable (unchanged mtime/size) polls before a file is
     # treated as complete. Raised from this crate's original default of 2
     # alongside shrinking pollIntervalSecs to 120s, so the time-based

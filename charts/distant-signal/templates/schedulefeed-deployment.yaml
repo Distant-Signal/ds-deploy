@@ -198,7 +198,7 @@ spec:
           # names crates/schedule-ingest/src/config.rs actually declares
           # (#[arg(long, env)] with no explicit override) -- checked
           # directly against that file, not guessed: watch_dir, storage_dir,
-          # check_times, poll_interval_secs, retention_keep_sequences,
+          # check_times, poll_interval_secs, retention_keep_deliveries,
           # stability_cycles, api_ingest_url, internal_oauth_token_url/
           # client_id/scope/username/password, metrics_port, metrics_enabled.
           env:
@@ -210,8 +210,8 @@ spec:
               value: {{ .Values.scheduleFeed.ingest.checkTimes | quote }}
             - name: POLL_INTERVAL_SECS
               value: {{ .Values.scheduleFeed.ingest.pollIntervalSecs | quote }}
-            - name: RETENTION_KEEP_SEQUENCES
-              value: {{ .Values.scheduleFeed.ingest.retentionKeepSequences | quote }}
+            - name: RETENTION_KEEP_DELIVERIES
+              value: {{ .Values.scheduleFeed.ingest.retentionKeepDeliveries | quote }}
             - name: STABILITY_CYCLES
               value: {{ .Values.scheduleFeed.ingest.stabilityCycles | quote }}
             - name: API_INGEST_URL
