@@ -786,7 +786,7 @@ pod that fails every request forever.
 | `frontend.image.repository` | `distant-signal/frontend` | frontend image repository. |
 | `frontend.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `frontend.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `frontend.replicaCount` | `1` | Replicas. |
+| `frontend.replicaCount` | `1` | Safe to raise, with one documented caveat. frontend/lib/liveDataCache.ts keeps a process-local stale-data cache so a backend outage shows the last-known line status instead of an error page (docs/superpowers/specs/2026-09-02-frontend-disconnect-reconnect-ux-design.md). That cache is per-pod: with more than one replica, during an outage one visitor may get stale-but-useful content from a warm pod while another gets the auto-retrying error page from a cold one. Each pod stays internally consistent and no stale data crosses users (entries are session-scoped), so this is a degraded-experience caveat, not a correctness one -- deliberately documented rather than blocked, unlike postgresql.replicaCount above. |
 | `frontend.service.type` | `ClusterIP` | Service type. |
 | `frontend.service.port` | `3000` | Service and container port. |
 | `frontend.probes.path` | `/` | Probe path. Next.js ships no dedicated health route. |
