@@ -831,24 +831,7 @@ scheduleFeed:
   sftp:
     image:
       repository: drakkan/sftpgo
-      # -- MUST be a real drakkan/sftpgo tag, NOT left empty: unlike every
-      # distant-signal/* image above, an empty tag here does NOT track
-      # "this app's own version" -- it falls through `distant-signal.image`
-      # (templates/_helpers.tpl) straight to Chart.AppVersion, which is
-      # THIS CHART's own version (0.1.0), not an sftpgo release. That
-      # exact confusion previously shipped `0.1.0` as the effective
-      # default here -- a tag that has never existed on Docker Hub for
-      # drakkan/sftpgo -- causing every scheduleFeed.enabled=true install
-      # to ImagePullBackOff. v2.7.5 confirmed live against Docker Hub's
-      # real registry API (2026-09-03): its manifest digest
-      # (sha256:9011fe...c58738) is byte-identical to drakkan/sftpgo's
-      # own `latest` tag, and matches upstream's GitHub "latest release"
-      # (github.com/drakkan/sftpgo/releases/tag/v2.7.5, published
-      # 2026-07-17). Pinned rather than left on `latest`/`edge`, matching
-      # this chart's other third-party images (devAuthentik.image.tag,
-      # postgres/redis tags above) -- docker-compose.yml's schedule-sftp
-      # service is pinned to the same tag for the same reason.
-      tag: "v2.7.5"
+      tag: ""
       pullPolicy: IfNotPresent
     # -- SFTPGo's own default container port -- not independently
     # re-verified against a real deployed instance by this plan.
@@ -1014,13 +997,6 @@ railMcp:
     # short name, since this repo's own CI/CD does not build or publish
     # this image (Decision 1/6).
     repository: ghcr.io/CHANGE-ME/distant-signal-mcp
-    # -- Leaving this empty falls back to THIS CHART's own appVersion
-    # (see distant-signal.image, templates/_helpers.tpl) -- correct for
-    # every distant-signal/* image above, but meaningless once repository
-    # is pointed at a real external fork/build (same class of bug as
-    # scheduleFeed.sftp.image.tag's fixed drakkan/sftpgo default -- see
-    # that value's comment). An operator replacing CHANGE-ME above must
-    # also set a real tag here.
     tag: ""
     pullPolicy: IfNotPresent
   service:
