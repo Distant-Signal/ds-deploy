@@ -128,7 +128,14 @@ spec:
     - metadata:
         name: data
         labels:
-          {{- include "distant-signal.labels" (dict "root" . "component" "postgres") | nindent 10 }}
+          # selectorLabels, NOT the full distant-signal.labels -- these land in
+          # volumeClaimTemplates, which is immutable after creation exactly
+          # like selector.matchLabels (see that helper's own comment). The
+          # full label set embeds helm.sh/chart's version, so it changes on
+          # every chart bump; using it here means the SECOND chart upgrade
+          # after this StatefulSet's creation always fails with "updates to
+          # statefulset spec for fields other than ... are forbidden".
+          {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 10 }}
       spec:
         accessModes:
           {{- toYaml .Values.postgresql.persistence.accessModes | nindent 10 }}

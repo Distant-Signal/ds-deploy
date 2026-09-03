@@ -99,7 +99,11 @@ spec:
     - metadata:
         name: data
         labels:
-          {{- include "distant-signal.labels" (dict "root" . "component" "devauthentik-postgres") | nindent 10 }}
+          # selectorLabels, NOT distant-signal.labels -- see
+          # postgres-statefulset.yaml's identical comment: volumeClaimTemplates
+          # is immutable after creation, and the full label set's
+          # helm.sh/chart entry changes on every chart version bump.
+          {{- include "distant-signal.selectorLabels" (dict "root" . "component" "devauthentik-postgres") | nindent 10 }}
       spec:
         accessModes:
           - ReadWriteOnce

@@ -7,7 +7,7 @@ description: >-
 type: application
 
 # Chart version: bumped for chart-only changes.
-version: 0.2.1
+version: 0.2.2
 
 # Tracks the workspace crate version (crates/api/Cargo.toml). Used as the
 # default image tag for every workload whose `image.tag` is left empty.
