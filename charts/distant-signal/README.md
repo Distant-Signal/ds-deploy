@@ -743,7 +743,7 @@ Redis" above.
 | `redis.tolerations` | `[]` | Pod tolerations. |
 | `redis.affinity` | `{}` | Pod affinity rules. |
 | `redis.podAnnotations` | `{}` | Pod annotations. |
-| `redis.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+| `redis.podSecurityContext` | `{runAsUser: 999, runAsGroup: 999}` | Merged over the chart-wide pod securityContext defaults. Pinned (unlike most other `podSecurityContext` defaults in this chart) because the upstream `redis` image runs as root with no `USER` set at all -- confirmed against `redis:7`'s real image config; 999 is the `redis` user's actual uid/gid per docker-library/redis's own Dockerfile. Override if you point `redis.image` at a different image/tag whose non-root uid differs. |
 
 ### enricher
 

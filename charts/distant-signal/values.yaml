@@ -679,7 +679,33 @@ redis:
   tolerations: []
   affinity: {}
   podAnnotations: {}
-  podSecurityContext: {}
+  # -- Merged over the chart-wide pod securityContext defaults
+  # (runAsNonRoot: true, seccompProfile: RuntimeDefault) via the same
+  # distant-signal.podSecurityContext helper every other non-postgres
+  # workload here uses. runAsUser/runAsGroup are pinned here (unlike most
+  # other callers of that helper, which leave this empty and rely on the
+  # image's own numeric USER) because the official `redis` image runs as
+  # root with no USER set at all -- confirmed 2026-09-03 by pulling this
+  # exact repository:tag's manifest/config from Docker Hub's real registry
+  # API: `redis:7`'s resolved digest (org.opencontainers.image.version
+  # 7.4.11, debian/bookworm-slim base) has Config.User == null, which is
+  # exactly what makes kubelet's runAsNonRoot admission check fail with
+  # "container has runAsNonRoot and image will run as root" -- distinct
+  # from the "non-numeric user, cannot verify" failure the chart's 12
+  # custom Rust images hit before their own Dockerfiles pinned a numeric
+  # USER. redis's own docker-entrypoint.sh drops root to a `redis` user via
+  # gosu when started as root; 999 is that user's real uid/gid, confirmed
+  # against docker-library/redis's own Dockerfile source for the exact
+  # revision this digest was built from (debian/Dockerfile:
+  # `groupadd -r -g 999 redis; useradd -r -g redis -u 999 redis`) -- the
+  # same uid postgres:16 happens to use, verified independently rather
+  # than assumed from that coincidence. Pinning both runAsUser AND
+  # runAsGroup (not just runAsUser) skips the image's own root-to-999 gosu
+  # step entirely, matching how postgres-statefulset.yaml's inline
+  # equivalent already works.
+  podSecurityContext:
+    runAsUser: 999
+    runAsGroup: 999
 
 # ---------------------------------------------------------------------------
 # enricher (crates/enricher/src/config.rs)
