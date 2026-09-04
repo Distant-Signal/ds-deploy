@@ -438,6 +438,7 @@ api:
       trustConsumer: svc-trust-consumer
       scheduleIngest: svc-schedule-ingest
       scheduleReference: svc-schedule-reference
+      fullCoverage: svc-full-coverage-consumer
   probes:
     # -- Path served by crates/api/src/routes/health.rs, nested under /public
     # by main.rs. Changing this must be matched in tests/test-api-health.yaml.

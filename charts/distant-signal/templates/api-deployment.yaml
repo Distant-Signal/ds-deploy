@@ -122,6 +122,8 @@ spec:
               value: {{ .Values.api.internalOauth.groups.scheduleIngest | quote }}
             - name: INTERNAL_OAUTH_GROUP_SCHEDULE_REFERENCE
               value: {{ .Values.api.internalOauth.groups.scheduleReference | quote }}
+            - name: INTERNAL_OAUTH_GROUP_FULL_COVERAGE
+              value: {{ .Values.api.internalOauth.groups.fullCoverage | quote }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             # Always rendered, so it reflects the real value either way.
