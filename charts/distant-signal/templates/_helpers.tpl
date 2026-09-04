@@ -299,6 +299,31 @@ Resolved Secret name/key for trust-consumer's own OAuth2 credential.
 {{- end }}
 
 {{/*
+Resolved Secret name/key for full-coverage-consumer's own OAuth2
+credential -- own service account, per Decision 5, mirroring
+trust-consumer's own pattern above.
+*/}}
+{{- define "distant-signal.fullCoverageConsumerSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.fullCoverageConsumer.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.fullCoverageConsumerOauthUsernameSecretKey" -}}
+{{- if .Values.fullCoverageConsumer.existingSecret }}
+{{- .Values.fullCoverageConsumer.existingSecretInternalOauthUsernameKey }}
+{{- else }}
+{{- print "internal-oauth-username-full-coverage-consumer" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.fullCoverageConsumerOauthPasswordSecretKey" -}}
+{{- if .Values.fullCoverageConsumer.existingSecret }}
+{{- .Values.fullCoverageConsumer.existingSecretInternalOauthPasswordKey }}
+{{- else }}
+{{- print "internal-oauth-password-full-coverage-consumer" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Resolved Secret name/key for schedule-ingest's / schedule-reference's own
 OAuth2 credentials -- two independent service accounts sharing one Pod,
 each with its own existingSecret toggle.

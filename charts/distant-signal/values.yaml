@@ -817,6 +817,54 @@ trustConsumer:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
+# fullCoverageConsumer -- a second, independent Kafka consumer against the
+# same RDM Train Movements feed trustConsumer reads, correlating every
+# event against the FULL scheduled population of every shadow-computed
+# line (docs/superpowers/specs/2026-09-04-option-b-live-consumer-design.md).
+# SHADOW MODE ONLY -- see that design doc's binding condition: nothing
+# reads this component's output into a real line's severity/DataQuality
+# while every lines/*.toml entry's full_coverage_enabled stays false.
+#
+# Kafka connection settings (brokers/topic/saslMechanism/saslUsername/
+# saslPassword/existingSecret*) are DELIBERATELY NOT repeated here --
+# reused from trustConsumer.kafka.* above (same RDM connection, per
+# Decision 1's "connection vs. group membership" reasoning). Only this
+# component's own group id and everything else below is new.
+# ---------------------------------------------------------------------------
+fullCoverageConsumer:
+  image:
+    repository: distant-signal/full-coverage-consumer
+    tag: ""
+    pullPolicy: IfNotPresent
+  kafka:
+    consumerGroup: distant-signal-full-coverage-consumer
+  # -- Read this service's OAuth2 credential from a pre-existing Secret
+  # instead of the chart-rendered one.
+  existingSecret: ""
+  internalOauthUsername: ""
+  internalOauthPassword: ""
+  existingSecretInternalOauthUsernameKey: internal-oauth-username-full-coverage-consumer
+  existingSecretInternalOauthPasswordKey: internal-oauth-password-full-coverage-consumer
+  # -- Decision 4: comma-separated line ids to shadow-compute, or "*" for
+  # every catalogued line with at least one tiploc. Does NOT gate whether
+  # a line's stats are ever shown/escalated -- that's each line's own
+  # full_coverage_enabled in lines/*.toml, untouched by this value.
+  shadowLines: "*"
+  populationReloadSecs: 300
+  stanoxCrsReloadSecs: 3600
+  statsWriteIntervalSecs: 60
+  healthPort: 8082
+  metricsPort: 9093
+  logLevel: info
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
 # scheduleFeed -- OPT-IN CIF SCHEDULE feed SFTP-push receiver
 # (docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md)
 # ---------------------------------------------------------------------------

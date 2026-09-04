@@ -136,6 +136,9 @@ jobs:
           - service: trust-consumer
             dockerfile: docker/trust-consumer.Dockerfile
             target: ""
+          - service: full-coverage-consumer
+            dockerfile: docker/full-coverage-consumer.Dockerfile
+            target: ""
           - service: schedule-ingest
             dockerfile: docker/schedule-ingest.Dockerfile
             target: ""

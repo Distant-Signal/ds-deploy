@@ -266,6 +266,7 @@ spec:
           # Env var names below are the uppercase-snake-case clap `env`
           # names crates/schedule-reference/src/config.rs actually declares:
           # storage_dir, poll_interval_secs, api_ingest_url,
+          # schedule_line_population_url, lines (LINES_DIR),
           # internal_oauth_token_url/client_id/scope/username/password,
           # metrics_port, metrics_enabled.
           env:
@@ -275,6 +276,13 @@ spec:
               value: {{ .Values.scheduleFeed.reference.pollIntervalSecs | quote }}
             - name: API_INGEST_URL
               value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
+            # Task 7 (option-b-live-consumer plan): the per-line CIF
+            # SCHEDULE population publish this crate gained alongside its
+            # original stanox/crs responsibility.
+            - name: SCHEDULE_LINE_POPULATION_URL
+              value: {{ printf "%s/private/schedule-line-population" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: LINES_DIR
+              value: /app/lines
             - name: INTERNAL_OAUTH_TOKEN_URL
               value: {{ .Values.internalOauth.tokenUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID

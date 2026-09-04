@@ -1,0 +1,184 @@
+{{/*
+Fail-fast on an unusable Kafka config -- same guard as
+trust-consumer-deployment.yaml's own, checked AGAIN here independently
+(against the SAME trustConsumer.kafka.* values, reused per Decision 1's
+"connection vs. group membership" reasoning -- see values.yaml's own note)
+rather than relying on that Deployment's guard having already fired first.
+Two harmless duplicate `fail` messages if both are empty is safer than one
+Deployment silently depending on the other's template rendering order.
+*/}}
+{{- if not .Values.trustConsumer.kafka.brokers }}
+{{- fail "trustConsumer.kafka.brokers is empty. Set it to the RDM Train Movements Kafka broker address(es) (e.g. --set trustConsumer.kafka.brokers=kafka.raildata.org.uk:9094). An empty value would deploy a full-coverage-consumer that never connects." }}
+{{- end }}
+{{- if not .Values.trustConsumer.kafka.topic }}
+{{- fail "trustConsumer.kafka.topic is empty. Set it to the confirmed RDM Train Movements Kafka topic name. An empty value would deploy a full-coverage-consumer that never connects." }}
+{{- end }}
+{{- if not .Values.trustConsumer.kafka.saslMechanism }}
+{{- fail "trustConsumer.kafka.saslMechanism is empty. Set it to the confirmed RDM Kafka product's SASL mechanism (e.g. --set trustConsumer.kafka.saslMechanism=PLAIN or SCRAM-SHA-512). An empty value would deploy a full-coverage-consumer that silently guesses wrong and never connects." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-full-coverage-consumer" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "full-coverage-consumer") | nindent 4 }}
+spec:
+  # Fixed at 1: one fixed consumer-group id per deployment, same
+  # single-consumer-group-per-deployment reasoning as trust-consumer's own
+  # replicas: 1 (see that Deployment's own comment).
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "full-coverage-consumer") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "full-coverage-consumer") | nindent 8 }}
+      {{- if or .Values.metrics.enabled .Values.fullCoverageConsumer.podAnnotations }}
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.fullCoverageConsumer.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.fullCoverageConsumer.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.fullCoverageConsumer.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: full-coverage-consumer
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.fullCoverageConsumer.image) | quote }}
+          imagePullPolicy: {{ .Values.fullCoverageConsumer.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.fullCoverageConsumer.healthPort }}
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.fullCoverageConsumer.metricsPort }}
+              protocol: TCP
+            {{- end }}
+          # Real connected/disconnected semantics -- same reasoning as
+          # trust-consumer-deployment.yaml's own probes (a second,
+          # independent persistent Kafka consumer, same needs).
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6 # tolerate a real reconnect cycle before restarting the pod
+          # Env var names below are the uppercase-snake-case clap `env`
+          # names crates/full-coverage-consumer/src/config.rs actually
+          # declares.
+          env:
+            # REUSED from trustConsumer.kafka.* -- same connection, same
+            # RDM credential, per Decision 1's "connection vs. group
+            # membership" reasoning. Only KAFKA_CONSUMER_GROUP is this
+            # component's own new value.
+            - name: KAFKA_BROKERS
+              value: {{ .Values.trustConsumer.kafka.brokers | quote }}
+            - name: KAFKA_TOPIC
+              value: {{ .Values.trustConsumer.kafka.topic | quote }}
+            - name: KAFKA_CONSUMER_GROUP
+              value: {{ .Values.fullCoverageConsumer.kafka.consumerGroup | quote }}
+            - name: KAFKA_SASL_MECHANISM
+              value: {{ .Values.trustConsumer.kafka.saslMechanism | quote }}
+            - name: KAFKA_SASL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "distant-signal.secretName" .) .Values.trustConsumer.kafka.existingSecret }}
+                  key: {{ .Values.trustConsumer.kafka.existingSecretUsernameKey }}
+            - name: KAFKA_SASL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "distant-signal.secretName" .) .Values.trustConsumer.kafka.existingSecret }}
+                  key: {{ .Values.trustConsumer.kafka.existingSecretPasswordKey }}
+            - name: SCHEDULE_LINE_POPULATION_URL
+              value: {{ printf "%s/private/schedule-line-population" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: FULL_COVERAGE_STATS_URL
+              value: {{ printf "%s/private/full-coverage-stats" (include "distant-signal.apiBaseUrl" .) | quote }}
+            # The OTHER chain's own endpoint (per-station-full-coverage-stats
+            # plan) -- this crate is only ever an HTTP client of it.
+            - name: STATION_FULL_COVERAGE_STATS_URL
+              value: {{ printf "%s/private/station-full-coverage-samples" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: STANOX_CRS_URL
+              value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: INTERNAL_OAUTH_TOKEN_URL
+              value: {{ .Values.internalOauth.tokenUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ .Values.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_SCOPE
+              value: {{ .Values.internalOauth.scope | quote }}
+            - name: INTERNAL_OAUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.fullCoverageConsumerSecretName" . }}
+                  key: {{ include "distant-signal.fullCoverageConsumerOauthUsernameSecretKey" . }}
+            - name: INTERNAL_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.fullCoverageConsumerSecretName" . }}
+                  key: {{ include "distant-signal.fullCoverageConsumerOauthPasswordSecretKey" . }}
+            - name: POPULATION_RELOAD_SECS
+              value: {{ .Values.fullCoverageConsumer.populationReloadSecs | quote }}
+            - name: STANOX_CRS_RELOAD_SECS
+              value: {{ .Values.fullCoverageConsumer.stanoxCrsReloadSecs | quote }}
+            - name: STATS_WRITE_INTERVAL_SECS
+              value: {{ .Values.fullCoverageConsumer.statsWriteIntervalSecs | quote }}
+            - name: SHADOW_LINES
+              value: {{ .Values.fullCoverageConsumer.shadowLines | quote }}
+            # Matches the binary's own default (crates/full-coverage-consumer/src/config.rs)
+            # and where docker/full-coverage-consumer.Dockerfile bakes the
+            # catalogue in -- same pattern as aggregator/api/schedule-reference,
+            # no volume mount needed (confirmed against those Deployments:
+            # none of them mount a lines/ volume either, it's baked into
+            # the image at build time).
+            - name: LINES_DIR
+              value: /app/lines
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.fullCoverageConsumer.healthPort) | quote }}
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.fullCoverageConsumer.metricsPort | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.fullCoverageConsumer.logLevel | quote }}
+            {{- with .Values.fullCoverageConsumer.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.fullCoverageConsumer.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.fullCoverageConsumer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.fullCoverageConsumer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.fullCoverageConsumer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
