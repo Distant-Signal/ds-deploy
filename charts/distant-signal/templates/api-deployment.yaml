@@ -124,6 +124,14 @@ spec:
               value: {{ .Values.api.internalOauth.groups.scheduleReference | quote }}
             - name: INTERNAL_OAUTH_GROUP_FULL_COVERAGE
               value: {{ .Values.api.internalOauth.groups.fullCoverage | quote }}
+            # Global override for LineDefinition.full_coverage_enabled --
+            # see api.fullCoverageEnabledDefault's own comment in values.yaml.
+            # Default false; must be set the same on the aggregator
+            # Deployment (aggregator.fullCoverageEnabledDefault) to actually
+            # flip full coverage on everywhere, since both services
+            # independently gate on this.
+            - name: FULL_COVERAGE_ENABLED_DEFAULT
+              value: {{ .Values.api.fullCoverageEnabledDefault | quote }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             # Always rendered, so it reflects the real value either way.

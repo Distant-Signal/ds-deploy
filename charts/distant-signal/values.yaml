@@ -439,6 +439,18 @@ api:
       scheduleIngest: svc-schedule-ingest
       scheduleReference: svc-schedule-reference
       fullCoverage: svc-full-coverage-consumer
+  # -- Global override for every catalogued line's own `full_coverage_enabled`
+  # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
+  # `data::station_stats::full_coverage_enabled_for` (crates/api) treats
+  # EVERY line as full-coverage-enabled regardless of what its own TOML
+  # entry sets -- a single flag to flip on real TRUST-vs-schedule delay/
+  # cancellation data everywhere at once, instead of editing 100+ TOML
+  # files. Default `false`: unset, this changes nothing. SAME value name/
+  # semantics as `aggregator.fullCoverageEnabledDefault` below -- both
+  # services independently gate on `full_coverage_enabled`, so both need
+  # setting to actually flip full coverage on everywhere. Deliberately NOT
+  # flipped to `true` by this chart itself; an operator sets it explicitly.
+  fullCoverageEnabledDefault: false
   probes:
     # -- Path served by crates/api/src/routes/health.rs, nested under /public
     # by main.rs. Changing this must be matched in tests/test-api-health.yaml.
@@ -601,6 +613,18 @@ aggregator:
   # Decision 5 (written for the original 1-hour-bucket default, still the
   # basis for this value).
   halfHourlyStatsRetentionHours: 48
+  # -- Global override for every catalogued line's own `full_coverage_enabled`
+  # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
+  # `aggregation::merge_full_coverage` (crates/aggregator) treats EVERY line
+  # as full-coverage-enabled regardless of what its own TOML entry sets -- a
+  # single flag to flip on real TRUST-vs-schedule delay/cancellation data
+  # everywhere at once, instead of editing 100+ TOML files. Default `false`:
+  # unset, this changes nothing. SAME value name/semantics as
+  # `api.fullCoverageEnabledDefault` above -- both services independently
+  # gate on `full_coverage_enabled`, so both need setting to actually flip
+  # full coverage on everywhere. Deliberately NOT flipped to `true` by this
+  # chart itself; an operator sets it explicitly.
+  fullCoverageEnabledDefault: false
   logLevel: info
   extraEnv: []
   resources: {}
