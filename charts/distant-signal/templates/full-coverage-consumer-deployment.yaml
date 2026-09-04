@@ -7,6 +7,7 @@ rather than relying on that Deployment's guard having already fired first.
 Two harmless duplicate `fail` messages if both are empty is safer than one
 Deployment silently depending on the other's template rendering order.
 */}}
+{{- if eq .Values.fullCoverageConsumer.movementFeed "kafka" }}
 {{- if not .Values.trustConsumer.kafka.brokers }}
 {{- fail "trustConsumer.kafka.brokers is empty. Set it to the RDM Train Movements Kafka broker address(es) (e.g. --set trustConsumer.kafka.brokers=kafka.raildata.org.uk:9094). An empty value would deploy a full-coverage-consumer that never connects." }}
 {{- end }}
@@ -16,6 +17,7 @@ Deployment silently depending on the other's template rendering order.
 {{- if not .Values.trustConsumer.kafka.saslMechanism }}
 {{- fail "trustConsumer.kafka.saslMechanism is empty. Set it to the confirmed RDM Kafka product's SASL mechanism (e.g. --set trustConsumer.kafka.saslMechanism=PLAIN or SCRAM-SHA-512). An empty value would deploy a full-coverage-consumer that silently guesses wrong and never connects." }}
 {{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,10 +25,15 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "full-coverage-consumer") | nindent 4 }}
 spec:
-  # Fixed at 1: one fixed consumer-group id per deployment, same
-  # single-consumer-group-per-deployment reasoning as trust-consumer's own
-  # replicas: 1 (see that Deployment's own comment).
-  replicas: 1
+  # Values-driven, symmetry with trust-consumer's own knob (Task 10 of
+  # docs/superpowers/plans/2026-09-04-movement-relay-plan.md) -- was a
+  # fixed `1` YAML literal: one fixed consumer-group id per deployment,
+  # same single-consumer-group-per-deployment reasoning as trust-consumer's
+  # own replicaCount (see that Deployment's own comment). Not load-bearing
+  # for Deploy B's B1 step (this component never held real Kafka group
+  # membership -- design doc Decision 6), added for a consistent
+  # values.yaml mental model.
+  replicas: {{ .Values.fullCoverageConsumer.replicaCount }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "full-coverage-consumer") | nindent 6 }}
@@ -155,6 +162,14 @@ spec:
               value: /app/lines
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.fullCoverageConsumer.healthPort) | quote }}
+            - name: MOVEMENT_FEED_BACKEND
+              value: {{ .Values.fullCoverageConsumer.movementFeed | quote }}
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            - name: REDIS_AUTOCLAIM_MIN_IDLE_SECS
+              value: {{ .Values.fullCoverageConsumer.redisAutoclaimMinIdleSecs | quote }}
+            - name: REDIS_GAP_CHECK_SECS
+              value: {{ .Values.fullCoverageConsumer.redisGapCheckSecs | quote }}
             - name: METRICS_ENABLED
               value: {{ .Values.metrics.enabled | quote }}
             {{- if .Values.metrics.enabled }}

@@ -324,6 +324,17 @@ trust-consumer's own pattern above.
 {{- end }}
 
 {{/*
+Resolved Secret name for movement-relay's Kafka SASL credential --
+mirrors trustConsumerSecretName's exact shape. No OAuth username/password
+secret keys needed here (unlike every other crate in this repo):
+movement-relay never calls api, so it has no internal-OAuth credential at
+all.
+*/}}
+{{- define "distant-signal.movementRelaySecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.movementRelay.kafka.existingSecret }}
+{{- end }}
+
+{{/*
 Resolved Secret name/key for schedule-ingest's / schedule-reference's own
 OAuth2 credentials -- two independent service accounts sharing one Pod,
 each with its own existingSecret toggle.

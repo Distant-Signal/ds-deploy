@@ -11,6 +11,7 @@ show for it. See that file's doc comment: the exact RDM Train Movements
 broker address, topic name, and SASL mechanism are all GAP-flagged as
 unconfirmed, so there is no sane default to fall back to.
 */}}
+{{- if eq .Values.trustConsumer.movementFeed "kafka" }}
 {{- if not .Values.trustConsumer.kafka.brokers }}
 {{- fail "trustConsumer.kafka.brokers is empty. Set it to the RDM Train Movements Kafka broker address(es) (e.g. --set trustConsumer.kafka.brokers=kafka.raildata.org.uk:9094). An empty value would deploy a trust-consumer that never connects." }}
 {{- end }}
@@ -20,6 +21,7 @@ unconfirmed, so there is no sane default to fall back to.
 {{- if not .Values.trustConsumer.kafka.saslMechanism }}
 {{- fail "trustConsumer.kafka.saslMechanism is empty. Set it to the confirmed RDM Kafka product's SASL mechanism (e.g. --set trustConsumer.kafka.saslMechanism=PLAIN or SCRAM-SHA-512). crates/trust-consumer/src/config.rs's doc comment flags this as GAP: unconfirmed whether RDM's Kafka product uses PLAIN or a SCRAM variant -- an empty value would deploy a trust-consumer that silently guesses wrong and never connects." }}
 {{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,11 +29,17 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "trust-consumer") | nindent 4 }}
 spec:
-  # Fixed at 1: this plan's v1 uses one fixed consumer-group id per
-  # deployment (crates/trust-consumer/src/config.rs's doc comment on
+  # Values-driven (Task 10 of docs/superpowers/plans/2026-09-04-movement-relay-plan.md,
+  # "Judgment calls" item 2) -- was a fixed `1` YAML literal: this plan's v1
+  # uses one fixed consumer-group id per deployment
+  # (crates/trust-consumer/src/config.rs's doc comment on
   # kafka_consumer_group) -- horizontal scaling via multiple replicas
-  # sharing the group is a real future option, not implemented here.
-  replicas: 1
+  # sharing the group is a real future option, not implemented here. The
+  # values-driven knob exists so Deploy B's B1 step (scale to 0 to stop
+  # this crate's Kafka connection cleanly) is an explicit, visible,
+  # `helm get values`-inspectable part of every command run during the
+  # cutover, not a fact that lives only in `kubectl`'s live cluster state.
+  replicas: {{ .Values.trustConsumer.replicaCount }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "trust-consumer") | nindent 6 }}
@@ -39,9 +47,16 @@ spec:
     metadata:
       labels:
         {{- include "distant-signal.labels" (dict "root" . "component" "trust-consumer") | nindent 8 }}
-      {{- with .Values.trustConsumer.podAnnotations }}
+      {{- if or .Values.metrics.enabled .Values.trustConsumer.podAnnotations }}
       annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.trustConsumer.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.trustConsumer.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
@@ -62,6 +77,11 @@ spec:
             - name: health
               containerPort: {{ .Values.trustConsumer.healthPort }}
               protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.trustConsumer.metricsPort }}
+              protocol: TCP
+            {{- end }}
           # Real connected/disconnected semantics, unlike every poller and
           # unlike enricher's "no probes" -- see this plan's Task 16 intro.
           readinessProbe:
@@ -126,6 +146,20 @@ spec:
               value: {{ .Values.trustConsumer.retentionDays | quote }}
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.trustConsumer.healthPort) | quote }}
+            - name: MOVEMENT_FEED_BACKEND
+              value: {{ .Values.trustConsumer.movementFeed | quote }}
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            - name: REDIS_AUTOCLAIM_MIN_IDLE_SECS
+              value: {{ .Values.trustConsumer.redisAutoclaimMinIdleSecs | quote }}
+            - name: REDIS_GAP_CHECK_SECS
+              value: {{ .Values.trustConsumer.redisGapCheckSecs | quote }}
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.trustConsumer.metricsPort | quote }}
+            {{- end }}
             - name: RUST_LOG
               value: {{ .Values.trustConsumer.logLevel | quote }}
             {{- with .Values.trustConsumer.extraEnv }}

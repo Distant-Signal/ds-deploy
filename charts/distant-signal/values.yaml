@@ -831,6 +831,28 @@ trustConsumer:
   stanoxCrsReloadSecs: 3600
   retentionDays: 90
   healthPort: 8081
+  # -- Values-driven replica count, added specifically to support the
+  # Deploy B cutover runbook's B1 step (stop trust-consumer's Kafka
+  # connection cleanly, by scaling to 0 via `helm upgrade`, not an
+  # out-of-band `kubectl scale` a later `helm upgrade` could silently
+  # undo). See docs/superpowers/plans/2026-09-04-movement-relay-plan.md,
+  # "Judgment calls," item 2.
+  replicaCount: 1
+  # -- Which MovementFeed transport this deployment uses: "kafka" (today's
+  # production default, unchanged) or "redis-stream" (reads what
+  # movement-relay publishes -- only meaningful once movementRelay.enabled
+  # and the real credential has moved over, see the Deploy B runbook's B3
+  # step).
+  movementFeed: kafka
+  redisAutoclaimMinIdleSecs: 30
+  redisGapCheckSecs: 60
+  # -- Prometheus metrics port. New as of the movement-relay work
+  # (crates/trust-consumer previously had no metrics listener at all) --
+  # added so trust_consumer_stream_gap_detected_total (only meaningful
+  # under movementFeed=redis-stream) has somewhere real to be scraped
+  # from. Gated on the same top-level metrics.enabled toggle every other
+  # workload in this chart already uses.
+  metricsPort: 9095
   logLevel: info
   extraEnv: []
   resources: {}
@@ -879,6 +901,65 @@ fullCoverageConsumer:
   statsWriteIntervalSecs: 60
   healthPort: 8082
   metricsPort: 9093
+  # -- Values-driven replica count -- symmetry with trustConsumer's own
+  # knob (see that block's comment). Not load-bearing for the Deploy B B1
+  # step itself (this component never held real Kafka group membership --
+  # design doc Decision 6), but a consistent mental model for an operator
+  # reading this file is worth the two extra lines.
+  replicaCount: 1
+  movementFeed: kafka
+  redisAutoclaimMinIdleSecs: 30
+  redisGapCheckSecs: 60
+  logLevel: info
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# movementRelay -- the sole real Kafka client against RDM's Train Movements
+# product from Deploy B onward (docs/superpowers/specs/2026-09-04-movement-relay-design.md).
+# Off by default: `movementRelay.enabled: false` means this Deployment does
+# not render at all, and neither trustConsumer nor fullCoverageConsumer's
+# production Kafka behavior changes until a human executes the Deploy B
+# runbook (docs/superpowers/plans/2026-09-04-movement-relay-plan.md).
+#
+# Kafka connection settings here are DELIBERATELY SEPARATE from
+# trustConsumer.kafka.* (unlike fullCoverageConsumer's own values block,
+# which reuses trustConsumer.kafka.* by design) -- Decision 4's own B2 step
+# describes the real credential as MOVING from trustConsumer.kafka.* to
+# movementRelay.kafka.* during the cutover, which only makes sense if these
+# are genuinely separate value paths an operator sets independently, not
+# the same one two components both read.
+# ---------------------------------------------------------------------------
+movementRelay:
+  enabled: false
+  image:
+    repository: distant-signal/movement-relay
+    tag: ""
+    pullPolicy: IfNotPresent
+  kafka:
+    brokers: ""
+    topic: ""
+    consumerGroup: ""
+    saslMechanism: ""
+    saslUsername: ""
+    saslPassword: ""
+    existingSecret: ""
+    # -- NOT "kafka-sasl-username"/"kafka-sasl-password": those keys are
+    # trustConsumer's own, in the SAME chart-rendered Secret whenever
+    # movementRelay.kafka.existingSecret is left unset (the default
+    # distant-signal.secretName is shared) -- reusing them here would read
+    # trustConsumer's credential instead of movement-relay's own. See
+    # secret.yaml's own comment on why these are separate data keys.
+    existingSecretUsernameKey: movement-relay-kafka-sasl-username
+    existingSecretPasswordKey: movement-relay-kafka-sasl-password
+  streamLagPollSecs: 30
+  healthPort: 8083
+  metricsPort: 9094
   logLevel: info
   extraEnv: []
   resources: {}

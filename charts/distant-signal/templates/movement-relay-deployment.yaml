@@ -1,0 +1,144 @@
+{{- if .Values.movementRelay.enabled }}
+{{- if not .Values.movementRelay.kafka.brokers }}
+{{- fail "movementRelay.kafka.brokers is empty. Set it to the RDM Train Movements Kafka broker address(es) once movementRelay.enabled=true -- see docs/superpowers/plans/2026-09-04-movement-relay-plan.md's Deploy B runbook." }}
+{{- end }}
+{{- if not .Values.movementRelay.kafka.topic }}
+{{- fail "movementRelay.kafka.topic is empty. Set it to the confirmed RDM Train Movements Kafka topic name." }}
+{{- end }}
+{{- if not .Values.movementRelay.kafka.consumerGroup }}
+{{- fail "movementRelay.kafka.consumerGroup is empty. Set it to the real, RDM-issued consumer group id (SC-... in production) -- see the design doc's 'Why this exists' section. Unlike trustConsumer.kafka.consumerGroup, this field has NO sensible default: guessing wrong here risks colliding with a real group id." }}
+{{- end }}
+{{- if not .Values.movementRelay.kafka.saslMechanism }}
+{{- fail "movementRelay.kafka.saslMechanism is empty. Set it to the confirmed RDM Kafka product's SASL mechanism." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-movement-relay" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "movement-relay") | nindent 4 }}
+spec:
+  replicas: 1
+  # Explicit, unlike trust-consumer/full-coverage-consumer's own
+  # undeclared (default-25%/25%) strategy: a rolling update here MUST NOT
+  # have zero members ready before a new one takes over -- see the design
+  # doc's Decision 5. This is the OPPOSITE intent from every Recreate-typed
+  # Deployment in this chart (aggregator, notifier, poller-deployments,
+  # schedulefeed), stated explicitly for the same reason they state theirs.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "movement-relay") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "movement-relay") | nindent 8 }}
+      {{- if or .Values.metrics.enabled .Values.movementRelay.podAnnotations }}
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.movementRelay.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.movementRelay.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.movementRelay.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: movement-relay
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.movementRelay.image) | quote }}
+          imagePullPolicy: {{ .Values.movementRelay.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.movementRelay.healthPort }}
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.movementRelay.metricsPort }}
+              protocol: TCP
+            {{- end }}
+          # Readiness means "confirmed Kafka partition assignment" (a
+          # rebalance-callback-driven signal, crates/movement-relay/src/health.rs),
+          # NOT "at least one message arrived" -- deliberately tighter than
+          # trust-consumer's own probe. See that file's own doc comment.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ .Values.movementRelay.kafka.brokers | quote }}
+            - name: KAFKA_TOPIC
+              value: {{ .Values.movementRelay.kafka.topic | quote }}
+            - name: KAFKA_CONSUMER_GROUP
+              value: {{ .Values.movementRelay.kafka.consumerGroup | quote }}
+            - name: KAFKA_SASL_MECHANISM
+              value: {{ .Values.movementRelay.kafka.saslMechanism | quote }}
+            - name: KAFKA_SASL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.movementRelaySecretName" . }}
+                  key: {{ .Values.movementRelay.kafka.existingSecretUsernameKey }}
+            - name: KAFKA_SASL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.movementRelaySecretName" . }}
+                  key: {{ .Values.movementRelay.kafka.existingSecretPasswordKey }}
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            - name: STREAM_LAG_POLL_SECS
+              value: {{ .Values.movementRelay.streamLagPollSecs | quote }}
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.movementRelay.healthPort) | quote }}
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.movementRelay.metricsPort | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.movementRelay.logLevel | quote }}
+            {{- with .Values.movementRelay.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.movementRelay.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.movementRelay.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.movementRelay.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.movementRelay.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

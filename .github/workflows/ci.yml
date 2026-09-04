@@ -162,9 +162,23 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # movement-feed's RedisStreamMovementFeed tests (Task 3 of
+      # docs/superpowers/plans/2026-09-04-movement-relay-plan.md) are the
+      # first #[ignore]d tests in this repo needing a live Redis rather than
+      # a live Postgres -- mirrors the postgres: block above exactly.
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      REDIS_URL: redis://localhost:6379
 
     steps:
       - name: Checkout repository
@@ -214,6 +228,9 @@ jobs:
 
       - name: cargo test -p api -p aggregator -- --ignored (DB-backed tests)
         run: cargo test -p api -p aggregator -- --ignored --test-threads=1
+
+      - name: cargo test -p movement-feed -- --ignored (Redis-backed tests)
+        run: cargo test -p movement-feed -- --ignored --test-threads=1
 
   # Custom: no reusable Piped workflow covers Node/npm at all (its
   # ecosystem coverage is Python + Rust). frontend/package.json has no
