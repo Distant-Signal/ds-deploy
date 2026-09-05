@@ -2,8 +2,8 @@
 
 Deploys the whole National Rail status stack into a single namespace: a
 bundled single-replica **PostgreSQL** StatefulSet, a bundled single-replica
-**Redis** (a disposable trigger queue, no persistence), the **api**, the
-**aggregator**, the **enricher**, the **frontend**, and five optional
+**Redis** (persistent by default — see "Using an external Redis" below),
+the **api**, the **aggregator**, the **enricher**, the **frontend**, and five optional
 **pollers** — four Rail Data Marketplace pollers (incidents, stations, tocs, ldbws)
 plus a TfL Unified API poller (tfl). The chart has no subchart
 dependencies and no `dependencies:` block, so `helm dependency update` is
@@ -19,10 +19,12 @@ the two deployment paths do not drift.
   the automatic `kubernetes.io/metadata.name` label, GA from 1.22.
 - **Helm 3.8+ or 4.x.** Developed and verified against Helm v4.1.4.
 - **A default StorageClass**, or set `postgresql.persistence.storageClass`
-  explicitly — the bundled Postgres uses a `volumeClaimTemplates` entry. Set
-  `postgresql.persistence.enabled: false` for throwaway testing (data is
-  lost on reschedule), or `postgresql.enabled: false` to use a managed
-  database.
+  and `redis.persistence.storageClass` explicitly — the bundled Postgres
+  uses a `volumeClaimTemplates` entry and the bundled Redis a standalone
+  PVC. Set `postgresql.persistence.enabled: false` or
+  `redis.persistence.enabled: false` for throwaway testing (data is lost
+  on reschedule), or `postgresql.enabled: false` / `redis.enabled: false`
+  to use a managed database/Redis instead.
 - **Images already present in a registry the cluster can pull from.** This
   chart builds nothing.
 
@@ -424,12 +426,24 @@ bundled Postgres is disabled, no Postgres objects render at all and no
 
 ## Using an external Redis
 
-Redis here is a **disposable trigger queue, not a system of record**: the api
-publishes an event when an incident's text changes, and the enricher consumes
-it to re-extract promptly. Losing the queue costs nothing but promptness —
-the enricher's hourly sweep re-finds anything a dropped event would have
-triggered, and the api logs and continues if a publish fails. The bundled
-Redis therefore runs with **no persistence** on purpose.
+Redis backs two independent Redis Streams here, with two very different
+durability profiles:
+
+- `incident-text-changed`: the api publishes an event when an incident's
+  text changes, and the enricher consumes it to re-extract promptly. Losing
+  this one costs nothing but promptness — the enricher's hourly sweep
+  re-finds anything a dropped event would have triggered.
+- `movement-events`: the **sole transport** between movement-relay (this
+  chart's one real Kafka client) and its two downstream consumer groups,
+  trust-consumer and full-coverage-consumer. There is no replay source
+  behind it — losing this one loses data outright, not just promptness.
+
+Because of the second stream, the bundled Redis runs with persistence
+**on by default**: a PVC (`redis.persistence.*`, disable with
+`redis.persistence.enabled: false`) plus `--appendonly yes`. This was not
+always the case — see redis-deployment.yaml's own comment for the
+2026-09-04 production incident (a Redis restart with no persistence wiped
+`movement-events` and both consumer groups) that this default responds to.
 
 Set `redis.enabled: false` and give a URL to point at a managed instance
 instead:
@@ -726,9 +740,10 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 
 ### redis
 
-There is intentionally no `replicaCount` and no persistence: this is a
-disposable trigger queue, not a system of record. See "Using an external
-Redis" above.
+There is intentionally no `replicaCount`: this is a single, non-clustered
+instance (Deployment+PVC, not a StatefulSet — see redis-deployment.yaml's
+own comment for why). See "Using an external Redis" above for what it's
+used for and why persistence defaults on.
 
 | Key | Default | Description |
 |---|---|---|
@@ -738,6 +753,11 @@ Redis" above.
 | `redis.image.tag` | `"7"` | Pinned to the major the compose stack uses. |
 | `redis.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `redis.service.port` | `6379` | Service and container port; also sets the `REDIS_URL` the api and enricher get. |
+| `redis.persistence.enabled` | `true` | Attach a PVC and run redis with `--appendonly yes`. When false an emptyDir is used and data is lost on reschedule. |
+| `redis.persistence.size` | `1Gi` | Requested volume size. |
+| `redis.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
+| `redis.persistence.accessModes` | `[ReadWriteOnce]` | PVC access modes. |
+| `redis.persistence.existingClaim` | `""` | Use a pre-existing PVC instead of a chart-rendered one. |
 | `redis.resources` | `{}` | Container resource requests/limits. |
 | `redis.nodeSelector` | `{}` | Pod node selector. |
 | `redis.tolerations` | `[]` | Pod tolerations. |

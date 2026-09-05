@@ -699,6 +699,30 @@ redis:
     pullPolicy: IfNotPresent
   service:
     port: 6379
+  persistence:
+    # -- Attach a PersistentVolumeClaim, and run redis with `--appendonly
+    # yes` (AOF persistence). When false, an emptyDir is used instead and
+    # ALL DATA IS LOST when the pod is rescheduled -- ephemeral testing
+    # only. Defaults to true (unlike a typical "disposable cache" Redis)
+    # because this Redis is no longer just enricher's disposable
+    # incident-text-changed trigger queue: it is also the sole transport
+    # (via a Redis Stream, no replay source behind it) between
+    # movement-relay and its trust-consumer/full-coverage-consumer
+    # consumer groups. A 2026-09-04 production incident confirmed a
+    # restart with no persistence wipes that stream and both consumer
+    # groups outright -- see redis-deployment.yaml's own comment for the
+    # full account.
+    enabled: true
+    # -- Requested volume size. Small on purpose: both streams this Redis
+    # carries (movement-events, incident-text-changed) are actively
+    # consumed and trimmed, not accumulated indefinitely.
+    size: 1Gi
+    # -- StorageClass name. Empty means the cluster default.
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    # -- Use a pre-existing PVC instead of a chart-rendered one.
+    existingClaim: ""
   resources: {}
   nodeSelector: {}
   tolerations: []

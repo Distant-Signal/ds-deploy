@@ -1,7 +1,9 @@
 {{/*
-The first standalone PersistentVolumeClaim in this chart -- every other
-stateful workload here (postgres, redis) uses a StatefulSet's
-volumeClaimTemplates instead. scheduleFeed's Deployment (schedulefeed-
+The first standalone PersistentVolumeClaim in this chart (redis-pvc.yaml,
+added later, follows the same shape). postgres is the one stateful
+workload here that uses a StatefulSet's volumeClaimTemplates instead --
+it's the one workload whose per-replica identity guarantees would
+matter if it were ever scaled. scheduleFeed's Deployment (schedulefeed-
 deployment.yaml, Task 8 Step 2) is a fixed-replicas:1 singleton with no
 per-replica identity to preserve, so a plain PVC referenced by name is
 enough -- no volumeClaimTemplate machinery needed.

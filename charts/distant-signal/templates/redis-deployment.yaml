@@ -6,9 +6,35 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "redis") | nindent 4 }}
 spec:
-  # Fixed at 1 -- redis here is a disposable trigger queue, not a system of
-  # record (the enricher's hourly sweep is the durability backstop), so it
-  # doesn't need the StatefulSet/PVC machinery postgres has.
+  # Fixed at 1 -- this is still a single, non-clustered Redis instance (see
+  # values.yaml's own comment on `redis:` for the two consumers of it), not
+  # a system of record with any HA story. It stays a Deployment+PVC rather
+  # than becoming a StatefulSet like postgres: a StatefulSet's ordinal
+  # naming and stable per-replica identity exist to let MULTIPLE replicas
+  # each keep their own volume, which buys nothing at replicas: 1. The one
+  # thing a StatefulSet would add here -- a `volumeClaimTemplates` entry
+  # instead of a standalone PersistentVolumeClaim -- is exactly the shape
+  # scheduleFeed's own singleton Deployment already uses successfully (see
+  # schedulefeed-pvc.yaml's own comment), so this follows that precedent
+  # instead of introducing a second stateful pattern into the chart.
+  #
+  # WHY THIS NOW HAS PERSISTENCE AT ALL (it didn't before): this Redis was
+  # originally "a disposable trigger queue, not a system of record" for
+  # enricher's incident-text-changed stream alone (crates/enricher/src/
+  # stream.rs) -- losing it cost nothing but promptness, since enricher's
+  # hourly sweep re-finds anything a dropped event would have triggered.
+  # movement-relay's movement-events stream (crates/movement-feed/src/
+  # redis_stream.rs) changed that: it is the SOLE transport between
+  # movement-relay (the one real Kafka client) and its two downstream
+  # consumer groups, trust-consumer and full-coverage-consumer, with no
+  # replay source behind it. A real incident (2026-09-04) confirmed the
+  # cost of that gap live: an unrelated Helm/Flux reconcile restarted this
+  # pod, wiping the stream and both consumer groups instantly (no volume,
+  # no AOF/RDB at all), and trust-consumer logged NOGROUP errors on every
+  # cycle until its own process restart re-ran its one-time-at-startup
+  # ensure_group/XGROUP CREATE ... MKSTREAM logic. Persistence (this PVC
+  # plus `--appendonly yes` below) closes that gap for both streams at
+  # once.
   replicas: 1
   selector:
     matchLabels:
@@ -30,6 +56,20 @@ spec:
       {{- end }}
       securityContext:
         {{- include "distant-signal.podSecurityContext" (dict "override" .Values.redis.podSecurityContext) | nindent 8 }}
+      # Same shape as schedulefeed-deployment.yaml's own `volumes:` block:
+      # a plain PVC referenced by name (persistence.enabled), an
+      # operator-supplied existingClaim, or an emptyDir (persistence
+      # disabled -- e.g. throwaway/CI use, matching postgresql.persistence's
+      # own enabled:false contract) rather than three separate volumes/
+      # conditionals scattered through the container spec.
+      volumes:
+        - name: data
+          {{- if .Values.redis.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (include "distant-signal.redisFullname" .) .Values.redis.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
       containers:
         - name: redis
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.redis.image) | quote }}
@@ -40,16 +80,64 @@ spec:
             - name: redis
               containerPort: {{ .Values.redis.service.port }}
               protocol: TCP
+          # `redis:7`'s entrypoint (docker-library/redis's docker-
+          # entrypoint.sh) prepends `redis-server` itself whenever the first
+          # arg starts with `-`, so `args` alone (no `command` override) is
+          # enough to reach the real `redis-server --appendonly yes`
+          # invocation -- no ConfigMap-mounted redis.conf needed, unlike
+          # this chart's other config-via-file cases (e.g. schedulefeed's
+          # sftp-entrypoint ConfigMap), which exist for multi-line scripts
+          # redis.conf has no equivalent need for here.
+          #
+          # AOF, not (only) RDB: RDB's own snapshotting is async and
+          # point-in-time by design -- redis's own docs are explicit that
+          # you can lose everything written since the last snapshot. For a
+          # stream-shaped workload (movement-events, incident-text-changed)
+          # where each entry is a discrete event rather than replaceable
+          # state, that gap is exactly the durability the 2026-09-04
+          # incident (see the comment above `replicas: 1`) needed closed.
+          # AOF's default `appendfsync everysec` bounds the loss window to
+          # ~1s of writes at a small, constant disk-write cost -- acceptable
+          # here given this Redis's write volume (a handful of consumer
+          # groups' worth of stream entries, not a general-purpose cache).
+          # RDB is deliberately NOT disabled: `redis:7` ships with default
+          # `save` points built in (no redis.conf is mounted, so redis runs
+          # on its compiled-in defaults), which cost nothing extra to leave
+          # on and give a second, independent recovery path (e.g. a fast
+          # full resync) alongside AOF.
+          args:
+            - --appendonly
+            - "yes"
+          volumeMounts:
+            - name: data
+              # Redis's own default working directory (`dir` in redis.conf,
+              # unset here since no redis.conf is mounted -- see the args
+              # comment above) is `/data` for the official image, and both
+              # its RDB dump.rdb and its AOF appendonlydir/ are written
+              # relative to `dir`. No override needed: mount the volume at
+              # the same path the image already treats as its data
+              # directory.
+              mountPath: /data
+          # AOF replay on startup is proportional to the AOF's size. Both
+          # streams here are actively consumed/trimmed (not accumulated
+          # indefinitely), so replay should stay fast, but the probe
+          # tolerances below are widened from this chart's pre-persistence
+          # defaults (failureThreshold was unset, i.e. Kubernetes' default
+          # of 3) to give a slow replay room without a hard-coded delay --
+          # same reasoning postgres-statefulset.yaml's own probes already
+          # use for its (much slower) startup path.
           readinessProbe:
             exec:
               command: ["redis-cli", "ping"]
             initialDelaySeconds: 5
             periodSeconds: 5
+            failureThreshold: 6
           livenessProbe:
             exec:
               command: ["redis-cli", "ping"]
             initialDelaySeconds: 15
             periodSeconds: 10
+            failureThreshold: 6
           {{- with .Values.redis.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

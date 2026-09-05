@@ -1,0 +1,24 @@
+{{/*
+The second standalone PersistentVolumeClaim in this chart, after
+schedulefeed-pvc.yaml -- see redis-deployment.yaml's own comment above
+`replicas: 1` for why this Deployment (still fixed-replicas:1, still no
+per-replica identity to preserve) gets a plain PVC referenced by name
+instead of postgres's volumeClaimTemplates/StatefulSet machinery.
+*/}}
+{{- if and .Values.redis.enabled .Values.redis.persistence.enabled (not .Values.redis.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "distant-signal.redisFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "redis") | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.redis.persistence.accessModes | nindent 4 }}
+  {{- with .Values.redis.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size | quote }}
+{{- end }}
