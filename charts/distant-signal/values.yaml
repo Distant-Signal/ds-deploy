@@ -603,17 +603,19 @@ aggregator:
   dailyStatsRetentionDays: 300
   # -- Retention for the half-hourly rollup table (line_status_half_hourly_stats,
   # 30-minute buckets since the trend-chart granularity was doubled -- formerly
-  # line_status_hourly_stats, 1-hour buckets) -- a much shorter window than
-  # either historyRetentionDays or dailyStatsRetentionDays, since only the
-  # line-info-page's rolling 24-hour embed ever reads it. Measured in
-  # wall-clock hours, unchanged from the table's original hourly-bucket era:
-  # 48 hours of real time is still 48 hours of real time regardless of bucket
-  # size, it just now covers roughly twice as many rows per line (~96 instead
-  # of ~48), a trivial row count for Postgres. See
-  # docs/superpowers/specs/2026-09-02-trend-chart-granularity-design.md
-  # Decision 5 (written for the original 1-hour-bucket default, still the
-  # basis for this value).
-  halfHourlyStatsRetentionHours: 48
+  # line_status_hourly_stats, 1-hour buckets). Bumped from 48 hours to 840
+  # (35 days) by
+  # docs/superpowers/specs/2026-09-05-configurable-trend-granularity-design.md
+  # Decision 3: this table is now read directly (30-minute granularity) AND
+  # grouped into 1-hour/6-hour buckets by the History page's Trends tab, over
+  # the user's actual selected range, not just the line-info page's fixed
+  # rolling-24-hour embed. Measured in wall-clock hours, unchanged from the
+  # table's original hourly-bucket era. Same RDM Live Departure Board licence
+  # lineage as dailyStatsRetentionDays above -- the repo owner confirmed
+  # directly that "half-hourly is still fine as long as we aren't retaining
+  # for more than 300 days"; 840 hours (35 days) clears that with enormous
+  # margin. Matches crates/aggregator/src/config.rs's own default_value_t.
+  halfHourlyStatsRetentionHours: 840
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `aggregation::merge_full_coverage` (crates/aggregator) treats EVERY line

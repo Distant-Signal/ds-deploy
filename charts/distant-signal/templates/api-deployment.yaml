@@ -176,6 +176,17 @@ spec:
             # crates/api/src/data/config.rs's history_retention_days doc.
             - name: HISTORY_RETENTION_DAYS
               value: {{ .Values.aggregator.historyRetentionDays | quote }}
+            # Must equal the aggregator Deployment's own DAILY_STATS_RETENTION_DAYS
+            # -- sourced from the SAME value (not a separate api.* setting)
+            # so the two can't drift apart. See
+            # crates/api/src/data/config.rs's daily_stats_retention_days doc.
+            - name: DAILY_STATS_RETENTION_DAYS
+              value: {{ .Values.aggregator.dailyStatsRetentionDays | quote }}
+            # Must equal the aggregator Deployment's own HALF_HOURLY_STATS_RETENTION_HOURS
+            # -- same reasoning. See
+            # crates/api/src/data/config.rs's half_hourly_stats_retention_hours doc.
+            - name: HALF_HOURLY_STATS_RETENTION_HOURS
+              value: {{ .Values.aggregator.halfHourlyStatsRetentionHours | quote }}
             # LINES_DIR is deliberately NOT set: crates/api/src/data/config.rs
             # already defaults it to /app/lines, which is exactly where
             # docker/api.Dockerfile bakes the line catalogue.
