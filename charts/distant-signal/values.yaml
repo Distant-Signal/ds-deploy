@@ -1457,6 +1457,11 @@ metrics:
     # networkPolicy.enabled's identical reasoning: many clusters don't have
     # Prometheus Operator installed, and rendering a CRD that doesn't exist
     # would fail `helm install` outright rather than degrade gracefully.
+    # Not purely theoretical: at least one real cluster (mine-bringer, via
+    # Ranma-Config) does run Prometheus Operator and flips this to true in
+    # its own values overlay -- see
+    # docs/superpowers/specs/2026-09-05-status-observability-grafana-design.md
+    # and docs/superpowers/plans/2026-09-05-status-observability-grafana-plan.md.
     enabled: false
     interval: 30s
     scrapeTimeout: 10s

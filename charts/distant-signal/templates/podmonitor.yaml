@@ -18,6 +18,20 @@ above). A pod without a port of a given name is simply not matched by that
 podMetricsEndpoint entry -- this is not two separate PodMonitors because
 Prometheus Operator supports multiple endpoints per PodMonitor sharing one
 selector.
+
+trust-consumer/full-coverage-consumer are listed unconditionally (like
+aggregator/enricher above them -- neither has a chart-level enabled toggle)
+and movement-relay is gated on .Values.movementRelay.enabled, closing the
+real scrape gap identified in
+docs/superpowers/specs/2026-09-05-status-observability-grafana-design.md
+Finding 1 and
+docs/superpowers/plans/2026-09-05-status-observability-grafana-plan.md Task
+1. podTargetLabels promotes app.kubernetes.io/component (already set on
+every pod this chart deploys) into a real Prometheus target label
+(app_kubernetes_io_component); without it, every pod this one PodMonitor
+matches shares one static `job` label
+(`<namespace>/<podmonitor-name>`), making per-component dashboard queries
+impossible -- see the plan's Judgment Call 2.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.podMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
@@ -27,6 +41,8 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "metrics") | nindent 4 }}
 spec:
+  podTargetLabels:
+    - app.kubernetes.io/component
   selector:
     matchExpressions:
       - key: app.kubernetes.io/instance
@@ -39,6 +55,11 @@ spec:
           - api
           - aggregator
           - enricher
+          - trust-consumer
+          - full-coverage-consumer
+          {{- if .Values.movementRelay.enabled }}
+          - movement-relay
+          {{- end }}
           {{- range $name, $poller := .Values.pollers }}
           {{- if $poller.enabled }}
           - poller-{{ $name }}
