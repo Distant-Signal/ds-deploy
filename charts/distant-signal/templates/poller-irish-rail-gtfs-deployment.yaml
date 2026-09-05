@@ -1,0 +1,103 @@
+{{- if .Values.pollerIrishRailGtfs.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-poller-irish-rail-gtfs" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "poller-irish-rail-gtfs") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "poller-irish-rail-gtfs") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "poller-irish-rail-gtfs") | nindent 8 }}
+      {{- if or .Values.metrics.enabled .Values.pollerIrishRailGtfs.podAnnotations }}
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.pollerIrishRailGtfs.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.pollerIrishRailGtfs.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.pollerIrishRailGtfs.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: poller-irish-rail-gtfs
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.pollerIrishRailGtfs.image) | quote }}
+          imagePullPolicy: {{ .Values.pollerIrishRailGtfs.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.pollerIrishRailGtfs.metricsPort }}
+              protocol: TCP
+          {{- end }}
+          env:
+            - name: GTFS_URL
+              value: {{ .Values.pollerIrishRailGtfs.gtfsUrl | quote }}
+            - name: API_STATIONS_INGEST_URL
+              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.pollerIrishRailGtfs.apiStationsIngestPath | quote }}
+            - name: API_LINES_INGEST_URL
+              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.pollerIrishRailGtfs.apiLinesIngestPath | quote }}
+            - name: INTERNAL_OAUTH_TOKEN_URL
+              value: {{ .Values.internalOauth.tokenUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ .Values.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_SCOPE
+              value: {{ .Values.internalOauth.scope | quote }}
+            - name: INTERNAL_OAUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerIrishRailGtfsSecretName" . }}
+                  key: {{ include "distant-signal.pollerIrishRailGtfsOauthUsernameSecretKey" . }}
+            - name: INTERNAL_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerIrishRailGtfsSecretName" . }}
+                  key: {{ include "distant-signal.pollerIrishRailGtfsOauthPasswordSecretKey" . }}
+            - name: POLL_INTERVAL_SECS
+              value: {{ .Values.pollerIrishRailGtfs.pollIntervalSecs | quote }}
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.pollerIrishRailGtfs.metricsPort | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.pollerIrishRailGtfs.logLevel | quote }}
+            {{- with .Values.pollerIrishRailGtfs.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.pollerIrishRailGtfs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.pollerIrishRailGtfs.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pollerIrishRailGtfs.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pollerIrishRailGtfs.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

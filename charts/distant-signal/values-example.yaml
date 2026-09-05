@@ -184,6 +184,16 @@ pollers:
     internalOauthUsername: svc-poller-tfl
     internalOauthPassword: replace-me-poller-tfl-app-password
 
+# Exercises the poller-irish-rail-gtfs Deployment/PodMonitor/Secret
+# templates' enabled=true render path in CI (helm-lint job's
+# "values-example.yaml" step) -- see
+# docs/superpowers/plans/2026-09-05-ireland-rail-support-plan.md Task A5.
+# No apiKey field, unlike the RDM pollers above: this feed needs none.
+pollerIrishRailGtfs:
+  enabled: true
+  internalOauthUsername: svc-poller-irish-rail-gtfs
+  internalOauthPassword: replace-me-poller-irish-rail-gtfs-app-password
+
 metrics:
   podMonitor:
     # Exercises the PodMonitor template's enabled=true render path in CI

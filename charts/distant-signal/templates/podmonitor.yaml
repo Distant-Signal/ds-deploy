@@ -60,6 +60,9 @@ spec:
           {{- if .Values.movementRelay.enabled }}
           - movement-relay
           {{- end }}
+          {{- if .Values.pollerIrishRailGtfs.enabled }}
+          - poller-irish-rail-gtfs
+          {{- end }}
           {{- range $name, $poller := .Values.pollers }}
           {{- if $poller.enabled }}
           - poller-{{ $name }}

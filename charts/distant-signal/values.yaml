@@ -439,6 +439,7 @@ api:
       scheduleIngest: svc-schedule-ingest
       scheduleReference: svc-schedule-reference
       fullCoverage: svc-full-coverage-consumer
+      irishRailGtfs: svc-poller-irish-rail-gtfs
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `data::station_stats::full_coverage_enabled_for` (crates/api) treats
@@ -985,6 +986,52 @@ movementRelay:
   healthPort: 8083
   metricsPort: 9094
   logLevel: info
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# pollerIrishRailGtfs (crates/poller-irish-rail-gtfs/src/config.rs: Config)
+# -- Tier A of docs/superpowers/specs/2026-09-05-ireland-rail-support-design.md.
+# Gets its own bespoke Deployment template, not a new entry in the generic
+# `.Values.pollers` map -- that map's own template unconditionally renders
+# an RDM-style API-key Secret reference, which this crate has no use for
+# (the GTFS feed is a plain anonymous HTTPS GET, no key, no sign-up). See
+# docs/superpowers/plans/2026-09-05-ireland-rail-support-plan.md's Judgment
+# Call #2.
+# ---------------------------------------------------------------------------
+pollerIrishRailGtfs:
+  enabled: false
+  image:
+    repository: distant-signal/poller-irish-rail-gtfs
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- Transport for Ireland's public GTFS zip for Iarnrod Eireann -- real,
+  # key-free, confirmed reachable directly
+  # (docs/superpowers/specs/2026-09-05-ireland-vs-northern-ireland-friction-research.md
+  # section 1), unlike every RDM poller's own baseUrl. Overridable in case
+  # the feed ever moves.
+  gtfsUrl: "https://www.transportforireland.ie/transitData/Data/GTFS_Irish_Rail.zip"
+  apiStationsIngestPath: /private/island-of-ireland-stations
+  apiLinesIngestPath: /private/island-of-ireland-lines
+  # -- No confirmed real refresh cadence for this feed; defaults to the
+  # same 24h convention pollers.stations/pollers.tocs already use for
+  # reference data with an unconfirmed cadence.
+  pollIntervalSecs: 86400
+  # -- No API key needed at all (unlike every RDM poller) -- see this
+  # chart's own Judgment Call #2 in
+  # docs/superpowers/plans/2026-09-05-ireland-rail-support-plan.md.
+  internalOauthUsername: ""
+  internalOauthPassword: ""
+  existingSecret: ""
+  existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-irish-rail-gtfs
+  existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-irish-rail-gtfs
+  logLevel: info
+  metricsPort: 9091
   extraEnv: []
   resources: {}
   nodeSelector: {}

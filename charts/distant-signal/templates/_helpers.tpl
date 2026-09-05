@@ -380,6 +380,31 @@ each with its own existingSecret toggle.
 {{- end }}
 
 {{/*
+Resolved Secret name/key for poller-irish-rail-gtfs's own OAuth2 credential
+-- same shape as scheduleIngest/scheduleReference above (its own
+existingSecret toggle, falling back to the shared chart-rendered Secret).
+*/}}
+{{- define "distant-signal.pollerIrishRailGtfsSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.pollerIrishRailGtfs.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.pollerIrishRailGtfsOauthUsernameSecretKey" -}}
+{{- if .Values.pollerIrishRailGtfs.existingSecret }}
+{{- .Values.pollerIrishRailGtfs.existingSecretInternalOauthUsernameKey }}
+{{- else }}
+{{- print "internal-oauth-username-poller-irish-rail-gtfs" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.pollerIrishRailGtfsOauthPasswordSecretKey" -}}
+{{- if .Values.pollerIrishRailGtfs.existingSecret }}
+{{- .Values.pollerIrishRailGtfs.existingSecretInternalOauthPasswordKey }}
+{{- else }}
+{{- print "internal-oauth-password-poller-irish-rail-gtfs" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Environment entries giving a workload a working DATABASE_URL. Takes root.
 Used identically by api-deployment.yaml and aggregator-deployment.yaml.
 
