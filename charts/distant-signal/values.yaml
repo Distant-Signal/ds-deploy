@@ -440,6 +440,7 @@ api:
       scheduleReference: svc-schedule-reference
       fullCoverage: svc-full-coverage-consumer
       irishRailGtfs: svc-poller-irish-rail-gtfs
+      irishRailLive: svc-poller-irish-rail-live
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `data::station_stats::full_coverage_enabled_for` (crates/api) treats
@@ -1032,6 +1033,52 @@ pollerIrishRailGtfs:
   existingSecret: ""
   existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-irish-rail-gtfs
   existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-irish-rail-gtfs
+  logLevel: info
+  metricsPort: 9091
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# pollerIrishRailLive (crates/poller-irish-rail-live/src/config.rs: Config)
+# -- Tier B of docs/superpowers/specs/2026-09-05-ireland-rail-support-design.md.
+# Gets its own bespoke Deployment template for the same reason
+# pollerIrishRailGtfs does (Judgment Call #2): api.irishrail.ie's legacy
+# realtime service is unauthenticated, no API key at all, so this crate's
+# Config doesn't fit the generic `.Values.pollers` map's RDM-API-key shape
+# either.
+# ---------------------------------------------------------------------------
+pollerIrishRailLive:
+  enabled: false
+  image:
+    repository: distant-signal/poller-irish-rail-live
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- api.irishrail.ie's legacy realtime ASMX service root -- real,
+  # key-free, confirmed reachable directly
+  # (docs/superpowers/specs/2026-09-05-ireland-vs-northern-ireland-friction-research.md
+  # section 1; re-confirmed live during this crate's own implementation).
+  irishRailBaseUrl: "http://api.irishrail.ie/realtime/realtime.asmx"
+  apiIngestPath: /private/island-of-ireland-station-samples
+  # -- Conservative default: api.irishrail.ie's real rate limits/uptime are
+  # unconfirmed (design spec section 8, open question 4), and this poller
+  # samples every station getAllStationsXML returns (no line-catalogue
+  # curation like GB LDBWS's sample_stations -- see the plan's Judgment
+  # Call #3), unlike pollers.ldbws's 60s default against a modern,
+  # documented API.
+  pollIntervalSecs: 300
+  # -- Comma-separated station-code allowlist; empty means "poll
+  # everything getAllStationsXML returns."
+  stationCodesOverride: ""
+  internalOauthUsername: ""
+  internalOauthPassword: ""
+  existingSecret: ""
+  existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-irish-rail-live
+  existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-irish-rail-live
   logLevel: info
   metricsPort: 9091
   extraEnv: []

@@ -405,6 +405,30 @@ existingSecret toggle, falling back to the shared chart-rendered Secret).
 {{- end }}
 
 {{/*
+Resolved Secret name/key for poller-irish-rail-live's own OAuth2
+credential -- same shape as pollerIrishRailGtfs above.
+*/}}
+{{- define "distant-signal.pollerIrishRailLiveSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.pollerIrishRailLive.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.pollerIrishRailLiveOauthUsernameSecretKey" -}}
+{{- if .Values.pollerIrishRailLive.existingSecret }}
+{{- .Values.pollerIrishRailLive.existingSecretInternalOauthUsernameKey }}
+{{- else }}
+{{- print "internal-oauth-username-poller-irish-rail-live" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.pollerIrishRailLiveOauthPasswordSecretKey" -}}
+{{- if .Values.pollerIrishRailLive.existingSecret }}
+{{- .Values.pollerIrishRailLive.existingSecretInternalOauthPasswordKey }}
+{{- else }}
+{{- print "internal-oauth-password-poller-irish-rail-live" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Environment entries giving a workload a working DATABASE_URL. Takes root.
 Used identically by api-deployment.yaml and aggregator-deployment.yaml.
 

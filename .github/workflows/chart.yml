@@ -136,6 +136,9 @@ jobs:
           - service: poller-irish-rail-gtfs
             dockerfile: docker/poller-irish-rail-gtfs.Dockerfile
             target: ""
+          - service: poller-irish-rail-live
+            dockerfile: docker/poller-irish-rail-live.Dockerfile
+            target: ""
           - service: trust-consumer
             dockerfile: docker/trust-consumer.Dockerfile
             target: ""

@@ -63,6 +63,9 @@ spec:
           {{- if .Values.pollerIrishRailGtfs.enabled }}
           - poller-irish-rail-gtfs
           {{- end }}
+          {{- if .Values.pollerIrishRailLive.enabled }}
+          - poller-irish-rail-live
+          {{- end }}
           {{- range $name, $poller := .Values.pollers }}
           {{- if $poller.enabled }}
           - poller-{{ $name }}
