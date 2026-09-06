@@ -442,6 +442,13 @@ api:
       irishRailGtfs: svc-poller-irish-rail-gtfs
       irishRailLive: svc-poller-irish-rail-live
       nirStations: svc-poller-nir-stations
+  # -- Authentik/SSO group (via the `groups` OIDC claim, NOT one of the
+  # machine/service-account groups above) that grants a real, logged-in
+  # user access to the embedded chatbot -- crate::auth::ChatbotAuthorizedUser
+  # checks this against that user's own resolved `groups`. Suggested default
+  # only; an operator's actual Authentik group name is not mandated.
+  # Supersedes the former per-user `chatbot_allowed_users` DB allowlist.
+  chatbotAccessGroup: distant-signal-chatbot-users
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `data::station_stats::full_coverage_enabled_for` (crates/api) treats

@@ -130,6 +130,12 @@ spec:
               value: {{ .Values.api.internalOauth.groups.irishRailLive | quote }}
             - name: INTERNAL_OAUTH_GROUP_NIR_STATIONS
               value: {{ .Values.api.internalOauth.groups.nirStations | quote }}
+            # Authentik/SSO end-user group that grants embedded-chatbot
+            # access -- see api.chatbotAccessGroup's own comment in
+            # values.yaml. NOT one of the INTERNAL_OAUTH_GROUP_* machine
+            # credentials above.
+            - name: CHATBOT_ACCESS_GROUP
+              value: {{ .Values.api.chatbotAccessGroup | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see api.fullCoverageEnabledDefault's own comment in values.yaml.
             # Default false; must be set the same on the aggregator
