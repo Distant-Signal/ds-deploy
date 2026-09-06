@@ -441,6 +441,7 @@ api:
       fullCoverage: svc-full-coverage-consumer
       irishRailGtfs: svc-poller-irish-rail-gtfs
       irishRailLive: svc-poller-irish-rail-live
+      nirStations: svc-poller-nir-stations
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `data::station_stats::full_coverage_enabled_for` (crates/api) treats
@@ -1079,6 +1080,50 @@ pollerIrishRailLive:
   existingSecret: ""
   existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-irish-rail-live
   existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-irish-rail-live
+  logLevel: info
+  metricsPort: 9091
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# pollerNirStations (crates/poller-nir-stations/src/config.rs: Config)
+# -- Tier A of docs/superpowers/specs/2026-09-05-nir-tier-a-implementation-design.md.
+# Gets its own bespoke Deployment template for the same reason
+# pollerIrishRailGtfs/pollerIrishRailLive do: OpenDataNI's CSVs are
+# anonymous, key-free downloads, so this crate's Config doesn't fit the
+# generic `.Values.pollers` map's RDM-API-key shape.
+# ---------------------------------------------------------------------------
+pollerNirStations:
+  enabled: false
+  image:
+    repository: distant-signal/poller-nir-stations
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- OpenDataNI's own CKAN download URLs for Translink's "Northern
+  # Ireland Railways Stations"/"...Halts" CSVs -- real, key-free, confirmed
+  # reachable directly with a browser User-Agent
+  # (docs/superpowers/specs/2026-09-05-nir-tier-a-implementation-design.md
+  # section 1; re-confirmed this session). Overridable in case OpenDataNI
+  # ever moves these.
+  stationsCsvUrl: "https://admin.opendatani.gov.uk/dataset/5f27f171-b8aa-4511-983d-6df6e87bbf20/resource/967e32c3-1cc2-4aee-b485-92121a32eb4d/download/translink_rail_stations.csv"
+  haltsCsvUrl: "https://admin.opendatani.gov.uk/dataset/1f2a94b9-1e86-4aec-ad9a-90a3de233893/resource/370b0d8a-29b9-46ca-bcc7-91357c28c43d/download/translink_halts.csv"
+  apiStationsIngestPath: /private/island-of-ireland-stations
+  apiLinesIngestPath: /private/island-of-ireland-lines
+  # -- OpenDataNI's own CKAN metadata confirms `frequency: "irregular"` for
+  # both CSVs -- same 24h convention pollerIrishRailGtfs/pollers.stations
+  # already use for reference data with an unconfirmed cadence.
+  pollIntervalSecs: 86400
+  # -- No API key needed at all (OGL-licensed, anonymous CSV downloads).
+  internalOauthUsername: ""
+  internalOauthPassword: ""
+  existingSecret: ""
+  existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-nir-stations
+  existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-nir-stations
   logLevel: info
   metricsPort: 9091
   extraEnv: []

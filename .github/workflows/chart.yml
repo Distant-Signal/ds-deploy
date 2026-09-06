@@ -139,6 +139,9 @@ jobs:
           - service: poller-irish-rail-live
             dockerfile: docker/poller-irish-rail-live.Dockerfile
             target: ""
+          - service: poller-nir-stations
+            dockerfile: docker/poller-nir-stations.Dockerfile
+            target: ""
           - service: trust-consumer
             dockerfile: docker/trust-consumer.Dockerfile
             target: ""

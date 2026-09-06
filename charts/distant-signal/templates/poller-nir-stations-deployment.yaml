@@ -1,0 +1,105 @@
+{{- if .Values.pollerNirStations.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-poller-nir-stations" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "poller-nir-stations") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "poller-nir-stations") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "poller-nir-stations") | nindent 8 }}
+      {{- if or .Values.metrics.enabled .Values.pollerNirStations.podAnnotations }}
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.pollerNirStations.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.pollerNirStations.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.pollerNirStations.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: poller-nir-stations
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.pollerNirStations.image) | quote }}
+          imagePullPolicy: {{ .Values.pollerNirStations.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.pollerNirStations.metricsPort }}
+              protocol: TCP
+          {{- end }}
+          env:
+            - name: STATIONS_CSV_URL
+              value: {{ .Values.pollerNirStations.stationsCsvUrl | quote }}
+            - name: HALTS_CSV_URL
+              value: {{ .Values.pollerNirStations.haltsCsvUrl | quote }}
+            - name: API_STATIONS_INGEST_URL
+              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.pollerNirStations.apiStationsIngestPath | quote }}
+            - name: API_LINES_INGEST_URL
+              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.pollerNirStations.apiLinesIngestPath | quote }}
+            - name: INTERNAL_OAUTH_TOKEN_URL
+              value: {{ .Values.internalOauth.tokenUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ .Values.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_SCOPE
+              value: {{ .Values.internalOauth.scope | quote }}
+            - name: INTERNAL_OAUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerNirStationsSecretName" . }}
+                  key: {{ include "distant-signal.pollerNirStationsOauthUsernameSecretKey" . }}
+            - name: INTERNAL_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerNirStationsSecretName" . }}
+                  key: {{ include "distant-signal.pollerNirStationsOauthPasswordSecretKey" . }}
+            - name: POLL_INTERVAL_SECS
+              value: {{ .Values.pollerNirStations.pollIntervalSecs | quote }}
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.pollerNirStations.metricsPort | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.pollerNirStations.logLevel | quote }}
+            {{- with .Values.pollerNirStations.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.pollerNirStations.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.pollerNirStations.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pollerNirStations.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pollerNirStations.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

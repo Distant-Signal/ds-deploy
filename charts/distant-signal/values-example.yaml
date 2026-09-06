@@ -204,6 +204,11 @@ pollerIrishRailLive:
   internalOauthUsername: svc-poller-irish-rail-live
   internalOauthPassword: replace-me-poller-irish-rail-live-app-password
 
+pollerNirStations:
+  enabled: true
+  internalOauthUsername: svc-poller-nir-stations
+  internalOauthPassword: replace-me-poller-nir-stations-app-password
+
 metrics:
   podMonitor:
     # Exercises the PodMonitor template's enabled=true render path in CI

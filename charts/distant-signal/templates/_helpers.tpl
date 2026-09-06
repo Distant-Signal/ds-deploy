@@ -429,6 +429,30 @@ credential -- same shape as pollerIrishRailGtfs above.
 {{- end }}
 
 {{/*
+Resolved Secret name/key for poller-nir-stations's own OAuth2 credential --
+same shape as pollerIrishRailGtfs/pollerIrishRailLive above.
+*/}}
+{{- define "distant-signal.pollerNirStationsSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.pollerNirStations.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.pollerNirStationsOauthUsernameSecretKey" -}}
+{{- if .Values.pollerNirStations.existingSecret }}
+{{- .Values.pollerNirStations.existingSecretInternalOauthUsernameKey }}
+{{- else }}
+{{- print "internal-oauth-username-poller-nir-stations" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.pollerNirStationsOauthPasswordSecretKey" -}}
+{{- if .Values.pollerNirStations.existingSecret }}
+{{- .Values.pollerNirStations.existingSecretInternalOauthPasswordKey }}
+{{- else }}
+{{- print "internal-oauth-password-poller-nir-stations" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Environment entries giving a workload a working DATABASE_URL. Takes root.
 Used identically by api-deployment.yaml and aggregator-deployment.yaml.
 

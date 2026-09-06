@@ -128,6 +128,8 @@ spec:
               value: {{ .Values.api.internalOauth.groups.irishRailGtfs | quote }}
             - name: INTERNAL_OAUTH_GROUP_IRISH_RAIL_LIVE
               value: {{ .Values.api.internalOauth.groups.irishRailLive | quote }}
+            - name: INTERNAL_OAUTH_GROUP_NIR_STATIONS
+              value: {{ .Values.api.internalOauth.groups.nirStations | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see api.fullCoverageEnabledDefault's own comment in values.yaml.
             # Default false; must be set the same on the aggregator

@@ -66,6 +66,9 @@ spec:
           {{- if .Values.pollerIrishRailLive.enabled }}
           - poller-irish-rail-live
           {{- end }}
+          {{- if .Values.pollerNirStations.enabled }}
+          - poller-nir-stations
+          {{- end }}
           {{- range $name, $poller := .Values.pollers }}
           {{- if $poller.enabled }}
           - poller-{{ $name }}
