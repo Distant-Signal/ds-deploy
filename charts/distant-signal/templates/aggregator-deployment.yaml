@@ -82,6 +82,14 @@ spec:
               value: {{ .Values.aggregator.dailyStatsRetentionDays | quote }}
             - name: HALF_HOURLY_STATS_RETENTION_HOURS
               value: {{ .Values.aggregator.halfHourlyStatsRetentionHours | quote }}
+            # See Config::trust_event_backlog_retention_days's own doc
+            # comment (crates/aggregator/src/config.rs) and
+            # aggregator.trustEventBacklogRetentionDays's own comment
+            # below (values.yaml) for the licensing safeguard this
+            # default (1) exists to enforce -- do not bump this chart
+            # default without that confirmation happening first.
+            - name: TRUST_EVENT_BACKLOG_RETENTION_DAYS
+              value: {{ .Values.aggregator.trustEventBacklogRetentionDays | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see aggregator.fullCoverageEnabledDefault's own comment in
             # values.yaml. Default false; must be set the same on the api

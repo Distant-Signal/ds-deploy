@@ -324,6 +324,32 @@ trust-consumer's own pattern above.
 {{- end }}
 
 {{/*
+Resolved Secret name/key for trust-backlog-consumer's own OAuth2
+credential -- own service account, mirroring full-coverage-consumer's own
+pattern above (docs/superpowers/plans/2026-09-05-trust-event-backlog-plan.md
+Task 12).
+*/}}
+{{- define "distant-signal.trustBacklogConsumerSecretName" -}}
+{{- default (include "distant-signal.secretName" .) .Values.trustBacklogConsumer.existingSecret }}
+{{- end }}
+
+{{- define "distant-signal.trustBacklogConsumerOauthUsernameSecretKey" -}}
+{{- if .Values.trustBacklogConsumer.existingSecret }}
+{{- .Values.trustBacklogConsumer.existingSecretInternalOauthUsernameKey }}
+{{- else }}
+{{- print "internal-oauth-username-trust-backlog-consumer" }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.trustBacklogConsumerOauthPasswordSecretKey" -}}
+{{- if .Values.trustBacklogConsumer.existingSecret }}
+{{- .Values.trustBacklogConsumer.existingSecretInternalOauthPasswordKey }}
+{{- else }}
+{{- print "internal-oauth-password-trust-backlog-consumer" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Resolved Secret name for movement-relay's Kafka SASL credential --
 mirrors trustConsumerSecretName's exact shape. No OAuth username/password
 secret keys needed here (unlike every other crate in this repo):

@@ -148,6 +148,9 @@ jobs:
           - service: full-coverage-consumer
             dockerfile: docker/full-coverage-consumer.Dockerfile
             target: ""
+          - service: trust-backlog-consumer
+            dockerfile: docker/trust-backlog-consumer.Dockerfile
+            target: ""
           - service: movement-relay
             dockerfile: docker/movement-relay.Dockerfile
             target: ""

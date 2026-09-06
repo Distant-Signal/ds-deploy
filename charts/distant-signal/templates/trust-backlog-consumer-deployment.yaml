@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-trust-backlog-consumer" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "trust-backlog-consumer") | nindent 4 }}
+spec:
+  # Single-consumer-group-per-deployment, same reasoning as every other
+  # consumer in this chart (trust-consumer/full-coverage-consumer's own
+  # replicaCount comments) -- this crate connects as one fixed Redis
+  # Streams consumer name ("trust-event-backlog-1", see main.rs), so more
+  # than one replica would fight over the same consumer identity.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "trust-backlog-consumer") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "trust-backlog-consumer") | nindent 8 }}
+      {{- if or .Values.metrics.enabled .Values.trustBacklogConsumer.podAnnotations }}
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.trustBacklogConsumer.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.trustBacklogConsumer.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.trustBacklogConsumer.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: trust-backlog-consumer
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.trustBacklogConsumer.image) | quote }}
+          imagePullPolicy: {{ .Values.trustBacklogConsumer.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.trustBacklogConsumer.healthPort }}
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.trustBacklogConsumer.metricsPort }}
+              protocol: TCP
+            {{- end }}
+          # Real connected/disconnected semantics -- same reasoning as
+          # trust-consumer/full-coverage-consumer's own probes (a
+          # persistent Redis Streams consumer).
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6 # tolerate a real reconnect cycle before restarting the pod
+          # Env var names below are the uppercase-snake-case clap `env`
+          # names crates/trust-backlog-consumer/src/config.rs actually
+          # declares. No Kafka connection block at all, unlike
+          # full-coverage-consumer -- this crate only ever speaks Redis
+          # (Task 7's own decision).
+          env:
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            - name: REDIS_AUTOCLAIM_MIN_IDLE_SECS
+              value: {{ .Values.trustBacklogConsumer.redisAutoclaimMinIdleSecs | quote }}
+            - name: REDIS_GAP_CHECK_SECS
+              value: {{ .Values.trustBacklogConsumer.redisGapCheckSecs | quote }}
+            - name: API_INGEST_URL
+              value: {{ printf "%s/private/trust-event-backlog" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: STANOX_CRS_URL
+              value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: STANOX_CRS_RELOAD_SECS
+              value: {{ .Values.trustBacklogConsumer.stanoxCrsReloadSecs | quote }}
+            # STANOX_CRS_FILE is left at the binary's own default
+            # (/app/reference-data/stanox-crs.csv) -- matches
+            # docker/trust-backlog-consumer.Dockerfile's own COPY
+            # destination, same as trust-consumer's identical default.
+            - name: INTERNAL_OAUTH_TOKEN_URL
+              value: {{ .Values.internalOauth.tokenUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ .Values.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_SCOPE
+              value: {{ .Values.internalOauth.scope | quote }}
+            - name: INTERNAL_OAUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.trustBacklogConsumerSecretName" . }}
+                  key: {{ include "distant-signal.trustBacklogConsumerOauthUsernameSecretKey" . }}
+            - name: INTERNAL_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.trustBacklogConsumerSecretName" . }}
+                  key: {{ include "distant-signal.trustBacklogConsumerOauthPasswordSecretKey" . }}
+            # Matches the binary's own default (crates/trust-backlog-consumer/src/config.rs)
+            # and where docker/trust-backlog-consumer.Dockerfile bakes the
+            # catalogue in -- same pattern as aggregator/api/
+            # full-coverage-consumer/schedule-reference, no volume mount
+            # needed (confirmed against every one of those Deployments:
+            # none of them mount a lines/ ConfigMap volume either, it's
+            # baked into the image at build time).
+            - name: LINES_DIR
+              value: /app/lines
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.trustBacklogConsumer.healthPort) | quote }}
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.trustBacklogConsumer.metricsPort | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.trustBacklogConsumer.logLevel | quote }}
+            {{- with .Values.trustBacklogConsumer.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.trustBacklogConsumer.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.trustBacklogConsumer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trustBacklogConsumer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trustBacklogConsumer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -630,6 +630,21 @@ aggregator:
   # full coverage on everywhere. Deliberately NOT flipped to `true` by this
   # chart itself; an operator sets it explicitly.
   fullCoverageEnabledDefault: false
+  # -- How long trust_event_backlog rows are kept before aggregator prunes
+  # them (crates/aggregator/src/queries.rs::prune_trust_event_backlog).
+  # DEFAULT IS 1 DAY, DELIBERATELY -- see
+  # crates/aggregator/src/config.rs's own
+  # trust_event_backlog_retention_days doc comment and
+  # docs/superpowers/plans/2026-09-05-trust-event-backlog-plan.md's own
+  # "Scope decision: retention tier and the licensing safeguard" section.
+  # A human must confirm TRUST's real Train Movements licence terms
+  # directly with RDM before this is ever set above 1 in a real
+  # production deployment -- do not bump this default without that
+  # confirmation happening first. See also
+  # trustBacklogConsumer.retentionDaysWarningAcknowledged below, which
+  # exists purely to document that this decision has been made, not to
+  # gate anything itself.
+  trustEventBacklogRetentionDays: 1
   logLevel: info
   extraEnv: []
   resources: {}
@@ -939,6 +954,51 @@ fullCoverageConsumer:
   movementFeed: kafka
   redisAutoclaimMinIdleSecs: 30
   redisGapCheckSecs: 60
+  logLevel: info
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# trustBacklogConsumer (crates/trust-backlog-consumer) -- a third,
+# independent Redis Streams consumer group on movement-events, retaining a
+# short, catalogued-line-scoped backlog of real TRUST calling-point events
+# for late-tracking pins. See
+# docs/superpowers/plans/2026-09-05-trust-event-backlog-plan.md. Unlike
+# fullCoverageConsumer, this crate is Redis-Streams-only (no legacy Kafka
+# backend) -- no movementFeed/kafka.* block here.
+# ---------------------------------------------------------------------------
+trustBacklogConsumer:
+  image:
+    repository: distant-signal/trust-backlog-consumer
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- Read this service's OAuth2 credential from a pre-existing Secret
+  # instead of the chart-rendered one.
+  existingSecret: ""
+  internalOauthUsername: ""
+  internalOauthPassword: ""
+  existingSecretInternalOauthUsernameKey: internal-oauth-username-trust-backlog-consumer
+  existingSecretInternalOauthPasswordKey: internal-oauth-password-trust-backlog-consumer
+  stanoxCrsReloadSecs: 3600
+  redisAutoclaimMinIdleSecs: 30
+  redisGapCheckSecs: 60
+  healthPort: 8083
+  metricsPort: 9096
+  # -- A purely documentation-level flag: this plan's real retention
+  # safeguard is aggregator.trustEventBacklogRetentionDays (above), a
+  # Rust-level default of 1 with a loud startup/per-cycle warning above
+  # that. This value is NOT wired to any gating logic in this chart or in
+  # any crate -- it exists only so a human editing this file sees a
+  # clearly named place documenting that a real licensing decision is
+  # required before going beyond the 1-day default. See
+  # docs/superpowers/plans/2026-09-05-trust-event-backlog-plan.md's own
+  # "Scope decision: retention tier and the licensing safeguard" section.
+  retentionDaysWarningAcknowledged: false
   logLevel: info
   extraEnv: []
   resources: {}
