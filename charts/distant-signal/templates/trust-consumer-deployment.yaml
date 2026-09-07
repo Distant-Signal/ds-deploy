@@ -118,6 +118,8 @@ spec:
                   key: {{ .Values.trustConsumer.kafka.existingSecretPasswordKey }}
             - name: API_INGEST_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/train-events" | quote }}
+            - name: FORWARD_SIGNALS_URL
+              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/train-forward-signals" | quote }}
             - name: API_TRACKED_TRAINS_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/tracked-trains" | quote }}
             - name: INTERNAL_OAUTH_TOKEN_URL
