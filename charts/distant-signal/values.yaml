@@ -108,7 +108,13 @@ postgresql:
     # -- Attach a PersistentVolumeClaim. When false, an emptyDir is used and
     # ALL DATA IS LOST when the pod is rescheduled -- ephemeral testing only.
     enabled: true
-    size: 8Gi
+    # -- Bumped from 8Gi: the shared trains/train_movement_events/
+    # train_current_state tables (national-scope TRUST ingestion, 30-day
+    # retention -- see docs/superpowers/specs/2026-09-06-shared-train-
+    # identity-design.md) can reach a several-GB ceiling on their own before
+    # accounting for WAL and autovacuum bloat on their high-churn
+    # append/prune pattern, which left 8Gi with too little headroom.
+    size: 20Gi
     # -- StorageClass name. Empty means the cluster default.
     storageClass: ""
     accessModes:
