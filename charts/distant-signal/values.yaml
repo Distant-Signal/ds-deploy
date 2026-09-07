@@ -683,6 +683,10 @@ notifier:
   # -- Decision 4: the delay, in minutes, at or above which a tracked
   # train's delay reading becomes notify-worthy.
   trainDelayThresholdMinutes: 15
+  # -- Task 17/18: cadence for the forwarding-queue poll, deliberately
+  # faster than pollIntervalSecs above -- see config.rs's own comment on
+  # why this is a judgment call, not a researched figure.
+  forwardQueuePollIntervalSecs: 15
   vapid:
     # -- mailto: or https: contact, required by RFC 8292's VAPID "sub" claim.
     subject: ""

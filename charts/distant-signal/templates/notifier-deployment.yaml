@@ -46,6 +46,8 @@ spec:
               value: {{ .Values.notifier.cooldownMinutes | quote }}
             - name: TRAIN_DELAY_THRESHOLD_MINUTES
               value: {{ .Values.notifier.trainDelayThresholdMinutes | quote }}
+            - name: FORWARD_QUEUE_POLL_INTERVAL_SECS
+              value: {{ .Values.notifier.forwardQueuePollIntervalSecs | quote }}
             - name: VAPID_SUBJECT
               value: {{ .Values.notifier.vapid.subject | quote }}
             - name: VAPID_PUBLIC_KEY
