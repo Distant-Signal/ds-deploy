@@ -287,6 +287,10 @@ spec:
             # SCHEDULE population.
             - name: SCHEDULE_NETWORK_DEPARTURES_URL
               value: {{ printf "%s/private/schedule-network-departures" (include "distant-signal.apiBaseUrl" .) | quote }}
+            # Train-listing-page plan: this crate's fourth responsibility,
+            # the destination-keyed sibling of the publish directly above.
+            - name: SCHEDULE_DESTINATION_DEPARTURES_URL
+              value: {{ printf "%s/private/schedule-destination-departures" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: LINES_DIR
               value: /app/lines
             - name: INTERNAL_OAUTH_TOKEN_URL
