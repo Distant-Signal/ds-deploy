@@ -90,6 +90,23 @@ spec:
             # default without that confirmation happening first.
             - name: TRUST_EVENT_BACKLOG_RETENTION_DAYS
               value: {{ .Values.aggregator.trustEventBacklogRetentionDays | quote }}
+            # NOT a licensing safeguard, unlike the setting directly above --
+            # purely disk. See
+            # Config::schedule_destination_departures_retention_days
+            # (crates/aggregator/src/config.rs) for why the default is 2
+            # rather than 1.
+            - name: SCHEDULE_DESTINATION_DEPARTURES_RETENTION_DAYS
+              value: {{ .Values.aggregator.scheduleDestinationDeparturesRetentionDays | quote }}
+            - name: TRAINS_RETENTION_DAYS
+              value: {{ .Values.aggregator.trainsRetentionDays | quote }}
+            # Shorter tier for a trains row with NO train_subscriptions
+            # row referencing it -- see aggregator.untrackedTrainsRetentionDays's
+            # own comment above (values.yaml) and
+            # Config::untracked_trains_retention_days
+            # (crates/aggregator/src/config.rs). A tracked train still
+            # keeps TRAINS_RETENTION_DAYS above regardless of this value.
+            - name: UNTRACKED_TRAINS_RETENTION_DAYS
+              value: {{ .Values.aggregator.untrackedTrainsRetentionDays | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see aggregator.fullCoverageEnabledDefault's own comment in
             # values.yaml. Default false; must be set the same on the api
