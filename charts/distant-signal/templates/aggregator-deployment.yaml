@@ -91,10 +91,10 @@ spec:
             - name: TRUST_EVENT_BACKLOG_RETENTION_DAYS
               value: {{ .Values.aggregator.trustEventBacklogRetentionDays | quote }}
             # NOT a licensing safeguard, unlike the setting directly above --
-            # purely disk. See
+            # keeps GET /public/trains/search's 7-day backward search
+            # window intact with a 1-day safety margin. See
             # Config::schedule_destination_departures_retention_days
-            # (crates/aggregator/src/config.rs) for why the default is 2
-            # rather than 1.
+            # (crates/aggregator/src/config.rs) for why the default is 8.
             - name: SCHEDULE_DESTINATION_DEPARTURES_RETENTION_DAYS
               value: {{ .Values.aggregator.scheduleDestinationDeparturesRetentionDays | quote }}
             - name: TRAINS_RETENTION_DAYS

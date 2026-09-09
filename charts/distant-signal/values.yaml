@@ -662,10 +662,13 @@ aggregator:
   # service dates. This table holds one row per departure (~377,000 per
   # day) and its wholesale replace is scoped to a single service date, so
   # unlike schedule_network_departures it genuinely accrues and genuinely
-  # needs pruning. 2 rather than 1 to stay safe across the rail day's
-  # midnight boundary and a late CIF delivery; nothing reads a past
-  # service date, so there is no reason to raise it.
-  scheduleDestinationDeparturesRetentionDays: 2
+  # needs pruning. NOT a licensing safeguard -- purely disk and keeping
+  # GET /public/trains/search's 7-day backward search window intact with
+  # a 1-day safety margin. See
+  # Config::schedule_destination_departures_retention_days
+  # (crates/aggregator/src/config.rs) and
+  # docs/superpowers/specs/2026-09-09-trains-search-multi-day-design.md.
+  scheduleDestinationDeparturesRetentionDays: 8
   # -- How long trains rows (and, via CASCADE, train_movement_events/
   # train_current_state) are kept before aggregator prunes them, for a
   # train that HAS at least one train_subscriptions row referencing it --
