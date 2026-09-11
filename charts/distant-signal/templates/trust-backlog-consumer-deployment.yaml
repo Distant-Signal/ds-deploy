@@ -126,6 +126,12 @@ spec:
             {{- end }}
             - name: RUST_LOG
               value: {{ .Values.trustBacklogConsumer.logLevel | quote }}
+            # -- Finding #2's kill switch, mirroring
+            # trustConsumer.trustTimestampCorrectionEnabled exactly (see
+            # crates/trust-backlog-consumer/src/config.rs's
+            # trust_timestamp_correction_enabled doc comment).
+            - name: TRUST_TIMESTAMP_CORRECTION_ENABLED
+              value: {{ .Values.trustBacklogConsumer.trustTimestampCorrectionEnabled | quote }}
             {{- with .Values.trustBacklogConsumer.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

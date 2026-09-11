@@ -944,6 +944,18 @@ trustConsumer:
   # workload in this chart already uses.
   metricsPort: 9095
   logLevel: info
+  # -- Kill switch for the TRUST timestamp Europe/London-mislabelling
+  # correction (crates/common/src/trust_timestamp.rs). The hypothesis this
+  # correction applies is well-evidenced but NOT vendor-confirmed, and its
+  # own plausibility guard can only catch under-correction, never
+  # over-correction -- see crates/trust-consumer/src/config.rs's
+  # trust_timestamp_correction_enabled doc comment for the full reasoning.
+  # Default `true` (correction on, since this codebase is choosing to ship
+  # it) -- same semantics/pattern as aggregator.fullCoverageEnabledDefault
+  # below: an operator flips this to `false` to disable the correction
+  # entirely, without a rebuild, the instant the correction itself becomes
+  # the suspect (e.g. the upstream feed vendor silently fixes their bug).
+  trustTimestampCorrectionEnabled: true
   extraEnv: []
   resources: {}
   nodeSelector: {}
@@ -1046,6 +1058,11 @@ trustBacklogConsumer:
   # "Scope decision: retention tier and the licensing safeguard" section.
   retentionDaysWarningAcknowledged: false
   logLevel: info
+  # -- Kill switch for the TRUST timestamp Europe/London-mislabelling
+  # correction, mirroring trustConsumer.trustTimestampCorrectionEnabled
+  # exactly (same underlying crates/common/src/trust_timestamp.rs
+  # correction, same default, same reasoning).
+  trustTimestampCorrectionEnabled: true
   extraEnv: []
   resources: {}
   nodeSelector: {}

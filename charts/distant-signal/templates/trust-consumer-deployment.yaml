@@ -164,6 +164,15 @@ spec:
             {{- end }}
             - name: RUST_LOG
               value: {{ .Values.trustConsumer.logLevel | quote }}
+            # -- Finding #2's kill switch for the TRUST timestamp
+            # Europe/London-mislabelling correction (see
+            # crates/trust-consumer/src/config.rs's
+            # trust_timestamp_correction_enabled doc comment). Same
+            # env-var-backed-flag/default-true pattern as
+            # aggregator.fullCoverageEnabledDefault/FULL_COVERAGE_ENABLED_DEFAULT
+            # above.
+            - name: TRUST_TIMESTAMP_CORRECTION_ENABLED
+              value: {{ .Values.trustConsumer.trustTimestampCorrectionEnabled | quote }}
             {{- with .Values.trustConsumer.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
