@@ -233,11 +233,13 @@ jobs:
         run: cargo test -p movement-feed -- --ignored --test-threads=1
 
   # Custom: no reusable Piped workflow covers Node/npm at all (its
-  # ecosystem coverage is Python + Rust). frontend/package.json has no
-  # `lint` script and there is no eslint.config.* in frontend/, so "lint"
-  # here is `tsc --noEmit` against the existing strict tsconfig.json --
-  # that's the real typecheck this repo has, not a stand-in for a missing
-  # eslint setup.
+  # ecosystem coverage is Python + Rust). frontend/package.json now has a
+  # `lint` script (`eslint .`, flat config in frontend/eslint.config.mjs
+  # built on eslint-config-next's `core-web-vitals`/`typescript` configs --
+  # Next.js 16 removed the `next lint` CLI in favor of running ESLint
+  # directly). `npx tsc --noEmit` remains a separate step alongside it:
+  # ESLint's typescript-eslint rules are style/correctness lint, not a
+  # substitute for a full type-check.
   #
   # frontend/e2e does not exist yet, so `npm run test:e2e` (playwright,
   # testDir: ./e2e) has nothing to run -- deliberately omitted rather than
@@ -261,6 +263,9 @@ jobs:
 
       - name: npm ci
         run: npm ci
+
+      - name: Lint (eslint)
+        run: npm run lint
 
       - name: Typecheck (tsc --noEmit)
         run: npx tsc --noEmit
