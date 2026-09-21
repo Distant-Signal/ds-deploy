@@ -219,6 +219,24 @@ jobs:
       - name: cargo test --workspace (ignored tests skipped)
         run: cargo test --workspace
 
+      # Fast, no-secrets tier of the lines/*.toml external-identifier
+      # validator (crates/line-catalogue-validator): checks every `crs`,
+      # `tiploc` and `operators` value against the vendored snapshot in
+      # reference-data/crs-tiploc.csv and reference-data/toc-codes.csv --
+      # deterministic, no network access, no rate limits, runs in well
+      # under a second. Added as a step here rather than a separate job:
+      # it's already covered by this job's own `cargo build --workspace`
+      # above (no extra toolchain/deps needed) and is fast enough that a
+      # dedicated job with its own checkout/toolchain-install overhead
+      # would cost more than it saves. See
+      # crates/line-catalogue-validator/src/main.rs's module doc for the
+      # thorough, live-external-source counterpart to this check, which
+      # runs on its own weekly schedule instead (see
+      # .github/workflows/validate-line-catalogue.yml, currently disabled
+      # pending credentials).
+      - name: Validate lines/*.toml external identifiers (fast tier)
+        run: cargo run -p line-catalogue-validator
+
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
 
