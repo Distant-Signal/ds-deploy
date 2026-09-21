@@ -259,10 +259,10 @@ jobs:
   # ESLint's typescript-eslint rules are style/correctness lint, not a
   # substitute for a full type-check.
   #
-  # frontend/e2e does not exist yet, so `npm run test:e2e` (playwright,
-  # testDir: ./e2e) has nothing to run -- deliberately omitted rather than
-  # added as a guaranteed-failing step. Add a job for it once e2e specs
-  # exist.
+  # `npm run test:e2e` (Playwright, testDir: ./e2e) is deliberately NOT run
+  # here -- it needs a live `api` + Postgres + Redis + seeded fixtures and a
+  # built/started frontend, none of which this job stands up. See the
+  # `frontend-e2e` job below for that.
   frontend:
     runs-on: ubuntu-24.04
     defaults:
@@ -293,6 +293,181 @@ jobs:
 
       - name: npm run build (next build)
         run: npm run build
+
+  # Custom: Playwright e2e + full-default-ruleset axe-core accessibility
+  # sweep (frontend/e2e/, 7 spec files -- accessibility.spec.ts is the axe
+  # sweep, the rest cover nav/layout/chat/connectivity/service-worker/push
+  # notifications). This is the job the `frontend` job's own comment used to
+  # say was deliberately deferred until e2e specs existed; they now do.
+  #
+  # Needs a real, reachable `api` (Postgres + Redis behind it) to render
+  # anything beyond a skeleton/error state -- extends `rust-test`'s own
+  # `services:` pattern (same images, same health-check options) rather
+  # than `docker-compose.yml`: that file needs dummy values for ~20+
+  # unrelated service credentials (Kafka, RDM/TfL/LDBWS pollers, five
+  # services' worth of internal-OAuth pairs) just to resolve config, and its
+  # `api`/`frontend` images would rebuild from scratch in-container with no
+  # cache reuse, unlike this job's `Swatinem/rust-cache` (shared with
+  # `rust-test`) and `actions/setup-node`'s npm cache.
+  #
+  # The `INTERNAL_OAUTH_*`/`SSO_*` values below are dummy-but-syntactically-
+  # valid, matching local dev's own `.devdata/api.env` pattern: `api` only
+  # syntax-checks an issuer URL at startup (OIDC discovery is lazy -- see
+  # `crates/api/src/data/config.rs`'s own doc comments on `sso_issuer_url`),
+  # never actually contacting it unless a real OAuth redirect happens,
+  # which no spec here drives.
+  frontend-e2e:
+    name: Playwright e2e + accessibility
+    runs-on: ubuntu-24.04
+
+    # Same two services, same images, same health-check options as
+    # `rust-test` above -- copied rather than factored out into a reusable
+    # block, matching this file's existing per-job `services:` duplication
+    # (there is no third job that would justify extracting one).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      REDIS_URL: redis://localhost:6379
+      BIND_URL: 127.0.0.1:8080
+      API_BASE_URL: http://127.0.0.1:8080
+      RUST_LOG: info
+      # See this job's own top comment for why these are safe dummies.
+      INTERNAL_OAUTH_ISSUER_URL: http://internal-oauth.example.invalid
+      INTERNAL_OAUTH_CLIENT_ID: distant-signal-internal-dummy
+      SSO_ISSUER_URL: http://sso.example.invalid
+      SSO_CLIENT_ID: distant-signal-dummy
+      SSO_CLIENT_SECRET: distant-signal-dummy-secret
+      SSO_REDIRECT_URL: http://localhost:3000/api/auth/callback
+      SSO_POST_LOGIN_REDIRECT_URL: http://localhost:3000/
+      VAPID_PUBLIC_KEY: BDummyVapidPublicKeyForLocalDevOnlyNotARealKeyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      LINES_DIR: ${{ github.workspace }}/lines
+      # Frontend build-time var: NEXT_PUBLIC_-prefixed values are inlined
+      # into the browser bundle at `npm run build`, not read at runtime, so
+      # this must be set before that step (chat.spec.ts's `**/mcp` mocks
+      # intercept every request this fixture host resolves to, matching by
+      # path glob rather than by host -- see that file's own comments).
+      NEXT_PUBLIC_RAILMCP_PUBLIC_URL: http://mcp.example.invalid
+      # frontend/e2e/fixtures/seed.sql's own fixture ids -- see that file's
+      # header comment for what each backs and why the dates are fixed.
+      E2E_REAL_LINE_ID: lner-ecml
+      E2E_CUSTOM_LINE_ID: custom-fixture-commute
+      E2E_REAL_STATION_CRS: KGX
+      E2E_REAL_INCIDENT_ID: FIXTURE-INCIDENT-1
+      E2E_TRAIN_UID: W12345
+      E2E_TRAIN_DATE: 2026-09-17
+      E2E_TRACKING_ID: "1"
+      E2E_GROUP_ID: fixture-group-1
+      E2E_GROUP_INVITE_TOKEN: fixture-invite-token-123456789
+      E2E_SESSION_COOKIE: qhE59Tg8RipXqulYsgOav1p46-YsflwgjQxMa1K5lKY
+      E2E_BASE_URL: http://127.0.0.1:3000
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Cache cargo registry/target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo build -p api
+        run: cargo build -p api
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
+
+      - name: Run api migrations
+        working-directory: crates/api
+        run: sqlx migrate run
+
+      - name: Seed e2e fixtures
+        run: psql "$DATABASE_URL" -f frontend/e2e/fixtures/seed.sql
+
+      - name: Start api in the background
+        run: |
+          nohup ./target/debug/api > api.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/public/health > /dev/null; then
+              echo "api is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "api did not become healthy in time"
+          cat api.log
+          exit 1
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browsers (chromium, firefox)
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: npm run build (next build)
+        working-directory: frontend
+        run: npm run build
+
+      - name: Start frontend in the background
+        working-directory: frontend
+        run: |
+          nohup npm run start -- -p 3000 > frontend.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/ > /dev/null; then
+              echo "frontend is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "frontend did not become ready in time"
+          cat frontend.log
+          exit 1
+
+      - name: npx playwright test
+        working-directory: frontend
+        run: npx playwright test
+
+      - name: Upload Playwright report + traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/e2e-report/
+            frontend/test-results/
+          retention-days: 7
 
   # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
   # `helm lint` + `helm template` against both the chart's own defaults and
