@@ -139,11 +139,23 @@ jobs:
         run: cargo fmt --all --check
 
   # Custom: cargo build/test across the whole workspace, plus the
-  # DATABASE_URL-gated `#[ignore]`d integration tests in `api` and
-  # `aggregator` (the only two crates whose ignored tests need a live
+  # DATABASE_URL-gated `#[ignore]`d integration tests in `api`, `aggregator`
+  # and `notifier` (the only three crates whose ignored tests need a live
   # Postgres -- confirmed by grepping every `#[ignore = "..."]` reason in
   # the workspace; `enricher`'s four ignored tests need a live LLM_BASE_URL
-  # instead and are deliberately left ignored here).
+  # instead and are deliberately left ignored here). `notifier` joined this
+  # list here: it already had several DATABASE_URL-gated `#[ignore]`d tests
+  # of its own (`queries.rs`'s poll/push-subscription round trips,
+  # `main.rs`'s `run_cycle` transition test) that CI simply never ran, plus
+  # two more this plan's own Tasks 8/9 added --
+  # `list_committed_legs_for_today` and the `skip_notification_state`/
+  # `upsert_skip_notification_state` round-trip -- and `skip_check.rs`'s new
+  # `leg_is_skipped` test from this fix wave. Every one of them calls
+  # `queries.rs`/`skip_check.rs` functions (or, for `run_cycle`, passes a
+  # literal fake VAPID key straight into the function call) directly against
+  # a live Postgres, never through `main()`'s own env-var parsing, so none
+  # need anything beyond the same `DATABASE_URL` this job already sets up
+  # for `api`/`aggregator`.
   rust-test:
     name: cargo build & test
     runs-on: ubuntu-24.04
@@ -244,8 +256,8 @@ jobs:
         working-directory: crates/api
         run: sqlx migrate run
 
-      - name: cargo test -p api -p aggregator -- --ignored (DB-backed tests)
-        run: cargo test -p api -p aggregator -- --ignored --test-threads=1
+      - name: cargo test -p api -p aggregator -p notifier -- --ignored (DB-backed tests)
+        run: cargo test -p api -p aggregator -p notifier -- --ignored --test-threads=1
 
       - name: cargo test -p movement-feed -- --ignored (Redis-backed tests)
         run: cargo test -p movement-feed -- --ignored --test-threads=1
