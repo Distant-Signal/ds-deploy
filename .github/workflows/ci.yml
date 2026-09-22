@@ -143,10 +143,8 @@ jobs:
 
   # Custom: cargo build/test across the whole workspace, plus the
   # DATABASE_URL-gated `#[ignore]`d integration tests in `api`, `aggregator`
-  # and `notifier` (the only three crates whose ignored tests need a live
-  # Postgres -- confirmed by grepping every `#[ignore = "..."]` reason in
-  # the workspace; `enricher`'s four ignored tests need a live LLM_BASE_URL
-  # instead and are deliberately left ignored here). `notifier` joined this
+  # and `notifier` (confirmed by grepping every `#[ignore = "..."]` reason
+  # in the workspace to need only a live Postgres). `notifier` joined this
   # list here: it already had several DATABASE_URL-gated `#[ignore]`d tests
   # of its own (`queries.rs`'s poll/push-subscription round trips,
   # `main.rs`'s `run_cycle` transition test) that CI simply never ran, plus
@@ -159,6 +157,23 @@ jobs:
   # a live Postgres, never through `main()`'s own env-var parsing, so none
   # need anything beyond the same `DATABASE_URL` this job already sets up
   # for `api`/`aggregator`.
+  #
+  # `enricher` is a mixed bag, so it's handled in its own step below instead
+  # of being folded into the `-p api -p aggregator -p notifier` step: five
+  # of its six `#[ignore]`d tests (`llm.rs`'s `live_eval_*`) call
+  # `live_client_from_env()` and genuinely need a real `LLM_BASE_URL` with
+  # live model access, so those five stay excluded here -- there is no such
+  # credential in CI. But `main.rs`'s
+  # `process_incident_writes_successfully_and_advances_hash_and_version_when_primary_extraction_is_truncated`
+  # only needs `DATABASE_URL`: it mocks all three LLM calls it makes against
+  # its own `wiremock` server (see that test's doc comment), so it now runs
+  # here too -- verified locally with `DATABASE_URL=postgres://postgres:
+  # postgres@localhost:5432/postgres cargo test -p enricher process_incident
+  # -- --ignored --test-threads=1` against a live Postgres, which passes.
+  # The step below uses that same `process_incident` test-name filter
+  # rather than a bare `-p enricher` addition to the step above, because
+  # without the filter the five LLM-gated tests get pulled in too and fail
+  # with "LLM_BASE_URL must be set for live eval".
   rust-test:
     name: cargo build & test
     runs-on: ubuntu-24.04
@@ -261,6 +276,9 @@ jobs:
 
       - name: cargo test -p api -p aggregator -p notifier -- --ignored (DB-backed tests)
         run: cargo test -p api -p aggregator -p notifier -- --ignored --test-threads=1
+
+      - name: cargo test -p enricher process_incident -- --ignored (DB-backed test; LLM-gated evals stay excluded)
+        run: cargo test -p enricher process_incident -- --ignored --test-threads=1
 
       - name: cargo test -p movement-feed -- --ignored (Redis-backed tests)
         run: cargo test -p movement-feed -- --ignored --test-threads=1
