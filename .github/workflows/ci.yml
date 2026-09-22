@@ -63,6 +63,14 @@ jobs:
   # PR annotations) without the upstream bug. Revert to the Piped reusable
   # workflow once this is fixed upstream.
   #
+  # `--all-targets` is in `check-args` alongside `--all-features` for the
+  # same reason: both are cargo-level flags, so both must land BEFORE the
+  # `--` separator (see the argv trace above) to reach `cargo clippy`
+  # rather than `clippy-driver`/`rustc`. Without it, warnings in test/
+  # bench/example code (anything `cargo test`/`cargo bench` would build
+  # but a plain `cargo clippy` skips) are invisible here even though this
+  # job is a hard gate for whatever it does check.
+  #
   # Also installs the same system packages docker/trust-consumer.Dockerfile
   # documents needing for rdkafka's `cmake-build`/`ssl`/`sasl` features
   # (trust-consumer is part of this workspace, so `--all-features
@@ -95,11 +103,11 @@ jobs:
       - name: Cache cargo registry/target
         uses: Swatinem/rust-cache@v2
 
-      - name: cargo clippy --workspace --all-features
+      - name: cargo clippy --workspace --all-features --all-targets
         uses: auguwu/clippy-action@9817d076b82df0194935be9db6154c56ac07b317 # v1.5.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          check-args: --all-features
+          check-args: --all-features --all-targets
 
   # Reusable workflow_call from FasterSpeeding/Piped: runs actionlint over
   # this repo's own .github/workflows/*.yml via reviewdog. Self-contained
@@ -115,13 +123,9 @@ jobs:
   # change deliberately does not add the Piped submodule just to satisfy
   # one check, so a plain `cargo fmt --check` step is used instead.
   #
-  # `continue-on-error: true`: `cargo fmt --check` is NOT clean on `main`
-  # today (confirmed by running it locally -- widespread pre-existing
-  # formatting drift in crates/aggregator/src/aggregation.rs and others,
-  # predating this change). Gating on it now would turn every PR red for a
-  # problem this change didn't create. The check still runs and reports so
-  # the drift is visible, it just doesn't block merges. Flip this to a hard
-  # gate once someone runs `cargo fmt` across the whole workspace.
+  # Hard gate: `cargo fmt --all` has been run across the whole workspace, so
+  # `cargo fmt --all --check` is clean on `main` and any drift from here on
+  # is a real regression a PR introduced.
   rustfmt:
     name: cargo fmt --check
     runs-on: ubuntu-24.04
@@ -135,7 +139,6 @@ jobs:
           components: rustfmt
 
       - name: cargo fmt --check
-        continue-on-error: true
         run: cargo fmt --all --check
 
   # Custom: cargo build/test across the whole workspace, plus the
