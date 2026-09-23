@@ -88,6 +88,28 @@ image (`redis.image.*`), which this repository does not build.
 Then point each `*.image.repository` value at `$REG/...`. An empty
 `image.tag` falls back to the chart's `appVersion`.
 
+**Pinning by content digest instead of tag.** Every first-party service
+above also has an `*.image.digest` value (e.g. `api.image.digest`), empty
+by default. When set to a real `sha256:<64 hex chars>` digest, it takes
+priority over `tag`/`appVersion` entirely: the rendered image reference
+becomes `<repository>@<digest>` with no tag at all, since a digest is the
+only fully immutable reference (a tag, even an otherwise-immutable-looking
+`sha-<short-sha>` one, can in principle be re-pushed to point at different
+content; `repo@sha256:...` cannot). `.github/workflows/containers.yml`'s
+`push-helm-chart` job populates this automatically for every first-party
+image in the packaged chart's own default `values.yaml`, from that same
+run's real, already-pushed image digests -- so a plain `helm install`
+against a chart pulled from `oci://ghcr.io/fasterspeeding/charts` already
+pins every first-party image by digest with no operator action needed. Set
+it by hand (`--set api.image.digest=sha256:...`) only if you're building
+and pushing your own images per the table above and want the same
+guarantee for them. `postgresql`, `redis`, `devAuthentik` and
+`scheduleFeed.sftp` (all externally-sourced, not built by this repo) have
+no `digest` field and cannot be pinned by digest through this chart's
+values today -- `distant-signal.image` always appends `:<tag>` for them,
+so there is no clean value shape for a caller to force an `@sha256:...`
+reference onto one of these instead.
+
 ## Install
 
 ```bash
@@ -658,6 +680,7 @@ Used only when `postgresql.enabled` is `false`.
 |---|---|---|
 | `api.image.repository` | `distant-signal/api` | api image repository. |
 | `api.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `api.image.digest` | `""` | Exact content digest (`sha256:...`). When set, takes priority over `tag`/appVersion -- see "Pinning by content digest instead of tag" above. CI populates this automatically for images it builds and pushes. |
 | `api.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `api.replicaCount` | `1` | Replicas. >1 is safe — sqlx's Migrator takes a Postgres advisory lock. |
 | `api.service.type` | `ClusterIP` | Service type. |
@@ -734,6 +757,7 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 |---|---|---|
 | `aggregator.image.repository` | `distant-signal/aggregator` | aggregator image repository. |
 | `aggregator.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `aggregator.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `aggregator.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `aggregator.pollIntervalSecs` | `60` | Recompute cadence. |
 | `aggregator.historyRetentionDays` | `7` | How long `line_status_history` rows are kept. |
@@ -788,6 +812,7 @@ pod that fails every request forever.
 |---|---|---|
 | `enricher.image.repository` | `distant-signal/enricher` | enricher image repository. |
 | `enricher.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `enricher.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `enricher.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `enricher.llm.baseUrl` | `""` | **Required.** Base URL of an OpenAI-compatible chat-completions endpoint. Empty aborts the render. |
 | `enricher.llm.model` | `""` | **Required.** Model name that endpoint serves. Empty aborts the render. Also stored as the extraction's `model_version`, so changing it re-extracts every incident on the next sweep. |
@@ -813,6 +838,7 @@ pod that fails every request forever.
 |---|---|---|
 | `frontend.image.repository` | `distant-signal/frontend` | frontend image repository. |
 | `frontend.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `frontend.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `frontend.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `frontend.replicaCount` | `1` | Safe to raise, with one documented caveat. frontend/lib/liveDataCache.ts keeps a process-local stale-data cache so a backend outage shows the last-known line status instead of an error page (docs/superpowers/specs/2026-09-02-frontend-disconnect-reconnect-ux-design.md). That cache is per-pod: with more than one replica, during an outage one visitor may get stale-but-useful content from a warm pod while another gets the auto-retrying error page from a cold one. Each pod stays internally consistent and no stale data crosses users (entries are session-scoped), so this is a degraded-experience caveat, not a correctness one -- deliberately documented rather than blocked, unlike postgresql.replicaCount above. |
 | `frontend.service.type` | `ClusterIP` | Service type. |
@@ -868,6 +894,7 @@ Keys below exist under each of `pollers.incidents`, `pollers.stations`,
 | `pollers.<name>.enabled` | `false` | Deploy this poller. All four are off by default. |
 | `pollers.<name>.image.repository` | `distant-signal/poller-<name>` | Poller image repository. |
 | `pollers.<name>.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `pollers.<name>.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollers.<name>.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollers.<name>.baseUrl` | `""` | Upstream feed base URL. Required when enabled; empty aborts the render. |
 | `pollers.<name>.baseUrlEnvVar` | per-poller | Env var the binary reads the base URL from. Do not change. |

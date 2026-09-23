@@ -32,6 +32,15 @@ version: 0.2.2
 # install` straight from a checkout without going through CI -- keep it
 # tracking the workspace crate version (crates/api/Cargo.toml) for that
 # case, but it is NOT the source of truth for anything CI publishes.
+#
+# SUPERSEDED, for first-party images, whenever that same `push-helm-chart`
+# job also pins a per-service `*.image.digest` (values.yaml) -- see that
+# job's "Pin first-party image digests into values.yaml" step and
+# `distant-signal.image`'s own comment in templates/_helpers.tpl. A set
+# `image.digest` renders `<repo>@<digest>` and ignores `tag`/appVersion
+# entirely; appVersion (via `tag`) only remains the effective default for
+# any service whose digest wasn't populated for some reason (see that
+# step's own comment on when that happens).
 appVersion: "0.1.0"
 
 # templates/networkpolicy.yaml selects the ingress-controller namespace via

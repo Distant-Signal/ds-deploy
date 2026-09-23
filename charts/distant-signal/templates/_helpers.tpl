@@ -69,7 +69,19 @@ ServiceAccount name. Takes root.
 {{/*
 Image reference. Call as:
   {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) }}
-An empty `tag` falls back to the chart's appVersion.
+An empty `tag` falls back to the chart's appVersion. An explicit
+`.image.digest` (e.g. `sha256:...`) takes priority over both: when set, the
+rendered reference is `<repo>@<digest>` and `tag`/appVersion are ignored
+entirely -- `repo:tag@digest` is valid OCI syntax, but the digest silently
+wins on pull anyway, so rendering a tag alongside it would just be
+misleading. Only this chart's first-party, CI-built images (api,
+aggregator, notifier, enricher, frontend, the pollers, trustConsumer,
+fullCoverageConsumer, trustBacklogConsumer, movementRelay,
+pollerIrishRailGtfs/Live, pollerNirStations, scheduleFeed.ingest/reference)
+carry a `digest` field at all -- see each's own `image.digest` values.yaml
+comment (canonical copy: `api.image.digest`) and
+`.github/workflows/containers.yml`'s `push-helm-chart` job for how it gets
+populated in CI.
 
 When `.Values.global.imageRegistry` is set, it replaces whatever comes
 before the last two `/`-separated segments of `.image.repository` (e.g.
@@ -80,7 +92,8 @@ image this chart renders -- including postgres/redis/devAuthentik/
 sftpgo -- at a private mirror without touching each service's own
 `image.repository`. A repository with two or fewer segments (e.g. the
 bundled `postgres`/`redis` defaults) is kept whole and the registry is
-just prepended in front of it. NOTE: this chart no longer builds/deploys
+just prepended in front of it. This override logic is shared by both the
+digest and tag branches below. NOTE: this chart no longer builds/deploys
 the derived MCP service ("distant-signal-mcp") itself, so there is no
 railMcp image to re-point here any more -- see railMcp's own values.yaml
 comment for how to link this chart's frontend to a separately, externally
@@ -95,7 +108,11 @@ deployed instance instead.
 {{- end -}}
 {{- $repo = printf "%s/%s" .root.Values.global.imageRegistry $repo -}}
 {{- end -}}
+{{- if .image.digest -}}
+{{- printf "%s@%s" $repo .image.digest }}
+{{- else -}}
 {{- printf "%s:%s" $repo (default .root.Chart.AppVersion .image.tag) }}
+{{- end -}}
 {{- end }}
 
 {{/*

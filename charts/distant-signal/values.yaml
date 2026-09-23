@@ -192,6 +192,9 @@ pollers:
     image:
       repository: ghcr.io/fasterspeeding/distant-signal/poller-incidents
       tag: ""
+      # -- Content digest override. See api.image.digest's own comment below
+      # for the full rationale; same shape here.
+      digest: ""
       pullPolicy: IfNotPresent
     # -- RDM Knowledgebase Incidents feed base URL. Required when enabled.
     baseUrl: ""
@@ -228,6 +231,9 @@ pollers:
     image:
       repository: ghcr.io/fasterspeeding/distant-signal/poller-stations
       tag: ""
+      # -- Content digest override. See api.image.digest's own comment below
+      # for the full rationale; same shape here.
+      digest: ""
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_STATIONS_BASE_URL
@@ -259,6 +265,9 @@ pollers:
     image:
       repository: ghcr.io/fasterspeeding/distant-signal/poller-tfl
       tag: ""
+      # -- Content digest override. See api.image.digest's own comment below
+      # for the full rationale; same shape here.
+      digest: ""
       pullPolicy: IfNotPresent
     # -- TfL Unified API root. Unlike the RDM feeds this is a real, public,
     # documented endpoint, so it has a working default rather than "".
@@ -302,6 +311,9 @@ pollers:
     image:
       repository: ghcr.io/fasterspeeding/distant-signal/poller-tocs
       tag: ""
+      # -- Content digest override. See api.image.digest's own comment below
+      # for the full rationale; same shape here.
+      digest: ""
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_TOCS_BASE_URL
@@ -333,6 +345,9 @@ pollers:
     image:
       repository: ghcr.io/fasterspeeding/distant-signal/poller-ldbws
       tag: ""
+      # -- Content digest override. See api.image.digest's own comment below
+      # for the full rationale; same shape here.
+      digest: ""
       pullPolicy: IfNotPresent
     # -- LDBWS base URL up to and including the /LDBWS/api/20220120 segment;
     # the binary appends /GetDepBoardWithDetails/{crs} itself.
@@ -377,6 +392,28 @@ api:
     repository: ghcr.io/fasterspeeding/distant-signal/api
     # -- Empty means "use the chart's appVersion".
     tag: ""
+    # -- Exact content digest (e.g. sha256:<64 hex chars>) of the image CI
+    # just built and pushed for this run, e.g.
+    # `sha256:1234...abcd`. Empty by default. When set,
+    # `distant-signal.image` (templates/_helpers.tpl) renders
+    # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
+    # `repo:tag@digest` is valid OCI syntax, but the digest silently wins on
+    # pull anyway, so rendering the tag alongside it would just be
+    # misleading. A digest is the only fully immutable image reference (a
+    # tag, even the `sha-<short-sha>` one this chart's appVersion normally
+    # resolves to, can in principle be re-pushed to point at different
+    # content; `repo@sha256:...` cannot). `.github/workflows/containers.yml`'s
+    # `push-helm-chart` job populates this for every first-party image from
+    # that same run's own `docker/build-push-action` digest output, plumbed
+    # via per-service artifacts (see that job's own comment) -- see that
+    # job's comment for what happens when a digest is legitimately missing
+    # (e.g. a re-run of just that job without a fresh image build): it falls
+    # back cleanly to this same tag/appVersion behavior rather than baking a
+    # broken `@` reference into the packaged chart. Left empty here (and in
+    # every other first-party service's `image.digest` below) as the
+    # human-facing default -- nothing in this chart or a plain `helm
+    # install`/`helm template` run ever sets it for you.
+    digest: ""
     pullPolicy: IfNotPresent
   # -- Replicas. >1 is safe: crates/api/src/main.rs runs sqlx::migrate!() in
   # process at startup, and sqlx's Migrator takes a Postgres advisory lock,
@@ -627,6 +664,9 @@ aggregator:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/aggregator
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   # -- DESIGN.md section 4 targets every 30-60s; 60 is the conservative end.
   pollIntervalSecs: 60
@@ -738,6 +778,9 @@ notifier:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/notifier
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   # -- Same "reasonable round number, not load-tested" posture as
   # aggregator.pollIntervalSecs.
@@ -859,6 +902,9 @@ enricher:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/enricher
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   llm:
     baseUrl: ""
@@ -919,6 +965,9 @@ trustConsumer:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/trust-consumer
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   kafka:
     brokers: ""
@@ -1013,6 +1062,9 @@ fullCoverageConsumer:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/full-coverage-consumer
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   kafka:
     consumerGroup: distant-signal-full-coverage-consumer
@@ -1064,6 +1116,9 @@ trustBacklogConsumer:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/trust-backlog-consumer
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   # -- Read this service's OAuth2 credential from a pre-existing Secret
   # instead of the chart-rendered one.
@@ -1122,6 +1177,9 @@ movementRelay:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/movement-relay
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   kafka:
     brokers: ""
@@ -1166,6 +1224,9 @@ pollerIrishRailGtfs:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-gtfs
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   # -- Transport for Ireland's public GTFS zip for Iarnrod Eireann -- real,
   # key-free, confirmed reachable directly
@@ -1211,6 +1272,9 @@ pollerIrishRailLive:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-live
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   # -- api.irishrail.ie's legacy realtime ASMX service root -- real,
   # key-free, confirmed reachable directly
@@ -1256,6 +1320,9 @@ pollerNirStations:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/poller-nir-stations
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   # -- OpenDataNI's own CKAN download URLs for Translink's "Northern
   # Ireland Railways Stations"/"...Halts" CSVs -- real, key-free, confirmed
@@ -1393,6 +1460,9 @@ scheduleFeed:
     image:
       repository: ghcr.io/fasterspeeding/distant-signal/schedule-ingest
       tag: ""
+      # -- Content digest override. See api.image.digest's own comment above
+      # for the full rationale; same shape here.
+      digest: ""
       pullPolicy: IfNotPresent
     checkTimes: "22:00,22:30,23:00,23:30,00:00,00:30,01:00,01:30,16:00"
     # -- Seconds between watch_dir scans. Replaces checkTimes as the thing
@@ -1430,6 +1500,9 @@ scheduleFeed:
     image:
       repository: ghcr.io/fasterspeeding/distant-signal/schedule-reference
       tag: ""
+      # -- Content digest override. See api.image.digest's own comment above
+      # for the full rationale; same shape here.
+      digest: ""
       pullPolicy: IfNotPresent
     pollIntervalSecs: 1800
     # -- MUST differ from metrics.port: this container shares the
@@ -1548,6 +1621,9 @@ frontend:
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/frontend
     tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
     pullPolicy: IfNotPresent
   # -- Safe to raise, with one documented caveat. frontend/lib/liveDataCache.ts
   # keeps a process-local stale-data cache so a backend outage shows the

@@ -260,6 +260,42 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: echo "${TAGS}" | xargs -I {} cosign sign --yes "{}@${DIGEST}"
 
+      # Matrix job outputs don't natively aggregate to a downstream job --
+      # `push-helm-chart` below needs every one of these 19 legs' own real
+      # `steps.build.outputs.digest` (the exact content digest of the image
+      # THIS leg just pushed) to pin the packaged chart's default image
+      # references to, not just the shared `sha-<short_sha>` tag string. The
+      # established pattern for getting a per-matrix-leg value to a
+      # `needs:`-dependent job is a per-leg artifact: write `service=digest`
+      # to a small file and upload it under a name namespaced by
+      # `matrix.service` (`image-digest-<service>`), so the 19 legs' uploads
+      # don't collide -- `push-helm-chart` downloads them all with a
+      # `pattern:`/`merge-multiple: true` glob. The FILE inside each
+      # artifact is also named `digest-<service>.txt`, not a fixed
+      # `digest.txt` -- `merge-multiple: true` flattens every downloaded
+      # artifact's contents into one shared directory, so 19 identically
+      # named files would silently overwrite each other down to just one
+      # surviving service; a unique filename per leg avoids that. Skipped on
+      # `pull_request` (no `id: build` push happened, so
+      # `steps.build.outputs.digest` is still a real digest of what was
+      # built locally, but there is nothing for a chart to pin to from an
+      # unpublished PR build, and PRs don't get a `packages:write` token
+      # anyway) -- same gate as the push/sign steps above.
+      - name: Record image digest
+        if: github.event_name != 'pull_request'
+        env:
+          SERVICE: ${{ matrix.service }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: echo "${SERVICE}=${DIGEST}" > "digest-${SERVICE}.txt"
+
+      - name: Upload image digest artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-digest-${{ matrix.service }}
+          path: digest-${{ matrix.service }}.txt
+          retention-days: 1
+
   # Package and push the Helm chart to ghcr.io, once every image in the
   # matrix above has built and pushed successfully.
   #
@@ -388,6 +424,23 @@ jobs:
   # unconditionally overridden here, so it no longer needs to track
   # anything CI-relevant, just to remain a sane default for someone
   # running `helm package`/`helm template` straight from a checkout.
+  #
+  # STRENGTHENED FURTHER, for first-party images specifically: the
+  # `sha-<short_sha>` tag above is immutable IN PRACTICE (nobody re-pushes
+  # over it) but not immutable IN PRINCIPLE -- a tag can always be
+  # overwritten to point at different content; `repo@sha256:...` cannot.
+  # This job's own "Pin first-party image digests into values.yaml" step
+  # below (fed by every matrix leg's own real `steps.build.outputs.digest`,
+  # collected via the `image-digest-<service>` artifacts each leg uploads)
+  # pins each first-party service's `*.image.digest` in the packaged
+  # chart's values.yaml to that exact content digest, which
+  # `distant-signal.image` (_helpers.tpl) prefers over `tag`/appVersion
+  # whenever it's set. `appVersion`/`image.tag` stay the fallback for any
+  # service whose digest wasn't available this run (see that step's own
+  # comment), and remain the ONLY mechanism for every non-first-party image
+  # (postgres, redis, devAuthentik's goauthentik/server, scheduleFeed's
+  # drakkan/sftpgo) this chart also renders, none of which get a `digest`
+  # field at all.
   push-helm-chart:
     name: Package and push Helm chart
     needs: build-and-push
@@ -408,6 +461,27 @@ jobs:
         uses: azure/setup-helm@v4
         with:
           version: v4.2.3
+
+      # Pulls in every `image-digest-<service>` artifact build-and-push's 19
+      # matrix legs uploaded above (see that job's own comment on the
+      # digest-plumbing mechanism), flattened into one directory via
+      # `merge-multiple: true` -- safe here specifically because each leg's
+      # own file is named `digest-<service>.txt` (not a fixed `digest.txt`),
+      # so flattening can't make two legs' files collide/overwrite. A
+      # `pattern:` that matches nothing (e.g. this job re-run on its own,
+      # after the matrix's artifacts already expired -- see their 1-day
+      # `retention-days` -- or without a corresponding fresh
+      # build-and-push run at all) is NOT an error: it just leaves this
+      # directory empty, and the next step's loop below then finds nothing
+      # to pin, leaving every `image.digest` at its checked-out-values.yaml
+      # default of `""` -- the intended "fall back to tag/appVersion"
+      # behavior for that case, not a hard failure.
+      - name: Download image digest artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: image-digest-*
+          path: /tmp/image-digests
+          merge-multiple: true
 
       - name: Log into ${{ env.REGISTRY }} (Helm OCI)
         run: |
@@ -433,6 +507,94 @@ jobs:
           fi
           echo "chart_version=${base_version}+build.${GITHUB_RUN_NUMBER}.sha.${short_sha}" >> "$GITHUB_OUTPUT"
           echo "app_version=sha-${short_sha}" >> "$GITHUB_OUTPUT"
+
+      # `helm package` (see its own `--help`) has no `--values`/`-f`/`--set`
+      # flag of any kind -- it just tars up whatever is already on disk at
+      # `charts/distant-signal`, unlike `helm template`/`helm install`,
+      # which render on top of caller-supplied overrides. So the ONLY way
+      # to make the packaged chart's own DEFAULT `*.image.digest` values
+      # reflect this run's real digests is to rewrite
+      # charts/distant-signal/values.yaml in this ephemeral checkout
+      # in-place before `helm package` runs below -- nothing is committed
+      # back to git, this workspace is discarded at the end of the job.
+      #
+      # `yq` (mikefarah's Go yq, preinstalled on GitHub's ubuntu-24.04
+      # runner image) does the in-place edit; `SERVICE_TO_PATH` below is a
+      # hand-maintained map from each matrix leg's `service:` name
+      # (containers.yml's own `build-and-push` matrix, kebab-case) to that
+      # service's actual values.yaml key (camelCase, nested under
+      # `pollers`/`scheduleFeed` for the services that live there) -- keep
+      # this in sync with both the matrix `include:` list above and
+      # values.yaml's first-party `image:` blocks whenever either changes.
+      # Only first-party, CI-built images are listed here -- postgresql,
+      # redis, devAuthentik and railMcp are intentionally absent, same as
+      # they have no `image.digest` field in values.yaml at all.
+      #
+      # A missing/empty digest for any one service (see the download step's
+      # own comment above for when that happens) is NOT an error: that
+      # service's `image.digest` is simply left at its checked-out default
+      # of `""`, and `distant-signal.image` (_helpers.tpl) falls back
+      # cleanly to the existing tag/appVersion-based reference for it --
+      # this loop only ever SETS a digest, never clears one, and never
+      # fails the job for an absent file. A malformed digest file (wrong
+      # `service=digest` shape, or a value that doesn't look like a real
+      # `sha256:<64 hex>` digest) DOES fail the job -- that indicates a bug
+      # in the upload side above, not a legitimately-missing digest, and
+      # packaging a chart with a corrupt digest silently baked in would be
+      # worse than failing loudly here.
+      - name: Pin first-party image digests into values.yaml
+        run: |
+          set -euo pipefail
+          declare -A SERVICE_TO_PATH=(
+            [api]=".api"
+            [aggregator]=".aggregator"
+            [enricher]=".enricher"
+            [notifier]=".notifier"
+            [poller-incidents]=".pollers.incidents"
+            [poller-stations]=".pollers.stations"
+            [poller-tocs]=".pollers.tocs"
+            [poller-ldbws]=".pollers.ldbws"
+            [poller-tfl]=".pollers.tfl"
+            [poller-irish-rail-gtfs]=".pollerIrishRailGtfs"
+            [poller-irish-rail-live]=".pollerIrishRailLive"
+            [poller-nir-stations]=".pollerNirStations"
+            [trust-consumer]=".trustConsumer"
+            [full-coverage-consumer]=".fullCoverageConsumer"
+            [trust-backlog-consumer]=".trustBacklogConsumer"
+            [movement-relay]=".movementRelay"
+            [schedule-ingest]=".scheduleFeed.ingest"
+            [schedule-reference]=".scheduleFeed.reference"
+            [frontend]=".frontend"
+          )
+
+          shopt -s nullglob
+          digest_files=(/tmp/image-digests/*.txt)
+          if [ ${#digest_files[@]} -eq 0 ]; then
+            echo "::warning::no image-digest-* artifacts found -- every service's image.digest stays empty, the packaged chart falls back to tag/appVersion-based image references for all of them."
+          fi
+
+          pinned=0
+          for f in "${digest_files[@]}"; do
+            line="$(cat "$f")"
+            service="${line%%=*}"
+            digest="${line#*=}"
+            if [ -z "${service}" ] || [ -z "${digest}" ] || [ "${line}" = "${service}" ]; then
+              echo "::error::malformed digest file ${f}: '${line}' (expected service=sha256:...)" >&2
+              exit 1
+            fi
+            if [[ ! "${digest}" =~ ^sha256:[0-9a-fA-F]{64}$ ]]; then
+              echo "::error::digest for service '${service}' (from ${f}) doesn't look like a real sha256 digest: '${digest}'" >&2
+              exit 1
+            fi
+            path="${SERVICE_TO_PATH[${service}]:-}"
+            if [ -z "${path}" ]; then
+              echo "::error::no values.yaml path mapping for service '${service}' (from ${f}) -- update this step's SERVICE_TO_PATH to match containers.yml's matrix and values.yaml." >&2
+              exit 1
+            fi
+            yq -i "${path}.image.digest = \"${digest}\"" charts/distant-signal/values.yaml
+            pinned=$((pinned + 1))
+          done
+          echo "Pinned ${pinned} first-party image digest(s) into charts/distant-signal/values.yaml."
 
       - name: helm package
         id: package
