@@ -12,6 +12,10 @@ mirrors the topology, environment contract and cadences that the
 repository's `docker-compose.yml` and `.env.example` already establish, so
 the two deployment paths do not drift.
 
+This chart does **not** deploy the derived MCP service ("distant-signal-mcp",
+a fork of train-mcp) — see the `railMcp` section under "Values reference"
+below for how to link the frontend to a separately-deployed instance of it.
+
 ## Prerequisites
 
 - **Kubernetes >= 1.23.** The chart declares `kubeVersion: ">=1.23.0-0"`.
@@ -831,6 +835,28 @@ pod that fails every request forever.
 
 The frontend is the one workload with `readOnlyRootFilesystem: false`:
 `next start` writes its incremental cache under `.next/cache`.
+
+### railMcp
+
+**This chart no longer deploys or configures the derived MCP service
+("distant-signal-mcp", a fork of train-mcp) itself.** That project has its
+own repository, its own CI/tests, and its own Helm chart
+(`Distant-Signal-MCP`, or its own fork) with a more complete config surface
+and better security posture than this chart used to bundle. Deploy it as
+its **own, separate Helm release** — pointing at that project's own chart,
+or the fork directly — then come back here and set the values below so
+this chart's own **frontend** can link to it. Everything below is optional
+and off by default: leaving `railMcp.enabled` at `false` renders none of
+these env vars at all.
+
+| Key | Default | Description |
+|---|---|---|
+| `railMcp.enabled` | `false` | Link frontend to a separately, externally-deployed instance of the derived MCP service. |
+| `railMcp.baseUrl` | `""` | External HTTP base URL frontend calls server-to-server. Point this at wherever you deployed that separate release (its Service DNS name if co-located, its Ingress host otherwise). Required when enabled; empty aborts the render. |
+| `railMcp.publicUrl` | `""` | The other release's own `PUBLIC_URL`, surfaced to the browser as `NEXT_PUBLIC_RAILMCP_PUBLIC_URL`. Must match what that release was configured with. |
+| `railMcp.internalCompleteToken` | `""` | Shared secret between frontend's consent bridge and the other release's `OAUTH_INTERNAL_COMPLETE_TOKEN`. Must match what that release was configured with — **never auto-generated**: required (together with, or in place of, `existingSecret` below) when enabled, or the render aborts. |
+| `railMcp.existingSecretInternalCompleteTokenKey` | `internal-complete-token` | Key within `railMcp.existingSecret`. |
+| `railMcp.existingSecret` | `""` | Read `internalCompleteToken` from this pre-existing Secret instead. |
 
 ### pollers
 

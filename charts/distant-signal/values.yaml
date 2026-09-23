@@ -1492,136 +1492,54 @@ scheduleFeed:
     fsGroup: 1000
 
 # ---------------------------------------------------------------------------
-# railMcp: the derived MCP service ("distant-signal-mcp"), a fork of
-# train-mcp living in its own repository -- this chart deploys it, it does
-# not build it. See
+# railMcp: OPTIONAL linking config for the derived MCP service
+# ("distant-signal-mcp", a fork of train-mcp -- see
 # docs/superpowers/specs/2026-09-01-train-mcp-integration-design.md
-# Decision 1/6, docs/superpowers/plans/2026-09-01-train-mcp-integration.md
-# Task 7, and docs/superpowers/plans/2026-09-02-embedded-chatbot-shared-
-# foundation-and-option-c.md Task 8, which retired the Discord-OAuth values
-# this block originally shipped with (railMcp.discord.*, below) in favor of
-# the service's own real OAuth 2.1 adapter -- "superseded, not stacked
-# alongside DS's OIDC" (train-mcp design Decision 4d).
+# Decision 1). This chart does NOT deploy or configure that service's own
+# process any more -- it has its own repository, its own CI/tests, and its
+# own Helm chart (Distant-Signal-MCP) with a more complete config surface
+# and better security posture than this chart used to bundle. Deploy it as
+# its OWN separate Helm release (that project's own chart, or the fork
+# directly), then set the values below to point THIS chart's frontend at
+# wherever you deployed it. Everything here stays optional, gated on
+# `enabled` staying false by default -- frontend renders no railMcp env vars
+# at all until you opt in.
 # ---------------------------------------------------------------------------
 railMcp:
-  # -- Opt-in; false by default, matching scheduleFeed.enabled's own
-  # pattern. This chart never builds this image itself -- its source lives
-  # in the derived service's own repository (a fork of train-mcp), not
-  # anywhere under crates/ -- see the design doc's Decision 1.
+  # -- Opt-in; false by default. Set true once you have deployed the derived
+  # MCP service as its own separate release and want frontend to link to it
+  # (server-to-server calls plus a public link surfaced to the browser).
   enabled: false
-  image:
-    # -- Full external registry path, like devAuthentik.image.repository
-    # (ghcr.io/goauthentik/server) -- NOT a bare distant-signal/<name>
-    # short name, since this repo's own CI/CD does not build or publish
-    # this image (Decision 1/6).
-    repository: ghcr.io/CHANGE-ME/distant-signal-mcp
-    # -- Leaving this empty falls back to THIS CHART's own appVersion
-    # (see distant-signal.image, templates/_helpers.tpl) -- correct for
-    # every distant-signal/* image above, but meaningless once repository
-    # is pointed at a real external fork/build (same class of bug as
-    # scheduleFeed.sftp.image.tag's fixed drakkan/sftpgo default -- see
-    # that value's comment). An operator replacing CHANGE-ME above must
-    # also set a real tag here.
-    tag: ""
-    pullPolicy: IfNotPresent
-  service:
-    port: 3000
-  # -- The MCP service's own PUBLIC_URL (its OAuth discovery metadata needs
-  # a real, reachable origin -- see the fork's own src/config.ts). Left
-  # blank by default; an operator enabling railMcp must set this to
-  # wherever they expose the railmcp Service, matching
-  # ingress.railMcp.host below. Also this adapter's own RFC 8707 issuer/
-  # resource identifier -- the fork's own src/config.ts reuses PUBLIC_URL
-  # directly for that rather than a second env var, since the two must
-  # always be identical (embedded-chatbot-shared-foundation-and-option-c
-  # plan, Task 1's own config.ts comment).
+  # -- The external HTTP base URL frontend calls server-to-server (its
+  # OAuth consent bridge, frontend/app/connect-claude/authorize/route.ts).
+  # This must point at wherever the operator deployed that SEPARATE release
+  # -- e.g. that chart's own Service DNS name if both releases share a
+  # cluster and namespace, or its Ingress host otherwise. No default:
+  # required when railMcp.enabled is true.
+  baseUrl: ""
+  # -- The MCP service's own PUBLIC_URL as configured on that separate
+  # release (its OAuth discovery metadata needs a real, reachable origin --
+  # see the fork's own src/config.ts). Surfaced to frontend as
+  # NEXT_PUBLIC_RAILMCP_PUBLIC_URL. Left blank by default; an operator
+  # enabling railMcp must set this to match whatever PUBLIC_URL that other
+  # release was configured with.
   publicUrl: ""
-  # -- frontend's own public origin, e.g. https://status.example.com --
-  # where the OAuth consent bridge (frontend/app/connect-claude/authorize/)
-  # lives. Required when railMcp.enabled is true (the fork's own
-  # src/config.ts asserts DS_FRONTEND_ORIGIN is set at boot).
-  frontendOrigin: ""
-  # -- Shared secret between this service and frontend/'s consent bridge --
-  # mirrors secrets.internalToken's exact auto-generate-if-empty pattern
-  # (see secret.yaml). Leave empty to auto-generate. A new,
-  # chart-provisioned credential distinct from secrets.internalToken: they
-  # protect different processes (this one guards frontend/'s server-to-
-  # server calls into the railmcp Service; internalToken guards api's own
-  # /private/* routes).
+  # -- Shared secret between frontend/'s consent bridge and the derived MCP
+  # service's OAUTH_INTERNAL_COMPLETE_TOKEN, AS CONFIGURED ON THAT SEPARATE
+  # RELEASE. Unlike this chart's own chart-internal secrets (e.g.
+  # secrets.internalToken), this value is NOT auto-generated: it must match
+  # a value the operator ALSO configured on the other, separately-deployed
+  # release, so there is no safe default to fall back to -- the render
+  # fails when railMcp.enabled is true and neither this nor existingSecret
+  # below is set, rather than silently minting a token that cannot possibly
+  # match the other side.
   internalCompleteToken: ""
   existingSecretInternalCompleteTokenKey: internal-complete-token
-  # -- Authentik-native access-group names this deployment's operator has
-  # configured (Decision 3 of
-  # docs/superpowers/specs/2026-09-02-mcp-server-oauth-access-groups-design.md):
-  # mcpUsersGroup gates the whole MCP server -- authenticating via DS's own
-  # OIDC login is no longer sufficient on its own, the caller must also be
-  # a member of this Authentik group -- mcpLiveBoardsGroup additionally
-  # gates the four tools that hit metered Darwin/LDBWS product keys
-  # directly (get_departures/get_arrivals/get_service_detail/plan_journey).
-  # Enforced entirely by the derived MCP service's own adapter (a separate
-  # repository); this chart only ever threads these two names through as
-  # plain, non-secret config, the same way it passes any other
-  # operator-chosen string -- an Authentik group name is not a credential.
-  accessGroups:
-    mcpUsersGroup: mcp-users
-    mcpLiveBoardsGroup: mcp-live-boards
-  # -- LDBWS/Rail Data Marketplace credentials the fork's board/service-
-  # detail tools still call directly (Decision 5 of the design doc --
-  # unchanged by this integration, board tools are not routed through DS).
-  # Six required values, unchanged from the fork's own README.md
-  # Configuration table.
-  ldbws:
-    departuresUrl: ""
-    departuresKey: ""
-    arrivalsUrl: ""
-    arrivalsKey: ""
-    serviceUrl: ""
-    serviceKey: ""
-  # -- Read the six LDBWS values above, plus internalCompleteToken above,
-  # from this pre-existing Secret instead (see the existingSecret*Key
-  # overrides for each key's name within it). The six LDBWS credentials are
-  # genuinely external and this chart cannot generate them; internalCompleteToken
-  # CAN be chart-generated (secret.yaml) but is still read from here instead
-  # when this is set, same as secrets.existingSecret/internalToken's own
-  # relationship.
+  # -- Read internalCompleteToken above from this pre-existing Secret
+  # instead (see existingSecretInternalCompleteTokenKey above for the key's
+  # name within it). Same existingSecret/existingSecretXKey shape as this
+  # chart's other per-component credentials.
   existingSecret: ""
-  existingSecretLdbwsDeparturesUrlKey: ldbws-departures-url
-  existingSecretLdbwsDeparturesKeyKey: ldbws-departures-key
-  existingSecretLdbwsArrivalsUrlKey: ldbws-arrivals-url
-  existingSecretLdbwsArrivalsKeyKey: ldbws-arrivals-key
-  existingSecretLdbwsServiceUrlKey: ldbws-service-url
-  existingSecretLdbwsServiceKeyKey: ldbws-service-key
-  # -- How long Task 5's DS line-catalogue cache (in the derived service)
-  # trusts one fetch before refetching -- DS_LINE_CATALOGUE_TTL_MS, an
-  # unresearched starting figure per the design doc's Decision 3d Open
-  # questions/risks entry.
-  lineCatalogueTtlMs: 900000
-  # -- Number of reverse-proxy hops the derived service should trust when
-  # resolving a caller's address from X-Forwarded-For -- TRUST_PROXY_HOPS,
-  # which maps directly onto Express's own `trust proxy` setting (see the
-  # fork's own src/config.ts). This is the ONLY thing standing between the
-  # fork's addressLimiter (src/app.ts) -- which exists specifically to stop
-  # one bad actor's flood of bogus MCP tokens from exhausting shared Redis
-  # lookup capacity -- and req.ip resolving to this chart's own Ingress
-  # controller's Pod IP for every external caller, which would collapse
-  # that per-address limit into one shared quota across every legitimate
-  # client. Default 1 assumes exactly one hop between the caller and this
-  # Pod: the single Ingress controller this chart's own
-  # networkPolicy.ingressControllerNamespace default (ingress-nginx)
-  # implies, terminating TLS and proxying straight to the railmcp Service
-  # with no second load balancer of its own in front rewriting
-  # X-Forwarded-For again. Raise this if you front the Ingress controller
-  # with another proxy/LB that also appends to X-Forwarded-For; the fork's
-  # own config.ts default (0, trust nothing) is deliberately NOT reused
-  # here because this chart's own Ingress is a real, known hop -- leaving
-  # this at 0 behind it is the exact gap this value exists to close.
-  trustProxyHops: 1
-  resources: {}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  podAnnotations: {}
-  podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
 # frontend (frontend/lib/api.ts)
@@ -1706,17 +1624,6 @@ ingress:
     # in-cluster Service either way.
     enabled: false
     # -- Hostname for the api, e.g. api.example.com.
-    host: ""
-  railMcp:
-    # -- Public MCP endpoint. Unlike ingress.frontend (default true) and
-    # matching ingress.api's own posture, defaults false: exposing this
-    # publicly is only meaningful once the adapter auth layer (embedded-
-    # chatbot-shared-foundation-and-option-c plan, Tasks 1-7) is actually
-    # running, and per the train-mcp design's own Licensing note, the
-    # NRE-attribution legal question should be resolved before real users
-    # can reach this (that plan's Task 10).
-    enabled: false
-    # -- Hostname for the derived MCP service, e.g. mcp.example.com.
     host: ""
   # -- TLS blocks passed through verbatim. Shaped for cert-manager (pair it
   # with a cluster-issuer annotation above) but issuer-agnostic.

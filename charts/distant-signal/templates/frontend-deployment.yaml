@@ -44,6 +44,9 @@ spec:
             - name: API_BASE_URL
               value: {{ default (include "distant-signal.apiBaseUrl" .) .Values.frontend.apiBaseUrl | quote }}
             {{- if .Values.railMcp.enabled }}
+            {{- if not .Values.railMcp.baseUrl }}
+            {{- fail "railMcp.enabled is true but railMcp.baseUrl is empty. Set it to the external HTTP base URL of the separately-deployed derived MCP service, or set railMcp.enabled=false." }}
+            {{- end }}
             # The OAuth consent bridge (frontend/app/connect-claude/authorize/,
             # embedded-chatbot-shared-foundation-and-option-c plan Task 6) and
             # Option C's instructional page (Task 9) -- both no-ops, and
@@ -51,8 +54,12 @@ spec:
             # component whose config needs to reach the frontend Deployment
             # at all, so there was no prior existing example of this guard
             # shape to model on (that plan's own Open questions/risks #5).
+            # railMcp.baseUrl points at a SEPARATE, externally-deployed Helm
+            # release of the derived MCP service -- this chart no longer
+            # deploys that workload itself, so there is no in-cluster URL to
+            # compute here any more.
             - name: RAILMCP_BASE_URL
-              value: {{ include "distant-signal.railMcpInClusterUrl" . | quote }}
+              value: {{ .Values.railMcp.baseUrl | quote }}
             - name: RAILMCP_INTERNAL_COMPLETE_TOKEN
               valueFrom:
                 secretKeyRef:

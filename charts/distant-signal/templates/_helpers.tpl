@@ -77,10 +77,14 @@ before the last two `/`-separated segments of `.image.repository` (e.g.
 prepend the override), so a single
 `--set global.imageRegistry=registry.example.com/myfork` re-points every
 image this chart renders -- including postgres/redis/devAuthentik/
-railMcp/sftpgo -- at a private mirror without touching each service's own
+sftpgo -- at a private mirror without touching each service's own
 `image.repository`. A repository with two or fewer segments (e.g. the
 bundled `postgres`/`redis` defaults) is kept whole and the registry is
-just prepended in front of it.
+just prepended in front of it. NOTE: this chart no longer builds/deploys
+the derived MCP service ("distant-signal-mcp") itself, so there is no
+railMcp image to re-point here any more -- see railMcp's own values.yaml
+comment for how to link this chart's frontend to a separately, externally
+deployed instance instead.
 */}}
 {{- define "distant-signal.image" -}}
 {{- $repo := .image.repository -}}
@@ -735,20 +739,18 @@ added. */}}
 {{- end }}
 
 {{/*
-railMcp: the derived MCP service (Task 1: forked from train-mcp, own
-repository, own CI/tests -- see
+railMcp: frontend's own linking config for the derived MCP service
+("distant-signal-mcp", a fork of train-mcp -- see
 docs/superpowers/specs/2026-09-01-train-mcp-integration-design.md
-Decision 1). Object names and Secret name/key resolution, same shape as
-devAuthentikFullname/devAuthentikSecretName above. Every key helper below
-follows the same existingSecret/existingSecretXKey pattern as
+Decision 1). This chart no longer deploys that service itself -- it is
+expected to run as its own, separately-operated Helm release (that
+project's own chart, or the fork directly). What's left here is only
+frontend's own consumption of it: the shared internal-complete-token
+Secret. Same existingSecret/existingSecretXKey pattern as
 trustConsumerOauthUsernameSecretKey/pollerSecretKey -- one existingSecret
 toggle for the whole component (railMcp.existingSecret), each key
 individually overridable within it.
 */}}
-{{- define "distant-signal.railMcpFullname" -}}
-{{- printf "%s-railmcp" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- end }}
-
 {{- define "distant-signal.railMcpSecretName" -}}
 {{- default (include "distant-signal.secretName" .) .Values.railMcp.existingSecret }}
 {{- end }}
@@ -763,61 +765,6 @@ Task 8: "superseded, not stacked"). */}}
 {{- .Values.railMcp.existingSecretInternalCompleteTokenKey }}
 {{- else }}
 {{- print "internal-complete-token" }}
-{{- end }}
-{{- end }}
-
-{{/* In-cluster URL for the railmcp Service -- consumed by frontend-
-deployment.yaml's RAILMCP_BASE_URL, mirroring distant-signal.apiBaseUrl's
-own shape exactly. */}}
-{{- define "distant-signal.railMcpInClusterUrl" -}}
-{{- printf "http://%s:%d" (include "distant-signal.railMcpFullname" .) (int .Values.railMcp.service.port) -}}
-{{- end }}
-
-{{- define "distant-signal.railMcpLdbwsDeparturesUrlSecretKey" -}}
-{{- if .Values.railMcp.existingSecret }}
-{{- .Values.railMcp.existingSecretLdbwsDeparturesUrlKey }}
-{{- else }}
-{{- print "ldbws-departures-url" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.railMcpLdbwsDeparturesKeySecretKey" -}}
-{{- if .Values.railMcp.existingSecret }}
-{{- .Values.railMcp.existingSecretLdbwsDeparturesKeyKey }}
-{{- else }}
-{{- print "ldbws-departures-key" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.railMcpLdbwsArrivalsUrlSecretKey" -}}
-{{- if .Values.railMcp.existingSecret }}
-{{- .Values.railMcp.existingSecretLdbwsArrivalsUrlKey }}
-{{- else }}
-{{- print "ldbws-arrivals-url" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.railMcpLdbwsArrivalsKeySecretKey" -}}
-{{- if .Values.railMcp.existingSecret }}
-{{- .Values.railMcp.existingSecretLdbwsArrivalsKeyKey }}
-{{- else }}
-{{- print "ldbws-arrivals-key" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.railMcpLdbwsServiceUrlSecretKey" -}}
-{{- if .Values.railMcp.existingSecret }}
-{{- .Values.railMcp.existingSecretLdbwsServiceUrlKey }}
-{{- else }}
-{{- print "ldbws-service-url" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.railMcpLdbwsServiceKeySecretKey" -}}
-{{- if .Values.railMcp.existingSecret }}
-{{- .Values.railMcp.existingSecretLdbwsServiceKeyKey }}
-{{- else }}
-{{- print "ldbws-service-key" }}
 {{- end }}
 {{- end }}
 
