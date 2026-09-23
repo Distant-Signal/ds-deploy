@@ -74,10 +74,29 @@ name: Containers
 # `--set global.imageRegistry=ghcr.io/fasterspeeding` (or per-service
 # `image.repository` overrides prefixed with the registry).
 #
-# Tagging: docker/metadata-action's defaults -- branch ref, PR ref, sha,
-# and `latest` on the default branch. `git tag` shows no tags exist in
-# this repo yet, so no semver pattern is configured; add
-# `type=semver,pattern={{version}}` here if/when release tags start.
+# Tagging: docker/metadata-action's own bare defaults are actually just
+# `type=schedule` + `type=ref,event={branch,tag,pr}` -- confirmed against
+# the action's README, and against this registry's own real package
+# history (`gh api /users/fasterspeeding/packages/container/distant-signal
+# %2Fapi/versions`), which before this change showed every build landing
+# on a *single* mutable tag equal to the branch name (`main`), silently
+# overwritten on every push, and nothing else -- no sha tag, no `latest`
+# (that needs an explicit `flavor`/`type=raw` rule or a tag/semver event,
+# neither of which this repo has). An older version of this comment
+# claimed a `sha` tag was already part of the defaults; it wasn't -- that
+# was wrong, which is exactly why `push-helm-chart` below (see its own
+# comment) had nothing reliable to pin the chart's default image tag to.
+#
+# `type=sha` is now added explicitly (below, in the `meta` step) on top
+# of that same default set, purely so every image also gets a second,
+# immutable `sha-<short-sha>` tag alongside the existing mutable branch
+# tag -- this is the one piece `push-helm-chart` needs to make the
+# chart's packaged `appVersion` (and therefore every workload's default
+# `image.tag`) point at the *exact* images this run just built, not
+# whatever `main` happens to resolve to by the time someone installs the
+# chart. `git tag` shows no tags exist in this repo yet, so no semver
+# pattern is configured; add `type=semver,pattern={{version}}` here
+# if/when release tags start.
 #
 # The `push-helm-chart` job below packages and pushes
 # charts/distant-signal to this same ghcr.io org's OCI registry (as an
@@ -193,11 +212,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Explicit `tags:` here reproduces the action's own bare defaults
+      # (schedule/branch/tag/pr -- see this file's top-of-file "Tagging"
+      # comment) and adds `type=sha` on top, so every image also gets an
+      # immutable `sha-<short-sha>` tag that `push-helm-chart` can pin the
+      # chart's default `appVersion`/image references to.
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE_BASE }}/${{ matrix.service }}
+          tags: |
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+            type=sha
 
       # Build on every trigger (including PRs, as a build-sanity check);
       # push+cache only outside pull_request. Mirrors Piped's own
@@ -263,31 +293,101 @@ jobs:
   # itself, so the packaged chart doesn't read as one more "service"
   # alongside api/aggregator/frontend/etc.
   #
-  # Versioning: pushes whatever `version:` is currently set in
-  # charts/distant-signal/Chart.yaml, unchanged -- the same manual-bump
-  # convention the chart already uses (see that file's own "Chart version:
-  # bumped for chart-only changes" comment, and commits like "Bump chart
-  # version to 0.2.0 for the accumulated chart-only fixes"). Deliberately
-  # NOT derived from the git ref/SHA the way the container images above
-  # are (docker/metadata-action's branch/PR/sha/latest tags): Helm chart
-  # versions must be valid SemVer 2 -- both `helm package` and `helm push`
-  # reject anything else -- and neither a branch name like `main` nor a
-  # bare short SHA is one. Doing that properly would mean synthesizing a
-  # SemVer build-metadata suffix (e.g. `0.2.2+sha.<short>`) on every push,
-  # which would mint a new, permanent, immutable chart version in the
-  # registry on every single push to main, even ones that touched zero
-  # chart files -- noisier than this repo's existing chart-versioning
-  # discipline warrants, and a bigger change than this task's scope.
-  # Reusing Chart.yaml's own version instead means: no chart-file change
-  # -> this push just overwrites the same OCI tag (a no-op from the
-  # consumer's point of view, exactly like the container images' own
-  # mutable `main`/`latest` tags being repushed on every commit); a real
-  # chart change -> the existing manual-bump discipline in Chart.yaml
-  # (already how chart versioning works today -- see `git log` on that
-  # file) is what produces a new, distinct pushed version, same as it
-  # always has. If per-commit immutable chart versions are wanted later,
-  # append a `+sha.<short>` build-metadata suffix to the packaged version
-  # here rather than changing Chart.yaml's own convention.
+  # Versioning -- rewritten from this job's original version, which just
+  # pushed whatever `version:`/`appVersion:` were statically set in
+  # Chart.yaml. That had two real bugs, confirmed against this registry's
+  # actual package history before this change:
+  #
+  #   1. `helm push`'s destination tag is `Chart.yaml`'s `version:`
+  #      field, bumped manually and "for chart-only changes" only (see
+  #      git log on that file: 0.2.0, 0.2.2, ... one bump per chart-only
+  #      change). But this job runs on *every* push to main, chart files
+  #      touched or not. So a push that only changes application code
+  #      re-pushes the exact same version string -- `gh api .../packages/
+  #      container/charts%2Fdistant-signal/versions` showed exactly one
+  #      version (`0.2.2`) ever recorded in the registry despite many
+  #      pushes, i.e. every one of those pushes silently overwrote that
+  #      same immutable-looking OCI tag in place.
+  #   2. Worse, `appVersion:` (which `_helpers.tpl`'s `distant-signal.
+  #      image` helper uses as the DEFAULT `image.tag` for every workload)
+  #      was equally static, manually tracking crates/api/Cargo.toml's
+  #      version. So even a chart-only bump that *did* produce a new
+  #      pushed chart version still pointed every workload's default
+  #      image reference at whatever `appVersion` was last hand-set to --
+  #      not the images this run just built and pushed above.
+  #
+  # Schemes considered for fixing both:
+  #
+  #   - CalVer (e.g. `2026.9.23[+<short-sha>]`). Readable at a glance, but
+  #     this chart has already published real `0.2.x` SemVer releases
+  #     (see git log above) -- switching format now means mixing two
+  #     incompatible version eras in the same OCI tag list, and breaks
+  #     the ordering/pinning expectations of anyone who already pulled a
+  #     `0.2.x` tag. Rejected: the compatibility cost outweighs the
+  #     readability gain for a chart that isn't starting from zero.
+  #   - CI bumps Chart.yaml's `version:` itself and commits it back to
+  #     main. Gives clean, strictly-ordered SemVer with no build-metadata
+  #     ambiguity, but no workflow in this repo commits back to main
+  #     today -- this would be a first, and a real one: it needs a
+  #     `[skip ci]`-style guard or a bot identity/PAT distinct from
+  #     GITHUB_TOKEN (whose commits don't retrigger `on: push`, by GitHub
+  #     design) to avoid `push-helm-chart`'s own commit re-triggering
+  #     this same workflow in a loop. Rejected as disproportionate: it
+  #     solves problem 1 but does nothing for problem 2 (appVersion) on
+  #     its own, and the bot-commit machinery is a bigger, riskier change
+  #     than either problem actually calls for.
+  #   - Plain SemVer + build metadata, e.g. `0.2.2+sha.<short-sha>`,
+  #     replacing Chart.yaml's version wholesale at package time. Valid
+  #     SemVer 2, immutable per-commit tag, no bot-commit needed -- close
+  #     to what's chosen below, but rejected in this exact form because
+  #     build-metadata is explicitly ignored for precedence by semver-
+  #     aware tooling (two tags differing only in `+sha.*` compare as
+  #     EQUAL precedence), and a bare commit SHA has no inherent temporal
+  #     order -- given two such tags side by side, neither a human nor a
+  #     semver-sorting tool can tell which one is newer without cross-
+  #     referencing git history. That gap is exactly what the chosen
+  #     scheme below closes.
+  #
+  # Chosen: a hybrid. Chart.yaml's `version:` field keeps its existing
+  # meaning and discipline completely unchanged -- a human still bumps it
+  # manually, only for chart-schema/template/values changes, exactly as
+  # documented in that file's own comment and git history. This job reads
+  # that field as a BASE and appends CI-computed build metadata to it on
+  # every run, valid or not: `<base>+build.<run_number>.sha.<short_sha>`.
+  # `run_number` is monotonically increasing per-workflow (GitHub-assigned,
+  # never reused), so unlike a bare sha suffix, two of this chart's tags
+  # CAN be told apart at a glance or by plain string/lexicographic-ish
+  # comparison of the run-number segment -- solving the ordering gap the
+  # plain-sha scheme above had, while `sha.<short_sha>` still ties the
+  # build back to the exact commit for traceability. This is still valid
+  # SemVer 2 build metadata (dot-separated alphanumeric identifiers), so
+  # `helm package --version` happily accepts it, and it's a pure additive
+  # suffix -- Chart.yaml on its own (e.g. packaged locally, outside CI)
+  # still resolves to a perfectly valid bare version with no CI step
+  # required. Example: base `0.2.2` + this run -> `0.2.2+build.42.sha.
+  # 860c190`. This directly fixes bug 1: chart-file changes or not, every
+  # push mints a new, distinguishable, immutable OCI tag.
+  #
+  # For bug 2, `appVersion` is packaged as `sha-<short_sha>` -- the SAME
+  # short SHA, in the SAME `sha-<short>` format docker/metadata-action's
+  # own `type=sha` tag rule (added to the `meta` step above) mints for
+  # every one of the 19 images this job's `needs:` just confirmed were
+  # built and pushed from this exact commit. That means the packaged
+  # chart's default `image.tag` (via `distant-signal.image` in
+  # _helpers.tpl) resolves to a real, already-pushed, immutable tag that
+  # is guaranteed to exist, because it's the same tag every image in the
+  # matrix above was just tagged with. `short_sha` here is derived as a
+  # plain 7-character prefix of `$GITHUB_SHA` (a default Actions env var,
+  # no `${{ }}` interpolated directly into the shell script) -- the same
+  # length and derivation docker/metadata-action's `type=sha` uses by
+  # default, so the two are guaranteed to match without needing to plumb
+  # an output through the matrix job.
+  #
+  # Chart.yaml's own `appVersion:` field is left as a human-managed
+  # local-dev fallback only (see that file's own updated comment) -- it's
+  # unconditionally overridden here, so it no longer needs to track
+  # anything CI-relevant, just to remain a sane default for someone
+  # running `helm package`/`helm template` straight from a checkout.
   push-helm-chart:
     name: Package and push Helm chart
     needs: build-and-push
@@ -315,10 +415,33 @@ jobs:
             --username ${{ github.actor }} \
             --password-stdin
 
+      # Reads $GITHUB_SHA/$GITHUB_RUN_NUMBER (default Actions env vars --
+      # not interpolated via `${{ }}` into the script body) rather than
+      # `github.sha`/`github.run_number` expressions, so nothing here
+      # risks the classic script-injection footgun of splicing an
+      # Actions expression straight into a shell string. See this job's
+      # top comment block for the version-format rationale.
+      - name: Compute chart & app version
+        id: version
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:7}"
+          base_version="$(sed -n 's/^version: *"\?\([^"[:space:]]*\)"\?.*/\1/p' charts/distant-signal/Chart.yaml)"
+          if [ -z "${base_version}" ]; then
+            echo "::error::could not parse version: from charts/distant-signal/Chart.yaml" >&2
+            exit 1
+          fi
+          echo "chart_version=${base_version}+build.${GITHUB_RUN_NUMBER}.sha.${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "app_version=sha-${short_sha}" >> "$GITHUB_OUTPUT"
+
       - name: helm package
         id: package
         run: |
-          helm package charts/distant-signal --destination /tmp/helm-package
+          set -euo pipefail
+          helm package charts/distant-signal \
+            --version "${{ steps.version.outputs.chart_version }}" \
+            --app-version "${{ steps.version.outputs.app_version }}" \
+            --destination /tmp/helm-package
           chart_tgz=$(find /tmp/helm-package -maxdepth 1 -name 'distant-signal-*.tgz' -print -quit)
           echo "chart_tgz=${chart_tgz}" >> "$GITHUB_OUTPUT"
 

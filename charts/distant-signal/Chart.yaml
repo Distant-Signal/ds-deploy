@@ -6,11 +6,32 @@ description: >-
   mirroring the topology of the repository's docker-compose.yml.
 type: application
 
-# Chart version: bumped for chart-only changes.
+# Chart version BASE: still bumped by hand, still only for chart-only
+# changes (template/values/schema changes), same discipline as before --
+# see git log on this file. What changed: this is no longer necessarily
+# the literal version that ends up pushed to the OCI registry. CI (see
+# `push-helm-chart` in .github/workflows/containers.yml) appends its own
+# build-metadata suffix on every push to main -- chart files touched or
+# not -- producing e.g. `0.2.2+build.42.sha.860c190` via
+# `helm package --version`, so every push mints a genuinely new,
+# immutable, distinguishable chart tag instead of silently re-pushing
+# this same bare string. Bump this when the chart's own shape changes;
+# CI's suffix is what makes each push distinct in the registry.
 version: 0.2.2
 
-# Tracks the workspace crate version (crates/api/Cargo.toml). Used as the
-# default image tag for every workload whose `image.tag` is left empty.
+# Local-dev fallback ONLY. CI unconditionally overrides this at package
+# time (`helm package --app-version`, see `push-helm-chart`'s own comment
+# in .github/workflows/containers.yml) to `sha-<short-sha>` of whatever
+# commit that run's images were built from -- the same tag
+# docker/metadata-action's `type=sha` rule mints for every one of those
+# images, so the chart's default `image.tag` (via `_helpers.tpl`'s
+# `distant-signal.image` helper) always resolves to the exact images
+# that were just built and pushed alongside it, not stale ones from
+# whenever this field was last hand-bumped. This static value is only
+# ever seen by someone running `helm package`/`helm template`/`helm
+# install` straight from a checkout without going through CI -- keep it
+# tracking the workspace crate version (crates/api/Cargo.toml) for that
+# case, but it is NOT the source of truth for anything CI publishes.
 appVersion: "0.1.0"
 
 # templates/networkpolicy.yaml selects the ingress-controller namespace via
