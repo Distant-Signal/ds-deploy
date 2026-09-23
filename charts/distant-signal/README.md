@@ -33,25 +33,29 @@ the two deployment paths do not drift.
 `.github/workflows/containers.yml` builds and publishes every image below to
 `ghcr.io/fasterspeeding/distant-signal/<service>` automatically (build-only
 sanity check on PRs; build + push + cosign-sign on push to main/master) — you
-do not need to do this by hand for a normal install. The table and commands
-below are for building and pushing to a registry of your own (e.g. a private
-registry, or testing a local change) without going through that pipeline.
+do not need to do this by hand for a normal install, and every `*.image.repository`
+below already defaults to that exact path. The table and commands below are
+for building and pushing to a registry of your own (e.g. a private registry,
+or testing a local change) without going through that pipeline — either set
+`global.imageRegistry` (see values.yaml) to swap every image's registry at
+once, or point each `*.image.repository` you're replacing at your own
+`$REG/...` directly.
 
 | Dockerfile | Default image repository |
 |---|---|
-| `docker/api.Dockerfile` | `distant-signal/api` |
-| `docker/aggregator.Dockerfile` | `distant-signal/aggregator` |
-| `docker/enricher.Dockerfile` | `distant-signal/enricher` |
-| `docker/notifier.Dockerfile` | `distant-signal/notifier` |
-| `docker/poller-incidents.Dockerfile` | `distant-signal/poller-incidents` |
-| `docker/poller-stations.Dockerfile` | `distant-signal/poller-stations` |
-| `docker/poller-tocs.Dockerfile` | `distant-signal/poller-tocs` |
-| `docker/poller-ldbws.Dockerfile` | `distant-signal/poller-ldbws` |
-| `docker/trust-consumer.Dockerfile` | `distant-signal/trust-consumer` |
-| `docker/poller-tfl.Dockerfile` | `distant-signal/poller-tfl` |
-| `docker/schedule-ingest.Dockerfile` | `distant-signal/schedule-ingest` |
-| `docker/schedule-reference.Dockerfile` | `distant-signal/schedule-reference` |
-| `frontend/Dockerfile` (target `runtime-prod`) | `distant-signal/frontend` |
+| `docker/api.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/api` |
+| `docker/aggregator.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/aggregator` |
+| `docker/enricher.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/enricher` |
+| `docker/notifier.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/notifier` |
+| `docker/poller-incidents.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-incidents` |
+| `docker/poller-stations.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-stations` |
+| `docker/poller-tocs.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-tocs` |
+| `docker/poller-ldbws.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-ldbws` |
+| `docker/trust-consumer.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/trust-consumer` |
+| `docker/poller-tfl.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-tfl` |
+| `docker/schedule-ingest.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-ingest` |
+| `docker/schedule-reference.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-reference` |
+| `frontend/Dockerfile` (target `runtime-prod`) | `ghcr.io/fasterspeeding/distant-signal/frontend` |
 
 ```bash
 REG=registry.example.com/distant-signal

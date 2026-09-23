@@ -70,9 +70,28 @@ ServiceAccount name. Takes root.
 Image reference. Call as:
   {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) }}
 An empty `tag` falls back to the chart's appVersion.
+
+When `.Values.global.imageRegistry` is set, it replaces whatever comes
+before the last two `/`-separated segments of `.image.repository` (e.g.
+`ghcr.io/fasterspeeding/distant-signal/api` -> keep `distant-signal/api`,
+prepend the override), so a single
+`--set global.imageRegistry=registry.example.com/myfork` re-points every
+image this chart renders -- including postgres/redis/devAuthentik/
+railMcp/sftpgo -- at a private mirror without touching each service's own
+`image.repository`. A repository with two or fewer segments (e.g. the
+bundled `postgres`/`redis` defaults) is kept whole and the registry is
+just prepended in front of it.
 */}}
 {{- define "distant-signal.image" -}}
-{{- printf "%s:%s" .image.repository (default .root.Chart.AppVersion .image.tag) }}
+{{- $repo := .image.repository -}}
+{{- if .root.Values.global.imageRegistry -}}
+{{- $parts := splitList "/" $repo -}}
+{{- if gt (len $parts) 2 -}}
+{{- $repo = join "/" (slice $parts (sub (len $parts) 2) (len $parts)) -}}
+{{- end -}}
+{{- $repo = printf "%s/%s" .root.Values.global.imageRegistry $repo -}}
+{{- end -}}
+{{- printf "%s:%s" $repo (default .root.Chart.AppVersion .image.tag) }}
 {{- end }}
 
 {{/*

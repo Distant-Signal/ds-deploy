@@ -13,6 +13,23 @@ fullnameOverride: ""
 imagePullSecrets: []
 # - name: my-registry-creds
 
+global:
+  # -- Registry (and, optionally, org/path prefix) substituted in front of
+  # every image this chart renders, in place of whichever registry each
+  # `image.repository` below already carries -- e.g.
+  # `--set global.imageRegistry=registry.example.com/myfork` turns
+  # `ghcr.io/fasterspeeding/distant-signal/api` into
+  # `registry.example.com/myfork/distant-signal/api` (see
+  # `distant-signal.image` in templates/_helpers.tpl for exactly how the
+  # split is made -- the last two `/`-separated path segments of
+  # `image.repository` are kept, everything before them is replaced).
+  # Leave empty to use every `image.repository` exactly as written --
+  # this project's own images already default to the real
+  # `ghcr.io/fasterspeeding/distant-signal/<service>` path
+  # `.github/workflows/containers.yml` publishes to, so no override is
+  # needed for a plain `helm install` to work.
+  imageRegistry: ""
+
 serviceAccount:
   # -- Create a ServiceAccount for the chart's workloads.
   create: true
@@ -173,7 +190,7 @@ pollers:
   incidents:
     enabled: false
     image:
-      repository: distant-signal/poller-incidents
+      repository: ghcr.io/fasterspeeding/distant-signal/poller-incidents
       tag: ""
       pullPolicy: IfNotPresent
     # -- RDM Knowledgebase Incidents feed base URL. Required when enabled.
@@ -209,7 +226,7 @@ pollers:
   stations:
     enabled: false
     image:
-      repository: distant-signal/poller-stations
+      repository: ghcr.io/fasterspeeding/distant-signal/poller-stations
       tag: ""
       pullPolicy: IfNotPresent
     baseUrl: ""
@@ -240,7 +257,7 @@ pollers:
   tfl:
     enabled: false
     image:
-      repository: distant-signal/poller-tfl
+      repository: ghcr.io/fasterspeeding/distant-signal/poller-tfl
       tag: ""
       pullPolicy: IfNotPresent
     # -- TfL Unified API root. Unlike the RDM feeds this is a real, public,
@@ -283,7 +300,7 @@ pollers:
   tocs:
     enabled: false
     image:
-      repository: distant-signal/poller-tocs
+      repository: ghcr.io/fasterspeeding/distant-signal/poller-tocs
       tag: ""
       pullPolicy: IfNotPresent
     baseUrl: ""
@@ -314,7 +331,7 @@ pollers:
   ldbws:
     enabled: false
     image:
-      repository: distant-signal/poller-ldbws
+      repository: ghcr.io/fasterspeeding/distant-signal/poller-ldbws
       tag: ""
       pullPolicy: IfNotPresent
     # -- LDBWS base URL up to and including the /LDBWS/api/20220120 segment;
@@ -357,7 +374,7 @@ pollers:
 # ---------------------------------------------------------------------------
 api:
   image:
-    repository: distant-signal/api
+    repository: ghcr.io/fasterspeeding/distant-signal/api
     # -- Empty means "use the chart's appVersion".
     tag: ""
     pullPolicy: IfNotPresent
@@ -608,7 +625,7 @@ devAuthentik:
 # would briefly run two.
 aggregator:
   image:
-    repository: distant-signal/aggregator
+    repository: ghcr.io/fasterspeeding/distant-signal/aggregator
     tag: ""
     pullPolicy: IfNotPresent
   # -- DESIGN.md section 4 targets every 30-60s; 60 is the conservative end.
@@ -719,7 +736,7 @@ aggregator:
 # ---------------------------------------------------------------------------
 notifier:
   image:
-    repository: distant-signal/notifier
+    repository: ghcr.io/fasterspeeding/distant-signal/notifier
     tag: ""
     pullPolicy: IfNotPresent
   # -- Same "reasonable round number, not load-tested" posture as
@@ -840,7 +857,7 @@ redis:
 # ---------------------------------------------------------------------------
 enricher:
   image:
-    repository: distant-signal/enricher
+    repository: ghcr.io/fasterspeeding/distant-signal/enricher
     tag: ""
     pullPolicy: IfNotPresent
   llm:
@@ -900,7 +917,7 @@ enricher:
 # ---------------------------------------------------------------------------
 trustConsumer:
   image:
-    repository: distant-signal/trust-consumer
+    repository: ghcr.io/fasterspeeding/distant-signal/trust-consumer
     tag: ""
     pullPolicy: IfNotPresent
   kafka:
@@ -994,7 +1011,7 @@ trustConsumer:
 # ---------------------------------------------------------------------------
 fullCoverageConsumer:
   image:
-    repository: distant-signal/full-coverage-consumer
+    repository: ghcr.io/fasterspeeding/distant-signal/full-coverage-consumer
     tag: ""
     pullPolicy: IfNotPresent
   kafka:
@@ -1045,7 +1062,7 @@ fullCoverageConsumer:
 # ---------------------------------------------------------------------------
 trustBacklogConsumer:
   image:
-    repository: distant-signal/trust-backlog-consumer
+    repository: ghcr.io/fasterspeeding/distant-signal/trust-backlog-consumer
     tag: ""
     pullPolicy: IfNotPresent
   # -- Read this service's OAuth2 credential from a pre-existing Secret
@@ -1103,7 +1120,7 @@ trustBacklogConsumer:
 movementRelay:
   enabled: false
   image:
-    repository: distant-signal/movement-relay
+    repository: ghcr.io/fasterspeeding/distant-signal/movement-relay
     tag: ""
     pullPolicy: IfNotPresent
   kafka:
@@ -1147,7 +1164,7 @@ movementRelay:
 pollerIrishRailGtfs:
   enabled: false
   image:
-    repository: distant-signal/poller-irish-rail-gtfs
+    repository: ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-gtfs
     tag: ""
     pullPolicy: IfNotPresent
   # -- Transport for Ireland's public GTFS zip for Iarnrod Eireann -- real,
@@ -1192,7 +1209,7 @@ pollerIrishRailGtfs:
 pollerIrishRailLive:
   enabled: false
   image:
-    repository: distant-signal/poller-irish-rail-live
+    repository: ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-live
     tag: ""
     pullPolicy: IfNotPresent
   # -- api.irishrail.ie's legacy realtime ASMX service root -- real,
@@ -1237,7 +1254,7 @@ pollerIrishRailLive:
 pollerNirStations:
   enabled: false
   image:
-    repository: distant-signal/poller-nir-stations
+    repository: ghcr.io/fasterspeeding/distant-signal/poller-nir-stations
     tag: ""
     pullPolicy: IfNotPresent
   # -- OpenDataNI's own CKAN download URLs for Translink's "Northern
@@ -1374,7 +1391,7 @@ scheduleFeed:
     folderPath: ""
   ingest:
     image:
-      repository: distant-signal/schedule-ingest
+      repository: ghcr.io/fasterspeeding/distant-signal/schedule-ingest
       tag: ""
       pullPolicy: IfNotPresent
     checkTimes: "22:00,22:30,23:00,23:30,00:00,00:30,01:00,01:30,16:00"
@@ -1411,7 +1428,7 @@ scheduleFeed:
   # docs/superpowers/specs/2026-09-01-schedule-ingest-stanox-crs-table-design.md.
   reference:
     image:
-      repository: distant-signal/schedule-reference
+      repository: ghcr.io/fasterspeeding/distant-signal/schedule-reference
       tag: ""
       pullPolicy: IfNotPresent
     pollIntervalSecs: 1800
@@ -1611,7 +1628,7 @@ railMcp:
 # ---------------------------------------------------------------------------
 frontend:
   image:
-    repository: distant-signal/frontend
+    repository: ghcr.io/fasterspeeding/distant-signal/frontend
     tag: ""
     pullPolicy: IfNotPresent
   # -- Safe to raise, with one documented caveat. frontend/lib/liveDataCache.ts

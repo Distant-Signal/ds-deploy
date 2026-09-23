@@ -36,7 +36,7 @@ spec:
         {{- include "distant-signal.podSecurityContext" (dict "override" dict) | nindent 8 }}
       containers:
         - name: authentik-server
-          image: {{ printf "%s:%s" .Values.devAuthentik.image.repository .Values.devAuthentik.image.tag | quote }}
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.devAuthentik.image) | quote }}
           imagePullPolicy: {{ .Values.devAuthentik.image.pullPolicy }}
           args: ["server"]
           securityContext:
