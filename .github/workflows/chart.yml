@@ -78,6 +78,12 @@ name: Containers
 # and `latest` on the default branch. `git tag` shows no tags exist in
 # this repo yet, so no semver pattern is configured; add
 # `type=semver,pattern={{version}}` here if/when release tags start.
+#
+# The `push-helm-chart` job below packages and pushes
+# charts/distant-signal to this same ghcr.io org's OCI registry (as an
+# OCI artifact, via `helm push`, not a container image) once every image
+# above has built and pushed successfully -- see that job's own comment
+# for the `needs:`/versioning rationale.
 
 concurrency:
   group: containers-${{ github.workflow }}-${{ github.ref }}
@@ -223,3 +229,98 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+
+  # Package and push the Helm chart to ghcr.io, once every image in the
+  # matrix above has built and pushed successfully.
+  #
+  # `needs: build-and-push` on a matrix job waits for every combination in
+  # the matrix, not just one -- so this only starts after all 19 images
+  # are confirmed built (and, outside pull_request, pushed). A chart push
+  # referencing a half-finished or partially-failed image matrix would be
+  # worse than not pushing at all, so `fail-fast: false` above combined
+  # with this plain `needs:` is deliberate: if any one image fails,
+  # build-and-push's own overall conclusion is failure and this job is
+  # skipped, same as any other `needs:` dependent job.
+  #
+  # Gated by the same `github.event_name != 'pull_request'` condition as
+  # the image push itself, for the same reason: PRs (including forked
+  # ones) don't get a packages:write GITHUB_TOKEN, and there is nothing
+  # worth publishing from an unmerged PR anyway.
+  #
+  # Registry & auth: ghcr.io, the same registry (and GITHUB_TOKEN --
+  # already scoped packages:write below, no separate secret needed) the
+  # container images above already use. GHCR is a normal, properly-TLS'd
+  # public-CA registry, so unlike a self-hosted/HTTP-only registry this
+  # needs no `--insecure`/`http`-style Helm or BuildKit configuration --
+  # `helm registry login` here is the standard GHCR-via-GitHub-Actions
+  # pattern.
+  #
+  # Path: pushed under ghcr.io/fasterspeeding/charts/distant-signal (i.e.
+  # `helm push ... oci://ghcr.io/fasterspeeding/charts`, which appends the
+  # chart's own name from Chart.yaml) -- a `charts/` sibling of
+  # IMAGE_BASE's own `distant-signal/<service>` image paths under the same
+  # `fasterspeeding` org, rather than nested inside `distant-signal/`
+  # itself, so the packaged chart doesn't read as one more "service"
+  # alongside api/aggregator/frontend/etc.
+  #
+  # Versioning: pushes whatever `version:` is currently set in
+  # charts/distant-signal/Chart.yaml, unchanged -- the same manual-bump
+  # convention the chart already uses (see that file's own "Chart version:
+  # bumped for chart-only changes" comment, and commits like "Bump chart
+  # version to 0.2.0 for the accumulated chart-only fixes"). Deliberately
+  # NOT derived from the git ref/SHA the way the container images above
+  # are (docker/metadata-action's branch/PR/sha/latest tags): Helm chart
+  # versions must be valid SemVer 2 -- both `helm package` and `helm push`
+  # reject anything else -- and neither a branch name like `main` nor a
+  # bare short SHA is one. Doing that properly would mean synthesizing a
+  # SemVer build-metadata suffix (e.g. `0.2.2+sha.<short>`) on every push,
+  # which would mint a new, permanent, immutable chart version in the
+  # registry on every single push to main, even ones that touched zero
+  # chart files -- noisier than this repo's existing chart-versioning
+  # discipline warrants, and a bigger change than this task's scope.
+  # Reusing Chart.yaml's own version instead means: no chart-file change
+  # -> this push just overwrites the same OCI tag (a no-op from the
+  # consumer's point of view, exactly like the container images' own
+  # mutable `main`/`latest` tags being repushed on every commit); a real
+  # chart change -> the existing manual-bump discipline in Chart.yaml
+  # (already how chart versioning works today -- see `git log` on that
+  # file) is what produces a new, distinct pushed version, same as it
+  # always has. If per-commit immutable chart versions are wanted later,
+  # append a `+sha.<short>` build-metadata suffix to the packaged version
+  # here rather than changing Chart.yaml's own convention.
+  push-helm-chart:
+    name: Package and push Helm chart
+    needs: build-and-push
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same action and pinned Helm version as ci.yml's `helm-lint` job,
+      # for consistency rather than introducing a second Helm setup/
+      # version into this repo's CI.
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.2.3
+
+      - name: Log into ${{ env.REGISTRY }} (Helm OCI)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} \
+            --username ${{ github.actor }} \
+            --password-stdin
+
+      - name: helm package
+        id: package
+        run: |
+          helm package charts/distant-signal --destination /tmp/helm-package
+          chart_tgz=$(find /tmp/helm-package -maxdepth 1 -name 'distant-signal-*.tgz' -print -quit)
+          echo "chart_tgz=${chart_tgz}" >> "$GITHUB_OUTPUT"
+
+      - name: helm push
+        run: helm push "${{ steps.package.outputs.chart_tgz }}" oci://${{ env.REGISTRY }}/fasterspeeding/charts
