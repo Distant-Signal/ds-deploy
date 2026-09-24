@@ -295,6 +295,10 @@ spec:
             # responsibility, the CIF ALF-derived fixed-link publish.
             - name: FIXED_LINKS_URL
               value: {{ printf "%s/private/fixed-links" (include "distant-signal.apiBaseUrl" .) | quote }}
+            # docs/superpowers/plans/2026-09-24-tiploc-crs-crosswalk-plan.md: this
+            # crate's TIPLOC-primary CRS crosswalk publish, alongside stanox/crs.
+            - name: TIPLOC_CRS_URL
+              value: {{ printf "%s/private/tiploc-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: LINES_DIR
               value: /app/lines
             - name: INTERNAL_OAUTH_TOKEN_URL
