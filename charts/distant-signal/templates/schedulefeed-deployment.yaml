@@ -276,7 +276,7 @@ spec:
           # Env var names below are the uppercase-snake-case clap `env`
           # names crates/schedule-reference/src/config.rs actually declares:
           # storage_dir, poll_interval_secs, api_ingest_url,
-          # schedule_feed_ingests_url, schedule_line_population_url,
+          # schedule_reference_publishes_url, schedule_line_population_url,
           # schedule_network_departures_url, schedule_destination_departures_url,
           # fixed_links_url, schedule_calling_points_full_url, tiploc_crs_url,
           # lines (LINES_DIR),
@@ -302,14 +302,22 @@ spec:
               value: {{ .Values.scheduleFeed.reference.pollIntervalSecs | quote }}
             - name: API_INGEST_URL
               value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
-            # Read once at startup by `main::seed_last_processed_delivery`, to
-            # seed the restart-durable `last_processed_delivery` dedup from
-            # api's own persisted schedule_feed_ingests record instead of
-            # redundantly republishing the whole forward window after every
-            # restart. GET, not POST -- api grants this container read-only
-            # access to that route (see crates/api/src/app.rs).
-            - name: SCHEDULE_FEED_INGESTS_URL
-              value: {{ printf "%s/private/schedule-feed-ingests" (include "distant-signal.apiBaseUrl" .) | quote }}
+            # This container's OWN per-delivery publish-completion marker.
+            # READ once at startup by `main::seed_last_processed_delivery` to
+            # seed the restart-durable `last_processed_delivery` dedup, and
+            # WRITTEN once per delivery by `main::poll_once`, only after every
+            # product for that delivery has published successfully. Both
+            # methods, one route, one credential (see crates/api/src/app.rs).
+            #
+            # Replaced SCHEDULE_FEED_INGESTS_URL here (2026-09-25). That route
+            # is schedule-INGEST's record of having EXTRACTED a delivery zip,
+            # written before this container has read a byte of it -- seeding
+            # from it meant a restart of this container mid-processing made it
+            # skip a delivery it had never published, silently losing a whole
+            # day of every product. See
+            # crates/api/migrations/20260925130000_schedule_reference_publishes.sql.
+            - name: SCHEDULE_REFERENCE_PUBLISHES_URL
+              value: {{ printf "%s/private/schedule-reference-publishes" (include "distant-signal.apiBaseUrl" .) | quote }}
             # Task 7 (option-b-live-consumer plan): the per-line CIF
             # SCHEDULE population publish this crate gained alongside its
             # original stanox/crs responsibility.
