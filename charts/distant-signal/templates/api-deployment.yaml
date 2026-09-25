@@ -46,6 +46,35 @@ metadata:
     {{- include "distant-signal.labels" (dict "root" . "component" "api") | nindent 4 }}
 spec:
   replicas: {{ .Values.api.replicaCount }}
+  strategy:
+    # Recreate, not the default RollingUpdate -- the SAME reasoning
+    # aggregator/notifier/schedulefeed/every poller Deployment in this chart
+    # already applies, for a different hazard.
+    #
+    # crates/api/src/main.rs runs `sqlx::migrate!().run(...)` BEFORE it binds
+    # its listener, so a new api pod applies schema migrations as part of
+    # starting up. This crate's migration history already contains steps that
+    # are NOT backward-compatible with the previous binary
+    # (20260907100000_rename_tracked_trains.sql renames a table;
+    # 20260906140000_drop_legacy_columns.sql drops columns), and
+    # `aggregator`, `enricher`, `notifier`, `trust-consumer` and
+    # `trust-backlog-consumer` all query those same tables on their own
+    # independent rollout schedules.
+    #
+    # Under RollingUpdate the new pod migrates the schema while the OLD pod
+    # is still Ready and still serving traffic against the pre-migration
+    # shape it was compiled for -- every request that old pod handles through
+    # a renamed/dropped column fails for as long as the rollout window lasts.
+    # Recreate removes that window entirely: the old pod is fully terminated
+    # before the new one starts, so exactly one schema expectation is ever
+    # live.
+    #
+    # TRADEOFF (deliberate): this means an api rollout has a brief outage --
+    # roughly terminationGracePeriod plus the new pod's own startup, which
+    # now includes the migration run itself (see api.probes.startup's budget
+    # in values.yaml). That is accepted as strictly better than serving
+    # requests against a schema the running binary does not match.
+    type: Recreate
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
@@ -124,6 +153,8 @@ spec:
               value: {{ .Values.api.internalOauth.groups.scheduleReference | quote }}
             - name: INTERNAL_OAUTH_GROUP_FULL_COVERAGE
               value: {{ .Values.api.internalOauth.groups.fullCoverage | quote }}
+            - name: INTERNAL_OAUTH_GROUP_TRUST_BACKLOG
+              value: {{ .Values.api.internalOauth.groups.trustBacklog | quote }}
             - name: INTERNAL_OAUTH_GROUP_IRISH_RAIL_GTFS
               value: {{ .Values.api.internalOauth.groups.irishRailGtfs | quote }}
             - name: INTERNAL_OAUTH_GROUP_IRISH_RAIL_LIVE

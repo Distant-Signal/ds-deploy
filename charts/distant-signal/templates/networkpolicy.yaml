@@ -19,9 +19,18 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Only the api, the aggregator and the enricher talk to Postgres. The
-    # pollers never do -- they reach the database only indirectly, by POSTing
-    # to the api's /private/* ingest endpoints.
+    # EXACTLY the workloads whose container env includes DATABASE_URL, i.e.
+    # every consumer of `distant-signal.databaseEnv` in this templates/
+    # directory. Keep this list derived from that helper, not from memory:
+    #   grep -l 'distant-signal.databaseEnv' templates/*.yaml
+    # `notifier` was missing here until 2026-09-25 (it reads DATABASE_URL via
+    # the same helper -- notifier-deployment.yaml -- and does nothing else but
+    # poll those tables), so turning networkPolicy.enabled on would have
+    # silently stopped every push notification this app sends.
+    #
+    # The pollers/consumers really do NOT belong here: they reach the database
+    # only indirectly, by POSTing to api's /private/* ingest endpoints (see the
+    # api policy below, which is where they are allow-listed).
     - from:
         - podSelector:
             matchExpressions:
@@ -35,6 +44,7 @@ spec:
                   - api
                   - aggregator
                   - enricher
+                  - notifier
       ports:
         - protocol: TCP
           port: {{ .Values.postgresql.service.port }}
@@ -54,8 +64,22 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # api publishes incident-text-changed events, enricher consumes them.
-    # Nothing else touches the queue.
+    # EXACTLY the workloads whose container env includes REDIS_URL, i.e. every
+    # consumer of `distant-signal.redisUrl` in this templates/ directory. Keep
+    # this list derived from that helper, not from memory:
+    #   grep -l 'distant-signal.redisUrl' templates/*.yaml
+    #
+    # The original comment here ("api publishes incident-text-changed events,
+    # enricher consumes them. Nothing else touches the queue.") was true when
+    # it was written and has been wrong since; four more workloads have grown
+    # a REDIS_URL of their own, and all four were missing until 2026-09-25:
+    #   - trust-consumer         -- its own durable movement queue
+    #   - trust-backlog-consumer -- drains the TRUST event backlog
+    #   - full-coverage-consumer -- its own movement stream
+    #   - movement-relay         -- publishes the redis-stream MovementFeed
+    # Every one of those is a queue producer or consumer whose ONLY job is
+    # Redis, so `networkPolicy.enabled=true` did not degrade them, it stopped
+    # them dead.
     - from:
         - podSelector:
             matchExpressions:
@@ -68,6 +92,10 @@ spec:
                 values:
                   - api
                   - enricher
+                  - trust-consumer
+                  - trust-backlog-consumer
+                  - full-coverage-consumer
+                  - movement-relay
       ports:
         - protocol: TCP
           port: {{ .Values.redis.service.port }}
@@ -115,6 +143,29 @@ spec:
   policyTypes:
     - Ingress
   ingress:
+    # EXACTLY the workloads that make an in-cluster HTTP call to the api
+    # Service, i.e. every consumer of `distant-signal.apiBaseUrl` in this
+    # templates/ directory. Keep this list derived from that helper, not from
+    # memory:
+    #   grep -rl 'distant-signal.apiBaseUrl' templates/
+    #
+    # Until 2026-09-25 this allowed only `frontend` plus the five
+    # `.Values.pollers` entries, which covered the read path and the original
+    # RDM pollers and nothing else. Everything below the poller range was
+    # missing, and every one of them POSTs to a /private/* ingest route as its
+    # entire reason to exist -- so with networkPolicy.enabled=true each would
+    # have failed every publish, which (see
+    # crates/schedule-reference/src/config.rs's chart_env_wiring_tests) is the
+    # deliberately best-effort log-and-continue path in most of these crates:
+    # the product simply stays empty, forever, with only a recurring error!
+    # line to show for it. Exactly the failure mode that cost this app a whole
+    # product earlier the same day.
+    #
+    # Components are listed UNCONDITIONALLY rather than gated on each
+    # workload's own `enabled` value: a matchExpressions value naming a
+    # component that isn't deployed selects nothing and is a harmless no-op,
+    # whereas an `if`-gate is one more place this list can silently drift out
+    # of step with the Deployment templates -- which is the bug being fixed.
     - from:
         - podSelector:
             matchExpressions:
@@ -125,11 +176,42 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
                 values:
+                  # Reads the public API for every page render.
                   - frontend
                   {{- range $name, $poller := .Values.pollers }}
                   {{- if $poller.enabled }}
                   - poller-{{ $name }}
                   {{- end }}
+                  {{- end }}
+                  # /private/train-events, /private/train-forward-signals,
+                  # /private/tracked-trains, /private/stanox-crs.
+                  - trust-consumer
+                  # /private/trust-event-backlog, /private/stanox-crs.
+                  - trust-backlog-consumer
+                  # /private/schedule-line-population,
+                  # /private/full-coverage-stats,
+                  # /private/station-full-coverage-samples,
+                  # /private/stanox-crs.
+                  - full-coverage-consumer
+                  # BOTH containers in this one Pod: `ingest`
+                  # (POST /private/schedule-feed-ingests) and `reference`
+                  # (the eight *_URL publishes enumerated in
+                  # crates/schedule-reference/src/config.rs). They share the
+                  # Pod's network namespace, so one component label covers
+                  # both.
+                  - schedulefeed
+                  # The three island-of-Ireland pollers, which live in their
+                  # own templates rather than under .Values.pollers, and so
+                  # were never covered by the range above.
+                  - poller-irish-rail-gtfs
+                  - poller-irish-rail-live
+                  - poller-nir-stations
+                  {{- if .Values.tests.enabled }}
+                  # `helm test`'s probe Pod curls api.probes.path
+                  # (templates/tests/test-api-health.yaml). Without this,
+                  # `helm test` fails on any release that has NetworkPolicy
+                  # turned on.
+                  - test
                   {{- end }}
       {{- if and .Values.ingress.enabled .Values.ingress.api.enabled }}
         # The api is published externally, so the ingress controller must

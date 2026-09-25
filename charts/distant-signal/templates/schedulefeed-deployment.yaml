@@ -179,7 +179,17 @@ spec:
             - name: sftp-entrypoint
               mountPath: /scripts
               readOnly: true
-          {{- with .Values.scheduleFeed.resources }}
+          # Per-container resources, NOT the one shared
+          # .Values.scheduleFeed.resources block all three containers used
+          # until 2026-09-25. These three siblings differ by an order of
+          # magnitude -- `reference` parses the whole-network CIF extract in
+          # memory, `sftp` just runs sftpgo -- and Kubernetes sums a Pod's
+          # per-container requests, so one shared block either starved
+          # `reference` or tripled the Pod's footprint to pad out two
+          # containers that never needed it. `.Values.scheduleFeed.resources`
+          # is still honoured as the fallback for any container whose own
+          # block is left empty, so an existing override keeps working.
+          {{- with (.Values.scheduleFeed.sftp.resources | default .Values.scheduleFeed.resources) }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -248,7 +258,7 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data/schedule-feed
-          {{- with .Values.scheduleFeed.resources }}
+          {{- with (.Values.scheduleFeed.ingest.resources | default .Values.scheduleFeed.resources) }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -362,7 +372,7 @@ spec:
             - name: data
               mountPath: /data/schedule-feed
               readOnly: true
-          {{- with .Values.scheduleFeed.resources }}
+          {{- with (.Values.scheduleFeed.reference.resources | default .Values.scheduleFeed.resources) }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
