@@ -46,8 +46,34 @@ spec:
               value: {{ .Values.notifier.cooldownMinutes | quote }}
             - name: TRAIN_DELAY_THRESHOLD_MINUTES
               value: {{ .Values.notifier.trainDelayThresholdMinutes | quote }}
+            # How long a watermark proposal must age before being promoted
+            # into a cursor's real last_processed_id -- see
+            # crates/notifier/src/config.rs's cursor_grace_seconds doc.
+            # 2026-09-25 Signal Box Audit Low finding: declared since this
+            # crate's first cursor/watermark commit but never wired here --
+            # harmless only because the code's own default (120) happened
+            # to be what every deployment wanted.
+            - name: CURSOR_GRACE_SECONDS
+              value: {{ .Values.notifier.cursorGraceSeconds | quote }}
             - name: FORWARD_QUEUE_POLL_INTERVAL_SECS
               value: {{ .Values.notifier.forwardQueuePollIntervalSecs | quote }}
+            # Station-skip check cadence (Task 9, §5.2) -- see
+            # crates/notifier/src/config.rs's skip_check_poll_interval_secs
+            # doc. Same "declared but never wired" gap as
+            # CURSOR_GRACE_SECONDS above.
+            - name: SKIP_CHECK_POLL_INTERVAL_SECS
+              value: {{ .Values.notifier.skipCheckPollIntervalSecs | quote }}
+            # Recurring-journey materialization sweep cadence (spec §3.1) --
+            # see crates/notifier/src/config.rs's
+            # template_sweep_poll_interval_secs doc. Same "declared but
+            # never wired" gap as the two intervals above.
+            - name: TEMPLATE_SWEEP_POLL_INTERVAL_SECS
+              value: {{ .Values.notifier.templateSweepPollIntervalSecs | quote }}
+            # 'auto'-mode leg commit-check lead time (spec §3.2 addendum) --
+            # see crates/notifier/src/config.rs's auto_commit_lead_minutes
+            # doc. Same "declared but never wired" gap as the three above.
+            - name: AUTO_COMMIT_LEAD_MINUTES
+              value: {{ .Values.notifier.autoCommitLeadMinutes | quote }}
             - name: VAPID_SUBJECT
               value: {{ .Values.notifier.vapid.subject | quote }}
             - name: VAPID_PUBLIC_KEY
@@ -60,7 +86,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.vapidPrivateKeySecretName" . }}
                   key: {{ include "distant-signal.vapidPrivateKeySecretKey" . }}
-            - name: RUST_LOG
+            # crates/notifier/src/config.rs's Config reads this via clap's
+            # env-from-field-name convention -- LOG_LEVEL, not RUST_LOG (it
+            # builds its own tracing_subscriber::EnvFilter from
+            # config.log_level rather than calling EnvFilter::from_default_env(),
+            # unlike every other binary in this workspace). 2026-09-25
+            # Signal Box Audit Low finding: this chart set RUST_LOG here,
+            # which clap silently ignores (it isn't the env name this
+            # field declares), so notifier's log level was permanently
+            # stuck at config.rs's own "info" default regardless of what
+            # notifier.logLevel was set to.
+            - name: LOG_LEVEL
               value: {{ .Values.notifier.logLevel | quote }}
             {{- with .Values.notifier.extraEnv }}
             {{- toYaml . | nindent 12 }}

@@ -43,6 +43,19 @@ spec:
           env:
             - name: API_BASE_URL
               value: {{ default (include "distant-signal.apiBaseUrl" .) .Values.frontend.apiBaseUrl | quote }}
+            # frontend/lib/siteOrigin.ts's own preferred source for
+            # share/invite links and same-origin checks -- falls back to
+            # the request's own Host header (with a one-time warning) when
+            # empty, so leaving this unset does not break anything, just
+            # loses the guarantee that those links use the deployment's
+            # real public hostname rather than whatever Host header a
+            # request happened to arrive with. 2026-09-25 Signal Box Audit
+            # Low finding: declared and read by the frontend since the
+            # site-origin work landed, but never wired into this chart --
+            # masked in every environment so far by the graceful fallback,
+            # not a working equivalent default.
+            - name: NEXT_PUBLIC_SITE_URL
+              value: {{ .Values.frontend.siteUrl | quote }}
             {{- if .Values.railMcp.enabled }}
             {{- if not .Values.railMcp.baseUrl }}
             {{- fail "railMcp.enabled is true but railMcp.baseUrl is empty. Set it to the external HTTP base URL of the separately-deployed derived MCP service, or set railMcp.enabled=false." }}

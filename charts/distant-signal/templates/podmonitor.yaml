@@ -10,14 +10,17 @@ frontend is deliberately absent from the selector below -- out of scope for
 this design (it's a Next.js service with its own, un-designed metrics
 story, see the spec's Architecture table).
 
-Two podMetricsEndpoints, not one, because api serves /metrics on a port
-literally named "http" (it reuses its existing listener -- see
-crates/api/src/main.rs, Task 2 of the metrics plan), while every other
-selected workload serves it on a new port named "metrics" (Steps 2-4
-above). A pod without a port of a given name is simply not matched by that
-podMetricsEndpoint entry -- this is not two separate PodMonitors because
-Prometheus Operator supports multiple endpoints per PodMonitor sharing one
-selector.
+One podMetricsEndpoint: every selected workload, api included, now serves
+/metrics on its own internal-only port named "metrics" (Steps 2-4 above;
+api's own version is crates/api/src/main.rs's spawn_metrics_listener --
+see metrics_port's own doc comment in crates/api/src/data/config.rs).
+Until 2026-09-25 api was the one exception, serving /metrics on a port
+literally named "http" that it reused from its own public listener (a Low
+finding: that listener is also what the chart's Ingress points its
+catch-all rule at, so /metrics was internet-reachable whenever
+ingress.api.enabled was also set) -- this PodMonitor used to need a SECOND
+podMetricsEndpoint (`port: http`) just for api's sake. That second entry
+is gone along with the shared listener it existed to scrape.
 
 trust-consumer/full-coverage-consumer are listed unconditionally (like
 aggregator/enricher above them -- neither has a chart-level enabled toggle)
@@ -78,10 +81,6 @@ spec:
           - schedulefeed
           {{- end }}
   podMetricsEndpoints:
-    - port: http
-      path: /metrics
-      interval: {{ .Values.metrics.podMonitor.interval }}
-      scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout }}
     - port: metrics
       path: /metrics
       interval: {{ .Values.metrics.podMonitor.interval }}

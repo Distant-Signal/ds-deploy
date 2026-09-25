@@ -86,7 +86,13 @@ spec:
       annotations:
         {{- if .Values.metrics.enabled }}
         prometheus.io/scrape: "true"
-        prometheus.io/port: {{ .Values.api.service.port | quote }}
+        # `metrics.port`, NOT `api.service.port` -- api now serves /metrics
+        # on its own internal-only listener, same as every other workload
+        # (2026-09-25 Signal Box Audit Low finding: /metrics used to share
+        # the public port, making it reachable through the Ingress's
+        # catch-all rule with no auth whenever ingress.api.enabled was also
+        # set). See crates/api/src/data/config.rs's metrics_port doc.
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
         prometheus.io/path: "/metrics"
         {{- end }}
         {{- with .Values.api.podAnnotations }}
@@ -125,6 +131,19 @@ spec:
             - name: http
               containerPort: {{ .Values.api.service.port }}
               protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            # api's own internal-only /metrics listener
+            # (crates/api/src/main.rs's spawn_metrics_listener) -- a
+            # SEPARATE port from the public one above, named "metrics" like
+            # every other workload's own listener so podmonitor.yaml's one
+            # shared podMetricsEndpoint entry covers it too. Not routed to
+            # by ingress.yaml and not opened to the ingress-controller
+            # namespace by networkpolicy.yaml's api rule -- only the
+            # monitoring namespace can reach it (that rule's own comment).
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.api.service.port) | quote }}
@@ -178,12 +197,18 @@ spec:
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             # Always rendered, so it reflects the real value either way.
-            # api has no metrics port of its own -- /metrics shares the http
-            # port above -- so this alone decides whether that route and its
-            # request-metrics middleware are registered
+            # Decides whether requests are counted at all AND whether the
+            # internal-only /metrics listener below is started
             # (`metrics_enabled` in crates/api/src/data/config.rs).
             - name: METRICS_ENABLED
               value: {{ .Values.metrics.enabled | quote }}
+            # Port for api's own internal-only /metrics listener -- see the
+            # `metrics` containerPort above and metrics_port's own doc
+            # comment in crates/api/src/data/config.rs. Always rendered
+            # (clap needs a value regardless; metrics_enabled=false just
+            # means main.rs never binds it).
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
             - name: RUST_LOG
               value: {{ .Values.api.logLevel | quote }}
             # OIDC SSO (crates/api/src/data/config.rs: ServiceArguments).
@@ -211,6 +236,26 @@ spec:
               value: {{ $postLoginRedirectUrl | quote }}
             - name: SESSION_TTL_DAYS
               value: {{ .Values.api.sessionTtlDays | quote }}
+            # Four sweep-cadence tunables, all declared in
+            # crates/api/src/data/config.rs with a working default but
+            # never wired into this template until the 2026-09-25 Signal
+            # Box Audit Low pass -- the same "declared but unwired" gap
+            # already closed above for the INTERNAL_OAUTH_GROUP_* fields
+            # (see chart_env_wiring_tests's own doc comment). Unlike those,
+            # an unwired sweep interval doesn't 403 anything -- it just
+            # means an operator can't tune the cadence without a redeploy,
+            # since the code-level default (matching the value below) still
+            # applies. schedule_match_interval_secs is the one sibling
+            # field deliberately NOT wired here -- see its own doc comment
+            # in config.rs for why.
+            - name: RECONCILIATION_SWEEP_INTERVAL_SECS
+              value: {{ .Values.api.reconciliationSweepIntervalSecs | quote }}
+            - name: SCHEDULE_ENRICHMENT_GRACE_MINUTES
+              value: {{ .Values.api.scheduleEnrichmentGraceMinutes | quote }}
+            - name: BACKLOG_MATCH_SWEEP_INTERVAL_SECS
+              value: {{ .Values.api.backlogMatchSweepIntervalSecs | quote }}
+            - name: SESSION_CLEANUP_INTERVAL_SECS
+              value: {{ .Values.api.sessionCleanupIntervalSecs | quote }}
             # Must equal the aggregator Deployment's own HISTORY_RETENTION_DAYS
             # -- sourced from the SAME value (not a separate api.* setting)
             # so the two can't drift apart. See

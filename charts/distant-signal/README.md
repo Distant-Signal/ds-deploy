@@ -537,12 +537,13 @@ annotation but is issuer-agnostic.
 > `ingress.api.enabled: false`; the frontend reaches the api over the
 > in-cluster Service either way.
 >
-> It publishes the api's `/metrics` endpoint the same way when
-> `metrics.enabled` is true (the default), because api serves `/metrics` on
-> its own HTTP port rather than on a separate `metrics.port` — unlike the
-> other seven binaries, whose metrics ports are never behind an Ingress.
-> That endpoint is read-only request-count/latency telemetry with no
-> secrets in it, and `metrics.enabled: false` removes the route entirely.
+> Until 2026-09-25 it also published the api's `/metrics` endpoint the same
+> way, because api served `/metrics` on its own public HTTP port rather
+> than on a separate `metrics.port` — unauthenticated, internet-readable
+> whenever `metrics.enabled` was also true (a Signal Box Audit Low
+> finding). api now serves `/metrics` on its own internal-only listener,
+> same as the other seven binaries, so enabling `ingress.api.enabled` no
+> longer exposes it at all.
 
 Enabling either host without setting its hostname aborts the render.
 
@@ -562,16 +563,20 @@ explicit allows:
   when `redis.enabled`.
 - **api** ← frontend, every enabled poller, and — when `ingress.enabled` and
   `ingress.api.enabled` — the namespace named by
-  `networkPolicy.ingressControllerNamespace`.
+  `networkPolicy.ingressControllerNamespace`, all on `api.service.port`.
 - **frontend** ← that same ingress-controller namespace, when
   `ingress.enabled` and `ingress.frontend.enabled`.
-- **aggregator**, **enricher** and every poller: default-deny apart from
-  `metrics.port` from the namespace named by
+- **api**, **aggregator**, **enricher** and every poller: default-deny apart
+  from `metrics.port` from the namespace named by
   `networkPolicy.monitoringNamespace`, and only when `metrics.enabled` is
-  true. With `metrics.enabled: false` they are pure default-deny — those
-  three expose no other listener. The api policy gains that same
-  monitoring-namespace allow, needing no extra port since api serves
-  `/metrics` on its existing one.
+  true. With `metrics.enabled: false` these expose no other listener. api's
+  own `metrics.port` allow is separate from — and does not widen — its
+  `api.service.port` allow above: until 2026-09-25 api served `/metrics` on
+  `api.service.port` itself, so this same monitoring-namespace allow
+  doubled as the ingress-controller's own path to it whenever
+  `ingress.api.enabled` was also set (the finding `## Ingress`'s security
+  warning above now documents as fixed); api now has its own internal-only
+  `metrics.port` listener, same as every other workload.
 
 **Egress is deliberately unrestricted.** The pollers must reach arbitrary
 external Rail Data Marketplace hosts, and constraining that would mean
@@ -937,16 +942,19 @@ On by default: the exporters are in-process and add no runtime dependency
 once the images are built. `metrics.enabled: false` is a real off switch,
 not merely an un-scraped one — it renders `METRICS_ENABLED=false` into every
 workload, and each binary then never starts its `/metrics` listener at all
-(api keeps its own HTTP listener, but drops the `/metrics` route and its
-request-metrics middleware). Note that api serves `/metrics` on
-`api.service.port`, not on `metrics.port`, because it already has a
-listener; only the aggregator, the enricher and the pollers use
-`metrics.port`.
+(api keeps its own public HTTP listener, but drops the request-metrics
+middleware and never starts the internal `/metrics` listener below). Every
+workload, api included, serves `/metrics` on `metrics.port` — a listener
+separate from its own public/service port. Until 2026-09-25 api was the
+one exception (it served `/metrics` on `api.service.port` itself, which
+made it internet-reachable through the api Ingress whenever
+`ingress.api.enabled` was also set — a Signal Box Audit Low finding); it
+now matches every other workload.
 
 | Key | Default | Description |
 |---|---|---|
 | `metrics.enabled` | `true` | Expose Prometheus `/metrics` on every workload, and render the metrics port, env, `prometheus.io/*` scrape annotations and NetworkPolicy allows. |
-| `metrics.port` | `9091` | Port the aggregator, enricher and each poller serve `/metrics` on. Not used by api, which serves it on `api.service.port`. |
+| `metrics.port` | `9091` | Port every workload, including api, serves `/metrics` on — a listener separate from api's own public/service port. |
 | `metrics.podMonitor.enabled` | `false` | Render a Prometheus Operator `PodMonitor`. Off by default — the CRD is absent on clusters without the operator, and installing it would fail the release outright. |
 | `metrics.podMonitor.interval` | `30s` | Scrape interval on the `PodMonitor`. |
 | `metrics.podMonitor.scrapeTimeout` | `10s` | Scrape timeout on the `PodMonitor`. Must stay below `interval`. |

@@ -343,6 +343,13 @@ pollers:
     extraEnv:
       - name: TFL_MODES
         value: "tube,dlr,overground,elizabeth-line,tram"
+    # -- Enables the DLR arrivals-diffing pilot -- see
+    # crates/poller-tfl/src/config.rs's dlr_pilot_enabled doc for why this
+    # defaults off (never yet run a clean cycle against a real deployment).
+    dlrPilotEnabled: false
+    # -- Poplar's Naptan id, the pilot's one fixed station -- see
+    # crates/poller-tfl/src/config.rs's dlr_pilot_stop_point_id doc.
+    dlrPilotStopPointId: "940GZZDLPOP"
     # One TfL line-status JSON document per tick.
     resources:
       requests:
@@ -542,6 +549,27 @@ api:
   # expiry stamped at login, not a sliding window refreshed by activity.
   # Matches the binary's own default.
   sessionTtlDays: 14
+  # -- How often the reconciliation sweep re-attempts fixing a stuck
+  # tracked-train row -- see crates/api/src/data/config.rs's
+  # reconciliation_sweep_interval_secs doc. 2026-09-25 Signal Box Audit Low
+  # finding: declared with a working default but never wired into this
+  # chart, alongside the three tunables immediately below it.
+  reconciliationSweepIntervalSecs: 300
+  # -- Grace period (minutes) the reconciliation sweep's schedule-
+  # enrichment half waits past a candidate's true origin departure before
+  # attempting a CIF-only match -- see config.rs's own
+  # schedule_enrichment_grace_minutes doc. Same "declared but never wired"
+  # gap as reconciliationSweepIntervalSecs above.
+  scheduleEnrichmentGraceMinutes: 30
+  # -- How often the backlog-match sweep retries `attempt_backlog_match`
+  # against still-pending pins -- see config.rs's own
+  # backlog_match_sweep_interval_secs doc. Same "declared but never wired"
+  # gap as the two tunables above.
+  backlogMatchSweepIntervalSecs: 300
+  # -- How often the session-cleanup sweep deletes expired `sessions` rows
+  # -- see config.rs's own session_cleanup_interval_secs doc. Same
+  # "declared but never wired" gap as the three tunables above.
+  sessionCleanupIntervalSecs: 3600
   # Internal-service OAuth2 verification -- see
   # docs/superpowers/specs/2026-09-02-internal-service-oauth2-design.md.
   # REQUIRED -- crates/api's clap config declares issuerUrl/clientId/13
@@ -946,10 +974,23 @@ notifier:
   # -- Decision 4: the delay, in minutes, at or above which a tracked
   # train's delay reading becomes notify-worthy.
   trainDelayThresholdMinutes: 15
+  # -- How long a watermark proposal must age before being promoted into a
+  # cursor's real last_processed_id -- see config.rs's own
+  # cursor_grace_seconds doc.
+  cursorGraceSeconds: 120
   # -- Task 17/18: cadence for the forwarding-queue poll, deliberately
   # faster than pollIntervalSecs above -- see config.rs's own comment on
   # why this is a judgment call, not a researched figure.
   forwardQueuePollIntervalSecs: 15
+  # -- Station-skip check cadence (Task 9, §5.2) -- see config.rs's own
+  # skip_check_poll_interval_secs doc.
+  skipCheckPollIntervalSecs: 90
+  # -- Recurring-journey materialization sweep cadence (spec §3.1) -- see
+  # config.rs's own template_sweep_poll_interval_secs doc.
+  templateSweepPollIntervalSecs: 3600
+  # -- 'auto'-mode leg commit-check lead time, minutes (spec §3.2 addendum)
+  # -- see config.rs's own auto_commit_lead_minutes doc.
+  autoCommitLeadMinutes: 120
   vapid:
     # -- mailto: or https: contact, required by RFC 8292's VAPID "sub" claim.
     subject: ""
@@ -1937,6 +1978,14 @@ frontend:
   # use the in-cluster api Service. API_BASE_URL is read at REQUEST time in
   # Server Components, not baked at build time, so this is a runtime value.
   apiBaseUrl: ""
+  # -- The deployment's own public origin (e.g. https://rail.example.com),
+  # used for share/invite links and same-origin checks
+  # (frontend/lib/siteOrigin.ts). Leave empty to fall back to each
+  # request's own Host header -- functional, but frontend logs a one-time
+  # warning recommending this be set in production. Strongly recommended
+  # to set to `https://<ingress.frontend.host>` when ingress.frontend is
+  # enabled.
+  siteUrl: ""
   extraEnv: []
   # A Next.js server render process -- Node's heap dominates, and it is
   # fairly insensitive to load here because the heavy lifting is api's.
@@ -2000,18 +2049,22 @@ ingress:
 metrics:
   # Cheap, in-process, no new runtime dependency once the images are built
   # -- unlike podMonitor.enabled below, safe to default on. Renders the
-  # metrics containerPort/env on aggregator, enricher and every enabled
+  # metrics containerPort/env on aggregator, enricher, api and every enabled
   # poller, plus the prometheus.io/scrape pod annotations (the CRD-free
-  # fallback) on every workload including api. Setting this false leaves
-  # every service working exactly as it does today with metrics wiring
-  # absent entirely, not merely un-scraped.
+  # fallback) on every workload. Setting this false leaves every service
+  # working exactly as it does today with metrics wiring absent entirely,
+  # not merely un-scraped.
   enabled: true
-  # aggregator, enricher and the five pollers each listen on this port for
-  # their own embedded Prometheus exporter (crates/common::metrics::install,
-  # see docs/superpowers/specs/2026-08-29-metrics-design.md). api does NOT
-  # use this value -- it serves /metrics on its own api.service.port
-  # instead, since it already has a listener. Distinct from
-  # api.service.port (8080), frontend.service.port (3000),
+  # aggregator, enricher, api and the five pollers each listen on this port
+  # for their own embedded Prometheus exporter -- aggregator/enricher/the
+  # pollers via crates/common::metrics::install, api via its own
+  # crates/api/src/main.rs::spawn_metrics_listener (see
+  # docs/superpowers/specs/2026-08-29-metrics-design.md). Until 2026-09-25
+  # api was the one exception, serving /metrics on its own api.service.port
+  # instead of this value -- a Low finding, since that port is also what
+  # the chart's Ingress routes public traffic to (see
+  # crates/api/src/data/config.rs's metrics_port doc for the full story).
+  # Distinct from api.service.port (8080), frontend.service.port (3000),
   # postgresql.service.port (5432), and redis.service.port (6379).
   port: 9091
   podMonitor:
