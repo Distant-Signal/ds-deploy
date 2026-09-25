@@ -266,10 +266,25 @@ spec:
           # Env var names below are the uppercase-snake-case clap `env`
           # names crates/schedule-reference/src/config.rs actually declares:
           # storage_dir, poll_interval_secs, api_ingest_url,
-          # schedule_line_population_url, schedule_network_departures_url,
+          # schedule_feed_ingests_url, schedule_line_population_url,
+          # schedule_network_departures_url, schedule_destination_departures_url,
+          # fixed_links_url, schedule_calling_points_full_url, tiploc_crs_url,
           # lines (LINES_DIR),
           # internal_oauth_token_url/client_id/scope/username/password,
           # metrics_port, metrics_enabled.
+          #
+          # EVERY one of that Config's `*_URL` fields must appear below.
+          # Their clap defaults all point at bare `http://api:8080/...`,
+          # which only resolves under docker-compose.yml -- this chart's api
+          # Service is `distant-signal.apiFullname` (`<release>-api`), so an
+          # omitted URL does not degrade gracefully: it points at a
+          # nonexistent host, and since each `publish_*` in that crate's
+          # main.rs is best-effort log-and-continue, its product silently
+          # never lands in Postgres at all. `SCHEDULE_CALLING_POINTS_FULL_URL`
+          # was missed exactly this way and left `GET /Trips/plan` answering
+          # "no CIF-derived schedule data has been published" for every date.
+          # `config.rs`'s own `chart_env_wiring_tests` now fails the build if
+          # a future `*_URL` field is added without being wired in here.
           env:
             - name: STORAGE_DIR
               value: /data/schedule-feed
@@ -277,6 +292,14 @@ spec:
               value: {{ .Values.scheduleFeed.reference.pollIntervalSecs | quote }}
             - name: API_INGEST_URL
               value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
+            # Read once at startup by `main::seed_last_processed_delivery`, to
+            # seed the restart-durable `last_processed_delivery` dedup from
+            # api's own persisted schedule_feed_ingests record instead of
+            # redundantly republishing the whole forward window after every
+            # restart. GET, not POST -- api grants this container read-only
+            # access to that route (see crates/api/src/app.rs).
+            - name: SCHEDULE_FEED_INGESTS_URL
+              value: {{ printf "%s/private/schedule-feed-ingests" (include "distant-signal.apiBaseUrl" .) | quote }}
             # Task 7 (option-b-live-consumer plan): the per-line CIF
             # SCHEDULE population publish this crate gained alongside its
             # original stanox/crs responsibility.
@@ -295,6 +318,12 @@ spec:
             # responsibility, the CIF ALF-derived fixed-link publish.
             - name: FIXED_LINKS_URL
               value: {{ printf "%s/private/fixed-links" (include "distant-signal.apiBaseUrl" .) | quote }}
+            # Dynamic-trip-planning Phase 2 plan: this crate's sixth
+            # responsibility, the whole-network, STP-resolved, un-bucketed
+            # calling-point publish that backs GET /Trips/plan. Without this
+            # line the table stays empty and that route 404s for every date.
+            - name: SCHEDULE_CALLING_POINTS_FULL_URL
+              value: {{ printf "%s/private/schedule-calling-points-full" (include "distant-signal.apiBaseUrl" .) | quote }}
             # docs/superpowers/plans/2026-09-24-tiploc-crs-crosswalk-plan.md: this
             # crate's TIPLOC-primary CRS crosswalk publish, alongside stanox/crs.
             - name: TIPLOC_CRS_URL
