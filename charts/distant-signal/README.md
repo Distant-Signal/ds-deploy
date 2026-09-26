@@ -478,12 +478,25 @@ always the case — see redis-deployment.yaml's own comment for the
 ### Sizing
 
 Nearly all of this Redis's memory is `movement-events`. Its length is capped
-at `movementRelay.streamMaxLen` entries (default 524,288, about 12 hours of
-daytime traffic). That default comes from a 512 MiB budget at roughly
-1 KiB per entry. `redis.maxmemory` (640mb) is that budget plus 25%, and
-the 1Gi memory limit leaves room above `maxmemory` for fragmentation and
-fork copy-on-write. Change the three together. Every extra 100,000
-entries needs about 100 MiB more `maxmemory` and about 130 MiB more limit.
+at `movementRelay.streamMaxLen` entries (default 1,048,576, about 24 hours
+of traffic at the ~1M entries/day measured in production). That default
+comes from a 1 GiB budget at roughly 1 KiB per entry. `redis.maxmemory`
+(1536mb) is that budget plus 50%, and the 2560Mi memory limit leaves room
+above `maxmemory` for fragmentation and fork copy-on-write:
+
+| | Memory |
+|---|---|
+| Steady state: 1,048,576 entries at ~920 B each | ~920 MiB |
+| `maxmemory` 1536mb x 1.06 fragmentation | ~1628 MiB |
+| + 25% copy-on-write during an AOF rewrite | +384 MiB |
+| + process baseline and client buffers | +~30 MiB, ~2.0 GiB total |
+| Limit | 2560Mi (~520 MiB spare) |
+
+Change the three together. Every extra 100,000 entries needs about 100 MiB
+more `maxmemory` and about 130 MiB more limit. At this size the AOF on
+disk can reach 1-2 GB, past the default 1Gi `redis.persistence.size`. Many
+provisioners don't enforce the size, but on a StorageClass that does, raise
+it (4Gi is comfortable); a full volume makes Redis refuse writes.
 RDB snapshots are off (`redis.save: ""`) because AOF already persists
 everything, and each snapshot forks the process.
 
@@ -687,11 +700,11 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.persistence.accessModes` | `[ReadWriteOnce]` | PVC access modes. |
 | `postgresql.persistence.existingClaim` | `""` | Use a pre-existing PVC instead of a `volumeClaimTemplates` entry. |
 | `postgresql.extraEnv` | `[]` | Extra container env vars. Server settings go in `postgresql.config`. |
-| `postgresql.config` | see below | `postgresql.conf` settings, rendered as `-c name=value` args. Sized for the default 2Gi limit. A `null` key falls back to the Postgres default. Changing it restarts Postgres. |
+| `postgresql.config` | see below | `postgresql.conf` settings, rendered as `-c name=value` args. Sized for the default 5Gi limit. A `null` key falls back to the Postgres default. Changing it restarts Postgres. |
 | `postgresql.shm.enabled` | `true` | Mount a memory-backed emptyDir at `/dev/shm` (the runtime default is 64MiB). |
-| `postgresql.shm.sizeLimit` | `512Mi` | Size of `/dev/shm`. Empty means unbounded apart from the memory limit. |
+| `postgresql.shm.sizeLimit` | `1Gi` | Size of `/dev/shm`. Empty means unbounded apart from the memory limit. |
 | `postgresql.podSecurityContext` | `{}` | Merged over the pod securityContext. uid/gid/fsGroup 999 are pinned by default and required by this image. |
-| `postgresql.resources` | requests `250m`/`1Gi`, limit `2Gi` | Container resource requests/limits. The `config` defaults assume the 2Gi limit. |
+| `postgresql.resources` | requests `250m`/`3Gi`, limit `5Gi` | Container resource requests/limits. The `config` and `shm` defaults assume the 5Gi limit. |
 | `postgresql.nodeSelector` | `{}` | Pod node selector. |
 | `postgresql.tolerations` | `[]` | Pod tolerations. |
 | `postgresql.affinity` | `{}` | Pod affinity rules. |
@@ -704,20 +717,25 @@ override only needs to name the keys it changes:
 
 | Setting | Chart default | Postgres default | Why |
 |---|---|---|---|
-| `shared_buffers` | `512MB` | `128MB` | About 25% of the 2Gi limit. |
-| `effective_cache_size` | `1536MB` | `4GB` | Planner hint only, about 75% of the limit. |
-| `work_mem` | `8MB` | `4MB` | Per sort/hash node. Hash nodes may use twice this (`hash_mem_multiplier`). |
-| `maintenance_work_mem` | `128MB` | `64MB` | Manual VACUUM, CREATE INDEX. |
-| `autovacuum_work_mem` | `64MB` | `-1` (= `maintenance_work_mem`) | Per autovacuum worker (3). Decoupled so maintenance bumps don't triple. |
-| `wal_buffers` | `16MB` | `-1` (shared_buffers/32, max 16MB) | Bulk schedule publishes fill small WAL buffers. |
-| `max_wal_size` | `2GB` | `1GB` | Fewer size-triggered checkpoints during bulk writes. |
+| `shared_buffers` | `1GB` | `128MB` | About 20% of the 5Gi limit. |
+| `effective_cache_size` | `3584MB` | `4GB` | Planner hint only, about 70% of the limit. |
+| `work_mem` | `16MB` | `4MB` | Per sort/hash node. Hash nodes may use twice this (`hash_mem_multiplier`). |
+| `maintenance_work_mem` | `256MB` | `64MB` | Manual VACUUM, CREATE INDEX. |
+| `autovacuum_work_mem` | `128MB` | `-1` (= `maintenance_work_mem`) | Per autovacuum worker (3). Decoupled so maintenance bumps don't triple. |
+| `wal_buffers` | `32MB` | `-1` (shared_buffers/32, max 16MB) | Bulk schedule publishes fill small WAL buffers. |
+| `max_wal_size` | `4GB` | `1GB` | Fewer size-triggered checkpoints during bulk writes. Needs up to this much `pg_wal` disk. |
+| `min_wal_size` | `1GB` | `80MB` | Keeps WAL segments recycled rather than deleted and recreated. |
 | `checkpoint_timeout` | `15min` | `5min` | Fewer full-page images. Crash recovery takes longer. |
+| `wal_compression` | `lz4` | `off` | Compresses the full-page images written after each checkpoint. Needs Postgres 15+ built with lz4 (the chart's `postgres:16` image is). |
+| `random_page_cost` | `1.1` | `4` | **Assumes SSD-class storage.** Set `"4"` on spinning disks. |
 | `huge_pages` | `off` | `try` | The pod requests no hugepages. `try` can SIGBUS on nodes where hugepages exist but aren't granted to the pod. |
 
-`random_page_cost` is left at Postgres's spinning-disk default of 4. Set
-it to `"1.1"` on SSD/NVMe storage, as `values-example.yaml` does. If you
-raise `resources.limits.memory`, scale `shared_buffers` (~25%) and
-`effective_cache_size` (~75%) with it. If you raise
+`random_page_cost` defaults to `"1.1"`, which assumes SSD-class storage
+(SSD/NVMe, or network block storage backed by it, as most managed
+StorageClasses are). On spinning disks set it back to `"4"`, Postgres's
+own default. If you change `resources.limits.memory`, scale
+`shared_buffers` (~20-25%), `effective_cache_size` (~70%) and
+`postgresql.shm.sizeLimit` with it. If you raise
 `maintenance_work_mem` or `work_mem`, raise `postgresql.shm.sizeLimit` too:
 a parallel VACUUM keeps its whole dead-tuple array (up to
 `maintenance_work_mem`) in `/dev/shm`. With the runtime default of 64MiB,
@@ -787,7 +805,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.probes.liveness.failureThreshold` | `3` | Liveness probe failures allowed. |
 | `api.probes.liveness.timeoutSeconds` | `3` | Liveness probe timeout. |
 | `api.extraEnv` | `[]` | Extra env vars appended to the container. |
-| `api.resources` | `{}` | Container resource requests/limits. |
+| `api.resources` | requests `200m`/`1Gi`, limit `3Gi` | Container resource requests/limits. Deliberately generous, stopgap-derived sizes (production's OOM-era overrides); the raw-JSON population relay, ETag reloads and `api.malloc` tuning should bring real usage well below them. Resize from live `kubectl top`. |
 | `api.nodeSelector` | `{}` | Pod node selector. |
 | `api.tolerations` | `[]` | Pod tolerations. |
 | `api.affinity` | `{}` | Pod affinity rules. |
@@ -858,14 +876,14 @@ used for and why persistence defaults on.
 | `redis.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `redis.service.port` | `6379` | Service and container port; also sets the `REDIS_URL` the api and enricher get. |
 | `redis.persistence.enabled` | `true` | Attach a PVC and run redis with `--appendonly yes`. When false an emptyDir is used and data is lost on reschedule. |
-| `redis.persistence.size` | `1Gi` | Requested volume size. |
+| `redis.persistence.size` | `1Gi` | Requested volume size. The AOF can reach 1-2 GB at the default `maxmemory`; raise this on a StorageClass that enforces size (see Sizing above). |
 | `redis.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
 | `redis.persistence.accessModes` | `[ReadWriteOnce]` | PVC access modes. |
 | `redis.persistence.existingClaim` | `""` | Use a pre-existing PVC instead of a chart-rendered one. |
-| `redis.maxmemory` | `640mb` | Passed as `--maxmemory`. With `noeviction`, a full Redis refuses writes (movement-relay backs off and Kafka holds the backlog) instead of being OOMKilled. Empty or null leaves it unbounded. |
+| `redis.maxmemory` | `1536mb` | Passed as `--maxmemory`. With `noeviction`, a full Redis refuses writes (movement-relay backs off and Kafka holds the backlog) instead of being OOMKilled. Empty or null leaves it unbounded. |
 | `redis.maxmemoryPolicy` | `noeviction` | Passed as `--maxmemory-policy`. Keep `noeviction`: any evicting policy deletes whole stream keys. |
 | `redis.save` | `""` | Passed as `--save`. `""` disables RDB snapshots (AOF covers durability); null keeps the image's built-in schedule. |
-| `redis.resources` | `{requests: {cpu: 50m, memory: 640Mi}, limits: {memory: 1Gi}}` | Container resource requests/limits, sized for `movementRelay.streamMaxLen` at `redis.maxmemory` plus fork copy-on-write; see values.yaml for the arithmetic. |
+| `redis.resources` | `{requests: {cpu: 50m, memory: 1536Mi}, limits: {memory: 2560Mi}}` | Container resource requests/limits, sized for `movementRelay.streamMaxLen` at `redis.maxmemory` plus fork copy-on-write; see values.yaml for the arithmetic. |
 | `redis.nodeSelector` | `{}` | Pod node selector. |
 | `redis.tolerations` | `[]` | Pod tolerations. |
 | `redis.affinity` | `{}` | Pod affinity rules. |

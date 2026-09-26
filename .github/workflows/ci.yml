@@ -603,13 +603,18 @@ jobs:
               jit: off
           EOF
           )
-          grep -q -- '- "shared_buffers=512MB"' <<<"$out"
+          grep -q -- '- "shared_buffers=1GB"' <<<"$out"
+          grep -q -- '- "effective_cache_size=3584MB"' <<<"$out"
+          grep -q -- '- "max_wal_size=4GB"' <<<"$out"
+          grep -q -- '- "wal_compression=lz4"' <<<"$out"
+          grep -q -- '- "random_page_cost=1.1"' <<<"$out"
           grep -q -- '- "huge_pages=off"' <<<"$out"
           grep -q -- '- "temp_file_limit=100000000"' <<<"$out"
           grep -q -- '- "jit=off"' <<<"$out"
           grep -q 'mountPath: /dev/shm' <<<"$out"
           grep -q 'medium: Memory' <<<"$out"
-          grep -q 'sizeLimit: 512Mi' <<<"$out"
+          grep -q 'sizeLimit: 1Gi' <<<"$out"
+          grep -q 'memory: 5Gi' <<<"$out"
           bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set postgresql.config=null --set postgresql.shm.enabled=false)
           if grep -E -q 'args:|/dev/shm|name: dshm' <<<"$bare"; then
@@ -618,7 +623,7 @@ jobs:
 
       # Redis must render --save "" and --maxmemory/--maxmemory-policy by
       # default; null must drop --save/--maxmemory. movement-relay must get
-      # MOVEMENT_STREAM_MAXLEN as a plain integer (not 524288e+00).
+      # MOVEMENT_STREAM_MAXLEN as a plain integer (not 1.048576e+06).
       - name: helm template (redis memory and stream cap)
         run: |
           set -euo pipefail
@@ -637,9 +642,9 @@ jobs:
           redis=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --show-only templates/redis-deployment.yaml)
           grep -A1 -- '- --save' <<<"$redis" | grep -q -- '- ""'
-          grep -A1 -- '- --maxmemory$' <<<"$redis" | grep -q -- '- "640mb"'
+          grep -A1 -- '- --maxmemory$' <<<"$redis" | grep -q -- '- "1536mb"'
           grep -A1 -- '- --maxmemory-policy' <<<"$redis" | grep -q -- '- "noeviction"'
-          grep -q 'memory: 1Gi' <<<"$redis"
+          grep -q 'memory: 2560Mi' <<<"$redis"
           bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set redis.save=null --set redis.maxmemory=null \
             --show-only templates/redis-deployment.yaml)
@@ -653,7 +658,7 @@ jobs:
             --set movementRelay.kafka.consumerGroup=test-group \
             --set movementRelay.kafka.saslMechanism=PLAIN \
             --show-only templates/movement-relay-deployment.yaml)
-          grep -A1 'name: MOVEMENT_STREAM_MAXLEN' <<<"$relay" | grep -q 'value: "524288"'
+          grep -A1 'name: MOVEMENT_STREAM_MAXLEN' <<<"$relay" | grep -q 'value: "1048576"'
 
       - name: helm template (values-example.yaml)
         run: |

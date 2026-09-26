@@ -38,12 +38,9 @@ api:
   internalOauth:
     issuerUrl: https://sso.example.com/application/o/distant-signal-internal/
     clientId: distant-signal-internal
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      memory: 512Mi
+  # resources: deliberately not overridden. values.yaml's 1Gi/3Gi default
+  # is what production needed to stop OOMKills from schedule publishes and
+  # line-population bursts; a smaller limit here would bring those back.
 
 aggregator:
   image:
@@ -113,17 +110,12 @@ postgresql:
     enabled: true
     size: 20Gi
     storageClass: fast-ssd
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      memory: 2Gi
-  # Merged key-by-key over values.yaml's `postgresql.config` defaults
-  # (which are already sized for this 2Gi limit); only the SSD-specific
-  # planner cost is added here. Any change restarts Postgres.
-  config:
-    random_page_cost: "1.1"
+  # resources, config and shm are deliberately not overridden: values.yaml's
+  # defaults (3Gi/5Gi, shared_buffers 1GB, a 1Gi /dev/shm) are sized
+  # together, and its random_page_cost 1.1 already suits this SSD class.
+  # If you lower the memory limit, scale shared_buffers,
+  # effective_cache_size and shm.sizeLimit down with it (see values.yaml's
+  # `postgresql.config` comment). Any config change restarts Postgres.
 
 # Shared, non-secret OAuth2 client-credentials config every real caller
 # below (the 5 pollers here, plus trust-consumer/schedule-ingest/

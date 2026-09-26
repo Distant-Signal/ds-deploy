@@ -149,42 +149,57 @@ postgresql:
   # "15min"). Set a key to null to drop it and fall back to Postgres's own
   # default; set `config: {}` to drop them all.
   #
-  # These defaults are SIZED FOR THE DEFAULT 2Gi MEMORY LIMIT in
-  # `resources` below: if you change that limit, scale shared_buffers
-  # (~25% of it) and effective_cache_size (~75%) with it. Rough budget at
-  # 2Gi: 512MB shared_buffers + 16MB WAL buffers + up to 3 x 64MB
-  # autovacuum + 128MB for one manual VACUUM/CREATE INDEX (held in
-  # /dev/shm when the VACUUM runs in parallel) + per-backend memory
-  # (typically 10-30MB idle, far more briefly while detoasting large
-  # JSONB) + parallel-query /dev/shm, leaving the rest to the page cache.
-  # Storage-dependent settings (random_page_cost, effective_io_concurrency)
-  # are deliberately not set: Postgres's defaults assume spinning disks;
-  # on SSD/NVMe set random_page_cost to 1.1.
+  # These defaults are the production (mine-bringer) settings, SIZED FOR
+  # THE DEFAULT 5Gi MEMORY LIMIT in `resources` below: if you change that
+  # limit, scale shared_buffers (~20-25% of it) and effective_cache_size
+  # (~70% of it) with it. Rough budget at 5Gi: 1GB shared_buffers + 32MB
+  # WAL buffers + up to 3 x 128MB autovacuum + 256MB for one manual
+  # VACUUM/CREATE INDEX (held in /dev/shm when the VACUUM runs in
+  # parallel) + per-backend memory (typically 10-30MB idle, far more
+  # briefly while detoasting large JSONB) + parallel-query /dev/shm,
+  # leaving the rest to the page cache.
+  #
+  # random_page_cost 1.1 ASSUMES SSD-CLASS STORAGE (SSD/NVMe, or network
+  # block storage backed by it), which is what essentially every managed
+  # Kubernetes default StorageClass provides. On spinning disks set it
+  # back to 4 (Postgres's own default). effective_io_concurrency is left
+  # at Postgres's default.
   config:
-    # Postgres default 128MB. ~25% of the memory limit.
-    shared_buffers: "512MB"
+    # Postgres default 128MB. ~20% of the memory limit.
+    shared_buffers: "1GB"
     # Planner hint only (no allocation): shared_buffers + the page cache
-    # the container can realistically keep, ~75% of the limit.
-    effective_cache_size: "1536MB"
+    # the container can realistically keep, ~70% of the limit.
+    effective_cache_size: "3584MB"
     # Per sort/hash node per backend, and hash nodes may use
     # hash_mem_multiplier (2) times this. Keep it modest -- the chart's
     # services hold ~15-20 pooled connections, max_connections is 100.
-    work_mem: "8MB"
+    work_mem: "16MB"
     # Manual VACUUM, CREATE INDEX, ALTER TABLE ADD FOREIGN KEY.
-    maintenance_work_mem: "128MB"
+    maintenance_work_mem: "256MB"
     # Per autovacuum worker (autovacuum_max_workers = 3). Set explicitly
     # so raising maintenance_work_mem for migrations doesn't triple into
-    # the autovacuum budget. 64MB holds ~11M dead tuple ids per pass.
-    autovacuum_work_mem: "64MB"
-    # The automatic value is shared_buffers/32 capped at 16MB; pinned so
-    # it doesn't shrink if shared_buffers is lowered. Bulk whole-day
-    # schedule publishes fill small WAL buffers fast.
-    wal_buffers: "16MB"
-    # Postgres defaults 1GB / 5min. Fewer, larger checkpoints mean fewer
-    # full-page images in WAL after each one; the cost is a longer crash
-    # recovery (bounded by max_wal_size) and more pg_wal disk.
-    max_wal_size: "2GB"
+    # the autovacuum budget. 128MB holds ~22M dead tuple ids per pass.
+    autovacuum_work_mem: "128MB"
+    # The automatic value is shared_buffers/32 capped at 16MB; pinned
+    # above that cap because bulk whole-day schedule publishes fill small
+    # WAL buffers fast.
+    wal_buffers: "32MB"
+    # Postgres defaults 1GB / 80MB / 5min. Fewer, larger checkpoints mean
+    # fewer full-page images in WAL after each one; the cost is a longer
+    # crash recovery (bounded by max_wal_size) and more pg_wal disk (up
+    # to ~max_wal_size, on the 20Gi `persistence.size`). min_wal_size
+    # keeps 1GB of segments recycled rather than removed and recreated.
+    max_wal_size: "4GB"
+    min_wal_size: "1GB"
     checkpoint_timeout: "15min"
+    # Compresses the full-page images written after each checkpoint.
+    # lz4 needs Postgres 15+ built with lz4 (the official postgres
+    # image is); use "pglz" or "on" on an older server.
+    wal_compression: "lz4"
+    # Planner cost of a random page read relative to a sequential one
+    # (Postgres default 4, which models spinning disks). See the note
+    # above: SSD-class storage only; set 4 on spinning disks.
+    random_page_cost: "1.1"
     # The pod requests no hugepages-2Mi resource, and "try" (the default)
     # can SIGBUS on nodes that have hugepages configured but not granted
     # to this cgroup. Quoted: a bare `off` is a YAML boolean.
@@ -202,8 +217,8 @@ postgresql:
   # mmap -- neither uses /dev/shm.)
   #
   # Size it as maintenance_work_mem + a few concurrent parallel hash nodes
-  # + ~50% headroom: with the defaults above, 128MB + 4 x (8MB x 2 x 3)
-  # = ~320MB, so 512Mi. tmpfs pages COUNT AGAINST THE CONTAINER MEMORY
+  # + ~50% headroom: with the defaults above, 256MB + 4 x (16MB x 2 x 3)
+  # = ~640MB, so 1Gi. tmpfs pages COUNT AGAINST THE CONTAINER MEMORY
   # LIMIT while in use (they are freed when the segment is), so budget
   # the worst case into `resources.limits.memory`, and raise this with
   # maintenance_work_mem/work_mem.
@@ -212,7 +227,7 @@ postgresql:
     enabled: true
     # -- Size of /dev/shm (the kubelet sizes the tmpfs to this). Empty
     # means no sizeLimit, i.e. bounded only by the pod's memory limit.
-    sizeLimit: 512Mi
+    sizeLimit: 1Gi
   # -- Merged over the pod securityContext. The uid/gid/fsGroup 999 pins are
   # required by the postgres image -- override them only if you know why.
   podSecurityContext: {}
@@ -241,12 +256,18 @@ postgresql:
   # protection set requests == limits here (Guaranteed QoS), accepting
   # that the postmaster is then OOMKilled rather than throttled if it
   # ever genuinely exceeds the limit.
+  #
+  # 3Gi/5Gi (production values, moved into the chart defaults
+  # 2026-09-26; previously 1Gi/2Gi): the limit covers the `config`
+  # budget above -- 1GB shared_buffers, up to 1Gi of /dev/shm in the
+  # worst case, autovacuum and backends -- with the rest left to the
+  # page cache that effective_cache_size assumes.
   resources:
     requests:
       cpu: 250m
-      memory: 1Gi
+      memory: 3Gi
     limits:
-      memory: 2Gi
+      memory: 5Gi
     # requests:
     #   cpu: 100m
     #   memory: 256Mi
@@ -842,12 +863,22 @@ api:
   # docs/superpowers/specs/2026-09-07-train-listing-destination-search-sizing-design.md
   # Task 1), and api buffers and deserialises that. Plus the line
   # catalogue, the sqlx pool, and one arena per concurrent request.
+  #
+  # 1Gi/3Gi are DELIBERATELY GENEROUS, stopgap-derived sizes: they are the
+  # production overrides that kept the pod from being OOMKilled (at the
+  # old 512Mi/1536Mi) during the 2026-09-26 investigation above, moved
+  # into the chart defaults. The fixes since merged -- line populations
+  # relayed as raw JSON text instead of a serde_json::Value round-trip,
+  # ETag conditional reloads, and the `malloc` tuning above -- are
+  # expected to bring real usage well below them. Resize from live
+  # `kubectl top` once they have run in production for a while, not from
+  # this estimate.
   resources:
     requests:
       cpu: 200m
-      memory: 512Mi
+      memory: 1Gi
     limits:
-      memory: 1536Mi
+      memory: 3Gi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1248,8 +1279,12 @@ redis:
     # file compresses the dataset about 4:1 (a ~105 MB base for ~400 MB in
     # memory, 2026-09-26), the incremental file grows to about the base's
     # size before a rewrite, and a rewrite briefly writes a new base
-    # alongside the old one. That is ~0.5 GB at the 640mb maxmemory. If
-    # you raise maxmemory well past that, raise this too.
+    # alongside the old one. At the default 1536mb maxmemory that can
+    # reach 1-2 GB on disk, i.e. past this 1Gi. Many provisioners round
+    # up or don't enforce the size (hostPath/local-path), but on a
+    # StorageClass that enforces it, raise this (e.g. to 4Gi) -- a full
+    # volume fails the AOF write and Redis refuses writes. If you raise
+    # maxmemory further, raise this with it.
     size: 1Gi
     # -- StorageClass name. Empty means the cluster default.
     storageClass: ""
@@ -1271,11 +1306,12 @@ redis:
   # enough to recover. api's XADD to incident-text-changed fails the same
   # way; enricher's hourly sweep covers anything that missed.
   #
-  # 640mb (Redis units: mebibytes) is movementRelay.streamMaxLen's 512 MiB
-  # budget plus 25% for larger-than-planned entries, the small
+  # 1536mb (Redis units: mebibytes) is movementRelay.streamMaxLen's 1 GiB
+  # budget plus 50% for larger-than-planned entries, the small
   # incident-text-changed stream and consumer-group PELs. Keep it at or
-  # below ~65% of the memory limit; see `resources` for the arithmetic.
-  maxmemory: 640mb
+  # below ~65% of the memory limit (it is 60% of 2560Mi); see `resources`
+  # for the arithmetic.
+  maxmemory: 1536mb
   # -- Redis `maxmemory-policy`. Keep `noeviction`: every other policy
   # would evict whole stream keys (a stream is one key), i.e. delete
   # movement-events and all three consumer groups outright.
@@ -1298,15 +1334,15 @@ redis:
   # A trigger/queue store, not a cache. Sized for movement-events at its
   # cap, which is nearly all of the memory.
   #
-  #   dataset at maxmemory (worst case):     640 MiB
-  #   x 1.06 fragmentation (measured):       ~680 MiB RSS
-  #   + fork copy-on-write, 25% of dataset:  +160 MiB  -> ~840 MiB
-  #   + process baseline, client buffers:    +~30 MiB  -> ~870 MiB
-  #   limit 1Gi                              -> ~150 MiB (15%) spare
+  #   dataset at maxmemory (worst case):     1536 MiB
+  #   x 1.06 fragmentation (measured):       ~1628 MiB RSS
+  #   + AOF-rewrite copy-on-write, 25%:      +384 MiB  -> ~2012 MiB
+  #   + process baseline, client buffers:    +~30 MiB  -> ~2042 MiB (~2.0 GiB)
+  #   limit 2560Mi                           -> ~520 MiB (20%) spare
   #
-  # Steady state is well under that: 524,288 entries at the 920 B/entry
-  # measured in production is ~460 MiB used, ~490 MiB RSS, about 48% of
-  # the limit. The request covers steady state plus a fork.
+  # Steady state is well under that: 1,048,576 entries at the 920 B/entry
+  # measured in production is ~920 MiB used, ~975 MiB RSS, about 38% of
+  # the limit. The 1536Mi request covers steady state plus a fork.
   #
   # The 25% copy-on-write figure is deliberately pessimistic. Measured
   # BGSAVE CoW in production was 1-2 MB, because stream writes append to
@@ -1317,13 +1353,16 @@ redis:
   #
   # History: 128Mi/512Mi until 2026-09-26, when the stream at its old
   # 500,000-entry cap measured 392 MB used / 417 MB RSS -- ~90% of the
-  # limit before any fork.
+  # limit before any fork. Then 640Mi/1Gi with a 640mb maxmemory and a
+  # 524,288-entry (~12h) cap, until the production values (1536mb,
+  # 1536Mi/2560Mi, ~24h cap) were moved into the chart defaults the
+  # same day.
   resources:
     requests:
       cpu: 50m
-      memory: 640Mi
+      memory: 1536Mi
     limits:
-      memory: 1Gi
+      memory: 2560Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1710,10 +1749,13 @@ movementRelay:
     existingSecretPasswordKey: movement-relay-kafka-sasl-password
   streamLagPollSecs: 30
   # -- `MAXLEN ~` cap on the movement-events stream, in entries
-  # (MOVEMENT_STREAM_MAXLEN). The default is a 512 MiB memory budget at a
+  # (MOVEMENT_STREAM_MAXLEN). The default is a 1 GiB memory budget at a
   # planning figure of 1 KiB of Redis memory per entry (920 B measured in
   # production). At the ~1M entries/day measured on 2026-09-26 that is
-  # ~12h of daytime traffic, longer overnight. It is the ONLY replay window
+  # about 24h of traffic. (movement-relay's own built-in default,
+  # crates/movement-relay/src/config.rs, is still the older 524,288 /
+  # ~12h; the chart always sets this env var, so that only applies
+  # outside Helm.) It is the ONLY replay window
   # trust-consumer, full-coverage-consumer and trust-backlog-consumer have:
   # RDM issues one Kafka group, which movement-relay holds, so a
   # downstream consumer that is down for longer than this loses the gap
@@ -1722,7 +1764,7 @@ movementRelay:
   # This and redis.maxmemory / redis.resources move together: every extra
   # 100,000 entries needs ~100 MiB more `maxmemory` and ~130 MiB more
   # memory limit. Minimum 1000.
-  streamMaxLen: 524288
+  streamMaxLen: 1048576
   healthPort: 8083
   metricsPort: 9094
   logLevel: info
@@ -2134,16 +2176,22 @@ scheduleFeed:
     # once. `crates/schedule-query/examples/index_memory.rs` measures this on
     # a production-shaped synthetic extract. Peak RSS went from 3.0Gi at
     # index build and 3.5Gi building one date's destination rows, to 0.9Gi
-    # for the index and ~1.2Gi peak. Once this ships and live usage confirms
-    # it, the request above (sized for the old 2.2-2.5Gi steady state) and
-    # the limit can both come down. Resize from live `kubectl top`, not from
-    # this estimate.
+    # for the index and ~1.2Gi peak.
+    #
+    # 3Gi/4Gi are DELIBERATELY GENEROUS, stopgap-derived sizes: they are the
+    # production overrides that carried this container through the OOMs
+    # above (at the old 2.25Gi/3Gi) before the fix landed, moved into the
+    # chart defaults. With the streamed compact timetable index and chunked
+    # per-date rows now on main, actual usage is expected to sit well below
+    # them (~1.2Gi peak by the estimate above). Once live usage confirms
+    # it, bring both down -- resize from live `kubectl top`, not from this
+    # estimate.
     resources:
       requests:
         cpu: 250m
-        memory: 2.25Gi
-      limits:
         memory: 3Gi
+      limits:
+        memory: 4Gi
   service:
     # -- LoadBalancer or NodePort + an operator-managed external LB/DNS --
     # NOT an Ingress (HTTP(S)-only by spec, cannot carry SFTP). Actually
