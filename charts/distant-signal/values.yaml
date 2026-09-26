@@ -2020,6 +2020,21 @@ scheduleFeed:
     # request against ~2.2-2.5Gi real usage badly understated this pod's
     # true footprint to both the scheduler and node-pressure eviction
     # ranking. The limit stays at 3Gi, unchanged.
+    #
+    # Resized footprint after the 2026-09-26 OOM fix. Adding the per-calling-
+    # point `platform` string pushed this container past its 3Gi limit on
+    # every run (~7.9M calling points in a ~735MB MCA). Three changes brought
+    # it back down: calling-point strings are stored inline (`SmallStr`,
+    # 128 -> 104 bytes per point, and no heap allocations); the MCA text is
+    # streamed into the index instead of being held as a ~700MB String; and
+    # per-date rows are built and POSTed 50k at a time instead of all at
+    # once. `crates/schedule-query/examples/index_memory.rs` measures this on
+    # a production-shaped synthetic extract. Peak RSS went from 3.0Gi at
+    # index build and 3.5Gi building one date's destination rows, to 0.9Gi
+    # for the index and ~1.2Gi peak. Once this ships and live usage confirms
+    # it, the request above (sized for the old 2.2-2.5Gi steady state) and
+    # the limit can both come down. Resize from live `kubectl top`, not from
+    # this estimate.
     resources:
       requests:
         cpu: 250m
