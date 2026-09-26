@@ -808,6 +808,34 @@ api:
       timeoutSeconds: 3
   # -- Extra env vars appended to the container.
   extraEnv: []
+  # glibc malloc tuning for the api container (debian:bookworm-slim, so
+  # glibc's ptmalloc is the allocator; these env vars are read by glibc
+  # itself at process start, no code involved). Set a key to "" to drop
+  # that env var and fall back to glibc's default.
+  #
+  # Why (2026-09-26 OOM-kill investigation): the api pod's working set sat
+  # at 1.2-1.4GiB of its 1536Mi limit even when idle, then tipped over
+  # during bursts of multi-MB schedule-line-population requests. Two glibc
+  # defaults make a tokio server hold on to freed memory:
+  #   * one malloc arena per concurrently-allocating thread, up to 8 x CPUs
+  #     of them, each keeping its own freed memory for reuse by itself only;
+  #   * a DYNAMIC mmap threshold: after a large mmap'd block (say a 20MB
+  #     response buffer) is freed, glibc raises the threshold to that size
+  #     (up to 32MB), so every later allocation below it comes from an arena
+  #     heap instead -- where freeing it rarely returns memory to the OS.
+  # The code fix (no serde_json::Value round-trip for populations) removes
+  # most of those big transient allocations; these settings keep whatever
+  # large buffers remain from being retained afterwards.
+  malloc:
+    # -- MALLOC_ARENA_MAX. 2 caps retained per-arena memory; the cost is
+    # more lock contention in malloc, negligible at this service's request
+    # rates.
+    arenaMax: "2"
+    # -- MALLOC_MMAP_THRESHOLD_, in bytes. Setting it at all pins the
+    # threshold (disabling the dynamic raise above), so every allocation of
+    # at least this size is its own mmap and goes straight back to the OS on
+    # free. 131072 is glibc's own starting value.
+    mmapThreshold: "131072"
   # The biggest single driver here is NOT steady-state serving, it is
   # the /private/* schedule publishes: schedule-reference POSTs a
   # whole-network day in one body (~30MB of JSON, ~60MB worst case per

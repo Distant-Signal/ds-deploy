@@ -288,6 +288,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.vapidPublicKeySecretName" . }}
                   key: {{ include "distant-signal.vapidPublicKeySecretKey" . }}
+            # glibc malloc tuning -- see api.malloc's own comment in
+            # values.yaml. Each is omitted when its value is empty, which
+            # leaves glibc's own default in place.
+            {{- with .Values.api.malloc.arenaMax }}
+            - name: MALLOC_ARENA_MAX
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.api.malloc.mmapThreshold }}
+            - name: MALLOC_MMAP_THRESHOLD_
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.api.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
