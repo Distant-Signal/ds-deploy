@@ -803,3 +803,59 @@ Task 8: "superseded, not stacked"). */}}
 {{- end }}
 {{- end }}
 
+
+{{/*
+Cold-archive env for the aggregator (crates/aggregator/src/archive.rs).
+Renders NOTHING when archive.enabled is false, so a default install carries
+no ARCHIVE_* env and needs no S3 settings. When enabled, fails rendering on
+a missing bucket/secret or a table the binary would refuse anyway.
+*/}}
+{{- define "distant-signal.archiveEnv" -}}
+{{- if .Values.archive.enabled -}}
+{{- $a := .Values.archive -}}
+{{- if not $a.s3.bucket -}}
+{{- fail "archive.enabled is true but archive.s3.bucket is empty." -}}
+{{- end -}}
+{{- if not $a.s3.existingSecret -}}
+{{- fail "archive.enabled is true but archive.s3.existingSecret is empty. Create a Secret holding the S3 access key pair (keys archive.s3.accessKeyIdKey / archive.s3.secretAccessKeyKey) and name it here." -}}
+{{- end -}}
+{{- range $a.tables -}}
+{{- if not (has . (list "trains")) -}}
+{{- fail (printf "archive.tables entry %q is not archivable. Supported: trains. trust_event_backlog (TRUST licensing safeguard) and LDBWS-derived tables (300-day licence ceiling) are deliberately excluded." .) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (has $a.failurePolicy (list "retain" "delete")) -}}
+{{- fail (printf "archive.failurePolicy must be retain or delete, got %q." $a.failurePolicy) -}}
+{{- end -}}
+- name: ARCHIVE_ENABLED
+  value: "true"
+- name: ARCHIVE_TABLES
+  value: {{ join "," $a.tables | quote }}
+- name: ARCHIVE_FAILURE_POLICY
+  value: {{ $a.failurePolicy | quote }}
+{{- with $a.s3.endpoint }}
+- name: ARCHIVE_S3_ENDPOINT
+  value: {{ . | quote }}
+{{- end }}
+- name: ARCHIVE_S3_BUCKET
+  value: {{ $a.s3.bucket | quote }}
+- name: ARCHIVE_S3_PREFIX
+  value: {{ $a.s3.prefix | quote }}
+- name: ARCHIVE_S3_REGION
+  value: {{ $a.s3.region | quote }}
+- name: ARCHIVE_S3_PATH_STYLE
+  value: {{ $a.s3.pathStyle | quote }}
+- name: ARCHIVE_S3_ALLOW_HTTP
+  value: {{ $a.s3.allowHttp | quote }}
+- name: ARCHIVE_S3_ACCESS_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ $a.s3.existingSecret }}
+      key: {{ $a.s3.accessKeyIdKey }}
+- name: ARCHIVE_S3_SECRET_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ $a.s3.existingSecret }}
+      key: {{ $a.s3.secretAccessKeyKey }}
+{{- end -}}
+{{- end }}

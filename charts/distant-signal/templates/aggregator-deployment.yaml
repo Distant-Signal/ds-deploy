@@ -115,6 +115,11 @@ spec:
             # gate on this.
             - name: FULL_COVERAGE_ENABLED_DEFAULT
               value: {{ .Values.aggregator.fullCoverageEnabledDefault | quote }}
+            {{- /* Optional cold archive (archive.* in values.yaml): nothing at
+            all is rendered here when archive.enabled is false. */}}
+            {{- if .Values.archive.enabled }}
+            {{- include "distant-signal.archiveEnv" . | nindent 12 }}
+            {{- end }}
             - name: RUST_LOG
               value: {{ .Values.aggregator.logLevel | quote }}
             {{- with .Values.aggregator.extraEnv }}

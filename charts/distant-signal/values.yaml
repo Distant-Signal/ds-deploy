@@ -987,6 +987,58 @@ aggregator:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
+# Cold archive (crates/aggregator/src/archive.rs) -- OPTIONAL
+# ---------------------------------------------------------------------------
+# "Archive, then delete" for the aggregator's retention prunes: rows about to
+# be pruned are first written to S3-compatible object storage as
+# zstd-compressed JSON Lines, and deleted only once their objects are
+# confirmed written. See docs/cold-archive.md for the object layout and how
+# to read an archive offline (the app itself never reads it back).
+#
+# DISABLED BY DEFAULT. With `enabled: false` no ARCHIVE_* env is rendered at
+# all, none of the settings below are required, and pruning just deletes,
+# exactly as before.
+archive:
+  enabled: false
+  # -- Tables to archive before pruning (explicit opt-in). Supported:
+  #   - trains  -> the trains row plus its cascaded train_movement_events and
+  #                train_current_state rows, one object per table per batch
+  #                under service_date=YYYY-MM-DD/.
+  # Deliberately NOT archivable (the binary refuses to start if listed):
+  # trust_event_backlog (its 1-day retention is a TRUST licensing
+  # safeguard) and every LDBWS-derived table (line_status_history,
+  # line_status_*_stats, line_coverage_*_stats, station_samples -- RDM's
+  # 300-day ceiling applies to every copy).
+  tables:
+    - trains
+  # -- What to do when an upload fails. `retain` (default): keep the rows,
+  # roll the batch back and retry next retention cycle -- the table grows
+  # past its window while storage is unreachable
+  # (aggregator_archive_upload_failures_total counts these). `delete`:
+  # delete the rows anyway, unarchived, as if archiving were disabled.
+  failurePolicy: retain
+  s3:
+    # -- S3 endpoint URL, e.g. https://thoth.<tailnet>.ts.net. Empty means
+    # AWS's own regional endpoint.
+    endpoint: ""
+    # -- Required when enabled.
+    bucket: ""
+    # -- Key prefix inside the bucket, e.g. distant-signal/archive.
+    prefix: ""
+    # -- Used for request signing; most non-AWS servers accept any value.
+    region: us-east-1
+    # -- Path-style addressing (https://endpoint/bucket/key), which most
+    # non-AWS S3 servers need. false = virtual-hosted style.
+    pathStyle: true
+    # -- Permit a plain http:// endpoint.
+    allowHttp: false
+    # -- Required when enabled: a pre-existing Secret holding the access key
+    # pair. The chart never renders the credentials itself.
+    existingSecret: ""
+    accessKeyIdKey: access-key-id
+    secretAccessKeyKey: secret-access-key
+
+# ---------------------------------------------------------------------------
 # notifier (crates/notifier -- Web Push for pinned-line/tracked-train
 # notifications). Same "no HTTP surface, replicas: 1" shape as aggregator
 # above -- see notifier-deployment.yaml's own comment on why two replicas

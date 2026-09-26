@@ -507,6 +507,19 @@ injected as its own `secretKeyRef` env entry and referenced from
 `DATABASE_URL` with Kubernetes' `$(VAR)` syntax, so `get deployments` — a
 strictly wider audience than `get secrets` — never sees it.
 
+## Cold archive (optional)
+
+Off by default. When `archive.enabled` is false, the aggregator renders no
+`ARCHIVE_*` env and its retention prunes simply delete. When enabled, the
+rows that `trains` retention is about to prune (together with their
+`train_movement_events`/`train_current_state` children) are written first to
+S3-compatible storage as zstd JSON Lines, and deleted only once the upload
+is confirmed. `archive.s3.bucket` and `archive.s3.existingSecret` are
+required when enabled. `trust_event_backlog` and the LDBWS-derived tables
+cannot be archived (licensing). See [docs/cold-archive.md](../../docs/cold-archive.md)
+for the key layout, the failure policy, and how to read an archive with
+DuckDB.
+
 ## Ingress
 
 One `Ingress` object with up to two **separate hostnames**, both optional and

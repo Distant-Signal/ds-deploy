@@ -547,6 +547,34 @@ jobs:
             --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
             > /dev/null
 
+      # Disabled (the default) must render no ARCHIVE_* env at all; enabled
+      # must wire the credentials from the named existing Secret.
+      - name: helm template (cold archive enabled)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          disabled=$(helm template distant-signal charts/distant-signal "${base[@]}")
+          if grep -q 'ARCHIVE_' <<<"$disabled"; then
+            echo "archive disabled but ARCHIVE_* env rendered" >&2; exit 1
+          fi
+          out=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set archive.enabled=true \
+            --set archive.s3.bucket=archive-bucket \
+            --set archive.s3.existingSecret=archive-creds)
+          grep -q 'name: ARCHIVE_S3_SECRET_ACCESS_KEY' <<<"$out"
+          grep -q 'name: archive-creds' <<<"$out"
+
       - name: helm template (values-example.yaml)
         run: |
           helm template distant-signal charts/distant-signal -f charts/distant-signal/values-example.yaml \
