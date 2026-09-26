@@ -1215,9 +1215,13 @@ redis:
     # groups outright -- see redis-deployment.yaml's own comment for the
     # full account.
     enabled: true
-    # -- Requested volume size. Small on purpose: both streams this Redis
-    # carries (movement-events, incident-text-changed) are actively
-    # consumed and trimmed, not accumulated indefinitely.
+    # -- Requested volume size. Both streams are capped (movement-events
+    # by movementRelay.streamMaxLen), so the AOF is bounded: its RDB base
+    # file compresses the dataset about 4:1 (a ~105 MB base for ~400 MB in
+    # memory, 2026-09-26), the incremental file grows to about the base's
+    # size before a rewrite, and a rewrite briefly writes a new base
+    # alongside the old one. That is ~0.5 GB at the 640mb maxmemory. If
+    # you raise maxmemory well past that, raise this too.
     size: 1Gi
     # -- StorageClass name. Empty means the cluster default.
     storageClass: ""
@@ -1225,16 +1229,73 @@ redis:
       - ReadWriteOnce
     # -- Use a pre-existing PVC instead of a chart-rendered one.
     existingClaim: ""
-  # A trigger/queue store, not a cache -- but note this chart sets no
-  # `maxmemory`, so Redis will happily grow to the limit below if a
-  # consumer stalls. The limit is the backstop; the real fix for a
-  # stalled consumer is the consumer.
+  # -- Redis `maxmemory`, passed as `--maxmemory`. Empty or null leaves
+  # Redis unbounded (its own default), so a runaway would be OOMKilled by
+  # the container limit instead of refused.
+  #
+  # With `maxmemoryPolicy: noeviction` this turns "the pod is OOMKilled
+  # mid-write" into "writes are refused": movement-relay's XADD gets an
+  # OOM error, retains the Kafka record, pauses its partitions and retries
+  # every 2s without committing (crates/movement-relay/src/main.rs
+  # run_cycle, event_sink.rs), so Kafka holds the backlog and nothing is
+  # dropped. On each refusal it also XTRIMs the stream to its cap (XTRIM
+  # is allowed at maxmemory), so lowering movementRelay.streamMaxLen is
+  # enough to recover. api's XADD to incident-text-changed fails the same
+  # way; enricher's hourly sweep covers anything that missed.
+  #
+  # 640mb (Redis units: mebibytes) is movementRelay.streamMaxLen's 512 MiB
+  # budget plus 25% for larger-than-planned entries, the small
+  # incident-text-changed stream and consumer-group PELs. Keep it at or
+  # below ~65% of the memory limit; see `resources` for the arithmetic.
+  maxmemory: 640mb
+  # -- Redis `maxmemory-policy`. Keep `noeviction`: every other policy
+  # would evict whole stream keys (a stream is one key), i.e. delete
+  # movement-events and all three consumer groups outright.
+  maxmemoryPolicy: noeviction
+  # -- RDB snapshot schedule, passed as `--save`. "" (the default)
+  # disables RDB snapshots; null leaves the image's built-in schedule
+  # (`3600 1 300 100 60 10000`).
+  #
+  # Disabled because AOF already covers durability and each snapshot is a
+  # fork plus a full rewrite of the dataset. At movement-events' write
+  # rate the `60 10000` point fires every ~2 minutes: in production
+  # (2026-09-26) that was a fork and a ~105 MB dump.rdb write every 2
+  # minutes, for a file nothing reads. When AOF is on, Redis loads the AOF
+  # at startup and ignores dump.rdb entirely. The AOF itself (Redis 7
+  # multi-part, `aof-use-rdb-preamble yes`) already has a compact RDB base
+  # file, which is what gives a fast restart (~3.7s for ~400 MB in
+  # production). AOF rewrites still fork, but only when the AOF has doubled
+  # in size (`auto-aof-rewrite-percentage 100`), not every 2 minutes.
+  save: ""
+  # A trigger/queue store, not a cache. Sized for movement-events at its
+  # cap, which is nearly all of the memory.
+  #
+  #   dataset at maxmemory (worst case):     640 MiB
+  #   x 1.06 fragmentation (measured):       ~680 MiB RSS
+  #   + fork copy-on-write, 25% of dataset:  +160 MiB  -> ~840 MiB
+  #   + process baseline, client buffers:    +~30 MiB  -> ~870 MiB
+  #   limit 1Gi                              -> ~150 MiB (15%) spare
+  #
+  # Steady state is well under that: 524,288 entries at the 920 B/entry
+  # measured in production is ~460 MiB used, ~490 MiB RSS, about 48% of
+  # the limit. The request covers steady state plus a fork.
+  #
+  # The 25% copy-on-write figure is deliberately pessimistic. Measured
+  # BGSAVE CoW in production was 1-2 MB, because stream writes append to
+  # new nodes rather than dirtying old pages. But an AOF rewrite that
+  # overlaps a burst, or transparent huge pages magnifying each dirtied
+  # page to 2 MiB, can push it far higher, and CoW is exactly the part the
+  # container limit sees that `maxmemory` does not.
+  #
+  # History: 128Mi/512Mi until 2026-09-26, when the stream at its old
+  # 500,000-entry cap measured 392 MB used / 417 MB RSS -- ~90% of the
+  # limit before any fork.
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 640Mi
     limits:
-      memory: 512Mi
+      memory: 1Gi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1620,6 +1681,20 @@ movementRelay:
     existingSecretUsernameKey: movement-relay-kafka-sasl-username
     existingSecretPasswordKey: movement-relay-kafka-sasl-password
   streamLagPollSecs: 30
+  # -- `MAXLEN ~` cap on the movement-events stream, in entries
+  # (MOVEMENT_STREAM_MAXLEN). The default is a 512 MiB memory budget at a
+  # planning figure of 1 KiB of Redis memory per entry (920 B measured in
+  # production). At the ~1M entries/day measured on 2026-09-26 that is
+  # ~12h of daytime traffic, longer overnight. It is the ONLY replay window
+  # trust-consumer, full-coverage-consumer and trust-backlog-consumer have:
+  # RDM issues one Kafka group, which movement-relay holds, so a
+  # downstream consumer that is down for longer than this loses the gap
+  # for good (detected and logged by check_gap, not recovered).
+  #
+  # This and redis.maxmemory / redis.resources move together: every extra
+  # 100,000 entries needs ~100 MiB more `maxmemory` and ~130 MiB more
+  # memory limit. Minimum 1000.
+  streamMaxLen: 524288
   healthPort: 8083
   metricsPort: 9094
   logLevel: info

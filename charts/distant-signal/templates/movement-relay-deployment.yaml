@@ -112,6 +112,8 @@ spec:
               value: {{ include "distant-signal.redisUrl" . | quote }}
             - name: STREAM_LAG_POLL_SECS
               value: {{ .Values.movementRelay.streamLagPollSecs | quote }}
+            - name: MOVEMENT_STREAM_MAXLEN
+              value: {{ int64 .Values.movementRelay.streamMaxLen | quote }}
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.movementRelay.healthPort) | quote }}
             - name: METRICS_ENABLED

@@ -100,14 +100,27 @@ spec:
           # ~1s of writes at a small, constant disk-write cost -- acceptable
           # here given this Redis's write volume (a handful of consumer
           # groups' worth of stream entries, not a general-purpose cache).
-          # RDB is deliberately NOT disabled: `redis:7` ships with default
-          # `save` points built in (no redis.conf is mounted, so redis runs
-          # on its compiled-in defaults), which cost nothing extra to leave
-          # on and give a second, independent recovery path (e.g. a fast
-          # full resync) alongside AOF.
+          #
+          # RDB snapshots (`--save`) are off by default -- see values.yaml's
+          # `redis.save` for why AOF alone is enough and what the
+          # snapshots cost. `--maxmemory`/`--maxmemory-policy` make a full
+          # Redis refuse writes (backpressure onto movement-relay's Kafka
+          # consumer) instead of being OOMKilled; see `redis.maxmemory`.
           args:
             - --appendonly
             - "yes"
+            {{- if not (kindIs "invalid" .Values.redis.save) }}
+            - --save
+            - {{ .Values.redis.save | quote }}
+            {{- end }}
+            {{- with .Values.redis.maxmemory }}
+            - --maxmemory
+            - {{ . | quote }}
+            {{- end }}
+            {{- with .Values.redis.maxmemoryPolicy }}
+            - --maxmemory-policy
+            - {{ . | quote }}
+            {{- end }}
           volumeMounts:
             - name: data
               # Redis's own default working directory (`dir` in redis.conf,

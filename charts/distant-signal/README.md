@@ -475,6 +475,18 @@ always the case — see redis-deployment.yaml's own comment for the
 2026-09-04 production incident (a Redis restart with no persistence wiped
 `movement-events` and both consumer groups) that this default responds to.
 
+### Sizing
+
+Nearly all of this Redis's memory is `movement-events`. Its length is capped
+at `movementRelay.streamMaxLen` entries (default 524,288, about 12 hours of
+daytime traffic). That default comes from a 512 MiB budget at roughly
+1 KiB per entry. `redis.maxmemory` (640mb) is that budget plus 25%, and
+the 1Gi memory limit leaves room above `maxmemory` for fragmentation and
+fork copy-on-write. Change the three together. Every extra 100,000
+entries needs about 100 MiB more `maxmemory` and about 130 MiB more limit.
+RDB snapshots are off (`redis.save: ""`) because AOF already persists
+everything, and each snapshot forks the process.
+
 Set `redis.enabled: false` and give a URL to point at a managed instance
 instead:
 
@@ -850,7 +862,10 @@ used for and why persistence defaults on.
 | `redis.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
 | `redis.persistence.accessModes` | `[ReadWriteOnce]` | PVC access modes. |
 | `redis.persistence.existingClaim` | `""` | Use a pre-existing PVC instead of a chart-rendered one. |
-| `redis.resources` | `{}` | Container resource requests/limits. |
+| `redis.maxmemory` | `640mb` | Passed as `--maxmemory`. With `noeviction`, a full Redis refuses writes (movement-relay backs off and Kafka holds the backlog) instead of being OOMKilled. Empty or null leaves it unbounded. |
+| `redis.maxmemoryPolicy` | `noeviction` | Passed as `--maxmemory-policy`. Keep `noeviction`: any evicting policy deletes whole stream keys. |
+| `redis.save` | `""` | Passed as `--save`. `""` disables RDB snapshots (AOF covers durability); null keeps the image's built-in schedule. |
+| `redis.resources` | `{requests: {cpu: 50m, memory: 640Mi}, limits: {memory: 1Gi}}` | Container resource requests/limits, sized for `movementRelay.streamMaxLen` at `redis.maxmemory` plus fork copy-on-write; see values.yaml for the arithmetic. |
 | `redis.nodeSelector` | `{}` | Pod node selector. |
 | `redis.tolerations` | `[]` | Pod tolerations. |
 | `redis.affinity` | `{}` | Pod affinity rules. |
@@ -1067,8 +1082,8 @@ helm uninstall distant-signal -n distant-signal
 - **No HorizontalPodAutoscaler.** The aggregator, the enricher and all four
   pollers are singleton loops that must not be scaled, and the api is
   database-bound.
-- **No persistence, backup or HA for the bundled Redis.** It is a disposable
-  trigger queue; see "Using an external Redis" above.
+- **No backup or HA for the bundled Redis.** It is a single replica with
+  AOF persistence on a PVC; see "Using an external Redis" above.
 - **No backup, restore or replication** for the bundled Postgres. It is a
   single-replica StatefulSet on a PVC. Set `postgresql.enabled: false` and
   use a managed database if you need HA.

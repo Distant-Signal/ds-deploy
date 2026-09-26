@@ -616,6 +616,45 @@ jobs:
             echo "postgres config/shm rendered despite being disabled" >&2; exit 1
           fi
 
+      # Redis must render --save "" and --maxmemory/--maxmemory-policy by
+      # default; null must drop --save/--maxmemory. movement-relay must get
+      # MOVEMENT_STREAM_MAXLEN as a plain integer (not 524288e+00).
+      - name: helm template (redis memory and stream cap)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          redis=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --show-only templates/redis-deployment.yaml)
+          grep -A1 -- '- --save' <<<"$redis" | grep -q -- '- ""'
+          grep -A1 -- '- --maxmemory$' <<<"$redis" | grep -q -- '- "640mb"'
+          grep -A1 -- '- --maxmemory-policy' <<<"$redis" | grep -q -- '- "noeviction"'
+          grep -q 'memory: 1Gi' <<<"$redis"
+          bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set redis.save=null --set redis.maxmemory=null \
+            --show-only templates/redis-deployment.yaml)
+          if grep -E -q -- '- --save|- --maxmemory$' <<<"$bare"; then
+            echo "redis --save/--maxmemory rendered despite being null" >&2; exit 1
+          fi
+          relay=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set movementRelay.enabled=true \
+            --set movementRelay.kafka.brokers=kafka.example.com:9094 \
+            --set movementRelay.kafka.topic=test-topic \
+            --set movementRelay.kafka.consumerGroup=test-group \
+            --set movementRelay.kafka.saslMechanism=PLAIN \
+            --show-only templates/movement-relay-deployment.yaml)
+          grep -A1 'name: MOVEMENT_STREAM_MAXLEN' <<<"$relay" | grep -q 'value: "524288"'
+
       - name: helm template (values-example.yaml)
         run: |
           helm template distant-signal charts/distant-signal -f charts/distant-signal/values-example.yaml \
