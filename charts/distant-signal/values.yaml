@@ -251,12 +251,18 @@ pollers:
     logLevel: info
     extraEnv: []
     # Fetches and diffs one RDM incident feed per tick.
+    #
+    # Limit trimmed from 256Mi to 128Mi 2026-09-26: live `kubectl top` on
+    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # range across all 5 pollers -- 256Mi was ~20-50x that. Halved rather
+    # than sized to the snapshot, since these are event-driven workloads
+    # that can spike under a burst of incoming messages.
     resources:
       requests:
         cpu: 25m
         memory: 64Mi
       limits:
-        memory: 256Mi
+        memory: 128Mi
     nodeSelector: {}
     tolerations: []
     affinity: {}
@@ -292,12 +298,18 @@ pollers:
     extraEnv: []
     # Holds the whole ~2,500-row station catalogue in memory to build one
     # ingest body.
+    #
+    # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
+    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # range across all 5 pollers -- 384Mi was ~30-75x that. Halved rather
+    # than sized to the snapshot, since these are event-driven workloads
+    # that can spike under a burst of incoming messages.
     resources:
       requests:
         cpu: 25m
         memory: 128Mi
       limits:
-        memory: 384Mi
+        memory: 192Mi
     nodeSelector: {}
     tolerations: []
     affinity: {}
@@ -351,12 +363,18 @@ pollers:
     # crates/poller-tfl/src/config.rs's dlr_pilot_stop_point_id doc.
     dlrPilotStopPointId: "940GZZDLPOP"
     # One TfL line-status JSON document per tick.
+    #
+    # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
+    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # range across all 5 pollers -- 384Mi was ~30-75x that. Halved rather
+    # than sized to the snapshot, since these are event-driven workloads
+    # that can spike under a burst of incoming messages.
     resources:
       requests:
         cpu: 25m
         memory: 128Mi
       limits:
-        memory: 384Mi
+        memory: 192Mi
     nodeSelector: {}
     tolerations: []
     affinity: {}
@@ -391,12 +409,18 @@ pollers:
     logLevel: info
     extraEnv: []
     # The smallest poller in the chart: a short operator list per tick.
+    #
+    # Limit trimmed from 256Mi to 128Mi 2026-09-26: live `kubectl top` on
+    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # range across all 5 pollers -- 256Mi was ~20-50x that. Halved rather
+    # than sized to the snapshot, since these are event-driven workloads
+    # that can spike under a burst of incoming messages.
     resources:
       requests:
         cpu: 25m
         memory: 64Mi
       limits:
-        memory: 256Mi
+        memory: 128Mi
     nodeSelector: {}
     tolerations: []
     affinity: {}
@@ -441,12 +465,18 @@ pollers:
     extraEnv: []
     # Parses Darwin LDBWS SOAP responses, which are verbose XML and the
     # largest bodies any RDM poller handles.
+    #
+    # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
+    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # range across all 5 pollers -- 384Mi was ~30-75x that. Halved rather
+    # than sized to the snapshot, since these are event-driven workloads
+    # that can spike under a burst of incoming messages.
     resources:
       requests:
         cpu: 25m
         memory: 128Mi
       limits:
-        memory: 384Mi
+        memory: 192Mi
     nodeSelector: {}
     tolerations: []
     affinity: {}
@@ -937,12 +967,17 @@ aggregator:
   extraEnv: []
   # A singleton loop: one line-catalogue copy plus one batch of
   # line_status/history rows in flight at a time.
+  #
+  # Limit trimmed from 768Mi to 384Mi 2026-09-26: live `kubectl top` on the
+  # mine-bringer cluster showed steady-state usage of ~22Mi -- 768Mi was
+  # ~35x that. Halved rather than sized to the snapshot, since this is an
+  # event-driven workload that can spike under a burst of upstream changes.
   resources:
     requests:
       cpu: 100m
       memory: 256Mi
     limits:
-      memory: 768Mi
+      memory: 384Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1162,12 +1197,17 @@ enricher:
   # Reads one incident at a time off Redis and calls out to the LLM
   # over HTTP. Almost all of its wall-clock is waiting on that call, so
   # both numbers are small.
+  #
+  # Limit trimmed from 512Mi to 256Mi 2026-09-26: live `kubectl top` on the
+  # mine-bringer cluster showed steady-state usage of ~6Mi -- 512Mi was
+  # ~85x that. Halved rather than sized to the snapshot, since this is an
+  # event-driven workload that can spike under a burst of incidents.
   resources:
     requests:
       cpu: 50m
       memory: 128Mi
     limits:
-      memory: 512Mi
+      memory: 256Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1260,12 +1300,17 @@ trustConsumer:
   # movement feed). Memory is librdkafka's own fetch buffers plus the
   # STANOX/CRS crosswalk it caches; CPU is per-message parsing, which
   # is why its request is one of the larger ones.
+  #
+  # Limit trimmed from 768Mi to 384Mi 2026-09-26: live `kubectl top` on the
+  # mine-bringer cluster showed steady-state usage of ~7Mi -- 768Mi was
+  # ~100x that. Halved rather than sized to the snapshot, since this is an
+  # event-driven workload that can spike under a burst of movement events.
   resources:
     requests:
       cpu: 200m
       memory: 256Mi
     limits:
-      memory: 768Mi
+      memory: 384Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1391,12 +1436,17 @@ trustBacklogConsumer:
   extraEnv: []
   # Drains a Redis list in bounded batches and POSTs them on. The
   # backlog itself lives in Redis, not in this process.
+  #
+  # Limit trimmed from 512Mi to 256Mi 2026-09-26: live `kubectl top` on the
+  # mine-bringer cluster showed steady-state usage of ~8Mi -- 512Mi was
+  # ~64x that. Halved rather than sized to the snapshot, since this is an
+  # event-driven workload that can spike under a burst of backlog entries.
   resources:
     requests:
       cpu: 50m
       memory: 128Mi
     limits:
-      memory: 512Mi
+      memory: 256Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1451,12 +1501,17 @@ movementRelay:
   extraEnv: []
   # A pure Kafka -> Redis-stream passthrough: one message in flight
   # plus librdkafka's fetch buffers.
+  #
+  # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on the
+  # mine-bringer cluster showed steady-state usage of ~7Mi -- 384Mi was
+  # ~55x that. Halved rather than sized to the snapshot, since this is an
+  # event-driven workload that can spike under a burst of movement events.
   resources:
     requests:
       cpu: 100m
       memory: 128Mi
     limits:
-      memory: 384Mi
+      memory: 192Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1725,12 +1780,17 @@ scheduleFeed:
     # drakkan/sftpgo doing nothing but accepting one SFTP session a day and
     # streaming a zip to the shared PVC. The smallest container in the chart;
     # it holds no application state at all.
+    #
+    # Limit trimmed from 256Mi to 128Mi 2026-09-26: live `kubectl top` on the
+    # mine-bringer cluster showed steady-state usage of ~33Mi -- 256Mi was
+    # ~8x that. Halved rather than sized to the snapshot, since a large CIF
+    # delivery can legitimately spike this.
     resources:
       requests:
         cpu: 25m
         memory: 64Mi
       limits:
-        memory: 256Mi
+        memory: 128Mi
     destinationFolder: incoming
     # -- Optional deeper subfolder within destinationFolder, e.g. "2026"
     # for DTD to land files in "/incoming/2026". Empty by default: RSPS5046
@@ -1777,12 +1837,17 @@ scheduleFeed:
     # A read_dir/stat scan loop plus an unzip of the delivered archive to the
     # same PVC. It streams rather than buffering the whole extract, so it sits
     # much closer to the sftp container than to `reference` below.
+    #
+    # Limit trimmed from 512Mi to 256Mi 2026-09-26: live `kubectl top` on the
+    # mine-bringer cluster showed steady-state usage of ~5Mi -- 512Mi was
+    # ~100x that. Halved rather than sized to the snapshot, since a large
+    # CIF delivery can legitimately spike this.
     resources:
       requests:
         cpu: 50m
         memory: 128Mi
       limits:
-        memory: 512Mi
+        memory: 256Mi
   # -- Third sibling container in this same Pod (crates/schedule-reference):
   # once `ingest` has moved a verified-complete delivery into
   # storage_dir/<n>/, parses that sequence's TI/A records into the
@@ -1822,10 +1887,18 @@ scheduleFeed:
     # aborts the parse partway through, which (like every other publish in
     # this crate) is best-effort log-and-continue -- so it does not retry
     # loudly, it just leaves the product stale until the next delivery.
+    #
+    # Request raised from 1Gi to 2.25Gi 2026-09-26: live `kubectl top` on
+    # the mine-bringer cluster showed steady-state usage of 2208-2565Mi --
+    # this is documented, expected behavior (the whole-network CIF parse
+    # plus its several derived in-memory products), not a leak, but a 1Gi
+    # request against ~2.2-2.5Gi real usage badly understated this pod's
+    # true footprint to both the scheduler and node-pressure eviction
+    # ranking. The limit stays at 3Gi, unchanged.
     resources:
       requests:
         cpu: 250m
-        memory: 1Gi
+        memory: 2.25Gi
       limits:
         memory: 3Gi
   service:
