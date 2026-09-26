@@ -2053,11 +2053,19 @@ frontend:
   apiBaseUrl: ""
   # -- The deployment's own public origin (e.g. https://rail.example.com),
   # used for share/invite links and same-origin checks
-  # (frontend/lib/siteOrigin.ts). Leave empty to fall back to each
-  # request's own Host header -- functional, but frontend logs a one-time
-  # warning recommending this be set in production. Strongly recommended
-  # to set to `https://<ingress.frontend.host>` when ingress.frontend is
-  # enabled.
+  # (frontend/lib/siteOrigin.ts). SET THIS IN PRODUCTION.
+  #
+  # When empty, the chart derives it from ingress.frontend.host (https if
+  # ingress.tls is set) whenever this chart's own ingress publishes the
+  # frontend -- see the "distant-signal.frontendSiteUrl" helper. Only when
+  # there is no such host either (port-forward installs, or an externally
+  # managed ingress/proxy) does the frontend fall back to each request's
+  # own Host + X-Forwarded-Proto headers: every group invite link and
+  # journey share link is then built from request headers a client or a
+  # misconfigured proxy can spoof, instead of a pinned value. The frontend
+  # logs a one-time warning in that case and NOTES.txt prints one at
+  # install time. If TLS terminates somewhere the chart can't see (so the
+  # derived scheme would be http), set this explicitly.
   siteUrl: ""
   extraEnv: []
   # A Next.js server render process -- Node's heap dominates, and it is

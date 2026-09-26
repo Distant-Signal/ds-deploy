@@ -130,6 +130,24 @@ Per-component object names. Each takes root.
 {{- printf "%s-frontend" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/*
+The frontend's pinned public origin (NEXT_PUBLIC_SITE_URL). frontend.siteUrl
+wins when set; otherwise, when the chart itself publishes the frontend via
+ingress, the origin is DERIVED from ingress.frontend.host (https when
+ingress.tls is set -- the same expression NOTES.txt uses for the UI URL), so
+share/invite links are pinned to an operator-configured value rather than
+falling back to each request's Host/X-Forwarded-Proto headers. Empty only
+when neither is available (e.g. port-forward-only installs), in which case
+NOTES.txt prints a warning.
+*/}}
+{{- define "distant-signal.frontendSiteUrl" -}}
+{{- if .Values.frontend.siteUrl -}}
+{{- .Values.frontend.siteUrl -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.frontend.enabled .Values.ingress.frontend.host -}}
+{{- printf "http%s://%s" (ternary "s" "" (not (empty .Values.ingress.tls))) .Values.ingress.frontend.host -}}
+{{- end -}}
+{{- end }}
+
 {{- define "distant-signal.redisFullname" -}}
 {{- printf "%s-redis" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}

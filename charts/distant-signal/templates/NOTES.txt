@@ -17,6 +17,18 @@ Reach the web UI:
   # then open http://localhost:{{ .Values.frontend.service.port }}/
 {{- end }}
 
+{{- if not (include "distant-signal.frontendSiteUrl" .) }}
+
+  ############################################################################
+  # WARNING: frontend.siteUrl is not set (and there is no ingress.frontend.host
+  # to derive it from), so the frontend builds share/invite links from each
+  # request's own Host / X-Forwarded-Proto headers. Behind a proxy that
+  # forwards a client-supplied Host, those links can point at an arbitrary
+  # host. Set frontend.siteUrl to your public origin, e.g.
+  #   --set frontend.siteUrl=https://rail.example.com
+  ############################################################################
+{{- end }}
+
 Reach the api:
 {{- if and .Values.ingress.enabled .Values.ingress.api.enabled .Values.ingress.api.host }}
 

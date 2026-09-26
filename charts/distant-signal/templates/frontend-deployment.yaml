@@ -55,7 +55,7 @@ spec:
             # masked in every environment so far by the graceful fallback,
             # not a working equivalent default.
             - name: NEXT_PUBLIC_SITE_URL
-              value: {{ .Values.frontend.siteUrl | quote }}
+              value: {{ include "distant-signal.frontendSiteUrl" . | quote }}
             {{- if .Values.railMcp.enabled }}
             {{- if not .Values.railMcp.baseUrl }}
             {{- fail "railMcp.enabled is true but railMcp.baseUrl is empty. Set it to the external HTTP base URL of the separately-deployed derived MCP service, or set railMcp.enabled=false." }}
