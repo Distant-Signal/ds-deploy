@@ -119,6 +119,11 @@ postgresql:
       memory: 512Mi
     limits:
       memory: 2Gi
+  # Merged key-by-key over values.yaml's `postgresql.config` defaults
+  # (which are already sized for this 2Gi limit); only the SSD-specific
+  # planner cost is added here. Any change restarts Postgres.
+  config:
+    random_page_cost: "1.1"
 
 # Shared, non-secret OAuth2 client-credentials config every real caller
 # below (the 5 pollers here, plus trust-consumer/schedule-ingest/

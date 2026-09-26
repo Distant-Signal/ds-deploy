@@ -14,8 +14,14 @@ spec:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 6 }}
   template:
     metadata:
+      # Deliberately NOT the full `distant-signal.labels` set: its
+      # `helm.sh/chart` and `app.kubernetes.io/version` values change on every
+      # CI build, and any pod-template change rolls this StatefulSet -- i.e.
+      # restarted Postgres (dropping its cache) on every deploy. Only labels
+      # that stay constant across releases belong here.
       labels:
-        {{- include "distant-signal.labels" (dict "root" . "component" "postgres") | nindent 8 }}
+        {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 8 }}
+        app.kubernetes.io/part-of: distant-signal
       {{- with .Values.postgresql.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
@@ -44,6 +50,20 @@ spec:
         - name: postgres
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.postgresql.image) | quote }}
           imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          {{- with .Values.postgresql.config }}
+          # postgresql.config, one `-c name=value` pair per key (sorted).
+          # The image's entrypoint forwards a leading `-c` to `postgres`,
+          # including for the temporary initdb-time server. Command-line
+          # settings OUTRANK postgresql.conf AND ALTER SYSTEM
+          # (postgresql.auto.conf), so values here always win. Being part of
+          # the pod template, any change rolls the StatefulSet -- i.e. a
+          # Postgres restart, which most of these settings need anyway.
+          args:
+            {{- range $name, $value := . }}
+            - -c
+            - {{ printf "%s=%s" $name (include "distant-signal.postgresConfValue" $value) | quote }}
+            {{- end }}
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             # NOT read-only: postgres writes its socket to /var/run/postgresql.
@@ -97,6 +117,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            {{- if .Values.postgresql.shm.enabled }}
+            - name: dshm
+              mountPath: /dev/shm
+            {{- end }}
           {{- with .Values.postgresql.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -113,8 +137,10 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or (not .Values.postgresql.persistence.enabled) .Values.postgresql.persistence.existingClaim }}
+      {{- $podDataVolume := or (not .Values.postgresql.persistence.enabled) .Values.postgresql.persistence.existingClaim }}
+      {{- if or $podDataVolume .Values.postgresql.shm.enabled }}
       volumes:
+        {{- if $podDataVolume }}
         - name: data
           {{- if .Values.postgresql.persistence.existingClaim }}
           persistentVolumeClaim:
@@ -122,6 +148,24 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
+        {{- if .Values.postgresql.shm.enabled }}
+        # The container runtime's default /dev/shm is 64 MiB. Postgres puts
+        # its dynamic shared memory there (dynamic_shared_memory_type=posix):
+        # a parallel VACUUM's dead-tuple array (up to maintenance_work_mem)
+        # and parallel hash joins (up to work_mem * hash_mem_multiplier per
+        # participant). A full /dev/shm fails the statement with "could not
+        # resize shared memory segment ... No space left on device" -- seen
+        # in production. shared_buffers is an anonymous mmap and does NOT
+        # live here. tmpfs pages count against the container's memory limit
+        # while in use. Sizing rule: see `postgresql.shm` in values.yaml.
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            {{- with .Values.postgresql.shm.sizeLimit }}
+            sizeLimit: {{ . }}
+            {{- end }}
+        {{- end }}
       {{- end }}
   {{- if and .Values.postgresql.persistence.enabled (not .Values.postgresql.persistence.existingClaim) }}
   volumeClaimTemplates:

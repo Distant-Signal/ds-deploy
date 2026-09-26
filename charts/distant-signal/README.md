@@ -670,17 +670,59 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `postgresql.service.port` | `5432` | Port the headless Service and the container listen on. |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |
-| `postgresql.persistence.size` | `8Gi` | Requested volume size. |
+| `postgresql.persistence.size` | `20Gi` | Requested volume size. |
 | `postgresql.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
 | `postgresql.persistence.accessModes` | `[ReadWriteOnce]` | PVC access modes. |
 | `postgresql.persistence.existingClaim` | `""` | Use a pre-existing PVC instead of a `volumeClaimTemplates` entry. |
-| `postgresql.extraEnv` | `[]` | Extra container env vars (e.g. `shared_buffers` tuning). |
+| `postgresql.extraEnv` | `[]` | Extra container env vars. Server settings go in `postgresql.config`. |
+| `postgresql.config` | see below | `postgresql.conf` settings, rendered as `-c name=value` args. Sized for the default 2Gi limit. A `null` key falls back to the Postgres default. Changing it restarts Postgres. |
+| `postgresql.shm.enabled` | `true` | Mount a memory-backed emptyDir at `/dev/shm` (the runtime default is 64MiB). |
+| `postgresql.shm.sizeLimit` | `512Mi` | Size of `/dev/shm`. Empty means unbounded apart from the memory limit. |
 | `postgresql.podSecurityContext` | `{}` | Merged over the pod securityContext. uid/gid/fsGroup 999 are pinned by default and required by this image. |
-| `postgresql.resources` | `{}` | Container resource requests/limits. |
+| `postgresql.resources` | requests `250m`/`1Gi`, limit `2Gi` | Container resource requests/limits. The `config` defaults assume the 2Gi limit. |
 | `postgresql.nodeSelector` | `{}` | Pod node selector. |
 | `postgresql.tolerations` | `[]` | Pod tolerations. |
 | `postgresql.affinity` | `{}` | Pod affinity rules. |
 | `postgresql.podAnnotations` | `{}` | Pod annotations. |
+
+#### Postgres memory and checkpoint tuning
+
+`postgresql.config` is merged key by key over these defaults, so an
+override only needs to name the keys it changes:
+
+| Setting | Chart default | Postgres default | Why |
+|---|---|---|---|
+| `shared_buffers` | `512MB` | `128MB` | About 25% of the 2Gi limit. |
+| `effective_cache_size` | `1536MB` | `4GB` | Planner hint only, about 75% of the limit. |
+| `work_mem` | `8MB` | `4MB` | Per sort/hash node. Hash nodes may use twice this (`hash_mem_multiplier`). |
+| `maintenance_work_mem` | `128MB` | `64MB` | Manual VACUUM, CREATE INDEX. |
+| `autovacuum_work_mem` | `64MB` | `-1` (= `maintenance_work_mem`) | Per autovacuum worker (3). Decoupled so maintenance bumps don't triple. |
+| `wal_buffers` | `16MB` | `-1` (shared_buffers/32, max 16MB) | Bulk schedule publishes fill small WAL buffers. |
+| `max_wal_size` | `2GB` | `1GB` | Fewer size-triggered checkpoints during bulk writes. |
+| `checkpoint_timeout` | `15min` | `5min` | Fewer full-page images. Crash recovery takes longer. |
+| `huge_pages` | `off` | `try` | The pod requests no hugepages. `try` can SIGBUS on nodes where hugepages exist but aren't granted to the pod. |
+
+`random_page_cost` is left at Postgres's spinning-disk default of 4. Set
+it to `"1.1"` on SSD/NVMe storage, as `values-example.yaml` does. If you
+raise `resources.limits.memory`, scale `shared_buffers` (~25%) and
+`effective_cache_size` (~75%) with it. If you raise
+`maintenance_work_mem` or `work_mem`, raise `postgresql.shm.sizeLimit` too:
+a parallel VACUUM keeps its whole dead-tuple array (up to
+`maintenance_work_mem`) in `/dev/shm`. With the runtime default of 64MiB,
+that fails with `could not resize shared memory segment ... No space left
+on device`. Memory used in `/dev/shm` counts against the container's
+memory limit.
+
+The settings are passed on the command line, so they override both
+`postgresql.conf` and `ALTER SYSTEM`. They are part of the pod template,
+so changing any of them rolls the StatefulSet (`RollingUpdate`, one pod).
+Postgres restarts, which `shared_buffers`, `wal_buffers` and `huge_pages`
+need anyway. Expect a short outage. Postgres stops cleanly (the image's
+SIGINT stop signal requests a fast shutdown), then starts with a cold
+buffer cache. Because the pod template carries the `helm.sh/chart` and
+`app.kubernetes.io/version` labels, **every chart upgrade restarts
+Postgres anyway**, even when these settings don't change. No config
+checksum annotation is needed.
 
 ### externalDatabase
 

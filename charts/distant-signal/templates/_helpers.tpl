@@ -122,6 +122,23 @@ Per-component object names. Each takes root.
 {{- printf "%s-postgres" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/*
+One postgresql.config value, rendered as Postgres expects it after
+`-c name=`. YAML hands Helm whole numbers as float64 (so a bare 100000000
+would print as 1e+08) and YAML 1.1 turns a bare on/off into a bool: whole
+floats print as integers and bools as on/off. Everything else, including
+unit strings like 512MB, prints as-is. Takes the value.
+*/}}
+{{- define "distant-signal.postgresConfValue" -}}
+{{- if kindIs "bool" . -}}
+{{- ternary "on" "off" . -}}
+{{- else if and (kindIs "float64" .) (eq (float64 (int64 .)) .) -}}
+{{- int64 . -}}
+{{- else -}}
+{{- toString . -}}
+{{- end -}}
+{{- end }}
+
 {{- define "distant-signal.apiFullname" -}}
 {{- printf "%s-api" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}

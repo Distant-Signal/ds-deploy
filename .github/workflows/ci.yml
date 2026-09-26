@@ -575,6 +575,47 @@ jobs:
           grep -q 'name: ARCHIVE_S3_SECRET_ACCESS_KEY' <<<"$out"
           grep -q 'name: archive-creds' <<<"$out"
 
+      # postgresql.config must render as sorted `-c name=value` args, with
+      # whole YAML numbers as integers (not 1e+08) and bools as on/off,
+      # plus the memory-backed /dev/shm. `config: null` and
+      # `shm.enabled=false` must render neither.
+      - name: helm template (postgres config and /dev/shm)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --show-only templates/postgres-statefulset.yaml
+          )
+          out=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            -f - <<'EOF'
+          postgresql:
+            config:
+              temp_file_limit: 100000000
+              jit: off
+          EOF
+          )
+          grep -q -- '- "shared_buffers=512MB"' <<<"$out"
+          grep -q -- '- "huge_pages=off"' <<<"$out"
+          grep -q -- '- "temp_file_limit=100000000"' <<<"$out"
+          grep -q -- '- "jit=off"' <<<"$out"
+          grep -q 'mountPath: /dev/shm' <<<"$out"
+          grep -q 'medium: Memory' <<<"$out"
+          grep -q 'sizeLimit: 512Mi' <<<"$out"
+          bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set postgresql.config=null --set postgresql.shm.enabled=false)
+          if grep -E -q 'args:|/dev/shm|name: dshm' <<<"$bare"; then
+            echo "postgres config/shm rendered despite being disabled" >&2; exit 1
+          fi
+
       - name: helm template (values-example.yaml)
         run: |
           helm template distant-signal charts/distant-signal -f charts/distant-signal/values-example.yaml \

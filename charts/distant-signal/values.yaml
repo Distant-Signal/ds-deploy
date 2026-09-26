@@ -138,8 +138,81 @@ postgresql:
       - ReadWriteOnce
     # -- Use a pre-existing PVC instead of a volumeClaimTemplates entry.
     existingClaim: ""
-  # -- Extra PostgreSQL container env vars (e.g. shared_buffers tuning).
+  # -- Extra PostgreSQL container env vars. Server settings go in
+  # `config` below, not here: the postgres image reads no env var for them.
   extraEnv: []
+  # -- postgresql.conf settings, passed as `-c name=value` args (see
+  # postgres-statefulset.yaml). Command-line settings outrank both
+  # postgresql.conf and ALTER SYSTEM. Any change rolls the StatefulSet,
+  # i.e. restarts Postgres -- which shared_buffers, wal_buffers and
+  # huge_pages need anyway. Quote values carrying units ("512MB",
+  # "15min"). Set a key to null to drop it and fall back to Postgres's own
+  # default; set `config: {}` to drop them all.
+  #
+  # These defaults are SIZED FOR THE DEFAULT 2Gi MEMORY LIMIT in
+  # `resources` below: if you change that limit, scale shared_buffers
+  # (~25% of it) and effective_cache_size (~75%) with it. Rough budget at
+  # 2Gi: 512MB shared_buffers + 16MB WAL buffers + up to 3 x 64MB
+  # autovacuum + 128MB for one manual VACUUM/CREATE INDEX (held in
+  # /dev/shm when the VACUUM runs in parallel) + per-backend memory
+  # (typically 10-30MB idle, far more briefly while detoasting large
+  # JSONB) + parallel-query /dev/shm, leaving the rest to the page cache.
+  # Storage-dependent settings (random_page_cost, effective_io_concurrency)
+  # are deliberately not set: Postgres's defaults assume spinning disks;
+  # on SSD/NVMe set random_page_cost to 1.1.
+  config:
+    # Postgres default 128MB. ~25% of the memory limit.
+    shared_buffers: "512MB"
+    # Planner hint only (no allocation): shared_buffers + the page cache
+    # the container can realistically keep, ~75% of the limit.
+    effective_cache_size: "1536MB"
+    # Per sort/hash node per backend, and hash nodes may use
+    # hash_mem_multiplier (2) times this. Keep it modest -- the chart's
+    # services hold ~15-20 pooled connections, max_connections is 100.
+    work_mem: "8MB"
+    # Manual VACUUM, CREATE INDEX, ALTER TABLE ADD FOREIGN KEY.
+    maintenance_work_mem: "128MB"
+    # Per autovacuum worker (autovacuum_max_workers = 3). Set explicitly
+    # so raising maintenance_work_mem for migrations doesn't triple into
+    # the autovacuum budget. 64MB holds ~11M dead tuple ids per pass.
+    autovacuum_work_mem: "64MB"
+    # The automatic value is shared_buffers/32 capped at 16MB; pinned so
+    # it doesn't shrink if shared_buffers is lowered. Bulk whole-day
+    # schedule publishes fill small WAL buffers fast.
+    wal_buffers: "16MB"
+    # Postgres defaults 1GB / 5min. Fewer, larger checkpoints mean fewer
+    # full-page images in WAL after each one; the cost is a longer crash
+    # recovery (bounded by max_wal_size) and more pg_wal disk.
+    max_wal_size: "2GB"
+    checkpoint_timeout: "15min"
+    # The pod requests no hugepages-2Mi resource, and "try" (the default)
+    # can SIGBUS on nodes that have hugepages configured but not granted
+    # to this cgroup. Quoted: a bare `off` is a YAML boolean.
+    huge_pages: "off"
+  # A memory-backed /dev/shm for Postgres's dynamic shared memory
+  # (dynamic_shared_memory_type=posix). The runtime default is 64MiB, and
+  # that has ALREADY FAILED IN PRODUCTION: a manual
+  # `VACUUM (ANALYZE) train_movement_events` died with "could not resize
+  # shared memory segment ... to 67145344 bytes: No space left on device",
+  # because a parallel VACUUM (max_parallel_maintenance_workers = 2) keeps
+  # its whole dead-tuple array -- up to maintenance_work_mem -- in DSM.
+  # Parallel hash joins also live here: up to work_mem * hash_mem_multiplier
+  # per participant (leader + max_parallel_workers_per_gather = 3) per hash
+  # node. (Autovacuum is never parallel; shared_buffers is an anonymous
+  # mmap -- neither uses /dev/shm.)
+  #
+  # Size it as maintenance_work_mem + a few concurrent parallel hash nodes
+  # + ~50% headroom: with the defaults above, 128MB + 4 x (8MB x 2 x 3)
+  # = ~320MB, so 512Mi. tmpfs pages COUNT AGAINST THE CONTAINER MEMORY
+  # LIMIT while in use (they are freed when the segment is), so budget
+  # the worst case into `resources.limits.memory`, and raise this with
+  # maintenance_work_mem/work_mem.
+  shm:
+    # -- Mount a memory-backed emptyDir at /dev/shm.
+    enabled: true
+    # -- Size of /dev/shm (the kubelet sizes the tmpfs to this). Empty
+    # means no sizeLimit, i.e. bounded only by the pod's memory limit.
+    sizeLimit: 512Mi
   # -- Merged over the pod securityContext. The uid/gid/fsGroup 999 pins are
   # required by the postgres image -- override them only if you know why.
   podSecurityContext: {}
