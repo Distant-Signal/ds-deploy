@@ -129,6 +129,21 @@ spec:
             {{- end }}
             - name: POLL_INTERVAL_SECS
               value: {{ $poller.pollIntervalSecs | quote }}
+            {{- if $poller.hourlyRequestBudget }}
+            # ldbws only (LEG-18): optional hourly LDBWS request budget.
+            - name: HOURLY_REQUEST_BUDGET
+              value: {{ $poller.hourlyRequestBudget | quote }}
+            {{- end }}
+            {{- if $poller.samplePinnedLinesOnly }}
+            # ldbws only (LEG-18): sample only pinned lines' stations.
+            - name: SAMPLE_PINNED_LINES_ONLY
+              value: "true"
+            {{- end }}
+            {{- if $poller.sampleMaxStations }}
+            # ldbws only (LEG-18): cap on the sample-station list.
+            - name: SAMPLE_MAX_STATIONS
+              value: {{ $poller.sampleMaxStations | quote }}
+            {{- end }}
             {{- if hasKey $poller "dlrPilotStopPointId" }}
             # tfl only: the DLR arrivals-diffing pilot -- see
             # crates/poller-tfl/src/config.rs's dlr_pilot_enabled/

@@ -624,9 +624,26 @@ pollers:
     sampleStationsPath: /private/sample-stations
     # -- ldbws only: LDBWS `numRows` query parameter (upstream default 10).
     numRows: 10
-    # -- DESIGN.md section 4 targets 30-60s; 60 is the conservative end
-    # because this feed's real rate limit is unconfirmed.
+    # -- DESIGN.md section 4 targets 30-60s; 60 is the conservative end.
+    # The resulting LDBWS request volume (about 560 sample stations, as many
+    # as fit the 45s cycle budget each minute) was accepted by the repo owner
+    # under the Rail Data Marketplace terms on 2026-09-27 (LEG-18). The three
+    # knobs below can cut it without a code change; all are off by default,
+    # and while off their env vars are not rendered at all.
     pollIntervalSecs: 60
+    # -- ldbws only: at most this many LDBWS requests in any rolling hour,
+    # spread evenly over the hour's cycles. Stations a cycle cannot afford
+    # are skipped (distant_signal_ldbws_budget_skipped_polls_total, plus a
+    # warning log) and sampled first next cycle. A tight budget will also
+    # trip DistantSignalLdbwsStationStale. 0 = no budget (HOURLY_REQUEST_BUDGET).
+    hourlyRequestBudget: 0
+    # -- ldbws only: sample only stations on lines at least one user has
+    # pinned. With nothing pinned, nothing is sampled (SAMPLE_PINNED_LINES_ONLY).
+    samplePinnedLinesOnly: false
+    # -- ldbws only: sample at most this many stations, chosen by api
+    # line-fairly with the most-pinned lines first. 0 = no cap
+    # (SAMPLE_MAX_STATIONS).
+    sampleMaxStations: 0
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-ldbws-api-key

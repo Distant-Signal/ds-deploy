@@ -855,6 +855,41 @@ jobs:
           grep -q 'alert: DistantSignalPollerFailing' <<<"$pollers"
           grep -q 'alert: DistantSignalLdbwsStationStale' <<<"$pollers"
 
+      # LEG-18 LDBWS volume knobs: off by default, and while off none of
+      # their env vars may render (production behaviour is unchanged); set,
+      # each renders on the ldbws poller.
+      - name: helm template (LDBWS volume knobs)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set pollers.ldbws.enabled=true
+            --set pollers.ldbws.baseUrl=https://ldbws.example.com
+          )
+          knobs='HOURLY_REQUEST_BUDGET|SAMPLE_PINNED_LINES_ONLY|SAMPLE_MAX_STATIONS'
+          off=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --show-only templates/poller-deployments.yaml)
+          if grep -nE "name: ($knobs)\$" <<<"$off"; then
+            echo "LDBWS volume knobs are off by default but their env rendered" >&2; exit 1
+          fi
+          on=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set pollers.ldbws.hourlyRequestBudget=5000 \
+            --set pollers.ldbws.samplePinnedLinesOnly=true \
+            --set pollers.ldbws.sampleMaxStations=150 \
+            --show-only templates/poller-deployments.yaml)
+          grep -A1 'name: HOURLY_REQUEST_BUDGET$' <<<"$on" | grep -q 'value: "5000"'
+          grep -A1 'name: SAMPLE_PINNED_LINES_ONLY$' <<<"$on" | grep -q 'value: "true"'
+          grep -A1 'name: SAMPLE_MAX_STATIONS$' <<<"$on" | grep -q 'value: "150"'
+
       # The PodMonitor must select every workload that serves a port named
       # "metrics". trust-backlog-consumer was missing (INF-6), so the
       # DistantSignalDeadLetter* alerts could never fire for it.

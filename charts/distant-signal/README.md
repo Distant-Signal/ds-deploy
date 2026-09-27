@@ -1142,7 +1142,7 @@ these env vars at all.
 ### pollers
 
 Keys below exist under each of `pollers.incidents`, `pollers.stations`,
-`pollers.tocs` and `pollers.ldbws`; the last two rows are ldbws-only.
+`pollers.tocs` and `pollers.ldbws`; the last five rows are ldbws-only.
 
 | Key | Default | Description |
 |---|---|---|
@@ -1172,6 +1172,9 @@ Keys below exist under each of `pollers.incidents`, `pollers.stations`,
 | `pollers.<name>.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 | `pollers.ldbws.sampleStationsPath` | `/private/sample-stations` | ldbws only: second api endpoint listing which stations to sample. |
 | `pollers.ldbws.numRows` | `10` | ldbws only: LDBWS `numRows` query parameter. |
+| `pollers.ldbws.hourlyRequestBudget` | `0` | ldbws only (LEG-18): max LDBWS requests per rolling hour, spread evenly over cycles; skipped stations count in `ldbws_budget_skipped_polls_total`. `0` = no budget, env not rendered. |
+| `pollers.ldbws.samplePinnedLinesOnly` | `false` | ldbws only (LEG-18): sample only stations on lines some user has pinned. |
+| `pollers.ldbws.sampleMaxStations` | `0` | ldbws only (LEG-18): cap on sample stations, chosen line-fairly by api, most-pinned lines first. `0` = no cap. |
 
 ### ingress
 
