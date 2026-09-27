@@ -1650,6 +1650,11 @@ fullCoverageConsumer:
   # trust-consumer reads, so its footprint scales with the line
   # catalogue rather than staying flat. Sized with materially more
   # headroom than trust-consumer for exactly that reason.
+  #
+  # Measured 2026-09-27 (docs/full-coverage-consumer.md): startup peak RSS
+  # 381,492 KB (~373 MiB) with a production-sized population (243 lines,
+  # ~171k uid memberships per date) plus a startup replay of a full rail
+  # day (1M stream entries). The 1Gi limit keeps well over 1.5x that peak.
   resources:
     requests:
       cpu: 200m

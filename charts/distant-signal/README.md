@@ -562,6 +562,20 @@ consume-loop iteration has completed for `<consumer>.progressStallSecs`
 (300s, or 900s for `fullCoverageConsumer`). Their liveness probes then
 restart a wedged pod.
 
+## Full-coverage consumer restarts
+
+On start, `full-coverage-consumer` waits for its first schedule population
+load, then replays the current rail day from `movement-events` before it
+consumes as its group, so a restart no longer corrupts that day's stats. A day
+it cannot replay in full (its start already trimmed, or the Kafka backend) is
+marked `partial`. The measured startup peak with a production-sized population
+and a full day's stream is about 373 MiB, well inside
+`fullCoverageConsumer.resources.limits.memory`. See
+[docs/full-coverage-consumer.md](../../docs/full-coverage-consumer.md) for the
+startup sequence, partial days, and the metrics to alert on
+(`distant_signal_full_coverage_consumer_startup_complete`,
+`..._day_partial`, `..._stream_gap_detected_total` and more).
+
 ## Ingress
 
 One `Ingress` object with up to two **separate hostnames**, both optional and
