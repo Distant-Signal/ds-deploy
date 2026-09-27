@@ -975,6 +975,7 @@ pod that fails every request forever.
 | `frontend.probes.liveness.failureThreshold` | `3` | Liveness probe failures allowed. |
 | `frontend.probes.liveness.timeoutSeconds` | `3` | Liveness probe timeout. |
 | `frontend.apiBaseUrl` | `""` | Override `API_BASE_URL`. Empty uses the in-cluster api Service. |
+| `frontend.legalPagesPublished` | `false` | Publish the DRAFT legal pages (`/privacy`, `/terms`, `/cookies`, `/contact`) and their footer links. Off by default: the text needs the operator's and a lawyer's review, and the operator values in `frontend/lib/legal.ts` must be filled in first. Even when `true`, the pages stay 404 while any placeholder is left in that file. `/attribution` is always public. |
 | `frontend.extraEnv` | `[]` | Extra env vars appended to the container. |
 | `frontend.resources` | `{}` | Container resource requests/limits. |
 | `frontend.nodeSelector` | `{}` | Pod node selector. |

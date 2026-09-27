@@ -403,6 +403,10 @@ jobs:
       # intercept every request this fixture host resolves to, matching by
       # path glob rather than by host -- see that file's own comments).
       NEXT_PUBLIC_RAILMCP_PUBLIC_URL: http://mcp.example.invalid
+      # Renders the draft legal pages (/privacy, /terms, /cookies, /contact)
+      # so accessibility.spec.ts can sweep them. Read at request time by
+      # `next start`; see frontend/lib/legal.ts. Production leaves it unset.
+      LEGAL_PAGES_PREVIEW: "true"
       # frontend/e2e/fixtures/seed.sql's own fixture ids -- see that file's
       # header comment for what each backs and why the dates are fixed.
       E2E_REAL_LINE_ID: lner-ecml

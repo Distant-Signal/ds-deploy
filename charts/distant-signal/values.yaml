@@ -2418,6 +2418,15 @@ frontend:
   # install time. If TLS terminates somewhere the chart can't see (so the
   # derived scheme would be http), set this explicitly.
   siteUrl: ""
+  # -- Publish the DRAFT legal pages (/privacy, /terms, /cookies, /contact)
+  # and their footer links. Off by default: the text is a draft that needs
+  # the operator's and a lawyer's review, and the operator values in
+  # frontend/lib/legal.ts must be filled in first. Even when true, the
+  # pages stay 404 while any placeholder is left in that file. /attribution
+  # is always public. To review the drafts on a staging install, add
+  # LEGAL_PAGES_PREVIEW=true through frontend.extraEnv (never in production:
+  # it renders them with a "draft" banner, placeholders and all).
+  legalPagesPublished: false
   extraEnv: []
   # A Next.js server render process -- Node's heap dominates, and it is
   # fairly insensitive to load here because the heavy lifting is api's.

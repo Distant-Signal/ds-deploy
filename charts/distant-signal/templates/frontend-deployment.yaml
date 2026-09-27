@@ -56,6 +56,10 @@ spec:
             # not a working equivalent default.
             - name: NEXT_PUBLIC_SITE_URL
               value: {{ include "distant-signal.frontendSiteUrl" . | quote }}
+            # frontend/lib/legal.ts: publishes the draft legal pages. Read
+            # per request, so no image rebuild is needed to flip it.
+            - name: LEGAL_PAGES_PUBLISHED
+              value: {{ .Values.frontend.legalPagesPublished | toString | quote }}
             {{- if .Values.railMcp.enabled }}
             {{- if not .Values.railMcp.baseUrl }}
             {{- fail "railMcp.enabled is true but railMcp.baseUrl is empty. Set it to the external HTTP base URL of the separately-deployed derived MCP service, or set railMcp.enabled=false." }}
