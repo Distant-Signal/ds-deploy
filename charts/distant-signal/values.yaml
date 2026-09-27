@@ -760,6 +760,13 @@ api:
   # only; an operator's actual Authentik group name is not mandated.
   # Supersedes the former per-user `chatbot_allowed_users` DB allowlist.
   chatbotAccessGroup: distant-signal-chatbot-users
+  # -- Authentik/SSO end-user group (same `groups` OIDC claim as
+  # chatbotAccessGroup) whose members may end any user's sessions through
+  # POST /api/admin/users/revoke-sessions. OFF by default: empty means
+  # nobody is an admin and that endpoint returns 403 to everyone. Group
+  # membership is read at login, so adding or removing someone takes effect
+  # at their next login. See docs/session-revocation.md.
+  adminGroup: ""
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `data::station_stats::full_coverage_enabled_for` (crates/api) treats

@@ -186,6 +186,10 @@ spec:
             # credentials above.
             - name: CHATBOT_ACCESS_GROUP
               value: {{ .Values.api.chatbotAccessGroup | quote }}
+            # Authentik/SSO end-user group allowed to revoke other users'
+            # sessions -- see api.adminGroup in values.yaml. Empty = off.
+            - name: ADMIN_GROUP
+              value: {{ .Values.api.adminGroup | default "" | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see api.fullCoverageEnabledDefault's own comment in values.yaml.
             # Default false; must be set the same on the aggregator
