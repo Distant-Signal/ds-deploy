@@ -60,6 +60,15 @@ spec:
             # per request, so no image rebuild is needed to flip it.
             - name: LEGAL_PAGES_PUBLISHED
               value: {{ .Values.frontend.legalPagesPublished | toString | quote }}
+            # frontend/lib/legal.ts retentionPolicy(): the privacy notice
+            # states the api's own retention settings, so they are copied
+            # from the api values rather than set twice (LEG-28, DQ7).
+            - name: RETENTION_PAST_TRAVEL_DAYS
+              value: {{ .Values.api.pastTravelRetentionDays | int | toString | quote }}
+            - name: RETENTION_STALE_PUSH_SUBSCRIPTION_DAYS
+              value: {{ .Values.api.stalePushSubscriptionDays | int | toString | quote }}
+            - name: RETENTION_INACTIVE_ACCOUNT_DAYS
+              value: {{ .Values.api.inactiveAccountRetentionDays | int | toString | quote }}
             {{- if .Values.railMcp.enabled }}
             {{- if not .Values.railMcp.baseUrl }}
             {{- fail "railMcp.enabled is true but railMcp.baseUrl is empty. Set it to the external HTTP base URL of the separately-deployed derived MCP service, or set railMcp.enabled=false." }}
@@ -82,12 +91,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.railMcpSecretName" . }}
                   key: {{ include "distant-signal.railMcpInternalCompleteTokenSecretKey" . }}
-            # Baked in at container-start-read time, not build time -- this
-            # value is read inside an async Server Component
-            # (app/connect-claude/page.tsx), which executes server-side on
-            # every request the same way API_BASE_URL above does (see this
-            # file's own comment on that), so the NEXT_PUBLIC_ prefix here
-            # does not require a build-time bake for this particular read.
+            # Read at request time, not build time. Next inlines a literal
+            # `process.env.NEXT_PUBLIC_*` reference at `next build` (in client
+            # AND server code), and the image is built without this value, so
+            # every reader goes through lib/csp.ts's runtimeRailMcpPublicUrl(),
+            # which looks the name up indirectly: proxy.ts (CSP connect-src),
+            # the /connect-claude page, and the /chat and /chat/callback
+            # Server Components, which pass it to their Client Components as
+            # a prop. No build-time bake is needed.
             - name: NEXT_PUBLIC_RAILMCP_PUBLIC_URL
               value: {{ .Values.railMcp.publicUrl | quote }}
             {{- end }}
