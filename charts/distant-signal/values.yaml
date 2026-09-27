@@ -856,6 +856,49 @@ api:
   # membership is read at login, so adding or removing someone takes effect
   # at their next login. See docs/session-revocation.md.
   adminGroup: ""
+  # -- LEG-6: extra IdP groups kept on users.groups at login, besides
+  # chatbotAccessGroup and adminGroup (every other group in the claim is
+  # dropped). Comma-separated; "" keeps none. The default is the two groups
+  # the distant-signal-mcp adapter reads back from /auth/session.
+  oidcStoredGroupsExtra: "mcp-users,mcp-live-boards"
+  # -- API-2: server-side time limits. A request still running after
+  # requestTimeoutSecs (public routes) or privateRequestTimeoutSecs (the
+  # /private ingest routes, which take up to 100 MB bodies) gets a 408; an
+  # HTTP/1 client that hasn't sent its full headers within
+  # headerReadTimeoutSecs is disconnected.
+  timeouts:
+    requestTimeoutSecs: 30
+    privateRequestTimeoutSecs: 300
+    headerReadTimeoutSecs: 10
+  # -- Per-client-IP rate limits (API-5, TRIPS-1; crates/api/src/rate_limit.rs).
+  # 429 with Retry-After when exceeded; /private/* is never limited. The key
+  # is the X-Real-IP header the frontend proxy sets from CF-Connecting-IP
+  # when trustXRealIp is true (safe only while the api Service is not
+  # exposed directly: keep ingress.api.enabled off), else the socket peer.
+  # Requests without the header all share the frontend pod's bucket; watch
+  # distant_signal_api_rate_limit_peer_fallback_total. perMinute is the
+  # sustained rate, burst how many may arrive at once.
+  rateLimit:
+    enabled: true
+    trustXRealIp: true
+    login:           # /public/auth/login and /public/auth/callback
+      perMinute: 10
+      burst: 20
+    tripPlan:        # /Trips/plan
+      perMinute: 20
+      burst: 10
+    trainByUid:      # /Train/by-uid/*
+      perMinute: 120
+      burst: 60
+    publicWrite:     # every other non-GET public route
+      perMinute: 120
+      burst: 60
+  # -- TRIPS-1: /Trips/plan keeps the built connections graph for this many
+  # service dates (~100 MB each; 0 disables the cache), rebuilt after a new
+  # schedule publish or after maxAgeSecs.
+  tripPlanGraphCache:
+    dates: 2
+    maxAgeSecs: 600
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `data::station_stats::full_coverage_enabled_for` (crates/api) treats

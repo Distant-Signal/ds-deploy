@@ -222,6 +222,43 @@ spec:
             # sessions -- see api.adminGroup in values.yaml. Empty = off.
             - name: ADMIN_GROUP
               value: {{ .Values.api.adminGroup | default "" | quote }}
+            # LEG-6: extra IdP groups kept on users.groups -- see
+            # api.oidcStoredGroupsExtra in values.yaml.
+            - name: OIDC_STORED_GROUPS_EXTRA
+              value: {{ .Values.api.oidcStoredGroupsExtra | default "" | quote }}
+            # API-2 time limits, the per-IP rate limits and the /Trips/plan
+            # graph cache -- see api.timeouts, api.rateLimit and
+            # api.tripPlanGraphCache in values.yaml.
+            - name: API_REQUEST_TIMEOUT_SECS
+              value: {{ .Values.api.timeouts.requestTimeoutSecs | quote }}
+            - name: API_PRIVATE_REQUEST_TIMEOUT_SECS
+              value: {{ .Values.api.timeouts.privateRequestTimeoutSecs | quote }}
+            - name: API_HEADER_READ_TIMEOUT_SECS
+              value: {{ .Values.api.timeouts.headerReadTimeoutSecs | quote }}
+            - name: API_RATE_LIMIT_ENABLED
+              value: {{ .Values.api.rateLimit.enabled | quote }}
+            - name: API_RATE_LIMIT_TRUST_X_REAL_IP
+              value: {{ .Values.api.rateLimit.trustXRealIp | quote }}
+            - name: API_RATE_LIMIT_LOGIN_PER_MINUTE
+              value: {{ .Values.api.rateLimit.login.perMinute | quote }}
+            - name: API_RATE_LIMIT_LOGIN_BURST
+              value: {{ .Values.api.rateLimit.login.burst | quote }}
+            - name: API_RATE_LIMIT_TRIP_PLAN_PER_MINUTE
+              value: {{ .Values.api.rateLimit.tripPlan.perMinute | quote }}
+            - name: API_RATE_LIMIT_TRIP_PLAN_BURST
+              value: {{ .Values.api.rateLimit.tripPlan.burst | quote }}
+            - name: API_RATE_LIMIT_TRAIN_BY_UID_PER_MINUTE
+              value: {{ .Values.api.rateLimit.trainByUid.perMinute | quote }}
+            - name: API_RATE_LIMIT_TRAIN_BY_UID_BURST
+              value: {{ .Values.api.rateLimit.trainByUid.burst | quote }}
+            - name: API_RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE
+              value: {{ .Values.api.rateLimit.publicWrite.perMinute | quote }}
+            - name: API_RATE_LIMIT_PUBLIC_WRITE_BURST
+              value: {{ .Values.api.rateLimit.publicWrite.burst | quote }}
+            - name: TRIP_PLAN_GRAPH_CACHE_DATES
+              value: {{ .Values.api.tripPlanGraphCache.dates | quote }}
+            - name: TRIP_PLAN_GRAPH_CACHE_MAX_AGE_SECS
+              value: {{ .Values.api.tripPlanGraphCache.maxAgeSecs | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see api.fullCoverageEnabledDefault's own comment in values.yaml.
             # Default false; must be set the same on the aggregator
