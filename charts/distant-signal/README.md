@@ -45,6 +45,19 @@ or testing a local change) without going through that pipeline — either set
 once, or point each `*.image.repository` you're replacing at your own
 `$REG/...` directly.
 
+The same workflow packages this chart and pushes it to
+`oci://ghcr.io/fasterspeeding/charts/distant-signal`, cosign-signed keylessly
+like the images (INF-12). Verify a pulled chart with:
+
+```bash
+cosign verify ghcr.io/fasterspeeding/charts/distant-signal@sha256:<digest> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/FasterSpeeding/Distant-Signal/.github/workflows/containers.yml@refs/heads/main
+```
+
+In Flux, set `verify.provider: cosign` with a `matchOIDCIdentity` entry for
+that issuer and subject on the chart's OCIRepository/HelmRepository.
+
 | Dockerfile | Default image repository |
 |---|---|
 | `docker/api.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/api` |
@@ -160,6 +173,20 @@ helm upgrade distant-signal ./charts/distant-signal -n distant-signal
 ```
 
 Read the next section before upgrading if you rely on generated secrets.
+
+> **Upgrade note: Redis PVC default 1Gi -> 4Gi (2026-09-27).** A PVC can only
+> grow, and only on a StorageClass with `allowVolumeExpansion: true`; k3s
+> `local-path` and other hostPath-style classes cannot expand. **Before
+> upgrading an existing install whose Redis PVC was created at 1Gi on such a
+> class, pin its current size (`--set redis.persistence.size=1Gi`, or in your
+> values/overlay) or set `redis.persistence.existingClaim` to the PVC.**
+> Otherwise the upgrade can fail when Kubernetes rejects the PVC change.
+> During a real `helm install`/`helm upgrade` (the helm CLI or Flux) the
+> chart also protects itself: it looks up the existing PVC and keeps its
+> current size when its StorageClass cannot expand it, and NOTES.txt says
+> so. That lookup sees nothing under `helm template`, `--dry-run` or Argo CD,
+> which is why the pin is still required there. On an expandable class the
+> PVC is resized to 4Gi in place.
 
 `api` and `aggregator` roll concurrently with no ordering guarantee between
 them. When a release adds a database migration that `aggregator` depends on
@@ -494,9 +521,9 @@ above `maxmemory` for fragmentation and fork copy-on-write:
 
 Change the three together. Every extra 100,000 entries needs about 100 MiB
 more `maxmemory` and about 130 MiB more limit. At this size the AOF on
-disk can reach 1-2 GB, past the default 1Gi `redis.persistence.size`. Many
-provisioners don't enforce the size, but on a StorageClass that does, raise
-it (4Gi is comfortable); a full volume makes Redis refuse writes.
+disk can reach 1-2 GB, so `redis.persistence.size` defaults to 4Gi (it was
+1Gi before 2026-09-27; see the upgrade note under [Upgrade](#upgrade)); a
+full volume makes Redis refuse writes.
 RDB snapshots are off (`redis.save: ""`) because AOF already persists
 everything, and each snapshot forks the process.
 
@@ -625,31 +652,46 @@ is worse than an absent one because it looks like protection.
 When enabled, the chart renders default-deny ingress per workload plus these
 explicit allows:
 
-- **postgres** ← api, aggregator, enricher only (the pollers never talk to
-  it; they reach the database only indirectly, via the api's ingest
-  endpoints).
-- **redis** ← api (publisher) and enricher (consumer) only. Rendered only
-  when `redis.enabled`.
-- **api** ← frontend, every enabled poller, and — when `ingress.enabled` and
+- **postgres** ← api, aggregator, enricher and notifier only (the pollers
+  and consumers never talk to it; they reach the database only indirectly,
+  via the api's ingest endpoints).
+- **redis** ← api, enricher, trust-consumer, trust-backlog-consumer,
+  full-coverage-consumer and movement-relay. Rendered only when
+  `redis.enabled`.
+- **api** ← frontend, every enabled poller, the consumers, schedulefeed, and — when `ingress.enabled` and
   `ingress.api.enabled` — the namespace named by
   `networkPolicy.ingressControllerNamespace`, all on `api.service.port`.
 - **frontend** ← that same ingress-controller namespace, when
   `ingress.enabled` and `ingress.frontend.enabled`.
-- **api**, **aggregator**, **enricher** and every poller: default-deny apart
-  from `metrics.port` from the namespace named by
-  `networkPolicy.monitoringNamespace`, and only when `metrics.enabled` is
-  true. With `metrics.enabled: false` these expose no other listener. api's
-  own `metrics.port` allow is separate from — and does not widen — its
-  `api.service.port` allow above: until 2026-09-25 api served `/metrics` on
-  `api.service.port` itself, so this same monitoring-namespace allow
-  doubled as the ingress-controller's own path to it whenever
-  `ingress.api.enabled` was also set (the finding `## Ingress`'s security
-  warning above now documents as fixed); api now has its own internal-only
-  `metrics.port` listener, same as every other workload.
+- **api**: `metrics.port` from the namespace named by
+  `networkPolicy.monitoringNamespace` when `metrics.enabled`. This is
+  separate from, and does not widen, the `api.service.port` allow above: api
+  serves `/metrics` on its own internal-only listener.
+- **Background workers** (aggregator, enricher, notifier, trust-consumer,
+  trust-backlog-consumer, full-coverage-consumer, movement-relay, every
+  poller including the three island-of-Ireland ones; INF-10): their own
+  metrics port from the monitoring namespace (when `metrics.enabled`), and
+  their health port(s) from any source, because kubelet probes come from the
+  node, which no selector can name. Nothing else.
+- **schedulefeed** (INF-2): SFTP on `scheduleFeed.sftp.port` from any source,
+  or only from `scheduleFeed.sftp.allowedCidrs` when set. The allow-list only
+  works when the pod sees the client's real address (Service
+  `externalTrafficPolicy: Local`, or a load balancer that preserves it);
+  behind source NAT it blocks every push. Also both containers' health ports
+  and metrics ports.
 
-**Egress is deliberately unrestricted.** The pollers must reach arbitrary
-external Rail Data Marketplace hosts, and constraining that would mean
-making every operator enumerate them.
+**Egress is unrestricted by default.** `networkPolicy.egress.enabled: true`
+(off by default) adds egress policies to the notifier, the consumers,
+movement-relay and every poller: DNS, the in-cluster services each one
+calls (api, the bundled Redis/Postgres, the bundled dev IdP), and the public
+internet minus `networkPolicy.egress.privateCidrs`/`privateCidrsV6`. That
+stops a notifier tricked into pushing to a private address, or a compromised
+poller, from reaching the rest of the cluster. Before enabling it, add a
+`networkPolicy.egress.extraRules` entry for anything these workers reach at
+a private address: an external Redis or Postgres, an OAuth token endpoint
+inside the cluster or on a tailnet (`100.64.0.0/10`), a private Kafka broker
+or a proxy. api, frontend, aggregator, enricher, schedulefeed, postgres and
+redis get no egress policy.
 
 ## Enabling the pollers
 
@@ -962,7 +1004,7 @@ used for and why persistence defaults on.
 | `redis.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `redis.service.port` | `6379` | Service and container port; also sets the `REDIS_URL` the api and enricher get. |
 | `redis.persistence.enabled` | `true` | Attach a PVC and run redis with `--appendonly yes`. When false an emptyDir is used and data is lost on reschedule. |
-| `redis.persistence.size` | `1Gi` | Requested volume size. The AOF can reach 1-2 GB at the default `maxmemory`; raise this on a StorageClass that enforces size (see Sizing above). |
+| `redis.persistence.size` | `4Gi` | Requested volume size. The AOF can reach 1-2 GB at the default `maxmemory` (see Sizing above). An existing PVC on a non-expandable StorageClass keeps its size; read the [Upgrade](#upgrade) note before upgrading from a 1Gi install. |
 | `redis.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
 | `redis.persistence.accessModes` | `[ReadWriteOnce]` | PVC access modes. |
 | `redis.persistence.existingClaim` | `""` | Use a pre-existing PVC instead of a chart-rendered one. |
@@ -1167,7 +1209,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; the repo-relative doc path is appended. |
-| `metrics.prometheusRule.<alert>.enabled` / `.for` / `.severity` / thresholds | see `values.yaml` | Per-alert toggles, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `enricherErrors` and `componentMemory`. |
+| `metrics.prometheusRule.<alert>.enabled` / `.for` / `.severity` / thresholds | see `values.yaml` | Per-alert toggles, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `enricherErrors`, `componentMemory`, `pollerFailures` and `ldbwsStalestStation`. |
 
 #### Alerts
 
@@ -1191,6 +1233,8 @@ rendered only when `movementRelay.enabled` is true.
 | `DistantSignalDeadLetterFull` | critical | A dead-letter write was refused because the stream is full (`movement_feed_deadletter_full_total`) within the last 1h. |
 | `DistantSignalEnricherErrors` | warning | Over 30m, more than 50% of an LLM call site's calls (`enricher_llm_call_total{outcome!="success"}`: `error`, `timeout`, `rate_limited`, `gateway_error`, `http_error` or `empty_content`) failed, with at least 3 failures, for 15m. |
 | `DistantSignalComponentMemoryHigh` | warning | A container in this release's pods (`pod=~"<fullname>-.*"`) has a working set (cadvisor) above 80% of its memory limit (kube-state-metrics) for 10m. |
+| `DistantSignalPollerFailing` | warning | A poller completed no successful cycle and at least one failed one (`poller_cycle_total{result}`) over the last 2h (SVC-08). Rendered only when a poller is enabled, in a separate `<fullname>-pollers` PrometheusRule. |
+| `DistantSignalLdbwsStationStale` | warning | The least recently sampled LDBWS station (`ldbws_stalest_station_age_seconds`) is over 7200s old for 30m: the rotation stopped reaching part of the list (SVC-04). Only when `pollers.ldbws.enabled`. |
 
 Metric names above omit the `distant_signal_` prefix every app metric
 carries. The dead-letter and stream-gap counters are registered at 0 when
@@ -1205,6 +1249,11 @@ creates new per-pod series, so that clause fired on every rollout.
 | `networkPolicy.enabled` | `false` | Render default-deny NetworkPolicies with explicit allows. |
 | `networkPolicy.ingressControllerNamespace` | `ingress-nginx` | Namespace the ingress controller runs in, matched by `kubernetes.io/metadata.name`. |
 | `networkPolicy.monitoringNamespace` | `monitoring` | Namespace Prometheus runs in, matched by `kubernetes.io/metadata.name`. Allowed to reach each workload's metrics port. Only used when `metrics.enabled` is true. |
+| `networkPolicy.egress.enabled` | `false` | Render egress policies for the notifier, consumers, movement-relay and pollers (see [NetworkPolicy](#networkpolicy)). |
+| `networkPolicy.egress.privateCidrs` | RFC 1918, CGNAT, loopback, link-local, reserved | IPv4 ranges excluded from the public-internet egress allow. |
+| `networkPolicy.egress.privateCidrsV6` | loopback, ULA, link-local, multicast, NAT64/6to4/Teredo | IPv6 ranges excluded from the public-internet egress allow. |
+| `networkPolicy.egress.extraRules` | `[]` | Extra NetworkPolicyEgressRule entries appended to every worker's egress policy. |
+| `scheduleFeed.sftp.allowedCidrs` | `[]` | Source CIDRs allowed to reach SFTP when `networkPolicy.enabled`. Empty allows any source. |
 
 ### tests
 

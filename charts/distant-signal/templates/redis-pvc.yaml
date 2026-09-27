@@ -20,5 +20,8 @@ spec:
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.redis.persistence.size | quote }}
+      # redis.persistence.size, unless the PVC already exists on a
+      # StorageClass that cannot expand it (DQ15; see
+      # distant-signal.redisPvcSize in _helpers.tpl).
+      storage: {{ include "distant-signal.redisPvcSize" . | quote }}
 {{- end }}

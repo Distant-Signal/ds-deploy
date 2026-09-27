@@ -74,6 +74,14 @@ spec:
           configMap:
             name: {{ include "distant-signal.scheduleFeedFullname" . }}-sftp-entrypoint
             defaultMode: 0555
+        # INF-13: the sftp entrypoint writes the push account's loaddata
+        # JSON (which holds its password or public key) here: memory-backed,
+        # so the credential never reaches the node's disk, and gone with the
+        # Pod.
+        - name: sftp-bootstrap
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
       containers:
         - name: sftp
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.scheduleFeed.sftp.image) | quote }}
@@ -83,8 +91,9 @@ spec:
           # runtime writes (its own SQLite metadata store at
           # /var/lib/sftpgo/sftpgo.db by default -- confirmed against
           # SFTPGo's own shipped sftpgo.json, data_provider.driver: "sqlite"
-          # -- plus the loaddata JSON the sftp-entrypoint ConfigMap's script
-          # writes to /tmp) genuinely need a writable root filesystem with
+          # -- the loaddata JSON the sftp-entrypoint ConfigMap's script
+          # writes now goes to the memory-backed sftp-bootstrap emptyDir
+          # instead, INF-13) genuinely need a writable root filesystem with
           # the mechanism this chart now uses. Note this also means the
           # SQLite user database is NOT on the persistent PVC (only
           # /data/schedule-feed is) -- it is rebuilt from scratch by the
@@ -189,6 +198,8 @@ spec:
             - name: sftp-entrypoint
               mountPath: /scripts
               readOnly: true
+            - name: sftp-bootstrap
+              mountPath: /run/sftp-bootstrap
           # Per-container resources, NOT the one shared
           # .Values.scheduleFeed.resources block all three containers used
           # until 2026-09-25. These three siblings differ by an order of

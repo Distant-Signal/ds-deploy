@@ -115,8 +115,15 @@ postgresql:
     existingSecretPasswordKey: postgres-password
   image:
     repository: postgres
-    # -- Pinned to the same major the docker-compose stack uses.
-    tag: "16"
+    # -- Pinned to an exact patch release, Debian base AND content digest
+    # (INF-11); Renovate (renovate.json5, helm-values manager) proposes
+    # bumps, digest included. Stays on major 16: a new major needs
+    # pg_upgrade. Stays on the trixie base the floating `16` tag moved
+    # production to (16.15-1.pgdg13, checked 2026-09-27): switching the
+    # base OS changes glibc, whose collation changes can silently corrupt
+    # text indexes, so never change the `-trixie` suffix without a REINDEX
+    # plan.
+    tag: "16.15-trixie@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54"
     pullPolicy: IfNotPresent
   service:
     # -- Port the headless Service and the container listen on.
@@ -878,7 +885,9 @@ api:
     # Pools: api this x replicaCount, aggregator 10, notifier 5, enricher 5
     # -- keep the sum under postgresql.config.max_connections minus a few
     # for psql/kubectl exec and the migration connection. Timeouts shared by
-    # every pool are in `databasePool`.
+    # every pool are in `databasePool`. With the bundled Postgres the chart
+    # fails to render when the pools can exceed max_connections - 3
+    # (templates/api-deployment.yaml, INF-7).
     maxConnections: 50
   # Settings for the dedicated connection api migrates on at startup,
   # before it binds (crates/api/src/migrate.rs). It first drops any INVALID
@@ -1054,8 +1063,9 @@ devAuthentik:
     # -- Pinned, same rationale/finite-shelf-life caveat as the compose
     # path's tag (design doc Research + Open questions: Authentik's
     # 3-month release cadence and 2-version support window mean this needs
-    # periodic bumping -- not automated by this chart).
-    tag: "2026.8.0"
+    # periodic bumping -- not automated by this chart). Digest-pinned
+    # (INF-11); Renovate proposes bumps.
+    tag: "2026.8.0@sha256:7421753cfea67e89a6d295a1f0173ccea3866b33768c88dad90453b151cdcfd5"
     pullPolicy: IfNotPresent
   # -- AUTHENTIK_SECRET_KEY. Chart-generated via the same lookup-then-
   # randAlphaNum pattern secret.yaml already uses for postgres-password/
@@ -1096,7 +1106,8 @@ devAuthentik:
   # pair there is no external-database escape hatch here, because this is a
   # throwaway dev-only database with no production posture to accommodate.
   postgresql:
-    image: postgres:16-alpine
+    # Digest-pinned (INF-11); Renovate proposes bumps.
+    image: postgres:16.15-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     persistence:
       enabled: true
       size: 1Gi
@@ -1438,7 +1449,10 @@ redis:
   externalUrl: ""
   image:
     repository: redis
-    tag: "7"
+    # -- Pinned to an exact 7.4 patch release and content digest (INF-11);
+    # Renovate (helm-values manager) proposes bumps, digest included. 7.4.11
+    # is what the floating `7` tag resolved to on 2026-09-27.
+    tag: "7.4.11@sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f"
     pullPolicy: IfNotPresent
   service:
     port: 6379
@@ -1462,12 +1476,24 @@ redis:
     # memory, 2026-09-26), the incremental file grows to about the base's
     # size before a rewrite, and a rewrite briefly writes a new base
     # alongside the old one. At the default 1536mb maxmemory that can
-    # reach 1-2 GB on disk, i.e. past this 1Gi. Many provisioners round
-    # up or don't enforce the size (hostPath/local-path), but on a
-    # StorageClass that enforces it, raise this (e.g. to 4Gi) -- a full
-    # volume fails the AOF write and Redis refuses writes. If you raise
-    # maxmemory further, raise this with it.
-    size: 1Gi
+    # reach 1-2 GB on disk, so the default is 4Gi (raised from 1Gi on
+    # 2026-09-27, DQ15/INF-8) -- a full volume fails the AOF write and
+    # Redis refuses writes. If you raise maxmemory further, raise this with
+    # it.
+    #
+    # !!! UPGRADE NOTE (1Gi -> 4Gi default) !!!
+    # A PVC can only grow, and only on a StorageClass with
+    # allowVolumeExpansion: true. k3s local-path (and most hostPath-style
+    # classes) cannot expand, so an existing install created at 1Gi on such
+    # a class must, BEFORE upgrading to this chart version, either pin its
+    # current size (`redis.persistence.size: 1Gi`) or point
+    # `redis.persistence.existingClaim` at the PVC.
+    # During a real `helm install/upgrade` (helm CLI or Flux) the chart
+    # also guards this itself: it looks the PVC up and keeps its current
+    # size when the StorageClass cannot expand it (NOTES.txt says so). That
+    # lookup is blind under `helm template`, `--dry-run` and Argo CD, which
+    # is why the pin is still required.
+    size: 4Gi
     # -- StorageClass name. Empty means the cluster default.
     storageClass: ""
     accessModes:
@@ -2220,11 +2246,19 @@ scheduleFeed:
       # this chart's other third-party images (devAuthentik.image.tag,
       # postgres/redis tags above) -- docker-compose.yml's schedule-sftp
       # service is pinned to the same tag for the same reason.
-      tag: "v2.7.5"
+      # Digest-pinned (INF-11): the digest above, which production runs.
+      tag: "v2.7.5@sha256:9011fe608d336d3daf6ed6224b16fd40443aab8f3335e0b20853d6a539c58738"
       pullPolicy: IfNotPresent
     # -- SFTPGo's own default container port -- not independently
     # re-verified against a real deployed instance by this plan.
     port: 2022
+    # -- Source CIDRs allowed to reach the SFTP port when
+    # networkPolicy.enabled (INF-2), e.g. DTD's published egress range.
+    # Empty allows any source. Only effective when the pod sees the real
+    # client IP (Service `externalTrafficPolicy: Local`, or a load balancer
+    # that preserves it); behind source NAT a non-empty list blocks every
+    # push. See templates/networkpolicy.yaml.
+    allowedCidrs: []
     # -- Purely informational: the public hostname/DNS name an operator has
     # pointed at this Service's LoadBalancer, i.e. what actually gets
     # handed to DTD alongside the port/username/destination below. This
@@ -2843,6 +2877,26 @@ metrics:
       stalledWindow: 10m
       stalledFor: 15m
       severity: warning
+    # DistantSignalPollerFailing (SVC-08): a poller (any of
+    # .Values.pollers or the three island-of-Ireland ones) completed no
+    # successful cycle and at least one failed one over `window`. Keyed on
+    # distant_signal_poller_cycle_total{result}. Rendered in a separate
+    # `<fullname>-pollers` PrometheusRule.
+    pollerFailures:
+      enabled: true
+      window: 2h
+      for: 0m
+      severity: warning
+    # DistantSignalLdbwsStationStale (SVC-04): the least recently sampled
+    # LDBWS station was last sampled more than `maxAgeSeconds` ago
+    # (distant_signal_ldbws_stalest_station_age_seconds), i.e. the rotation
+    # has stopped reaching part of the list. Production's 7-day max was
+    # ~2,900s (2026-09-27). Only when pollers.ldbws.enabled.
+    ldbwsStalestStation:
+      enabled: true
+      maxAgeSeconds: 7200
+      for: 30m
+      severity: warning
 
 # ---------------------------------------------------------------------------
 # NetworkPolicy (optional)
@@ -2851,9 +2905,12 @@ metrics:
 # NetworkPolicy at all, and a silently-unenforced policy is worse than an
 # absent one because it looks like protection.
 #
-# EGRESS IS DELIBERATELY UNRESTRICTED. The pollers must reach arbitrary
-# external Rail Data Marketplace hosts, and constraining that would mean
-# making every operator enumerate them.
+# Ingress: every workload gets a default-deny policy plus the allows it
+# needs (INF-10: the background workers get their metrics port from
+# monitoringNamespace and their health ports from anywhere, since kubelet
+# probes come from the node).
+#
+# Egress is unrestricted unless networkPolicy.egress.enabled (below).
 networkPolicy:
   enabled: false
   # -- Namespace your ingress controller runs in. Matched via the automatic
@@ -2864,6 +2921,57 @@ networkPolicy:
   # consulted when both networkPolicy.enabled and metrics.enabled are true.
   # Same pattern as the existing ingressControllerNamespace value.
   monitoringNamespace: monitoring
+  # Opt-in egress policies (INF-10, SVC-03 defence in depth) for the
+  # notifier, the Kafka/Redis consumers, movement-relay and every poller.
+  # OFF by default. Each of those may then reach only DNS (port 53, any
+  # destination), the in-cluster services it calls (api, the bundled
+  # Redis/Postgres, the bundled dev IdP) and the public internet minus
+  # `privateCidrs`/`privateCidrsV6` -- so a notifier tricked into pushing to
+  # a private address, or a compromised poller, cannot reach the rest of
+  # the cluster or the node's network. api, frontend, aggregator, enricher,
+  # schedulefeed, postgres and redis get no egress policy.
+  #
+  # BEFORE ENABLING, add an `extraRules` entry for anything these workers
+  # reach at a private address: an external Redis or Postgres
+  # (redis.enabled/postgresql.enabled false), an in-cluster or
+  # tailnet (100.64.0.0/10) OAuth token endpoint (internalOauth.tokenUrl),
+  # a private Kafka broker, or a proxy.
+  egress:
+    enabled: false
+    # -- Excluded from the public-internet allow: RFC 1918, CGNAT/tailnet,
+    # loopback, link-local (cloud metadata), "this network", IETF
+    # protocol assignments, benchmarking, multicast and reserved -- the same
+    # ranges the notifier's outbound guard refuses
+    # (crates/common/src/outbound_endpoint_guard.rs).
+    privateCidrs:
+      - 0.0.0.0/8
+      - 10.0.0.0/8
+      - 100.64.0.0/10
+      - 127.0.0.0/8
+      - 169.254.0.0/16
+      - 172.16.0.0/12
+      - 192.0.0.0/24
+      - 192.168.0.0/16
+      - 198.18.0.0/15
+      - 224.0.0.0/4
+      - 240.0.0.0/4
+    # -- IPv6 equivalents: loopback, ULA, link-local, multicast, and the
+    # NAT64/6to4/Teredo prefixes that can embed a private IPv4 address.
+    privateCidrsV6:
+      - ::1/128
+      - 64:ff9b::/96
+      - 2001::/32
+      - 2002::/16
+      - fc00::/7
+      - fe80::/10
+      - ff00::/8
+    # -- Extra NetworkPolicyEgressRule entries appended to every worker's
+    # egress policy, e.g.
+    #   - to:
+    #       - ipBlock: {cidr: 10.0.5.20/32}
+    #     ports:
+    #       - {protocol: TCP, port: 5432}
+    extraRules: []
 
 # ---------------------------------------------------------------------------
 # helm test

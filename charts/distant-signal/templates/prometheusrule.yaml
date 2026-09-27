@@ -363,3 +363,99 @@ spec:
     {{- end }}
     {{- end }}
 {{- end }}
+{{- /*
+Poller alerts (SVC-04, SVC-08), in their own PrometheusRule so this file's
+main resource above stays untouched. Same gating, prefix and namespace
+scoping as above.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled }}
+{{- $rule := .Values.metrics.prometheusRule }}
+{{- $ns := .Release.Namespace }}
+{{- $fullname := include "distant-signal.fullname" . }}
+{{- $extraLabels := $rule.ruleLabels | default dict }}
+{{- $anyPoller := or .Values.pollerIrishRailGtfs.enabled .Values.pollerIrishRailLive.enabled .Values.pollerNirStations.enabled }}
+{{- range $name, $poller := .Values.pollers }}
+{{- if $poller.enabled }}
+{{- $anyPoller = true }}
+{{- end }}
+{{- end }}
+{{- $pollerFailuresOn := and ($rule.pollerFailures).enabled $anyPoller }}
+{{- $ldbwsOn := and ($rule.ldbwsStalestStation).enabled (.Values.pollers.ldbws).enabled }}
+{{- if or $pollerFailuresOn $ldbwsOn }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ printf "%s-pollers" $fullname | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "metrics") | nindent 4 }}
+    {{- with $rule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $rule.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+    - name: distant-signal.pollers
+      rules:
+        {{- with $rule.pollerFailures }}
+        {{- if $pollerFailuresOn }}
+        {{- /*
+        No successful cycle, and at least one failed one, in the window. A
+        poller whose process has only ever failed has no success series,
+        hence the `or ... 0 *` fallback. Daily pollers (stations, tocs) run
+        one cycle a day, so one failed daily cycle is enough to fire.
+        */}}
+        {{- $failures := printf `sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="%s", result="failure"}[%s]))` $ns .window }}
+        {{- $successes := printf `sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="%s", result="success"}[%s]))` $ns .window }}
+        - alert: DistantSignalPollerFailing
+          expr: |
+            {{ $failures }} > 0
+            and on (namespace, poller)
+            (
+              {{ $successes }}
+              or on (namespace, poller)
+              0 * {{ $failures }}
+            ) == 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "poller {{ "{{ $labels.poller }}" }} has had no successful cycle in {{ .window }}"
+            description: >-
+              Poller {{ "{{ $labels.poller }}" }} in {{ "{{ $labels.namespace }}" }}
+              completed no successful poll cycle and at least one failed one over
+              the last {{ .window }}, so its product is going stale. Check the
+              poller's logs: its upstream feed, its credentials, and api's
+              /private ingest route.
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ldbwsStalestStation }}
+        {{- if $ldbwsOn }}
+        - alert: DistantSignalLdbwsStationStale
+          expr: |
+            max by (namespace) (distant_signal_ldbws_stalest_station_age_seconds{namespace="{{ $ns }}"}) > {{ .maxAgeSeconds }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "an LDBWS station has not been sampled for {{ "{{ $value | humanizeDuration }}" }}"
+            description: >-
+              The least recently sampled LDBWS station in {{ "{{ $labels.namespace }}" }}
+              was last sampled {{ "{{ $value | humanizeDuration }}" }} ago (threshold
+              {{ .maxAgeSeconds }}s). The rotation (SVC-04) has stopped reaching part
+              of the station list, e.g. every cycle runs out of budget first; see
+              distant_signal_ldbws_stations_attempted_per_cycle against
+              distant_signal_ldbws_stations_total.
+        {{- end }}
+        {{- end }}
+{{- end }}
+{{- end }}

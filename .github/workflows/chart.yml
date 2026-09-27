@@ -437,10 +437,16 @@ jobs:
   # `distant-signal.image` (_helpers.tpl) prefers over `tag`/appVersion
   # whenever it's set. `appVersion`/`image.tag` stay the fallback for any
   # service whose digest wasn't available this run (see that step's own
-  # comment), and remain the ONLY mechanism for every non-first-party image
-  # (postgres, redis, devAuthentik's goauthentik/server, scheduleFeed's
-  # drakkan/sftpgo) this chart also renders, none of which get a `digest`
-  # field at all.
+  # comment). The non-first-party images (postgres, redis, devAuthentik's
+  # goauthentik/server, scheduleFeed's drakkan/sftpgo) have no `digest`
+  # field; values.yaml pins them as `tag: "<version>@sha256:..."` instead
+  # (INF-11), kept current by Renovate.
+  #
+  # INF-12: the pushed chart is cosign-signed keylessly, like the images,
+  # so a consumer can verify it before installing (Flux: an
+  # OCIRepository/HelmRepository `verify.provider: cosign` with
+  # `matchOIDCIdentity` issuer `https://token.actions.githubusercontent.com`
+  # and subject `https://github.com/FasterSpeeding/Distant-Signal/.github/workflows/containers.yml@refs/heads/main`).
   push-helm-chart:
     name: Package and push Helm chart
     needs: build-and-push
@@ -449,6 +455,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # cosign keyless/OIDC signing of the chart (INF-12)
 
     steps:
       - name: Checkout repository
@@ -608,4 +615,43 @@ jobs:
           echo "chart_tgz=${chart_tgz}" >> "$GITHUB_OUTPUT"
 
       - name: helm push
-        run: helm push "${{ steps.package.outputs.chart_tgz }}" oci://${{ env.REGISTRY }}/fasterspeeding/charts
+        id: push
+        env:
+          CHART_TGZ: ${{ steps.package.outputs.chart_tgz }}
+          DEST: oci://${{ env.REGISTRY }}/fasterspeeding/charts
+        run: |
+          set -euo pipefail
+          helm push "$CHART_TGZ" "$DEST" 2>&1 | tee /tmp/helm-push.log
+          # `helm push` reports what it pushed as "Pushed: <ref>" and
+          # "Digest: sha256:...". Sign that exact digest, never a tag.
+          digest=$(sed -n 's/^Digest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' /tmp/helm-push.log | head -n 1)
+          if [ -z "$digest" ]; then
+            echo "::error::could not read the pushed chart's digest from helm push's output" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # INF-12: sign the chart the same way build-and-push signs every image
+      # (keyless, sigstore's public Fulcio/Rekor), then verify the signature
+      # against this workflow's own identity so a broken signing setup fails
+      # here rather than at install time.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log into ${{ env.REGISTRY }} (cosign)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign and verify the pushed chart
+        env:
+          CHART_REF: ${{ env.REGISTRY }}/fasterspeeding/charts/distant-signal@${{ steps.push.outputs.digest }}
+          IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$CHART_REF"
+          cosign verify "$CHART_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$IDENTITY" > /dev/null

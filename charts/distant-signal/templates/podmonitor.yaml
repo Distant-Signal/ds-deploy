@@ -22,7 +22,8 @@ ingress.api.enabled was also set) -- this PodMonitor used to need a SECOND
 podMetricsEndpoint (`port: http`) just for api's sake. That second entry
 is gone along with the shared listener it existed to scrape.
 
-trust-consumer/full-coverage-consumer are listed unconditionally (like
+trust-consumer/trust-backlog-consumer/full-coverage-consumer are listed
+unconditionally (like
 aggregator/enricher above them -- neither has a chart-level enabled toggle)
 and movement-relay is gated on .Values.movementRelay.enabled, closing the
 real scrape gap identified in
@@ -60,6 +61,11 @@ spec:
           - enricher
           - notifier
           - trust-consumer
+          # Exports distant_signal_movement_feed_deadlettered_total, which the
+          # DistantSignalDeadLetter* alerts in prometheusrule.yaml depend on
+          # (INF-6: it was missing here, so those alerts could never fire for
+          # the backlog consumer). No enabled toggle, like trust-consumer.
+          - trust-backlog-consumer
           - full-coverage-consumer
           {{- if .Values.movementRelay.enabled }}
           - movement-relay

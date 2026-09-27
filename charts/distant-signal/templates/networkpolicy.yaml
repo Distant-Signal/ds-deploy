@@ -104,35 +104,6 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ printf "%s-enricher" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
-  labels:
-    {{- include "distant-signal.labels" (dict "root" . "component" "enricher") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "enricher") | nindent 6 }}
-  policyTypes:
-    - Ingress
-  {{- if .Values.metrics.enabled }}
-  ingress:
-    # The enricher's own /metrics listener (Task 9 of the metrics plan) --
-    # scoped to whatever namespace runs Prometheus (or another scraper),
-    # not opened to the whole cluster.
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
-      ports:
-        - protocol: TCP
-          port: {{ .Values.metrics.port }}
-  {{- else }}
-  # Default-deny: like the aggregator, the enricher exposes no listener
-  # when metrics.enabled is false.
-  {{- end }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
   name: {{ include "distant-signal.apiFullname" . }}
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "api") | nindent 4 }}
@@ -281,101 +252,61 @@ spec:
   # reach it. Omitting `ingress` entirely is a default-deny.
   {{- end }}
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ printf "%s-aggregator" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
-  labels:
-    {{- include "distant-signal.labels" (dict "root" . "component" "aggregator") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "aggregator") | nindent 6 }}
-  policyTypes:
-    - Ingress
-  {{- if .Values.metrics.enabled }}
-  ingress:
-    # The aggregator's own /metrics listener (Task 3 of the metrics plan) --
-    # scoped to whatever namespace runs Prometheus (or another scraper),
-    # not opened to the whole cluster.
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
-      ports:
-        - protocol: TCP
-          port: {{ .Values.metrics.port }}
-  {{- else }}
-  # Default-deny: the aggregator exposes no listener at all when
-  # metrics.enabled is false.
-  {{- end }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ printf "%s-notifier" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
-  labels:
-    {{- include "distant-signal.labels" (dict "root" . "component" "notifier") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "notifier") | nindent 6 }}
-  policyTypes:
-    - Ingress
-  {{- if .Values.metrics.enabled }}
-  ingress:
-    # The notifier's /metrics listener (push queue metrics), scraper
-    # namespace only -- same shape as the aggregator's above.
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
-      ports:
-        - protocol: TCP
-          port: {{ .Values.metrics.port }}
-  {{- else }}
-  # Default-deny: the notifier exposes no listener when metrics.enabled is
-  # false.
-  {{- end }}
+{{- /*
+INF-10: every background worker gets a policy from
+distant-signal.workerNetworkPolicy (_helpers.tpl): its /metrics port from the
+monitoring namespace, its health port(s) from anywhere (kubelet probes come
+from the node), nothing else. Until 2026-09-27 trust-consumer,
+trust-backlog-consumer, full-coverage-consumer, movement-relay and the three
+island-of-Ireland pollers had no policy at all, so they accepted traffic from
+every pod in the cluster.
+
+`egress` lists the in-cluster services each worker calls; it only takes
+effect with networkPolicy.egress.enabled (see values.yaml). aggregator and
+enricher get none: their S3 archive and LLM endpoints may be private
+addresses this chart cannot know.
+*/}}
+{{- $enabledPollerNames := list }}
 {{- range $name, $poller := .Values.pollers }}
 {{- if $poller.enabled }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ printf "%s-poller-%s" (include "distant-signal.fullname" $root) $name | trunc 63 | trimSuffix "-" }}
-  labels:
-    {{- include "distant-signal.labels" (dict "root" $root "component" (printf "poller-%s" $name)) | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "distant-signal.selectorLabels" (dict "root" $root "component" (printf "poller-%s" $name)) | nindent 6 }}
-  policyTypes:
-    - Ingress
-  {{- if $root.Values.metrics.enabled }}
-  ingress:
-    # This poller's own /metrics listener (Tasks 4-8 of the metrics plan)
-    # -- scoped to whatever namespace runs Prometheus (or another
-    # scraper), not opened to the whole cluster. Same port for every
-    # poller -- there's no per-poller port to disambiguate.
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $root.Values.networkPolicy.monitoringNamespace | quote }}
-      ports:
-        - protocol: TCP
-          port: {{ $root.Values.metrics.port }}
-  {{- else }}
-  # Default-deny: pollers expose no listener when metrics.enabled is false.
-  {{- end }}
+{{- $enabledPollerNames = append $enabledPollerNames $name }}
 {{- end }}
+{{- end }}
+{{- $callsApi := dict "api" true }}
+{{- $queueWorker := dict "api" true "redis" true }}
+{{- $workers := list
+  (dict "component" "aggregator" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port))
+  (dict "component" "enricher" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port))
+  (dict "component" "notifier" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true))
+  (dict "component" "trust-consumer" "metricsPort" .Values.trustConsumer.metricsPort "healthPorts" (list .Values.trustConsumer.healthPort) "egress" $queueWorker)
+  (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $queueWorker)
+  (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $queueWorker)
+}}
+{{- if .Values.movementRelay.enabled }}
+{{- $workers = append $workers (dict "component" "movement-relay" "metricsPort" .Values.movementRelay.metricsPort "healthPorts" (list .Values.movementRelay.healthPort) "egress" (dict "redis" true)) }}
+{{- end }}
+{{- range $enabledPollerNames }}
+{{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $callsApi) }}
+{{- end }}
+{{- if .Values.pollerIrishRailGtfs.enabled }}
+{{- $workers = append $workers (dict "component" "poller-irish-rail-gtfs" "metricsPort" .Values.pollerIrishRailGtfs.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi) }}
+{{- end }}
+{{- if .Values.pollerIrishRailLive.enabled }}
+{{- $workers = append $workers (dict "component" "poller-irish-rail-live" "metricsPort" .Values.pollerIrishRailLive.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi) }}
+{{- end }}
+{{- if .Values.pollerNirStations.enabled }}
+{{- $workers = append $workers (dict "component" "poller-nir-stations" "metricsPort" .Values.pollerNirStations.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi) }}
+{{- end }}
+{{- range $workers }}
+---
+{{ include "distant-signal.workerNetworkPolicy" (merge (dict "root" $root) .) }}
 {{- end }}
 {{- if .Values.scheduleFeed.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "distant-signal.scheduleFeedFullname" . }}-metrics
+  name: {{ include "distant-signal.scheduleFeedFullname" . }}
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
 spec:
@@ -384,15 +315,41 @@ spec:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "schedulefeed") | nindent 6 }}
   policyTypes:
     - Ingress
-  {{- if .Values.metrics.enabled }}
   ingress:
-    # scheduleFeed's ingest container's own /metrics listener -- scoped to
-    # whatever namespace runs Prometheus (or another scraper), matching
-    # every other workload's block above. Only the IN-CLUSTER metrics-scrape
-    # allow is this chart's job: inbound SFTP-from-the-internet on the sftp
-    # container is entirely outside what NetworkPolicy can express (a cloud
-    # LB/security-group layer, a manual operator step -- see
-    # docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md).
+    # INF-2: DTD pushes the timetable over SFTP to the `sftp` container.
+    # Until 2026-09-27 this policy allowed only the metrics scrape, so
+    # enabling networkPolicy silently dropped every delivery. Traffic from
+    # the schedulefeed Service's LoadBalancer/NodePort reaches the pod as an
+    # ordinary ingress connection, which NetworkPolicy does govern.
+    #
+    # scheduleFeed.sftp.allowedCidrs narrows the sources. It only works when
+    # the pod sees the real client address: set
+    # `externalTrafficPolicy: Local` on the Service (or use a load balancer
+    # that preserves the source IP). Behind a source-NATing hop the source
+    # is a node or LB address and an allow-list would drop every push.
+    # Empty (the default) allows any source; SFTP authentication is the
+    # control then.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.scheduleFeed.sftp.port }}
+      {{- with .Values.scheduleFeed.sftp.allowedCidrs }}
+      from:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    # Kubelet probes (the ingest and reference /livez and /healthz ports)
+    # come from the node, which no selector can name.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.workerHealth.port }}
+        - protocol: TCP
+          port: {{ .Values.scheduleFeed.reference.healthPort }}
+  {{- if .Values.metrics.enabled }}
+    # The ingest container's /metrics (metrics.port) and the reference
+    # container's (scheduleFeed.reference.metricsPort), scoped to the
+    # monitoring namespace like every other workload.
     - from:
         - namespaceSelector:
             matchLabels:
@@ -400,10 +357,8 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.metrics.port }}
-  {{- else }}
-  # Default-deny: the ingest container exposes no listener when
-  # metrics.enabled is false. (Inbound SFTP is never governed by this
-  # NetworkPolicy at all -- see comment above.)
+        - protocol: TCP
+          port: {{ .Values.scheduleFeed.reference.metricsPort }}
   {{- end }}
 {{- end }}
 {{- end }}

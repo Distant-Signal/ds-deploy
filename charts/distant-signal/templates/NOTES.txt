@@ -163,3 +163,17 @@ so DTD's push client can trust it:
   # parses PKCS8 PEM directly from stdin like this has NOT been verified
   # against a real key in this pass; a conversion step may be required.
 {{- end }}
+{{- if and .Values.redis.enabled .Values.redis.persistence.enabled (not .Values.redis.persistence.existingClaim) }}
+{{- $redisSize := include "distant-signal.redisPvcSize" . }}
+{{- if ne $redisSize (.Values.redis.persistence.size | toString) }}
+
+  ############################################################################
+  # NOTE: the Redis PVC stays at {{ $redisSize }}, not redis.persistence.size
+  # ({{ .Values.redis.persistence.size }}): it already exists and its StorageClass cannot
+  # expand it, so changing the request would fail the upgrade. At the
+  # default maxmemory the AOF can outgrow {{ $redisSize }}. To get a bigger volume,
+  # migrate to a new PVC (redis.persistence.existingClaim), or pin
+  # redis.persistence.size={{ $redisSize }} to silence this note.
+  ############################################################################
+{{- end }}
+{{- end }}

@@ -48,7 +48,31 @@ data:
     : "${SCHEDULE_SFTP_USERNAME:?SCHEDULE_SFTP_USERNAME must be set}"
     : "${SCHEDULE_SFTP_HOME_DIR:?SCHEDULE_SFTP_HOME_DIR must be set}"
 
-    LOADDATA_FILE="/tmp/schedule-sftp-loaddata.json"
+    # INF-13: the loaddata file holds the push account's credential, so it
+    # lives on the memory-backed `sftp-bootstrap` emptyDir (never on disk,
+    # gone with the Pod) and is readable by this user only.
+    LOADDATA_FILE="${SCHEDULE_SFTP_LOADDATA_DIR:-/run/sftp-bootstrap}/schedule-sftp-loaddata.json"
+    umask 077
+
+    # Every value below goes into a JSON string literal, escaped here: a
+    # '"' or '\' in an operator-set password (or username, or key) must not
+    # be able to break out of its string and add or change fields, such as
+    # the account's permissions or home_dir. Control characters are
+    # rejected outright; none of these values legitimately contains one.
+    reject_control_chars() {
+      case "$2" in
+        *[[:cntrl:]]*)
+          echo "sftp-entrypoint: $1 contains a control character (newline, tab, ...); refusing to provision the account" >&2
+          exit 1
+          ;;
+      esac
+    }
+    json_escape() {
+      printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+    }
+
+    reject_control_chars SCHEDULE_SFTP_USERNAME "$SCHEDULE_SFTP_USERNAME"
+    reject_control_chars SCHEDULE_SFTP_HOME_DIR "$SCHEDULE_SFTP_HOME_DIR"
 
     # authMethod=public-key uses SFTPGo's own "public_keys" user field
     # instead of a password; authMethod=password (the only other value
@@ -57,26 +81,27 @@ data:
     # by the Deployment, matching its own scheduleFeed.sftp.authMethod
     # conditional.
     if [ -n "${SCHEDULE_SFTP_PUBLIC_KEY:-}" ]; then
-      AUTH_FIELD="\"public_keys\": [\"${SCHEDULE_SFTP_PUBLIC_KEY}\"]"
+      # A key read from a file usually ends in a newline; the command
+      # substitution drops trailing newlines.
+      public_key="$(printf '%s' "$SCHEDULE_SFTP_PUBLIC_KEY")"
+      reject_control_chars SCHEDULE_SFTP_PUBLIC_KEY "$public_key"
+      AUTH_FIELD="\"public_keys\": [\"$(json_escape "$public_key")\"]"
     else
       : "${SCHEDULE_SFTP_PASSWORD:?SCHEDULE_SFTP_PASSWORD must be set when SCHEDULE_SFTP_PUBLIC_KEY is not}"
-      AUTH_FIELD="\"password\": \"${SCHEDULE_SFTP_PASSWORD}\""
+      reject_control_chars SCHEDULE_SFTP_PASSWORD "$SCHEDULE_SFTP_PASSWORD"
+      AUTH_FIELD="\"password\": \"$(json_escape "$SCHEDULE_SFTP_PASSWORD")\""
     fi
+    USERNAME_JSON="$(json_escape "$SCHEDULE_SFTP_USERNAME")"
+    HOME_DIR_JSON="$(json_escape "$SCHEDULE_SFTP_HOME_DIR")"
 
-    # NOTE: no JSON-escaping is done on username/password/public-key below.
-    # Fine for this chart's actual values (username defaults to a fixed
-    # string, password is either operator-set or the chart's own
-    # randAlphaNum-generated value -- neither plausibly contains '"' or
-    # '\') -- flagged here rather than silently assumed safe for every
-    # possible operator override.
     cat > "$LOADDATA_FILE" <<EOF
     {
       "version": 17,
       "users": [
         {
           "status": 1,
-          "username": "${SCHEDULE_SFTP_USERNAME}",
-          "home_dir": "${SCHEDULE_SFTP_HOME_DIR}",
+          "username": "${USERNAME_JSON}",
+          "home_dir": "${HOME_DIR_JSON}",
           "permissions": {
             "/": ["*"]
           },

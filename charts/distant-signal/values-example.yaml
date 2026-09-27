@@ -16,6 +16,12 @@ api:
     tag: "0.1.0"
   replicaCount: 2
   logLevel: info
+  database:
+    # Two replicas at the default pool of 50 would need 100 + 21 for the
+    # other pools, more than the bundled Postgres's max_connections of 100
+    # (97 usable). 2 x 30 + 21 = 81 fits; the chart refuses to render a
+    # layout that doesn't (INF-7).
+    maxConnections: 30
   # Required -- the api will not render, let alone start, without these.
   # Note redirectUrl points at the FRONTEND host (status.example.com, the
   # same host the ingress section below publishes), not at the api: the

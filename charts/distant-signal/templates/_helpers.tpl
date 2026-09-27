@@ -920,3 +920,151 @@ livenessProbe:
   timeoutSeconds: {{ $h.liveness.timeoutSeconds }}
   failureThreshold: {{ $h.liveness.failureThreshold }}
 {{- end }}
+
+{{/*
+NetworkPolicy for one background worker (INF-10). Ingress: the worker's
+/metrics port from networkPolicy.monitoringNamespace (when metrics.enabled),
+and its health port(s) from anywhere, because kubelet probes come from the
+node, which no pod or namespace selector can name (INF-9's side note). A
+worker serves nothing else, so everything else is denied.
+
+Egress (only when networkPolicy.egress.enabled and `egress` is given): DNS,
+the in-cluster services the worker actually calls (flags below), the public
+internet minus networkPolicy.egress.privateCidrs(V6) (RDM/Irish Rail feeds,
+Kafka brokers, the OAuth token endpoint, Web Push services), and
+networkPolicy.egress.extraRules.
+Usage:
+  include "distant-signal.workerNetworkPolicy" (dict
+    "root" $root "component" "trust-consumer"
+    "metricsPort" 9095 "healthPorts" (list 8081)
+    "egress" (dict "api" true "redis" true "postgres" false))
+*/}}
+{{- define "distant-signal.workerNetworkPolicy" -}}
+{{- $root := .root -}}
+{{- $np := $root.Values.networkPolicy -}}
+{{- $egressOn := and .egress ($np.egress).enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-%s" (include "distant-signal.fullname" $root) .component | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" $root "component" .component) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" $root "component" .component) | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if $egressOn }}
+    - Egress
+    {{- end }}
+  ingress:
+    {{- if $root.Values.metrics.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .metricsPort }}
+    {{- end }}
+    - ports:
+        {{- range .healthPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+  {{- if $egressOn }}
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .egress.api }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "distant-signal.selectorLabels" (dict "root" $root "component" "api") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $root.Values.api.service.port }}
+    {{- if $root.Values.devAuthentik.enabled }}
+    # The bundled dev IdP serves the internal OAuth token endpoint.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "distant-signal.selectorLabels" (dict "root" $root "component" "devauthentik-server") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9000
+    {{- end }}
+    {{- end }}
+    {{- if and .egress.redis $root.Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "distant-signal.selectorLabels" (dict "root" $root "component" "redis") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $root.Values.redis.service.port }}
+    {{- end }}
+    {{- if and .egress.postgres $root.Values.postgresql.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "distant-signal.selectorLabels" (dict "root" $root "component" "postgres") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $root.Values.postgresql.service.port }}
+    {{- end }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            {{- with $np.egress.privateCidrs }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        - ipBlock:
+            cidr: "::/0"
+            {{- with $np.egress.privateCidrsV6 }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+    {{- with $np.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+{{/*
+The storage request for the chart-rendered Redis PVC (DQ15). Normally
+redis.persistence.size. But a PVC's size can only grow, and only on a
+StorageClass with allowVolumeExpansion: an upgrade that changes the request
+on any other class (k3s local-path, for one) fails outright. So when the PVC
+already exists and its StorageClass cannot expand (or cannot be read), keep
+the PVC's current request. NOTES.txt warns when that happens.
+
+`lookup` only sees the cluster during a real install/upgrade (helm CLI or
+Flux's helm-controller). `helm template`, `--dry-run` and Argo CD get
+nothing back and render redis.persistence.size as-is -- pin the size (or use
+existingClaim) there, as values.yaml's upgrade note says.
+*/}}
+{{- define "distant-signal.redisPvcSize" -}}
+{{- $size := .Values.redis.persistence.size | toString -}}
+{{- $existing := lookup "v1" "PersistentVolumeClaim" .Release.Namespace (include "distant-signal.redisFullname" .) -}}
+{{- if $existing -}}
+{{- $current := dig "spec" "resources" "requests" "storage" "" $existing | toString -}}
+{{- if and $current (ne $current $size) -}}
+{{- $expandable := false -}}
+{{- $class := dig "spec" "storageClassName" "" $existing -}}
+{{- if $class -}}
+{{- $sc := lookup "storage.k8s.io/v1" "StorageClass" "" $class -}}
+{{- $expandable = dig "allowVolumeExpansion" false $sc -}}
+{{- end -}}
+{{- if not $expandable -}}
+{{- $size = $current -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $size -}}
+{{- end }}

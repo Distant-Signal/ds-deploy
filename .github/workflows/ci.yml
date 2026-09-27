@@ -519,8 +519,11 @@ jobs:
 
   # A4 (DB review 2026-09-27): a migration added by this PR/push must have a
   # version above every migration already on the base. sqlx applies a
-  # missing lower version late and silently, out of order. Edits to merged
-  # migrations are caught by crates/api/tests/migration_checksums.rs.
+  # missing lower version late and silently, out of order. INF-16/DB2-35:
+  # the same script fails when a migration the base already had is
+  # modified, deleted or renamed, so it needs no lock-file upkeep;
+  # crates/api/tests/migration_checksums.rs is the second line of defence.
+  # The job name is unchanged in case a branch-protection rule requires it.
   migration-order:
     name: migration versions are newer than the base
     runs-on: ubuntu-24.04
@@ -691,6 +694,10 @@ jobs:
           grep -A1 -- '- --maxmemory$' <<<"$redis" | grep -q -- '- "1536mb"'
           grep -A1 -- '- --maxmemory-policy' <<<"$redis" | grep -q -- '- "noeviction"'
           grep -q 'memory: 2560Mi' <<<"$redis"
+          # DQ15: 4Gi default (no cluster here, so the existing-PVC lookup is
+          # empty and the value renders as-is).
+          helm template distant-signal charts/distant-signal "${base[@]}" \
+            --show-only templates/redis-pvc.yaml | grep -q 'storage: "4Gi"'
           bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set redis.save=null --set redis.maxmemory=null \
             --show-only templates/redis-deployment.yaml)
@@ -828,6 +835,125 @@ jobs:
             echo "PrometheusRule must not use an 'x unless x offset' new-series clause" >&2; exit 1
           fi
           echo "$names"
+          # SVC-04/SVC-08: the poller rules render (as <fullname>-pollers)
+          # once a poller is enabled.
+          pollers=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set metrics.prometheusRule.enabled=true \
+            --set pollers.ldbws.enabled=true \
+            --set pollers.ldbws.baseUrl=https://ldbws.example.com \
+            --show-only templates/prometheusrule.yaml)
+          grep -q 'alert: DistantSignalPollerFailing' <<<"$pollers"
+          grep -q 'alert: DistantSignalLdbwsStationStale' <<<"$pollers"
+
+      # The PodMonitor must select every workload that serves a port named
+      # "metrics". trust-backlog-consumer was missing (INF-6), so the
+      # DistantSignalDeadLetter* alerts could never fire for it.
+      - name: helm template (PodMonitor)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set metrics.podMonitor.enabled=true
+          )
+          pm=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --show-only templates/podmonitor.yaml)
+          for c in api aggregator enricher notifier trust-consumer trust-backlog-consumer full-coverage-consumer; do
+            grep -q -- "- $c\$" <<<"$pm" || { echo "PodMonitor must select $c" >&2; exit 1; }
+          done
+
+      # INF-7: with the bundled Postgres, api replicas x pool plus the other
+      # pools must fit in max_connections - 3, or rendering fails.
+      - name: helm template (Postgres connection budget)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --show-only templates/api-deployment.yaml
+          )
+          if helm template distant-signal charts/distant-signal "${base[@]}" \
+              --set api.replicaCount=2 > /dev/null 2>&1; then
+            echo "2 api replicas x 50 must exceed the default budget" >&2; exit 1
+          fi
+          helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set api.replicaCount=2 --set api.database.maxConnections=30 > /dev/null
+          helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set api.replicaCount=2 --set postgresql.config.max_connections=200 > /dev/null
+
+      # networkPolicy.enabled: every policy must keep the traffic its
+      # workload needs. INF-2: the schedulefeed policy must admit SFTP.
+      # INF-10: every background worker has a policy.
+      - name: helm template (NetworkPolicy)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set networkPolicy.enabled=true
+            --set scheduleFeed.enabled=true
+            --set scheduleFeed.sftp.authMethod=password
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          # One policy per document, keyed by name.
+          policy() { awk -v n="$1" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}'; }
+
+          feed=$(render --show-only templates/networkpolicy.yaml | policy distant-signal-schedulefeed)
+          [ -n "$feed" ] || fail "no schedulefeed NetworkPolicy rendered"
+          grep -q 'port: 2022' <<<"$feed" || fail "schedulefeed policy must allow SFTP on 2022"
+          if grep -q 'ipBlock' <<<"$feed"; then fail "empty allowedCidrs must not restrict SFTP sources"; fi
+          feed=$(render --set 'scheduleFeed.sftp.allowedCidrs={203.0.113.0/24}' \
+            --show-only templates/networkpolicy.yaml | policy distant-signal-schedulefeed)
+          grep -q 'cidr: "203.0.113.0/24"' <<<"$feed" || fail "allowedCidrs must render as ipBlocks"
+
+          # INF-10: every background worker has its own policy, admitting its
+          # health port (kubelet probes). Egress policies are opt-in.
+          all=$(render --set pollerIrishRailGtfs.enabled=true \
+            --set pollerIrishRailLive.enabled=true \
+            --set pollerNirStations.enabled=true \
+            --set movementRelay.enabled=true \
+            --set movementRelay.kafka.brokers=kafka.example.com:9094 \
+            --set movementRelay.kafka.topic=test-topic \
+            --set movementRelay.kafka.consumerGroup=test-group \
+            --set movementRelay.kafka.saslMechanism=PLAIN \
+            --show-only templates/networkpolicy.yaml)
+          for c in aggregator:8090 enricher:8090 notifier:8090 trust-consumer:8081 \
+              trust-backlog-consumer:8083 full-coverage-consumer:8082 movement-relay:8083 \
+              poller-irish-rail-gtfs:8090 poller-irish-rail-live:8090 poller-nir-stations:8090; do
+            p=$(policy "distant-signal-${c%%:*}" <<<"$all")
+            [ -n "$p" ] || fail "no NetworkPolicy for ${c%%:*}"
+            grep -q "port: ${c##*:}\$" <<<"$p" || fail "${c%%:*} policy must admit health port ${c##*:}"
+          done
+          if grep -q -- '- Egress' <<<"$all"; then fail "egress policies must be opt-in"; fi
+          eg=$(render --set networkPolicy.egress.enabled=true --show-only templates/networkpolicy.yaml)
+          notifier=$(policy distant-signal-notifier <<<"$eg")
+          grep -q -- '- Egress' <<<"$notifier" || fail "notifier must get an egress policy"
+          grep -q -- '- 10.0.0.0/8' <<<"$notifier" || fail "notifier egress must exclude private ranges"
 
       - name: helm template (values-example.yaml)
         run: |
