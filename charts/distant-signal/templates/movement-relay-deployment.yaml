@@ -110,6 +110,7 @@ spec:
                   key: {{ .Values.movementRelay.kafka.existingSecretPasswordKey }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisPasswordEnv" . }}
             - name: STREAM_LAG_POLL_SECS
               value: {{ .Values.movementRelay.streamLagPollSecs | quote }}
             - name: MOVEMENT_STREAM_MAXLEN

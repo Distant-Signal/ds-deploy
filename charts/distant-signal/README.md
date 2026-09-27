@@ -539,8 +539,55 @@ redis:
 Setting `redis.enabled: false` **without** `redis.externalUrl` aborts
 rendering with an explicit message — previously the chart would silently
 point both the api and the enricher at an in-chart Service that was never
-created. Unlike `DATABASE_URL` there is no `existingSecret` form; a URL with
-inline credentials works but is visible in the rendered Deployment.
+created. For a password-protected external Redis, keep `externalUrl`
+credential-free and use `redis.auth` with `existingSecret` (next section);
+a URL with inline credentials also works but is visible in the rendered
+Deployment.
+
+## Redis authentication (optional)
+
+Off by default (`redis.auth.enabled: false`); with it off the chart renders
+exactly what it rendered before the option existed. When enabled:
+
+- every Redis client (api, enricher, trust-consumer, trust-backlog-consumer,
+  full-coverage-consumer, movement-relay) gets `REDIS_PASSWORD` from a
+  Secret via `secretKeyRef`. `REDIS_URL` stays credential-free; the services
+  combine the two at startup (`crates/common/src/redis_auth.rs`, which
+  percent-encodes the password, so any characters work) and authenticate as
+  `AUTH default <password>`. The password is never in values, in the URL or
+  in any rendered manifest, and the services never log it;
+- with `redis.auth.requirePass: true` (the default) the bundled Redis starts
+  with `--requirepass` from the same Secret, and its probes authenticate
+  through `REDISCLI_AUTH`.
+
+The password comes from `redis.auth.existingSecret` / `existingSecretKey`
+(preferred; required for an external Redis) or, when that is empty, from a
+random 32-character `redis-password` the chart generates in its own Secret
+and keeps across upgrades (see "Generated secrets and the `lookup`
+limitation").
+
+**Enabling it on a running deployment, without an outage.** Redis 7.4 (the
+chart's image) accepts `AUTH default <anything>` while the default user has
+no password yet, and that is the form the clients send (verified against
+`redis:7.4.11`). So give the clients the password first:
+
+1. Create the Secret, then upgrade with `redis.auth.enabled=true`,
+   `redis.auth.requirePass=false`, `redis.auth.existingSecret=<name>`. Only
+   the six client Deployments roll; the Redis pod is not touched. Confirm
+   they are Ready and log no `NOAUTH`/`WRONGPASS`.
+2. Upgrade again with `redis.auth.requirePass=true` (the default). Only Redis
+   restarts (Recreate, AOF on the PVC: the same short gap as any Redis
+   restart), and the clients reconnect with the password.
+
+Doing both in one upgrade works too, but client pods still on the old spec
+get `NOAUTH` until they are replaced. A fresh install can enable both at
+once.
+
+**Rotation.** Clients read the password at process start and Redis at pod
+start; changing the Secret restarts nothing. To rotate without errors:
+upgrade with `requirePass=false` (Redis restarts without a password),
+update the Secret and `kubectl rollout restart` the six client
+Deployments, then upgrade with `requirePass=true`.
 
 ## Password encoding caveat
 
@@ -1003,6 +1050,10 @@ used for and why persistence defaults on.
 |---|---|---|
 | `redis.enabled` | `true` | Deploy the bundled Redis Deployment and Service. |
 | `redis.externalUrl` | `""` | Connection URL of an externally-managed Redis. Used only when `redis.enabled` is false, where it is **required** — empty aborts the render. |
+| `redis.auth.enabled` | `false` | Redis AUTH: give every Redis client `REDIS_PASSWORD` from a Secret. See "Redis authentication (optional)". |
+| `redis.auth.requirePass` | `true` | With `auth.enabled` and the bundled Redis, start it with `--requirepass` and authenticate its probes. `false` is step 1 of the no-outage enable sequence. |
+| `redis.auth.existingSecret` | `""` | Secret holding the password. Empty: the chart generates `redis-password` in its own Secret (bundled Redis only; an external Redis requires this). |
+| `redis.auth.existingSecretKey` | `redis-password` | Key within `redis.auth.existingSecret`. |
 | `redis.image.repository` | `redis` | Redis image repository (upstream image; this repo builds no Redis image). |
 | `redis.image.tag` | `"7"` | Pinned to the major the compose stack uses. |
 | `redis.image.pullPolicy` | `IfNotPresent` | Image pull policy. |

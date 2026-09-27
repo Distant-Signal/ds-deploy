@@ -269,6 +269,7 @@ spec:
               value: {{ .Values.api.fullCoverageEnabledDefault | quote }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisPasswordEnv" . }}
             # Always rendered, so it reflects the real value either way.
             # Decides whether requests are counted at all AND whether the
             # internal-only /metrics listener below is started

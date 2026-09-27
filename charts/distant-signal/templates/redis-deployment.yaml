@@ -1,4 +1,8 @@
 {{- if .Values.redis.enabled }}
+{{- /* redis.auth (INF-3): the server only requires a password in step 2
+     of the enable sequence (values.yaml redis.auth); in step 1 this pod
+     is left untouched so that only the clients roll. */}}
+{{- $requirePass := and .Values.redis.auth.enabled .Values.redis.auth.requirePass }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -137,6 +141,21 @@ spec:
             - --maxmemory-policy
             - {{ . | quote }}
             {{- end }}
+            {{- if $requirePass }}
+            # redis.auth (INF-3): the kubelet substitutes $(REDIS_PASSWORD)
+            # from the env below, so the value is never in the manifest.
+            # redis-server rewrites its process title, so it does not show
+            # in `ps` either.
+            - --requirepass
+            - "$(REDIS_PASSWORD)"
+            {{- end }}
+          {{- if $requirePass }}
+          env:
+            {{- include "distant-signal.redisPasswordEnv" . }}
+            # redis-cli (the probes below) reads its password from here.
+            - name: REDISCLI_AUTH
+              value: "$(REDIS_PASSWORD)"
+          {{- end }}
           volumeMounts:
             - name: data
               # Redis's own default working directory (`dir` in redis.conf,

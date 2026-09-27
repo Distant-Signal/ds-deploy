@@ -177,11 +177,12 @@ Mirrors the `postgresql.enabled` / `externalDatabase` contract below: the
 bundled Redis is used when `redis.enabled`, an operator-supplied
 `redis.externalUrl` otherwise, and disabling the bundled Redis without
 supplying one aborts the render rather than silently pointing both
-workloads at a Service that was never created. Unlike DATABASE_URL there is
-no existingSecret form -- a Redis URL for a disposable trigger queue carries
-no credential the chart needs to keep out of the Deployment spec; an
-operator who does need one can point `redis.externalUrl` at a URL with
-inline auth, accepting that it is visible in the rendered Deployment.
+workloads at a Service that was never created. The URL itself never
+carries a credential from this chart: with `redis.auth.enabled` the
+password travels separately as REDIS_PASSWORD (distant-signal.redisPasswordEnv
+below), and the services combine the two (crates/common/src/redis_auth.rs).
+An operator can still put inline auth in `redis.externalUrl`, accepting
+that it is visible in the rendered Deployment.
 */}}
 {{- define "distant-signal.redisUrl" -}}
 {{- if .Values.redis.enabled -}}
@@ -190,6 +191,50 @@ inline auth, accepting that it is visible in the rendered Deployment.
 {{- .Values.redis.externalUrl }}
 {{- else -}}
 {{- fail "redis.enabled is false but no external Redis is configured. Set redis.externalUrl (e.g. redis://redis.example.com:6379), or re-enable the bundled Redis with redis.enabled=true." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Redis AUTH (redis.auth, INF-3): the Secret and key holding the password.
+The chart-generated password lives in the chart's main Secret under
+`redis-password` (secret.yaml); an operator Secret is used as-is. An
+external Redis cannot use a chart-generated password (nothing would set it
+on the server), so that combination fails the render. Takes root.
+*/}}
+{{- define "distant-signal.redisAuthSecretName" -}}
+{{- if .Values.redis.auth.existingSecret -}}
+{{- .Values.redis.auth.existingSecret -}}
+{{- else if .Values.redis.enabled -}}
+{{- include "distant-signal.secretName" . -}}
+{{- else -}}
+{{- fail "redis.auth.enabled is true with an external Redis (redis.enabled=false) but redis.auth.existingSecret is empty. A chart-generated password cannot match a server this chart does not run: set redis.auth.existingSecret (and redis.auth.existingSecretKey) to the Secret holding the external Redis's password." -}}
+{{- end -}}
+{{- end }}
+
+{{- define "distant-signal.redisAuthSecretKey" -}}
+{{- if .Values.redis.auth.existingSecret -}}
+{{- required "redis.auth.existingSecretKey must not be empty when redis.auth.existingSecret is set" .Values.redis.auth.existingSecretKey -}}
+{{- else -}}
+redis-password
+{{- end -}}
+{{- end }}
+
+{{/*
+REDIS_PASSWORD env entry for a Redis client container (and the bundled
+Redis itself), from the redis.auth Secret. Renders NOTHING unless
+redis.auth.enabled, so callers wrap it in no conditional of their own and
+the default render is unchanged. Emits a leading newline and indents to 12
+(container env list items), so call it as
+`{{- include "distant-signal.redisPasswordEnv" . }}` directly after the
+REDIS_URL entry. Takes root.
+*/}}
+{{- define "distant-signal.redisPasswordEnv" -}}
+{{- if .Values.redis.auth.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.redisAuthSecretName" . }}
+                  key: {{ include "distant-signal.redisAuthSecretKey" . }}
 {{- end -}}
 {{- end }}
 

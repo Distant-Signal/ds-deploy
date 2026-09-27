@@ -723,6 +723,70 @@ jobs:
             --show-only templates/movement-relay-deployment.yaml)
           grep -A1 'name: MOVEMENT_STREAM_MAXLEN' <<<"$relay" | grep -q 'value: "1048576"'
 
+      # INF-3 Redis AUTH. Off (the default) must render no REDIS_PASSWORD,
+      # no --requirepass and no redis-password Secret key. On must give all
+      # six Redis clients REDIS_PASSWORD from the Secret (never inline),
+      # start Redis with --requirepass and authenticate its probes;
+      # requirePass=false (rollout step 1) must leave the Redis pod alone;
+      # an external Redis without existingSecret must fail the render.
+      - name: helm template (redis auth)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set movementRelay.enabled=true
+            --set movementRelay.kafka.brokers=kafka.example.com:9094
+            --set movementRelay.kafka.topic=test-topic
+            --set movementRelay.kafka.consumerGroup=test-group
+            --set movementRelay.kafka.saslMechanism=PLAIN
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+
+          off=$(render)
+          if grep -E -q 'REDIS_PASSWORD|REDISCLI_AUTH|requirepass|redis-password' <<<"$off"; then
+            fail "redis.auth disabled but auth settings rendered"
+          fi
+
+          on=$(render --set redis.auth.enabled=true \
+            --set redis.auth.existingSecret=redis-auth --set redis.auth.existingSecretKey=pw)
+          [ "$(grep -c 'name: REDIS_PASSWORD' <<<"$on")" -eq 7 ] \
+            || fail "expected REDIS_PASSWORD on the six clients plus redis"
+          [ "$(grep -A3 'name: REDIS_PASSWORD' <<<"$on" | grep -c 'name: redis-auth')" -eq 7 ] \
+            || fail "REDIS_PASSWORD must come from redis.auth.existingSecret"
+          grep -A1 'name: REDIS_URL' <<<"$on" | grep 'value:' | grep -q -v '@' \
+            || fail "REDIS_URL must stay credential-free"
+          redis=$(render --set redis.auth.enabled=true --set redis.auth.existingSecret=redis-auth \
+            --show-only templates/redis-deployment.yaml)
+          grep -A1 -- '- --requirepass' <<<"$redis" | grep -q -- '- "$(REDIS_PASSWORD)"' \
+            || fail "redis must start with --requirepass from the Secret"
+          grep -q 'name: REDISCLI_AUTH' <<<"$redis" || fail "redis probes must authenticate"
+
+          gen=$(render --set redis.auth.enabled=true)
+          grep -q '  redis-password: ' <<<"$gen" || fail "chart-generated redis-password missing"
+
+          step1=$(render --set redis.auth.enabled=true --set redis.auth.requirePass=false \
+            --set redis.auth.existingSecret=redis-auth --show-only templates/redis-deployment.yaml)
+          [ "$step1" = "$(render --show-only templates/redis-deployment.yaml)" ] \
+            || fail "requirePass=false must leave the Redis Deployment unchanged"
+
+          if render --set redis.enabled=false --set redis.externalUrl=redis://ext:6379 \
+              --set redis.auth.enabled=true >/dev/null 2>&1; then
+            fail "external Redis with auth but no existingSecret must fail the render"
+          fi
+          render --set redis.enabled=false --set redis.externalUrl=redis://ext:6379 \
+            --set redis.auth.enabled=true --set redis.auth.existingSecret=ext >/dev/null
+          render --set redis.auth.enabled=true --set networkPolicy.enabled=true >/dev/null
+
       # Reboot resilience: redis must roll with Recreate (single RWO AOF
       # volume, INF-1); postgres needs a startupProbe so WAL redo is never
       # killed by liveness (INF-4); the frontend probes must hit the

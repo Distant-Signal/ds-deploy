@@ -83,6 +83,7 @@ spec:
             {{- end }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisPasswordEnv" . }}
             - name: LLM_BASE_URL
               value: {{ .Values.enricher.llm.baseUrl | quote }}
             - name: LLM_MODEL

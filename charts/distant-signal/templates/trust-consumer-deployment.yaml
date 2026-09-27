@@ -157,6 +157,7 @@ spec:
               value: {{ .Values.trustConsumer.movementFeed | quote }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisPasswordEnv" . }}
             - name: REDIS_AUTOCLAIM_MIN_IDLE_SECS
               value: {{ .Values.trustConsumer.redisAutoclaimMinIdleSecs | quote }}
             - name: REDIS_GAP_CHECK_SECS

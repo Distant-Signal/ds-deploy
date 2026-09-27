@@ -1515,6 +1515,68 @@ redis:
   # created. Same contract as `postgresql.enabled: false` +
   # `externalDatabase.*`.
   externalUrl: ""
+  # -- Redis AUTH (INF-3). OFF by default: with `enabled: false` nothing
+  # below renders and the chart output is unchanged.
+  #
+  # When enabled, every workload that talks to Redis (api, enricher,
+  # trust-consumer, full-coverage-consumer, trust-backlog-consumer,
+  # movement-relay) gets a `REDIS_PASSWORD` env from the Secret below via
+  # `secretKeyRef`, next to its unchanged, credential-free `REDIS_URL`. The
+  # services combine the two at startup (crates/common/src/redis_auth.rs)
+  # and authenticate as `AUTH default <password>`. The password never
+  # appears in values, in `REDIS_URL` or in any rendered manifest. With
+  # `requirePass` (and the bundled Redis) the Redis container also gets the
+  # password from the Secret and starts with `--requirepass`, and its
+  # probes authenticate (`REDISCLI_AUTH`).
+  #
+  # SAFE ENABLE SEQUENCE FOR A RUNNING DEPLOYMENT (no outage). The chart's
+  # Redis is 7.4: the default user accepts `AUTH default <anything>` while
+  # it has no password (verified against redis:7.4.11), and the clients
+  # send exactly that form, so clients can hold the password before the
+  # server requires it:
+  #   1. Create the Secret (outside this repo), then deploy with
+  #      `enabled: true`, `requirePass: false`, `existingSecret: <name>`.
+  #      Only the client Deployments roll (new env); Redis itself is not
+  #      touched. Check they are healthy and connected (no NOAUTH/WRONGPASS
+  #      in their logs; /healthz ready).
+  #   2. Deploy again with `requirePass: true` (the default). Only Redis
+  #      restarts (strategy Recreate, AOF persisted: the same few seconds
+  #      of unavailability as any Redis restart; clients reconnect and
+  #      re-authenticate on their own).
+  # Doing both in one upgrade also works but is not outage-free: client
+  # pods still running the old spec get NOAUTH from the new Redis until
+  # they are replaced. A fresh install can set both at once.
+  #
+  # ROTATION: the password is read at process start (clients) and pod
+  # start (Redis), and a Secret change restarts nothing by itself. Rotating
+  # therefore means a short outage unless done in steps: set
+  # `requirePass: false` and deploy (Redis restarts without a password),
+  # update the Secret and restart the six client Deployments
+  # (`kubectl rollout restart`), then set `requirePass: true` and deploy.
+  #
+  # External Redis (`redis.enabled: false`): `enabled: true` passes the
+  # password from `existingSecret` to the clients (keep `externalUrl`
+  # credential-free, or the services refuse to start with two passwords);
+  # `requirePass` has no effect, the external server is configured
+  # elsewhere.
+  auth:
+    enabled: false
+    # -- Start the bundled Redis with `--requirepass` from the Secret. Only
+    # read when `enabled` is true. Set it to false for step 1 of the
+    # enable sequence above (clients authenticate, the server does not yet
+    # require it).
+    requirePass: true
+    # -- Name of an existing Secret holding the password (preferred for
+    # production; the Secret is managed outside this chart). When empty,
+    # the chart generates a random 32-character password in its own
+    # Secret (key `redis-password`), kept across upgrades by the same
+    # `lookup` as the generated postgres password (so an offline `helm
+    # template` renders a different value each time; see secret.yaml).
+    # Required with an external Redis. Use a password of printable
+    # characters; any character is fine, the services percent-encode it.
+    existingSecret: ""
+    # -- Key within `existingSecret` holding the password.
+    existingSecretKey: redis-password
   image:
     repository: redis
     # -- Pinned to an exact 7.4 patch release and content digest (INF-11);
