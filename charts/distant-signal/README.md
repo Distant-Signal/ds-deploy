@@ -760,7 +760,6 @@ override only needs to name the keys it changes:
 | `wal_compression` | `lz4` | `off` | Compresses the full-page images written after each checkpoint. Needs Postgres 15+ built with lz4 (the chart's `postgres:16` image is). |
 | `random_page_cost` | `1.1` | `4` | **Assumes SSD-class storage.** Set `"4"` on spinning disks. |
 | `huge_pages` | `off` | `try` | The pod requests no hugepages. `try` can SIGBUS on nodes where hugepages exist but aren't granted to the pod. |
-| `max_connections` | `200` | `100` | Pools: api `api.database.maxConnections` (50) per replica + aggregator 10 + notifier 5 + enricher 5. 100 is exceeded at 2 api replicas. Needs a restart. |
 | `shared_preload_libraries` | `pg_stat_statements` | `""` | Per-query statistics. Only loads at server start. The extension is created by migration `20260927070000`. |
 | `pg_stat_statements.track` | `top` | `top` | Top-level statements only. Pinned explicitly. |
 | `log_min_duration_statement` | `1s` | `-1` | Logs statements taking 1s or more. Expect one line per schedule-publish bulk batch. |
@@ -837,7 +836,7 @@ budget). Before it migrates, it drops any INVALID index that a failed
 | `databasePool.statementTimeoutSecs` | `60` | `statement_timeout` for every pooled connection. `0` disables it. |
 | `databasePool.idleInTransactionTimeoutSecs` | `30` | `idle_in_transaction_session_timeout`. `0` disables it. |
 | `databasePool.acquireTimeoutSecs` | `5` | How long to wait for a free pool connection. |
-| `api.database.maxConnections` | `50` | api pool size per replica. |
+| `api.database.maxConnections` | `50` | api pool size per replica. Pools total api 50 per replica + aggregator 10 + notifier 5 + enricher 5 = 70 at one api replica, against Postgres's default `max_connections` of 100 (the chart does not raise it). Each extra api replica adds 50: before scaling to 2 replicas, raise `postgresql.config.max_connections` (restart; check memory) or lower this. |
 | `api.migrations.lockTimeoutSecs` | `10` | `lock_timeout` for startup migrations. |
 | `api.migrations.statementTimeoutSecs` | `240` | `statement_timeout` for each startup migration statement. Keep it below the startup probe budget. |
 
@@ -859,7 +858,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `api.image.digest` | `""` | Exact content digest (`sha256:...`). When set, takes priority over `tag`/appVersion -- see "Pinning by content digest instead of tag" above. CI populates this automatically for images it builds and pushes. |
 | `api.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `api.replicaCount` | `1` | Replicas. >1 is safe — sqlx's Migrator takes a Postgres advisory lock. |
+| `api.replicaCount` | `1` | Replicas. >1 is safe for migrations — sqlx's Migrator takes a Postgres advisory lock — but each replica adds `api.database.maxConnections` (50) connections: see that row before scaling. |
 | `api.service.type` | `ClusterIP` | Service type. |
 | `api.service.port` | `8080` | Service and container port; also sets `BIND_URL`. |
 | `api.logLevel` | `info` | `RUST_LOG` value (tracing-subscriber EnvFilter syntax). |
