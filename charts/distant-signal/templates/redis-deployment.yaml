@@ -47,6 +47,11 @@ spec:
   # notifier, api).
   strategy:
     type: Recreate
+    # Explicit null: a live object that used RollingUpdate keeps its old
+    # `rollingUpdate` block under server-side apply, and the API server then
+    # rejects `type: Recreate` ("rollingUpdate: Forbidden"). Nulling it lets
+    # the upgrade from a RollingUpdate Deployment go through.
+    rollingUpdate: null
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "redis") | nindent 6 }}
