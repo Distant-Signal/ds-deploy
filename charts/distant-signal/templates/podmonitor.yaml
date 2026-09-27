@@ -92,4 +92,17 @@ spec:
       path: /metrics
       interval: {{ .Values.metrics.podMonitor.interval }}
       scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout }}
+    {{- if .Values.scheduleFeed.enabled }}
+    {{- /*
+    The schedulefeed pod's second container, `reference`, serves its own
+    /metrics on the port named ref-metrics; without this endpoint none of
+    schedule-reference's metrics (and so none of the
+    distant-signal.schedule-pipeline alerts) were ever scraped. Pods without
+    that port name get no target from it.
+    */}}
+    - port: ref-metrics
+      path: /metrics
+      interval: {{ .Values.metrics.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout }}
+    {{- end }}
 {{- end }}

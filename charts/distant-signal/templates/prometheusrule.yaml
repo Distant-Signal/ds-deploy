@@ -32,7 +32,8 @@ so that clause fired on every rollout.
 {{- $extraLabels := $rule.ruleLabels | default dict }}
 {{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled) }}
 {{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
-{{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn }}
+{{- $pipelineOn := and ($rule.schedulePipeline).enabled .Values.scheduleFeed.enabled }}
+{{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn }}
 {{- $notifierDroppedOn := ($rule.notifierPushDropped).enabled }}
 {{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
 {{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn }}
@@ -427,6 +428,151 @@ spec:
               are being pruned without an archive. Check the object store
               and the aggregator's "archiving a trains batch failed" logs.
             runbook_url: {{ printf "%s/docs/cold-archive.md" $runbookBase | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $pipelineOn }}
+    {{- with $rule.schedulePipeline }}
+    - name: distant-signal.schedule-pipeline
+      rules:
+        {{- /*
+        PL-15e: schedule-reference waits (with backoff, while /healthz stays
+        healthy) for api to answer its startup seed GET. 0 until it does.
+        */}}
+        - alert: DistantSignalScheduleReferenceNotSeeded
+          expr: |
+            max by (namespace) (distant_signal_schedule_reference_seeded{namespace="{{ $ns }}"}) == 0
+          for: {{ .notSeededFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "schedule-reference has not seeded for {{ .notSeededFor }}"
+            description: >-
+              schedule-reference in {{ "{{ $labels.namespace }}" }} has been
+              waiting for {{ .notSeededFor }} to read its last completed publish
+              from api (GET /private/schedule-reference-publishes), so it
+              publishes nothing. Check api and the internal OAuth token
+              endpoint; the container's warn log names the error.
+        {{- /*
+        PL-5: schedule-ingest quarantined an uploaded delivery zip that
+        declares more than scheduleFeed's extraction caps, or whose entries
+        inflate to a size other than they declare. The CIF pipeline stays on
+        the previous delivery until a new upload replaces it.
+        */}}
+        - alert: DistantSignalScheduleFeedZipRejected
+          expr: |
+            sum by (namespace) (increase(distant_signal_schedule_feed_zip_rejected_total{namespace="{{ $ns }}"}[{{ .zipRejectedWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "schedule-ingest rejected a delivery zip"
+            description: >-
+              schedule-ingest in {{ "{{ $labels.namespace }}" }} refused to
+              extract the uploaded CIF delivery zip (over MAX_EXTRACTED_BYTES
+              or MAX_ZIP_ENTRIES, or an entry larger than it declares). The
+              timetable is not refreshed until a new upload replaces it. The
+              ingest container's error log names the reason.
+        {{- /*
+        SCHED-2: the delivery timestamp of the last delivery every product
+        of which published (seeded at startup from api's durable marker).
+        Deliveries land nightly, so this covers a missing delivery, a
+        delivery that keeps failing to publish, and a wedged publisher.
+        */}}
+        - alert: DistantSignalScheduleReferencePublishStale
+          expr: |
+            time() - max by (namespace) (distant_signal_schedule_reference_last_published_delivery_timestamp_seconds{namespace="{{ $ns }}"}) > {{ mul (int .staleAfterHours) 3600 }}
+          for: 15m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no CIF delivery fully published for {{ .staleAfterHours }}h"
+            description: >-
+              schedule-reference in {{ "{{ $labels.namespace }}" }} last fully
+              published a delivery timestamped over {{ .staleAfterHours }} hours
+              ago. Either no new delivery arrived (check schedule-ingest and the
+              SFTP upload) or one keeps failing to publish (check
+              distant_signal_schedule_reference_publishes_total by outcome, and
+              the reference container's error log).
+        {{- /*
+        SCHED-2: api skipped a final chunk's delete because the staged key
+        count did not match the publisher's total, so rows missing from that
+        publish stay until the next complete one.
+        */}}
+        - alert: DistantSignalSchedulePublishStagedMismatch
+          expr: |
+            sum by (namespace, product) (increase(distant_signal_api_schedule_publish_staged_mismatch_total{namespace="{{ $ns }}"}[{{ .mismatchWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.product }}" }} publish kept stale rows"
+            description: >-
+              api in {{ "{{ $labels.namespace }}" }} finished a
+              {{ "{{ $labels.product }}" }} publish whose staged key count did not
+              match the publisher's total, so it did not delete the rows that
+              publish left out. They stay until the next complete publish;
+              api's warn log has the publish_id and both counts.
+        {{- /*
+        DQ6/SCHED-1: api answered 400/413/422 to one of schedule-reference's
+        products. That is permanent for the delivery: it is not retried, and
+        the durable completion marker is not written (so a restart tries the
+        delivery again). The product's previous rows stay in place.
+        */}}
+        - alert: DistantSignalScheduleReferencePublishRejected
+          expr: |
+            sum by (namespace, product) (increase(distant_signal_schedule_reference_publishes_total{namespace="{{ $ns }}", outcome="rejected"}[{{ .rejectedWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "api rejected schedule-reference's {{ "{{ $labels.product }}" }} publish"
+            description: >-
+              api in {{ "{{ $labels.namespace }}" }} refused schedule-reference's
+              {{ "{{ $labels.product }}" }} data with 400, 413 or 422. It is not
+              retried for this delivery and the delivery is not recorded as
+              published, so that product keeps its previous rows. Usually a
+              schema skew between the two services or an oversized chunk; the
+              reference container's error log has api's response body.
+        {{- /*
+        DQ11/PL-9: schedule-reference publishes each line's population for
+        today and tomorrow, so the rail day's population normally exists a
+        day early. full-coverage-consumer exports how many lines still have
+        none for the current rail day, but only once it is past 06:00 London
+        (0 before), so this alert needs no time-of-day logic.
+        */}}
+        - alert: DistantSignalLinePopulationMissing
+          expr: |
+            max by (namespace) (distant_signal_full_coverage_consumer_population_missing_past_deadline_lines{namespace="{{ $ns }}"}) > 0
+          for: {{ .populationMissingFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $value }}" }} lines have no schedule population for today"
+            description: >-
+              After 06:00 London, full-coverage-consumer in
+              {{ "{{ $labels.namespace }}" }} still has no schedule line population
+              for today's rail day on {{ "{{ $value }}" }} line(s), so their
+              full-coverage stats stay Pending. Check that last night's and the
+              previous CIF delivery published (DistantSignalScheduleReferencePublishStale),
+              and the consumer's population reload errors.
     {{- end }}
     {{- end }}
 {{- end }}
