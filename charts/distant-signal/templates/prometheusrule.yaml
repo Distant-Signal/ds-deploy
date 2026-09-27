@@ -241,11 +241,11 @@ spec:
         - alert: DistantSignalEnricherErrors
           expr: |
             (
-              sum by (namespace, call) (rate(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome="error"}[{{ .window }}]))
+              sum by (namespace, call) (rate(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome!="success"}[{{ .window }}]))
               / sum by (namespace, call) (rate(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}"}[{{ .window }}]))
             ) > {{ .errorRatio }}
             and on (namespace, call)
-            sum by (namespace, call) (increase(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome="error"}[{{ .window }}])) >= {{ .minErrors }}
+            sum by (namespace, call) (increase(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome!="success"}[{{ .window }}])) >= {{ .minErrors }}
           for: {{ .for }}
           labels:
             severity: {{ .severity }}

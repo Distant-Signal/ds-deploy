@@ -1471,9 +1471,9 @@ enricher:
   # -- Per-request timeout for a single LLM call, in seconds. One incident
   # makes three sequential calls (primary, resolution-adversarial,
   # severity-adversarial), so the worst case for one incident is roughly
-  # 3x this value. Raise this for a slow/remote self-hosted endpoint, but
-  # raise reclaimMinIdleSecs to match -- it must stay comfortably above
-  # 3x this value (see its own comment below).
+  # 3x this value. Raise this for a slow/remote endpoint. Behind a gateway
+  # that cuts calls itself (e.g. a 504 at ~302 s), set it slightly above
+  # the gateway's cutoff (e.g. 320) so the 504 is what gets reported.
   #
   # Raised from 120 to 300 (2026-08-21) after a live eval against a real
   # self-hosted endpoint (Ollama, qwen3.5:4b) measured single-call
@@ -1489,14 +1489,17 @@ enricher:
   # timed out, or a process that crashed between processing and acking.
   reclaimIntervalSecs: 60
   # -- How long (seconds) a pending entry must have sat unacked before
-  # it's eligible for reclaim. Must comfortably exceed the worst-case time
-  # for all three extraction calls (each bounded by llmRequestTimeoutSecs)
-  # plus the DB write, so a still-in-flight attempt is never reclaimed out
-  # from under itself. Default here matches the 300s default timeout: 3 *
-  # 300s = 900s worst case, plus headroom. Raise if you raise
-  # llmRequestTimeoutSecs.
+  # it's eligible for reclaim, i.e. the retry delay for a failed
+  # extraction. An entry whose incident is still being processed is
+  # skipped, however long it runs, so this is not a correctness bound.
+  # Keeping it above the usual worst case (3 x llmRequestTimeoutSecs, more
+  # with in-call retries) avoids needless claim-and-skip passes.
   reclaimMinIdleSecs: 1000
   logLevel: info
+  # -- Extra env vars. The enricher's off-by-default settings (provider
+  # policy: LLM_REASONING_EFFORT, LLM_MAX_TOKENS, LLM_MAX_IN_FLIGHT,
+  # LLM_RATE_LIMIT_RETRIES, LLM_RATE_LIMIT_RETRY_SECS, LLM_GATEWAY_RETRIES;
+  # and CARRY_FORWARD_SEMANTIC_NOOPS) are set here -- see the README.
   extraEnv: []
   # Reads one incident at a time off Redis and calls out to the LLM
   # over HTTP. Almost all of its wall-clock is waiting on that call, so

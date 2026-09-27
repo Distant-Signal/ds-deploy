@@ -943,16 +943,45 @@ pod that fails every request forever.
 | `enricher.llm.apiKey` | `""` | API key for that endpoint. Rendered into the chart Secret when `existingSecret` is empty. Empty is valid for a local endpoint needing no auth, and is never auto-generated. |
 | `enricher.llm.existingSecret` | `""` | Read the API key from this pre-existing Secret instead. |
 | `enricher.llm.existingSecretApiKeyKey` | `llm-api-key` | Key within `enricher.llm.existingSecret`. |
-| `enricher.llmRequestTimeoutSecs` | `120` | Per-request timeout for a single LLM call. One incident makes three sequential calls, so raise `reclaimMinIdleSecs` to match if you raise this. |
+| `enricher.llmRequestTimeoutSecs` | `300` | Per-request timeout for a single LLM call (`LLM_REQUEST_TIMEOUT_SECS`). One incident makes three sequential calls. Behind a gateway that cuts calls itself (e.g. a 504 at ~302 s), set this slightly above the gateway's cutoff (e.g. `320`) so the 504 is what gets reported. |
 | `enricher.sweepIntervalSecs` | `3600` | Cadence of the backstop sweep that re-checks every uncleared incident's text hash and model version. |
 | `enricher.reclaimIntervalSecs` | `60` | How often the reclaim loop checks for stream entries stuck unacked past `reclaimMinIdleSecs` (a timed-out request, or a crash between processing and acking). |
-| `enricher.reclaimMinIdleSecs` | `600` | How long a pending entry must sit unacked before it's eligible for reclaim. Must stay comfortably above `3 * llmRequestTimeoutSecs`. |
+| `enricher.reclaimMinIdleSecs` | `1000` | How long a pending entry must sit unacked before it's eligible for reclaim, i.e. the retry delay for a failed extraction. Entries whose incident is still being processed are skipped, so this is not a correctness bound; keeping it above `3 * llmRequestTimeoutSecs` avoids needless claim-and-skip passes. |
 | `enricher.logLevel` | `info` | `RUST_LOG` value. |
-| `enricher.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `enricher.extraEnv` | `[]` | Extra env vars appended to the container. The off-by-default enricher settings below are set here. |
 | `enricher.resources` | `{}` | Container resource requests/limits. |
 | `enricher.nodeSelector` | `{}` | Pod node selector. |
 | `enricher.tolerations` | `[]` | Pod tolerations. |
 | `enricher.affinity` | `{}` | Pod affinity rules. |
+
+The enricher has off-by-default settings with no dedicated value. Set them
+through `enricher.extraEnv`; with none set, it sends exactly the same
+requests as before and never retries a call in-process.
+
+| Env var | Default | Description |
+|---|---|---|
+| `LLM_REASONING_EFFORT` | unset | Sent as `reasoning_effort` (e.g. `low`). Reasoning models whose default effort is high need it, or they can spend their whole budget thinking and return empty content (`outcome="empty_content"`). |
+| `LLM_MAX_TOKENS` | unset | Sent as `max_tokens` (e.g. `8192`). |
+| `LLM_MAX_IN_FLIGHT` | unset | Cap on concurrent LLM HTTP requests across the stream, sweep and reclaim loops. |
+| `LLM_RATE_LIMIT_RETRIES` | `0` | In-call retries on HTTP 429. Each waits `Retry-After` (at least `LLM_RATE_LIMIT_RETRY_SECS`); a `Retry-After` over 600 s fails the call instead. |
+| `LLM_RATE_LIMIT_RETRY_SECS` | `20` | Minimum wait before a 429 retry. |
+| `LLM_GATEWAY_RETRIES` | `0` | In-call retries on 502/503/504 and client timeouts. Above `0` it also stops a timeout or 504 feeding the per-text retry backoff. (429, 502 and 503 never feed it.) |
+| `CARRY_FORWARD_SEMANTIC_NOOPS` | `false` | When `true`, a text change that only touches HTML, whitespace, entities, case or in-word punctuation re-stamps the existing extraction instead of re-running the LLM (`enricher_extraction_carried_forward_total`). With it off, the edit class only labels `enricher_extraction_rerun_total` and `enricher_extraction_churn_total` (`edit_class`). |
+
+For example, for a slow, rate-limited hosted reasoning model:
+
+```yaml
+enricher:
+  llmRequestTimeoutSecs: 320
+  reclaimMinIdleSecs: 3600
+  extraEnv:
+    - { name: LLM_REASONING_EFFORT, value: "low" }
+    - { name: LLM_MAX_TOKENS, value: "8192" }
+    - { name: LLM_MAX_IN_FLIGHT, value: "3" }
+    - { name: LLM_RATE_LIMIT_RETRIES, value: "3" }
+    - { name: LLM_GATEWAY_RETRIES, value: "2" }
+    - { name: CARRY_FORWARD_SEMANTIC_NOOPS, value: "true" }
+```
 | `enricher.podAnnotations` | `{}` | Pod annotations. |
 | `enricher.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 
@@ -1105,7 +1134,7 @@ rendered only when `movementRelay.enabled` is true.
 | `DistantSignalDeadLetterGrowing` | warning | Any record dead-lettered (`movement_feed_deadlettered_total`) within the last 1h. |
 | `DistantSignalDeadLetterNearFull` | warning | `movement_feed_deadletter_length` above 80% of the 10,000-record cap. |
 | `DistantSignalDeadLetterFull` | critical | A dead-letter write was refused because the stream is full (`movement_feed_deadletter_full_total`) within the last 1h. |
-| `DistantSignalEnricherErrors` | warning | Over 30m, more than 50% of an LLM call site's calls (`enricher_llm_call_total{outcome="error"}`) failed, with at least 3 failures, for 15m. |
+| `DistantSignalEnricherErrors` | warning | Over 30m, more than 50% of an LLM call site's calls (`enricher_llm_call_total{outcome!="success"}`: `error`, `timeout`, `rate_limited`, `gateway_error`, `http_error` or `empty_content`) failed, with at least 3 failures, for 15m. |
 | `DistantSignalComponentMemoryHigh` | warning | A container in this release's pods (`pod=~"<fullname>-.*"`) has a working set (cadvisor) above 80% of its memory limit (kube-state-metrics) for 10m. |
 
 Metric names above omit the `distant_signal_` prefix every app metric
