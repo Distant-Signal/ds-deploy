@@ -157,7 +157,8 @@ spec:
                   # /private/train-events, /private/train-forward-signals,
                   # /private/tracked-trains, /private/stanox-crs.
                   - trust-consumer
-                  # /private/trust-event-backlog, /private/stanox-crs.
+                  # /private/trust-event-backlog, /private/train-reasons,
+                  # /private/stanox-crs.
                   - trust-backlog-consumer
                   # /private/schedule-line-population,
                   # /private/full-coverage-stats,
