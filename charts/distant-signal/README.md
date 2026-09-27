@@ -635,10 +635,14 @@ stream is never trimmed. Alert on
 [docs/movement-events-deadletter.md](../../docs/movement-events-deadletter.md)
 for how to inspect records and re-inject them with `redis-cli`.
 
-The same three consumers' `/healthz` also answers 503 `stalled` when no
-consume-loop iteration has completed for `<consumer>.progressStallSecs`
-(300s, or 900s for `fullCoverageConsumer`). Their liveness probes then
-restart a wedged pod.
+The same three consumers, and `movement-relay`, serve two health paths.
+`/healthz` is readiness: it needs the Kafka or Redis connection (for
+`movement-relay`, a confirmed Kafka partition assignment). `/livez` is
+liveness and does not depend on Redis, Kafka or Postgres. Both answer 503
+`stalled` when no loop iteration has completed for
+`<component>.progressStallSecs` (300s, or 900s for `fullCoverageConsumer` and
+`movementRelay`). The liveness probes use `/livez`, so they restart a wedged
+pod but not one that is waiting for Redis to come back.
 
 ## Full-coverage consumer restarts
 

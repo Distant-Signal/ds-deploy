@@ -2150,6 +2150,14 @@ movementRelay:
   # memory limit. Minimum 1000.
   streamMaxLen: 1048576
   healthPort: 8083
+  # -- Liveness watchdog (PROGRESS_STALL_SECS): /livez answers 503 "stalled"
+  # once no relay-loop iteration has completed for this many seconds (waiting
+  # on Kafka for the next record never counts, and a failed cycle while Redis
+  # is down still completes), so only a wedged loop is restarted by the
+  # liveness probe (after its own failureThreshold * periodSeconds = 90s on
+  # top). See the binary's --progress-stall-secs doc for how the default is
+  # sized.
+  progressStallSecs: 900
   metricsPort: 9094
   logLevel: info
   extraEnv: []

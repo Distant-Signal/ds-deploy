@@ -840,6 +840,26 @@ jobs:
             grep -q 'name: HEALTH_BIND_URL' <<<"$out" || fail "$t needs HEALTH_BIND_URL"
           done
 
+          # The movement-stream consumers and movement-relay: /healthz is
+          # readiness (needs Redis/Kafka), /livez is liveness (progress only).
+          # Liveness on /healthz killed them whenever the Redis pod was
+          # recreated in the same rollout.
+          relay=(
+            --set movementRelay.enabled=true
+            --set movementRelay.kafka.brokers=kafka.example.com:9094
+            --set movementRelay.kafka.topic=test-topic
+            --set movementRelay.kafka.consumerGroup=test-group
+            --set movementRelay.kafka.saslMechanism=PLAIN
+          )
+          for t in trust-consumer trust-backlog-consumer full-coverage-consumer movement-relay; do
+            out=$(render "${relay[@]}" --show-only "templates/$t-deployment.yaml")
+            grep -A2 'livenessProbe:' <<<"$out" | grep -q 'path: /livez' \
+              || fail "$t liveness must hit /livez, not the Redis/Kafka-dependent /healthz"
+            grep -A2 'readinessProbe:' <<<"$out" | grep -q 'path: /healthz' \
+              || fail "$t needs a /healthz readiness probe"
+            grep -q 'name: PROGRESS_STALL_SECS' <<<"$out" || fail "$t needs PROGRESS_STALL_SECS"
+          done
+
           pollers=$(render -f charts/distant-signal/values-example.yaml \
             --set pollerIrishRailGtfs.enabled=true \
             --set pollerIrishRailLive.enabled=true \

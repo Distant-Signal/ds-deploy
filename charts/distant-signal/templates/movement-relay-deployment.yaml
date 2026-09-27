@@ -82,12 +82,20 @@ spec:
               port: health
             initialDelaySeconds: 10
             periodSeconds: 10
+          # Liveness is /livez (loop progress only), NOT /healthz: readiness
+          # is legitimately false while Redis is unavailable (the relay waits
+          # for it before joining the Kafka group) and during a slow group
+          # rebalance, and restarting the pod fixes neither. Liveness on
+          # /healthz SIGKILLed the relay ~2 minutes into every rollout that
+          # also recreated the Redis pod.
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /livez
               port: health
             initialDelaySeconds: 30
             periodSeconds: 15
+            # /livez goes 503 "stalled" once no loop iteration has completed
+            # for progressStallSecs, so a wedged loop is restarted too.
             failureThreshold: 6
           env:
             - name: KAFKA_BROKERS
@@ -117,6 +125,8 @@ spec:
               value: {{ int64 .Values.movementRelay.streamMaxLen | quote }}
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.movementRelay.healthPort) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.movementRelay.progressStallSecs | quote }}
             - name: METRICS_ENABLED
               value: {{ .Values.metrics.enabled | quote }}
             {{- if .Values.metrics.enabled }}
