@@ -545,6 +545,23 @@ cannot be archived (licensing). See [docs/cold-archive.md](../../docs/cold-archi
 for the key layout, the failure policy, and how to read an archive with
 DuckDB.
 
+## Movement-stream dead letters
+
+`trust-consumer`, `trust-backlog-consumer` and `full-coverage-consumer` move
+records that can never succeed (an explicit `api` data rejection, or a
+malformed or unparseable entry) to the Redis stream
+`movement-events-deadletter`. They never move an entry there only because
+`api` was down or slow; those entries stay pending and are retried. The
+stream is never trimmed. Alert on
+`distant_signal_movement_feed_deadlettered_total`. See
+[docs/movement-events-deadletter.md](../../docs/movement-events-deadletter.md)
+for how to inspect records and re-inject them with `redis-cli`.
+
+The same three consumers' `/healthz` also answers 503 `stalled` when no
+consume-loop iteration has completed for `<consumer>.progressStallSecs`
+(300s, or 900s for `fullCoverageConsumer`). Their liveness probes then
+restart a wedged pod.
+
 ## Ingress
 
 One `Ingress` object with up to two **separate hostnames**, both optional and

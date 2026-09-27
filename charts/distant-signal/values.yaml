@@ -1522,6 +1522,12 @@ trustConsumer:
   stanoxCrsReloadSecs: 3600
   retentionDays: 90
   healthPort: 8081
+  # -- Liveness watchdog (PROGRESS_STALL_SECS): /healthz answers 503 "stalled"
+  # once no consume-loop iteration has completed for this many seconds, so a
+  # wedged loop is restarted by the liveness probe (after its own
+  # failureThreshold * periodSeconds = 90s on top). See the binary's
+  # --progress-stall-secs doc for how the default is sized.
+  progressStallSecs: 300
   # -- Values-driven replica count, added specifically to support the
   # Deploy B cutover runbook's B1 step (stop trust-consumer's Kafka
   # connection cleanly, by scaling to 0 via `helm upgrade`, not an
@@ -1620,6 +1626,12 @@ fullCoverageConsumer:
   stanoxCrsReloadSecs: 3600
   statsWriteIntervalSecs: 60
   healthPort: 8082
+  # -- Liveness watchdog (PROGRESS_STALL_SECS): /healthz answers 503 "stalled"
+  # once no consume-loop iteration has completed for this many seconds, so a
+  # wedged loop is restarted by the liveness probe (after its own
+  # failureThreshold * periodSeconds = 90s on top). See the binary's
+  # --progress-stall-secs doc for how the default is sized.
+  progressStallSecs: 900
   metricsPort: 9093
   # -- Values-driven replica count -- symmetry with trustConsumer's own
   # knob (see that block's comment). Not load-bearing for the Deploy B B1
@@ -1678,6 +1690,12 @@ trustBacklogConsumer:
   redisAutoclaimMinIdleSecs: 30
   redisGapCheckSecs: 60
   healthPort: 8083
+  # -- Liveness watchdog (PROGRESS_STALL_SECS): /healthz answers 503 "stalled"
+  # once no consume-loop iteration has completed for this many seconds, so a
+  # wedged loop is restarted by the liveness probe (after its own
+  # failureThreshold * periodSeconds = 90s on top). See the binary's
+  # --progress-stall-secs doc for how the default is sized.
+  progressStallSecs: 300
   metricsPort: 9096
   # -- A purely documentation-level flag: this plan's real retention
   # safeguard is aggregator.trustEventBacklogRetentionDays (above), a

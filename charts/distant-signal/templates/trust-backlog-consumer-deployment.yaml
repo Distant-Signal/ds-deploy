@@ -68,7 +68,10 @@ spec:
               port: health
             initialDelaySeconds: 30
             periodSeconds: 15
-            failureThreshold: 6 # tolerate a real reconnect cycle before restarting the pod
+            # tolerate a real reconnect cycle before restarting the pod. /healthz
+            # also goes 503 "stalled" once no loop iteration has completed for
+            # progressStallSecs, so a wedged loop is restarted too.
+            failureThreshold: 6
           # Env var names below are the uppercase-snake-case clap `env`
           # names crates/trust-backlog-consumer/src/config.rs actually
           # declares. No Kafka connection block at all, unlike
@@ -118,6 +121,8 @@ spec:
               value: /app/lines
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.trustBacklogConsumer.healthPort) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.trustBacklogConsumer.progressStallSecs | quote }}
             - name: METRICS_ENABLED
               value: {{ .Values.metrics.enabled | quote }}
             {{- if .Values.metrics.enabled }}
