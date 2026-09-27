@@ -17,11 +17,12 @@ PodMonitor above attaches to every scraped series. The memory alert also
 matches pod=~"<fullname>-.*", since cadvisor/kube-state-metrics series carry
 no chart labels.
 
-Sparse counters (the dead-letter and stream-gap counters) are only
-registered on their first increment, so `increase()` alone misses that
-first increment (a series whose first sample is already 1 has no increase).
-Each such alert therefore also fires on `x unless x offset <window>`: a
-series that exists now but did not <window> ago.
+The counters these alerts key on (the three consumers' stream-gap
+counters, movement-feed's dead-letter counters for each group and reason)
+are registered at 0 when the process starts, so a plain `increase()` sees
+their first increment. There is deliberately no "new series" clause
+(`x unless x offset <window>`): every rollout creates new per-pod series,
+so that clause fired on every rollout.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled }}
 {{- $rule := .Values.metrics.prometheusRule }}
@@ -150,7 +151,6 @@ spec:
             {{- range $i, $c := list "trust_consumer" "full_coverage_consumer" "trust_backlog_consumer" }}
             {{- $m := printf `distant_signal_%s_stream_gap_detected_total{namespace="%s"}` $c $ns }}
             {{ if $i }}or {{ end }}label_replace(sum by (namespace) (increase({{ $m }}[{{ $w }}])) > 0, "consumer", "{{ $c }}", "", "")
-            or label_replace(sum by (namespace) ({{ $m }} unless {{ $m }} offset {{ $w }}), "consumer", "{{ $c }}", "", "")
             {{- end }}
           for: {{ .for }}
           labels:
@@ -175,7 +175,6 @@ spec:
         - alert: DistantSignalDeadLetterGrowing
           expr: |
             sum by (namespace, group, reason) (increase({{ $m }}[{{ .window }}])) > 0
-            or sum by (namespace, group, reason) ({{ $m }} unless {{ $m }} offset {{ .window }})
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -216,7 +215,6 @@ spec:
         - alert: DistantSignalDeadLetterFull
           expr: |
             sum by (namespace, group) (increase({{ $m }}[{{ .window }}])) > 0
-            or sum by (namespace, group) ({{ $m }} unless {{ $m }} offset {{ .window }})
           for: {{ .for }}
           labels:
             severity: {{ .severity }}

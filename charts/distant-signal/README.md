@@ -1193,9 +1193,10 @@ rendered only when `movementRelay.enabled` is true.
 | `DistantSignalComponentMemoryHigh` | warning | A container in this release's pods (`pod=~"<fullname>-.*"`) has a working set (cadvisor) above 80% of its memory limit (kube-state-metrics) for 10m. |
 
 Metric names above omit the `distant_signal_` prefix every app metric
-carries. The dead-letter and stream-gap counters only exist after their
-first increment, so those alerts also fire on a series that is new within
-the window, not only on `increase()`.
+carries. The dead-letter and stream-gap counters are registered at 0 when
+each process starts, so those alerts use a plain `increase()`. They no
+longer also fire on a series that is new within the window: every rollout
+creates new per-pod series, so that clause fired on every rollout.
 
 ### networkPolicy
 

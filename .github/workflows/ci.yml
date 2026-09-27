@@ -815,6 +815,12 @@ jobs:
           if bad=$(grep -v '^DistantSignal' <<<"$names"); then
             echo "alert names must start with DistantSignal:" >&2; echo "$bad" >&2; exit 1
           fi
+          # No "new series" clause (`x unless x offset <window>`): the
+          # counters are registered at 0 on startup, and every rollout makes
+          # new per-pod series, so that clause fired on every rollout.
+          if grep -n ' unless ' <<<"$rule"; then
+            echo "PrometheusRule must not use an 'x unless x offset' new-series clause" >&2; exit 1
+          fi
           echo "$names"
 
       - name: helm template (values-example.yaml)
