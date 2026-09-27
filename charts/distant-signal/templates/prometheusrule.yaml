@@ -31,7 +31,8 @@ so that clause fired on every rollout.
 {{- $runbookBase := trimSuffix "/" $rule.runbookBaseUrl }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
 {{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled) }}
-{{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled }}
+{{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
+{{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -258,6 +259,76 @@ spec:
               failed over the last {{ .window }} (threshold {{ .errorRatio }}, at
               least {{ .minErrors }} errors). Incidents are not being enriched;
               check the LLM endpoint (enricher.llm.baseUrl) and enricher's logs.
+    {{- end }}
+    {{- end }}
+    {{- if $fcwOn }}
+    {{- with $rule.fullCoverageWindow }}
+    {{- /*
+    Windowed full-coverage stats
+    (docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md).
+    Gated on fullCoverageConsumer.windowedStats.enabled via $fcwOn: with the
+    feature off the consumer never posts windows, so these would be noise.
+    The counters are registered at 0 on startup (a plain increase()/rate()
+    sees the first increment).
+    */}}
+    - name: distant-signal.full-coverage-window
+      rules:
+        - alert: DistantSignalFullCoverageWindowFeedStale
+          expr: |
+            max by (namespace) (distant_signal_full_coverage_consumer_window_feed_stale{namespace="{{ $ns }}"}) == 1
+          for: {{ .feedStaleFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "full-coverage windows marked feed_stale for {{ .feedStaleFor }}"
+            description: >-
+              full-coverage-consumer in {{ "{{ $labels.namespace }}" }} has marked
+              its windows feed_stale for {{ .feedStaleFor }}: too few TRUST
+              Activations in the last hour, or no movement event recently. No
+              window influences severity and no train is presumed cancelled
+              meanwhile. Expected during a known TRUST outage; otherwise check
+              movement-relay and the consumer's lag.
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md" $runbookBase | quote }}
+        - alert: DistantSignalFullCoverageWindowPostErrors
+          expr: |
+            sum by (namespace) (increase(distant_signal_full_coverage_consumer_errors_total{namespace="{{ $ns }}", operation="post_window_stats"}[{{ .postErrorsWindow }}])) > 0
+          for: {{ .postErrorsFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "full-coverage window stats POSTs failing"
+            description: >-
+              full-coverage-consumer in {{ "{{ $labels.namespace }}" }} failed to
+              POST its windows to /private/full-coverage-window-stats within the
+              last {{ .postErrorsWindow }}. An api without that route (not yet
+              deployed, or its migrations not run) answers 404; check api's logs
+              and the consumer's warn log.
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md" $runbookBase | quote }}
+        - alert: DistantSignalFullCoverageWindowStatsStalled
+          expr: |
+            sum by (namespace) (rate(distant_signal_full_coverage_consumer_window_rows_posted_total{namespace="{{ $ns }}"}[{{ .stalledWindow }}])) == 0
+          for: {{ .stalledFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no full-coverage window rows posted"
+            description: >-
+              full-coverage-consumer in {{ "{{ $labels.namespace }}" }} is running
+              with windowed stats on but has posted no window rows over
+              {{ .stalledWindow }} for {{ .stalledFor }}. It posts every stats
+              write (about every minute) once the startup replay is done;
+              check for a stuck replay, a population that never loaded, or
+              failing POSTs (DistantSignalFullCoverageWindowPostErrors).
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md" $runbookBase | quote }}
     {{- end }}
     {{- end }}
     {{- with $rule.componentMemory }}

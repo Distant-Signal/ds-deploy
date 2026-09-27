@@ -2812,6 +2812,26 @@ metrics:
       ratio: 0.8
       for: 10m
       severity: warning
+    # Windowed full-coverage stats. The whole group renders ONLY when
+    # fullCoverageConsumer.windowedStats.enabled is also true, so none of
+    # these can fire while the feature is off (the default).
+    # DistantSignalFullCoverageWindowFeedStale: the consumer has marked its
+    # windows feed_stale (too few Activations in the last hour, or no event
+    # for feedStaleSecs) for `feedStaleFor` -- no window influences severity
+    # meanwhile. Expected during a known TRUST outage.
+    # DistantSignalFullCoverageWindowPostErrors: a POST to
+    # /private/full-coverage-window-stats failed within `postErrorsWindow`
+    # (an api without the route answers 404).
+    # DistantSignalFullCoverageWindowStatsStalled: no window rows posted
+    # over `stalledWindow` for `stalledFor` while the consumer is running.
+    fullCoverageWindow:
+      enabled: true
+      feedStaleFor: 15m
+      postErrorsWindow: 30m
+      postErrorsFor: 0m
+      stalledWindow: 10m
+      stalledFor: 15m
+      severity: warning
 
 # ---------------------------------------------------------------------------
 # NetworkPolicy (optional)
