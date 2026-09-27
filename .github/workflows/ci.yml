@@ -740,6 +740,12 @@ jobs:
           grep -A10 'startupProbe:' <<<"$pg" | grep -q 'failureThreshold: 90' \
             || fail "postgres startupProbe budget must default to 90 x 10s"
 
+          api=$(render --show-only templates/api-deployment.yaml)
+          grep -A6 'startupProbe:' <<<"$api" | grep -q 'periodSeconds: 2' \
+            || fail "api startupProbe period must default to 2s"
+          grep -A6 'startupProbe:' <<<"$api" | grep -q 'failureThreshold: 450' \
+            || fail "api startupProbe budget must default to 450 x 2s (900s, matching postgres)"
+
           fe=$(render --show-only templates/frontend-deployment.yaml)
           [ "$(grep -c 'path: /healthz' <<<"$fe")" -eq 2 ] \
             || fail "frontend readiness and liveness must both hit /healthz"

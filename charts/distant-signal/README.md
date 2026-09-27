@@ -827,7 +827,7 @@ own transaction with `SET LOCAL`:
 
 api migrates at startup on its own connection, with
 `api.migrations.lockTimeoutSecs` (10) and
-`api.migrations.statementTimeoutSecs` (240, below the 300s startup-probe
+`api.migrations.statementTimeoutSecs` (240, well below the 900s startup-probe
 budget). Before it migrates, it drops any INVALID index that a failed
 `CREATE INDEX CONCURRENTLY` left behind.
 
@@ -882,7 +882,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.internalOauth.groups.scheduleReference` | `svc-schedule-reference` | Required Authentik group for schedule-reference (also accepted on `POST /private/stanox-crs`). Not secret. |
 | `api.probes.path` | `/public/health` | Path all three probes and the `helm test` pod hit. |
 | `api.probes.startup.periodSeconds` | `2` | Startup probe period. |
-| `api.probes.startup.failureThreshold` | `30` | Startup probe failures allowed (30 x 2s = 60s for in-process migrations). |
+| `api.probes.startup.failureThreshold` | `450` | Startup probe failures allowed (450 x 2s = 900s for in-process migrations, matching the Postgres startupProbe's 15 minutes). |
 | `api.probes.startup.timeoutSeconds` | `3` | Startup probe timeout. |
 | `api.probes.readiness.periodSeconds` | `10` | Readiness probe period. |
 | `api.probes.readiness.failureThreshold` | `3` | Readiness probe failures allowed. |

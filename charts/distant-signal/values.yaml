@@ -892,19 +892,26 @@ api:
     # Also bounds a CREATE INDEX CONCURRENTLY's wait for old transactions.
     lockTimeoutSecs: 10
     # -- statement_timeout per migration statement. MUST stay below the
-    # startup probe budget (`probes.startup`, 150 x 2s = 300s) so a slow
-    # statement fails with a logged error rather than a SIGKILL. It is per
-    # statement: several long ones can still add up past 300s. A migration
-    # that needs longer: raise this and the startup probe together.
+    # startup probe budget (`probes.startup`, 450 x 2s = 900s) so a slow
+    # statement fails with a logged error rather than a SIGKILL. 240s was
+    # first chosen to fit under the old 300s budget; it is kept now that the
+    # budget is 900s because a single statement running 4+ minutes is itself
+    # a sign of a stuck or mis-planned migration worth failing loudly, and it
+    # leaves room for three such statements (plus lock waits) in one run
+    # before the probe could fire. It is per statement: several long ones
+    # can still add up past 900s. A migration that needs longer: raise this
+    # (and, if needed, the startup probe) together.
     statementTimeoutSecs: 240
   probes:
     # -- Path served by crates/api/src/routes/health.rs, nested under /public
     # by main.rs. Changing this must be matched in tests/test-api-health.yaml.
     path: /public/health
     startup:
-      # 150 x 2s = 300s (5 minutes) of headroom. `api.migrations` below
-      # bounds each migration statement inside it (240s statement_timeout,
-      # 10s lock_timeout): raise the two together. The api runs
+      # 450 x 2s = 900s (15 minutes) of headroom, matching the Postgres
+      # startupProbe (`postgresql.probes.startup`, 90 x 10s): after a node
+      # reboot api may be waiting on WAL redo before its migrations can even
+      # start. `api.migrations` above bounds each migration statement inside
+      # it (240s statement_timeout, 10s lock_timeout). The api runs
       # sqlx::migrate!() BEFORE it binds its listener
       # (crates/api/src/main.rs:118), so /public/health does not answer at
       # all until every pending migration has committed -- the startup
@@ -931,8 +938,9 @@ api:
       # crash-loop that never converges, rather than a slow-but-successful
       # rollout.
       #
-      # 300s is ~10x the estimated worst case at today's real row counts, so
-      # it absorbs a slow index build without hiding a genuinely wedged
+      # 300s (raised to 900s on 2026-09-27, to match Postgres's own startup
+      # budget) is ~10x the estimated worst case at today's real row counts,
+      # so it absorbs a slow index build without hiding a genuinely wedged
       # start for long. It costs nothing on the normal path: periodSeconds
       # stays at 2, so a pod with no pending migrations still becomes ready
       # within ~2s -- which matters, because api now rolls with
@@ -941,7 +949,7 @@ api:
       # either way: the process exits and the container restarts regardless
       # of this budget, which only governs "alive but not yet answering".
       periodSeconds: 2
-      failureThreshold: 150
+      failureThreshold: 450
       timeoutSeconds: 3
     readiness:
       periodSeconds: 10
@@ -1325,8 +1333,11 @@ archive:
 # would double-send every push.
 # ---------------------------------------------------------------------------
 notifier:
-  # -- /livez stall window (see workerHealth): one cycle can legitimately take tens of minutes while push endpoints time out (SVC-02).
-  progressStallSecs: 3600
+  # -- /livez stall window (see workerHealth). Was 3600s while a cycle sent
+  # its pushes inline and could take tens of minutes on timing-out endpoints;
+  # pushes now run on the bounded push queue (SVC-02, push_queue.rs), so a
+  # cycle is DB-only and 900s is ample (2026-09-27 decision).
+  progressStallSecs: 900
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/notifier
     tag: ""
