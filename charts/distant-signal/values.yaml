@@ -1185,7 +1185,7 @@ devAuthentik:
 # replicas: 1 with strategy Recreate for the same reason -- a RollingUpdate
 # would briefly run two.
 aggregator:
-  # -- /livez stall window (see workerHealth): one aggregation pass plus the retention prunes (and cold-archive uploads when archive.enabled).
+  # -- /livez stall window (see workerHealth): one aggregation pass. The retention prunes (and cold-archive uploads when archive.enabled) run on their own task since SVC-06; if that task dies the process exits.
   progressStallSecs: 1800
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/aggregator
@@ -1345,7 +1345,8 @@ archive:
   # -- Tables to archive before pruning (explicit opt-in). Supported:
   #   - trains  -> the trains row plus its cascaded train_movement_events and
   #                train_current_state rows, one object per table per batch
-  #                under service_date=YYYY-MM-DD/.
+  #                under service_date=YYYY-MM-DD/. Movement events are
+  #                archived WITHOUT raw_body (the verbatim TRUST message).
   # Deliberately NOT archivable (the binary refuses to start if listed):
   # trust_event_backlog (its 1-day retention is a TRUST licensing
   # safeguard) and every LDBWS-derived table (line_status_history,
@@ -1374,6 +1375,13 @@ archive:
     pathStyle: true
     # -- Permit a plain http:// endpoint.
     allowHttp: false
+    # -- REQUIRED to be true when enabled; the chart refuses to render
+    # otherwise. Nothing in the app ever deletes an archived object, so the
+    # bucket (or the archive prefix) must carry an S3 lifecycle expiration
+    # rule, and the app cannot check that it does. Configure the rule on the
+    # bucket first, then set this to true to confirm it. See
+    # docs/cold-archive.md, "Object expiry".
+    lifecycleConfirmed: false
     # -- Required when enabled: a pre-existing Secret holding the access key
     # pair. The chart never renders the credentials itself.
     existingSecret: ""
@@ -2939,6 +2947,25 @@ metrics:
       enabled: true
       maxAgeSeconds: 7200
       for: 30m
+      severity: warning
+    # DistantSignalNotifierPushDropped: at least minDrops decided push
+    # notifications ended undelivered (queue full, every endpoint failed,
+    # or the job errored) within `window`, per reason. Notifier delivery is
+    # at-most-once by decision (triage DQ9), so these may be lost for good.
+    notifierPushDropped:
+      enabled: true
+      window: 1h
+      minDrops: 5
+      for: 0m
+      severity: warning
+    # DistantSignalArchiveUploadFailures: at least minFailures cold-archive
+    # batch uploads (or their verification) failed within `window`. Renders
+    # only when archive.enabled is also true.
+    archiveUploadFailures:
+      enabled: true
+      window: 1h
+      minFailures: 3
+      for: 0m
       severity: warning
 
 # ---------------------------------------------------------------------------

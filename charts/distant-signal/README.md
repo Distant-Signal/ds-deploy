@@ -566,9 +566,13 @@ Off by default. When `archive.enabled` is false, the aggregator renders no
 rows that `trains` retention is about to prune (together with their
 `train_movement_events`/`train_current_state` children) are written first to
 S3-compatible storage as zstd JSON Lines, and deleted only once the upload
-is confirmed. `archive.s3.bucket` and `archive.s3.existingSecret` are
-required when enabled. `trust_event_backlog` and the LDBWS-derived tables
-cannot be archived (licensing). See [docs/cold-archive.md](../../docs/cold-archive.md)
+is confirmed (size plus ETag = body MD5). `archive.s3.bucket` and
+`archive.s3.existingSecret` are required when enabled, and so is
+`archive.s3.lifecycleConfirmed: true`: the app never deletes an archived
+object, so the chart refuses to render until you confirm the bucket has an
+S3 lifecycle expiration rule. `trust_event_backlog` and the LDBWS-derived
+tables cannot be archived, and movement events are archived without their
+TRUST `raw_body` (licensing). See [docs/cold-archive.md](../../docs/cold-archive.md)
 for the key layout, the failure policy, and how to read an archive with
 DuckDB.
 

@@ -33,6 +33,9 @@ so that clause fired on every rollout.
 {{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled) }}
 {{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
 {{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn }}
+{{- $notifierDroppedOn := ($rule.notifierPushDropped).enabled }}
+{{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -360,6 +363,70 @@ spec:
               ({{ "{{ $labels.namespace }}" }}) has used more than {{ .ratio }} of
               its memory limit for {{ .for }}. It is at risk of being OOMKilled;
               raise its resources.limits.memory or find the growth.
+    {{- end }}
+    {{- end }}
+    {{- with $rule.notifierPushDropped }}
+    {{- if .enabled }}
+    - name: distant-signal.notifier
+      rules:
+        {{- /*
+        Notifier delivery is at-most-once by decision (triage DQ9): a push
+        that ends undelivered is counted, not retried beyond the cursor
+        grace window. See crates/notifier/src/push_queue.rs's module doc
+        for every reason label.
+        */}}
+        - alert: DistantSignalNotifierPushDropped
+          expr: |
+            sum by (namespace, reason) (increase(distant_signal_notifier_push_dropped_total{namespace="{{ $ns }}"}[{{ .window }}])) >= {{ .minDrops }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "notifier dropped {{ "{{ $value }}" }} pushes ({{ "{{ $labels.reason }}" }})"
+            description: >-
+              The notifier in {{ "{{ $labels.namespace }}" }} dropped
+              {{ "{{ $value }}" }} decided notifications with reason
+              {{ "{{ $labels.reason }}" }} over the last {{ .window }}. Delivery
+              is at-most-once, so these users may never get them.
+              queue_full/user_queue_full: raise notifier push queue capacity or
+              workers. send_failed: push endpoints are failing (check
+              distant_signal_notifier_push_send_total by outcome). error: the
+              notifier could not load subscriptions (check the database).
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-02-line-status-notifications-design.md#delivery-guarantee-at-most-once" $runbookBase | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $archiveAlertOn }}
+    {{- with $rule.archiveUploadFailures }}
+    - name: distant-signal.archive
+      rules:
+        {{- /*
+        Renders only with archive.enabled. Under the default `retain`
+        failure policy a failed upload keeps the rows, so the trains table
+        grows past its retention window while this fires; under `delete`
+        the rows are gone unarchived.
+        */}}
+        - alert: DistantSignalArchiveUploadFailures
+          expr: |
+            sum by (namespace) (increase(distant_signal_aggregator_archive_upload_failures_total{namespace="{{ $ns }}"}[{{ .window }}])) >= {{ .minFailures }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "cold archive uploads failing ({{ "{{ $value }}" }} in {{ .window }})"
+            description: >-
+              The aggregator in {{ "{{ $labels.namespace }}" }} failed
+              {{ "{{ $value }}" }} cold-archive batch uploads or verifications over
+              the last {{ .window }}. With failurePolicy retain the trains
+              table is growing past its retention window; with delete, rows
+              are being pruned without an archive. Check the object store
+              and the aggregator's "archiving a trains batch failed" logs.
+            runbook_url: {{ printf "%s/docs/cold-archive.md" $runbookBase | quote }}
     {{- end }}
     {{- end }}
 {{- end }}

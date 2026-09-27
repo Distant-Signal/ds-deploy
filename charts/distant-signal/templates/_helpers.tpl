@@ -844,6 +844,9 @@ a missing bucket/secret or a table the binary would refuse anyway.
 {{- if not $a.s3.existingSecret -}}
 {{- fail "archive.enabled is true but archive.s3.existingSecret is empty. Create a Secret holding the S3 access key pair (keys archive.s3.accessKeyIdKey / archive.s3.secretAccessKeyKey) and name it here." -}}
 {{- end -}}
+{{- if not $a.s3.lifecycleConfirmed -}}
+{{- fail "archive.enabled is true but archive.s3.lifecycleConfirmed is not. Archived objects are never deleted by the app: configure an S3 lifecycle (expiration) rule on the archive bucket/prefix first, then set archive.s3.lifecycleConfirmed=true. See docs/cold-archive.md, \"Object expiry\"." -}}
+{{- end -}}
 {{- range $a.tables -}}
 {{- if not (has . (list "trains")) -}}
 {{- fail (printf "archive.tables entry %q is not archivable. Supported: trains. trust_event_backlog (TRUST licensing safeguard) and LDBWS-derived tables (300-day licence ceiling) are deliberately excluded." .) -}}
@@ -872,6 +875,8 @@ a missing bucket/secret or a table the binary would refuse anyway.
   value: {{ $a.s3.pathStyle | quote }}
 - name: ARCHIVE_S3_ALLOW_HTTP
   value: {{ $a.s3.allowHttp | quote }}
+- name: ARCHIVE_S3_LIFECYCLE_CONFIRMED
+  value: "true"
 - name: ARCHIVE_S3_ACCESS_KEY_ID
   valueFrom:
     secretKeyRef:
