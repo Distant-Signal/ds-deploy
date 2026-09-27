@@ -703,6 +703,20 @@ api:
   # -- see config.rs's own session_cleanup_interval_secs doc. Same
   # "declared but never wired" gap as the three tunables above.
   sessionCleanupIntervalSecs: 3600
+  # -- Personal-data retention (UK legal audit LEG-5), applied hourly by
+  # the session-cleanup sweep -- see docs/personal-data-retention.md and
+  # config.rs. 0 disables each limit.
+  # Days after the travel date that tracked trains, tickets, journeys and
+  # template skip markers are kept (548 = 18 months).
+  pastTravelRetentionDays: 548
+  # Push subscriptions are dropped once their user has not logged in (and
+  # the subscription has not been renewed) for this many days.
+  stalePushSubscriptionDays: 365
+  # Whole accounts with no login and no live session for this many days are
+  # deleted. OFF (0) by default: users without an email address cannot be
+  # warned first, so enabling it is an operator decision the privacy notice
+  # must state. The audit suggests 730 (24 months).
+  inactiveAccountRetentionDays: 0
   # Internal-service OAuth2 verification -- see
   # docs/superpowers/specs/2026-09-02-internal-service-oauth2-design.md.
   # REQUIRED -- crates/api's clap config declares issuerUrl/clientId/13

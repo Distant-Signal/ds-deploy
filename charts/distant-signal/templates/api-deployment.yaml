@@ -260,6 +260,12 @@ spec:
               value: {{ .Values.api.backlogMatchSweepIntervalSecs | quote }}
             - name: SESSION_CLEANUP_INTERVAL_SECS
               value: {{ .Values.api.sessionCleanupIntervalSecs | quote }}
+            - name: PAST_TRAVEL_RETENTION_DAYS
+              value: {{ .Values.api.pastTravelRetentionDays | quote }}
+            - name: STALE_PUSH_SUBSCRIPTION_DAYS
+              value: {{ .Values.api.stalePushSubscriptionDays | quote }}
+            - name: INACTIVE_ACCOUNT_RETENTION_DAYS
+              value: {{ .Values.api.inactiveAccountRetentionDays | quote }}
             # Must equal the aggregator Deployment's own HISTORY_RETENTION_DAYS
             # -- sourced from the SAME value (not a separate api.* setting)
             # so the two can't drift apart. See
