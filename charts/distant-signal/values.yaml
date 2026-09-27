@@ -1219,6 +1219,27 @@ notifier:
   # -- 'auto'-mode leg commit-check lead time, minutes (spec §3.2 addendum)
   # -- see config.rs's own auto_commit_lead_minutes doc.
   autoCommitLeadMinutes: 120
+  # Web Push worker pool (services review SVC-02): cycles only decide and
+  # enqueue; these workers send. See crates/notifier/src/push_queue.rs.
+  push:
+    # -- Notifications being sent at once (each fans out to all of that
+    # user's subscriptions concurrently).
+    workers: 8
+    # -- Notifications waiting for a worker; beyond this new ones are
+    # dropped (distant_signal_notifier_push_dropped_total) and re-decided
+    # only if their source row is polled again.
+    queueCapacity: 1024
+    # -- At most this many of one user's notifications in flight, so one
+    # user's slow or tarpitting endpoints can't take the whole pool.
+    perUserInFlight: 2
+    # -- At most this many of one user's notifications waiting.
+    perUserQueued: 64
+    # -- Delete a subscription after this many consecutive timeouts
+    # (in-memory count, resets on restart). 404/410/401 are deleted at once.
+    pruneAfterTimeouts: 3
+    # -- On SIGTERM, seconds to let queued/in-flight pushes finish. Keep
+    # below the pod's terminationGracePeriodSeconds (30).
+    shutdownGraceSecs: 20
   vapid:
     # -- mailto: or https: contact, required by RFC 8292's VAPID "sub" claim.
     subject: ""
@@ -2453,13 +2474,13 @@ ingress:
 metrics:
   # Cheap, in-process, no new runtime dependency once the images are built
   # -- unlike podMonitor.enabled below, safe to default on. Renders the
-  # metrics containerPort/env on aggregator, enricher, api and every enabled
+  # metrics containerPort/env on aggregator, enricher, notifier, api and every enabled
   # poller, plus the prometheus.io/scrape pod annotations (the CRD-free
   # fallback) on every workload. Setting this false leaves every service
   # working exactly as it does today with metrics wiring absent entirely,
   # not merely un-scraped.
   enabled: true
-  # aggregator, enricher, api and the five pollers each listen on this port
+  # aggregator, enricher, notifier, api and the five pollers each listen on this port
   # for their own embedded Prometheus exporter -- aggregator/enricher/the
   # pollers via crates/common::metrics::install, api via its own
   # crates/api/src/main.rs::spawn_metrics_listener (see

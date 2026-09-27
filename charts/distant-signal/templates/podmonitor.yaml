@@ -58,6 +58,7 @@ spec:
           - api
           - aggregator
           - enricher
+          - notifier
           - trust-consumer
           - full-coverage-consumer
           {{- if .Values.movementRelay.enabled }}

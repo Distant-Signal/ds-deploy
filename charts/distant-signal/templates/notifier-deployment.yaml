@@ -18,9 +18,16 @@ spec:
     metadata:
       labels:
         {{- include "distant-signal.labels" (dict "root" . "component" "notifier") | nindent 8 }}
-      {{- with .Values.notifier.podAnnotations }}
+      {{- if or .Values.metrics.enabled .Values.notifier.podAnnotations }}
       annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.notifier.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
@@ -37,9 +44,41 @@ spec:
           imagePullPolicy: {{ .Values.notifier.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          # No probes: exposes no HTTP surface at all, same as aggregator.
+          # No probes. The optional /metrics listener (push queue depth,
+          # in-flight, sends, drops) is a scrape target, not a health signal,
+          # same as aggregator/enricher.
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          {{- end }}
           env:
             {{- include "distant-signal.databaseEnv" . | nindent 12 }}
+            # Always rendered, "false" included: this is what stops the
+            # binary starting its listener (see enricher-deployment.yaml).
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            {{- end }}
+            # Push worker pool (SVC-02) -- see crates/notifier/src/push_queue.rs
+            # and the push_* fields in crates/notifier/src/config.rs.
+            - name: PUSH_WORKERS
+              value: {{ .Values.notifier.push.workers | quote }}
+            - name: PUSH_QUEUE_CAPACITY
+              value: {{ .Values.notifier.push.queueCapacity | quote }}
+            - name: PUSH_PER_USER_IN_FLIGHT
+              value: {{ .Values.notifier.push.perUserInFlight | quote }}
+            - name: PUSH_PER_USER_QUEUED
+              value: {{ .Values.notifier.push.perUserQueued | quote }}
+            - name: PUSH_PRUNE_AFTER_TIMEOUTS
+              value: {{ .Values.notifier.push.pruneAfterTimeouts | quote }}
+            # Must stay below terminationGracePeriodSeconds (Kubernetes
+            # default 30s, not overridden here).
+            - name: PUSH_SHUTDOWN_GRACE_SECS
+              value: {{ .Values.notifier.push.shutdownGraceSecs | quote }}
             - name: POLL_INTERVAL_SECS
               value: {{ .Values.notifier.pollIntervalSecs | quote }}
             - name: COOLDOWN_MINUTES
