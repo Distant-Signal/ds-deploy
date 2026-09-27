@@ -252,7 +252,6 @@ spec:
   # No Ingress in front of the frontend, so nothing outside the pod needs to
   # reach it. Omitting `ingress` entirely is a default-deny.
   {{- end }}
----
 {{- /*
 INF-10: every background worker gets a policy from
 distant-signal.workerNetworkPolicy (_helpers.tpl): its /metrics port from the
