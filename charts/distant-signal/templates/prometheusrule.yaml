@@ -1,0 +1,296 @@
+{{/*
+Prometheus Operator's PrometheusRule CRD -- Distant-Signal-specific alerts
+only. Gated on metrics.prometheusRule.enabled (default false) for the same
+reason as the PodMonitor: rendering a CRD-backed resource against a cluster
+without the CRD fails `helm install` outright.
+
+Scope: generic cluster-level signals (OOMKilled, restart spikes, pods not
+ready, the movement-events lag-vs-MAXLEN/lag-growth rules keyed on the
+cluster's own view) live in the cluster's own PrometheusRule (Ranma-Config's
+monitoring-rules.yaml). These rules cover only what this chart's own
+metrics can say, plus per-component memory headroom. Every alert name
+starts with `DistantSignal` so nothing collides with the cluster's rules;
+CI (`.github/workflows/ci.yml`, helm-lint job) asserts that prefix.
+
+Every selector is scoped to namespace="<release namespace>", the label the
+PodMonitor above attaches to every scraped series. The memory alert also
+matches pod=~"<fullname>-.*", since cadvisor/kube-state-metrics series carry
+no chart labels.
+
+Sparse counters (the dead-letter and stream-gap counters) are only
+registered on their first increment, so `increase()` alone misses that
+first increment (a series whose first sample is already 1 has no increase).
+Each such alert therefore also fires on `x unless x offset <window>`: a
+series that exists now but did not <window> ago.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled }}
+{{- $rule := .Values.metrics.prometheusRule }}
+{{- $ns := .Release.Namespace }}
+{{- $fullname := include "distant-signal.fullname" . }}
+{{- $runbookBase := trimSuffix "/" $rule.runbookBaseUrl }}
+{{- $extraLabels := $rule.ruleLabels | default dict }}
+{{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled) }}
+{{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "metrics") | nindent 4 }}
+    {{- with $rule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $rule.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:{{ if not $anyOn }} []{{ end }}
+    {{- if $movementOn }}
+    - name: distant-signal.movement-events
+      rules:
+        {{- with $rule.movementLag }}
+        {{- if .enabled }}
+        {{- /*
+        Lag per consumer group as a fraction of the movement-events MAXLEN
+        cap. The cap comes from movement-relay's own
+        distant_signal_movement_relay_stream_maxlen gauge; before an image
+        exporting that gauge is running, the chart's configured
+        movementRelay.streamMaxLen stands in for it. Once lag reaches the
+        cap, unread entries start being trimmed before that group reads
+        them (a stream gap).
+        */}}
+        {{- $ratio := printf `(
+  max by (namespace, group) (distant_signal_movement_relay_stream_lag{namespace="%s"})
+  / on (namespace) group_left ()
+  (
+    max by (namespace) (distant_signal_movement_relay_stream_maxlen{namespace="%s"})
+    or on (namespace)
+    label_replace(vector(%d), "namespace", "%s", "", "")
+  )
+)` $ns $ns (int64 $.Values.movementRelay.streamMaxLen) $ns }}
+        - alert: DistantSignalMovementLagHigh
+          expr: |
+            {{- printf "%s > %v" $ratio .warningRatio | nindent 12 }}
+          for: {{ .for }}
+          labels:
+            severity: warning
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-events group {{ "{{ $labels.group }}" }} is {{ "{{ $value | humanizePercentage }}" }} of the stream cap behind"
+            description: >-
+              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
+              has unread movement-events entries amounting to
+              {{ "{{ $value | humanizePercentage }}" }} of the stream's MAXLEN cap
+              (warning above {{ .warningRatio }}). If lag reaches the cap, entries
+              are trimmed before this group reads them. Check the consumer's
+              logs and its downstream (api) health.
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-04-movement-relay-design.md" $runbookBase | quote }}
+        - alert: DistantSignalMovementLagCritical
+          expr: |
+            {{- printf "%s > %v" $ratio .criticalRatio | nindent 12 }}
+          for: {{ .for }}
+          labels:
+            severity: critical
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-events group {{ "{{ $labels.group }}" }} is {{ "{{ $value | humanizePercentage }}" }} of the stream cap behind"
+            description: >-
+              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
+              has unread movement-events entries amounting to
+              {{ "{{ $value | humanizePercentage }}" }} of the stream's MAXLEN cap
+              (critical above {{ .criticalRatio }}). Data loss (a stream gap) is
+              close: fix the consumer, or raise movementRelay.streamMaxLen together
+              with Redis maxmemory.
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-04-movement-relay-design.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.movementLagGrowing }}
+        {{- if .enabled }}
+        {{- /*
+        Lag never reads 0 (steady-state baseline is a few hundred entries),
+        so this requires both a rising trend (deriv > 0) and a real net
+        increase over the window, not merely a non-zero value.
+        */}}
+        - alert: DistantSignalMovementLagGrowing
+          expr: |
+            (
+              max by (namespace, group) (deriv(distant_signal_movement_relay_stream_lag{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+            )
+            and on (namespace, group)
+            (
+              max by (namespace, group) (delta(distant_signal_movement_relay_stream_lag{namespace="{{ $ns }}"}[{{ .window }}])) > {{ .minIncrease }}
+            )
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-events lag for group {{ "{{ $labels.group }}" }} keeps growing"
+            description: >-
+              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
+              has fallen further behind for the last {{ .window }} (more than
+              {{ .minIncrease }} entries net): it is consuming slower than
+              movement-relay publishes. Left alone, lag reaches the stream cap
+              and entries are trimmed unread.
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-04-movement-relay-design.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.streamGap }}
+        {{- if .enabled }}
+        {{- $w := .window }}
+        - alert: DistantSignalStreamGap
+          expr: |
+            {{- range $i, $c := list "trust_consumer" "full_coverage_consumer" "trust_backlog_consumer" }}
+            {{- $m := printf `distant_signal_%s_stream_gap_detected_total{namespace="%s"}` $c $ns }}
+            {{ if $i }}or {{ end }}label_replace(sum by (namespace) (increase({{ $m }}[{{ $w }}])) > 0, "consumer", "{{ $c }}", "", "")
+            or label_replace(sum by (namespace) ({{ $m }} unless {{ $m }} offset {{ $w }}), "consumer", "{{ $c }}", "", "")
+            {{- end }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.consumer }}" }} detected a movement-events stream gap"
+            description: >-
+              {{ "{{ $labels.consumer }}" }} in {{ "{{ $labels.namespace }}" }} found that
+              movement-events entries were trimmed before it read them (within
+              the last {{ .window }}). Those TRUST events are lost to it; treat
+              that rail day's derived data as not clean. Usually preceded by
+              DistantSignalMovementLagCritical.
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-04-movement-relay-design.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.deadLetter }}
+        {{- if .enabled }}
+        {{- $m := printf `distant_signal_movement_feed_deadlettered_total{namespace="%s"}` $ns }}
+        - alert: DistantSignalDeadLetterGrowing
+          expr: |
+            sum by (namespace, group, reason) (increase({{ $m }}[{{ .window }}])) > 0
+            or sum by (namespace, group, reason) ({{ $m }} unless {{ $m }} offset {{ .window }})
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.group }}" }} dead-lettered movement-events records ({{ "{{ $labels.reason }}" }})"
+            description: >-
+              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
+              moved records to movement-events-deadletter in the last {{ .window }}
+              (reason {{ "{{ $labels.reason }}" }}). This should normally stay at 0:
+              inspect the records and re-inject or delete them.
+            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+        - alert: DistantSignalDeadLetterNearFull
+          expr: |
+            max by (namespace, stream) (distant_signal_movement_feed_deadletter_length{namespace="{{ $ns }}"}) / 10000 > {{ .nearFullRatio }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.stream }}" }} is {{ "{{ $value | humanizePercentage }}" }} full"
+            description: >-
+              The dead-letter stream {{ "{{ $labels.stream }}" }} in
+              {{ "{{ $labels.namespace }}" }} holds {{ "{{ $value | humanizePercentage }}" }}
+              of its 10,000-record cap (warning above {{ .nearFullRatio }}). It is
+              never trimmed; once full, new poison records stay pending in their
+              group instead. Drain it.
+            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.deadLetterFull }}
+        {{- if .enabled }}
+        {{- $m := printf `distant_signal_movement_feed_deadletter_full_total{namespace="%s"}` $ns }}
+        - alert: DistantSignalDeadLetterFull
+          expr: |
+            sum by (namespace, group) (increase({{ $m }}[{{ .window }}])) > 0
+            or sum by (namespace, group) ({{ $m }} unless {{ $m }} offset {{ .window }})
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-events-deadletter is full; {{ "{{ $labels.group }}" }} records are stuck pending"
+            description: >-
+              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
+              tried to dead-letter records in the last {{ .window }} but the
+              dead-letter stream is at its 10,000-record cap. Those records stay
+              pending and are retried forever until the stream is drained.
+            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+    {{- end }}
+    {{- with $rule.enricherErrors }}
+    {{- if .enabled }}
+    - name: distant-signal.enricher
+      rules:
+        - alert: DistantSignalEnricherErrors
+          expr: |
+            (
+              sum by (namespace, call) (rate(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome="error"}[{{ .window }}]))
+              / sum by (namespace, call) (rate(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}"}[{{ .window }}]))
+            ) > {{ .errorRatio }}
+            and on (namespace, call)
+            sum by (namespace, call) (increase(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome="error"}[{{ .window }}])) >= {{ .minErrors }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "enricher LLM {{ "{{ $labels.call }}" }} calls failing ({{ "{{ $value | humanizePercentage }}" }})"
+            description: >-
+              {{ "{{ $value | humanizePercentage }}" }} of enricher's
+              {{ "{{ $labels.call }}" }} LLM calls in {{ "{{ $labels.namespace }}" }}
+              failed over the last {{ .window }} (threshold {{ .errorRatio }}, at
+              least {{ .minErrors }} errors). Incidents are not being enriched;
+              check the LLM endpoint (enricher.llm.baseUrl) and enricher's logs.
+    {{- end }}
+    {{- end }}
+    {{- with $rule.componentMemory }}
+    {{- if .enabled }}
+    - name: distant-signal.resources
+      rules:
+        {{- /*
+        cadvisor (kubelet) working set over kube-state-metrics' memory limit,
+        per container, for every pod this release deploys. Containers
+        without a memory limit have no limit series and never match.
+        */}}
+        - alert: DistantSignalComponentMemoryHigh
+          expr: |
+            (
+              max by (namespace, pod, container) (container_memory_working_set_bytes{namespace="{{ $ns }}", pod=~"{{ $fullname }}-.*", container!="", container!="POD"})
+              / on (namespace, pod, container)
+              max by (namespace, pod, container) (kube_pod_container_resource_limits{namespace="{{ $ns }}", pod=~"{{ $fullname }}-.*", resource="memory"})
+            ) > {{ .ratio }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.pod }}" }}/{{ "{{ $labels.container }}" }} at {{ "{{ $value | humanizePercentage }}" }} of its memory limit"
+            description: >-
+              Container {{ "{{ $labels.container }}" }} in pod {{ "{{ $labels.pod }}" }}
+              ({{ "{{ $labels.namespace }}" }}) has used more than {{ .ratio }} of
+              its memory limit for {{ .for }}. It is at risk of being OOMKilled;
+              raise its resources.limits.memory or find the growth.
+    {{- end }}
+    {{- end }}
+{{- end }}

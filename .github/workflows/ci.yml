@@ -660,6 +660,48 @@ jobs:
             --show-only templates/movement-relay-deployment.yaml)
           grep -A1 'name: MOVEMENT_STREAM_MAXLEN' <<<"$relay" | grep -q 'value: "1048576"'
 
+      # metrics.prometheusRule: disabled (the default) must render no
+      # PrometheusRule; enabled must render one whose every alert name
+      # starts with `DistantSignal` -- the cluster's own rules
+      # (Ranma-Config) own every other name, and dedupe against this prefix.
+      - name: helm template (PrometheusRule)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set movementRelay.enabled=true
+            --set movementRelay.kafka.brokers=kafka.example.com:9094
+            --set movementRelay.kafka.topic=test-topic
+            --set movementRelay.kafka.consumerGroup=test-group
+            --set movementRelay.kafka.saslMechanism=PLAIN
+          )
+          disabled=$(helm template distant-signal charts/distant-signal "${base[@]}")
+          if grep -q 'kind: PrometheusRule' <<<"$disabled"; then
+            echo "prometheusRule disabled but a PrometheusRule rendered" >&2; exit 1
+          fi
+          rule=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set metrics.prometheusRule.enabled=true \
+            --show-only templates/prometheusrule.yaml)
+          grep -q 'kind: PrometheusRule' <<<"$rule"
+          names=$(sed -n 's/^ *- alert: *//p' <<<"$rule")
+          count=$(grep -c . <<<"$names")
+          if [ "$count" -lt 9 ]; then
+            echo "expected at least 9 alerts, got $count:" >&2; echo "$names" >&2; exit 1
+          fi
+          if bad=$(grep -v '^DistantSignal' <<<"$names"); then
+            echo "alert names must start with DistantSignal:" >&2; echo "$bad" >&2; exit 1
+          fi
+          echo "$names"
+
       - name: helm template (values-example.yaml)
         run: |
           helm template distant-signal charts/distant-signal -f charts/distant-signal/values-example.yaml \

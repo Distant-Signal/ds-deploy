@@ -1063,6 +1063,40 @@ now matches every other workload.
 | `metrics.podMonitor.enabled` | `false` | Render a Prometheus Operator `PodMonitor`. Off by default — the CRD is absent on clusters without the operator, and installing it would fail the release outright. |
 | `metrics.podMonitor.interval` | `30s` | Scrape interval on the `PodMonitor`. |
 | `metrics.podMonitor.scrapeTimeout` | `10s` | Scrape timeout on the `PodMonitor`. Must stay below `interval`. |
+| `metrics.prometheusRule.enabled` | `false` | Render a Prometheus Operator `PrometheusRule` with the alerts below. Off by default for the same CRD reason as the `PodMonitor`; also needs `metrics.enabled`. |
+| `metrics.prometheusRule.labels` | `{}` | Extra labels on the `PrometheusRule` object — whatever your Prometheus's `ruleSelector` matches (e.g. `release: kube-prometheus-stack`). |
+| `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
+| `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
+| `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; the repo-relative doc path is appended. |
+| `metrics.prometheusRule.<alert>.enabled` / `.for` / `.severity` / thresholds | see `values.yaml` | Per-alert toggles, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `enricherErrors` and `componentMemory`. |
+
+#### Alerts
+
+Every alert is named `DistantSignal*` and covers only what this chart's own
+metrics can tell (plus per-container memory headroom). Generic signals —
+OOMKilled, restart spikes, pods not ready, pollers failing — belong to the
+cluster's own rules and are deliberately not duplicated here. Every
+expression is scoped to `namespace="<release namespace>"`, the label the
+`PodMonitor` attaches, so the rules only see series scraped that way (or by
+an equivalent scrape that sets `namespace`). The `movement-events` group is
+rendered only when `movementRelay.enabled` is true.
+
+| Alert | Severity | Fires when (defaults) |
+|---|---|---|
+| `DistantSignalMovementLagHigh` | warning | A consumer group's `movement_relay_stream_lag` is above 25% of the stream cap (`movement_relay_stream_maxlen`, falling back to `movementRelay.streamMaxLen`) for 10m. |
+| `DistantSignalMovementLagCritical` | critical | The same, above 50%. |
+| `DistantSignalMovementLagGrowing` | warning | A group's lag has a positive `deriv` and grew by more than 5000 entries over 30m, for 10m. Lag never reads 0, so neither alert is on `> 0`. |
+| `DistantSignalStreamGap` | warning | trust-consumer, full-coverage-consumer or trust-backlog-consumer counted a stream gap (`*_stream_gap_detected_total`) within the last 1h. |
+| `DistantSignalDeadLetterGrowing` | warning | Any record dead-lettered (`movement_feed_deadlettered_total`) within the last 1h. |
+| `DistantSignalDeadLetterNearFull` | warning | `movement_feed_deadletter_length` above 80% of the 10,000-record cap. |
+| `DistantSignalDeadLetterFull` | critical | A dead-letter write was refused because the stream is full (`movement_feed_deadletter_full_total`) within the last 1h. |
+| `DistantSignalEnricherErrors` | warning | Over 30m, more than 50% of an LLM call site's calls (`enricher_llm_call_total{outcome="error"}`) failed, with at least 3 failures, for 15m. |
+| `DistantSignalComponentMemoryHigh` | warning | A container in this release's pods (`pod=~"<fullname>-.*"`) has a working set (cadvisor) above 80% of its memory limit (kube-state-metrics) for 10m. |
+
+Metric names above omit the `distant_signal_` prefix every app metric
+carries. The dead-letter and stream-gap counters only exist after their
+first increment, so those alerts also fire on a series that is new within
+the window, not only on `increase()`.
 
 ### networkPolicy
 
@@ -1126,6 +1160,8 @@ helm uninstall distant-signal -n distant-signal
   service does expose a Prometheus `/metrics` endpoint (see the `metrics`
   values below), and the chart can render a `PodMonitor` for Prometheus
   Operator, but it never installs Prometheus itself, ships no Grafana
-  dashboards and no alerting rules, and offers no `ServiceMonitor`
+  dashboards, only Distant-Signal-specific alerting rules (an opt-in
+  `PrometheusRule`, see `metrics.prometheusRule` below; generic pod/cluster
+  alerts are left to the cluster), and offers no `ServiceMonitor`
   alternative — `PodMonitor` alone, because the pollers, the aggregator and
   the enricher have no Service in front of them at all.

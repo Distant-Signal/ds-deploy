@@ -2479,6 +2479,93 @@ metrics:
     enabled: false
     interval: 30s
     scrapeTimeout: 10s
+  prometheusRule:
+    # Prometheus Operator's PrometheusRule CRD with Distant-Signal-specific
+    # alerts (templates/prometheusrule.yaml). Off by default for the same
+    # reason as podMonitor.enabled: the CRD may be absent. Also needs
+    # metrics.enabled. Rules only fire on series the PodMonitor (or an
+    # equivalent scrape that sets a `namespace` label) collects.
+    #
+    # Scope is deliberately narrow: generic cluster-level alerts (OOMKilled,
+    # restart spikes, pods not ready, pollers failing) belong to the
+    # cluster's own rules (mine-bringer: Ranma-Config's
+    # monitoring-rules.yaml). Every alert here is named `DistantSignal*`.
+    enabled: false
+    # Extra labels on the PrometheusRule object itself, e.g. whatever the
+    # Prometheus CR's ruleSelector matches (`release: kube-prometheus-stack`
+    # on a stock kube-prometheus-stack; mine-bringer selects every rule, so
+    # nothing is needed there).
+    labels: {}
+    # Extra annotations on the PrometheusRule object.
+    annotations: {}
+    # Extra labels added to every alert (e.g. `team: distant-signal`), next
+    # to its `severity`.
+    ruleLabels: {}
+    # Prefix for each alert's runbook_url; the repo-relative doc path is
+    # appended.
+    runbookBaseUrl: https://github.com/FasterSpeeding/Distant-Signal/blob/main
+    # Needs movementRelay.enabled (all rules in this group read
+    # movement-events state).
+    #
+    # DistantSignalMovementLagHigh (warning) / ...Critical (critical): a
+    # consumer group's movement-events lag as a fraction of the stream's
+    # MAXLEN cap (movement-relay's stream_maxlen gauge, falling back to
+    # movementRelay.streamMaxLen). Lag never reads 0 (baseline is a few
+    # hundred entries), hence ratios rather than `> 0`.
+    movementLag:
+      enabled: true
+      for: 10m
+      warningRatio: 0.25
+      criticalRatio: 0.5
+    # DistantSignalMovementLagGrowing: a group's lag rose over `window`
+    # (positive deriv AND net delta above minIncrease entries).
+    movementLagGrowing:
+      enabled: true
+      window: 30m
+      minIncrease: 5000
+      for: 10m
+      severity: warning
+    # DistantSignalStreamGap: trust-consumer, full-coverage-consumer or
+    # trust-backlog-consumer detected entries trimmed before it read them.
+    streamGap:
+      enabled: true
+      window: 1h
+      for: 0m
+      severity: warning
+    # DistantSignalDeadLetterGrowing: any record dead-lettered within
+    # `window`. DistantSignalDeadLetterNearFull: movement-events-deadletter
+    # above nearFullRatio of its fixed 10,000-record cap.
+    deadLetter:
+      enabled: true
+      window: 1h
+      nearFullRatio: 0.8
+      for: 0m
+      severity: warning
+    # DistantSignalDeadLetterFull: a dead-letter write was refused because
+    # the stream is at its cap -- those records now stay pending.
+    deadLetterFull:
+      enabled: true
+      window: 1h
+      for: 0m
+      severity: critical
+    # DistantSignalEnricherErrors: over `window`, more than errorRatio of an
+    # LLM call site's calls failed, with at least minErrors failures.
+    enricherErrors:
+      enabled: true
+      window: 30m
+      errorRatio: 0.5
+      minErrors: 3
+      for: 15m
+      severity: warning
+    # DistantSignalComponentMemoryHigh: a container in this release's pods
+    # using more than `ratio` of its memory limit. Reads cadvisor
+    # (container_memory_working_set_bytes) and kube-state-metrics
+    # (kube_pod_container_resource_limits), not this app's own metrics.
+    componentMemory:
+      enabled: true
+      ratio: 0.8
+      for: 10m
+      severity: warning
 
 # ---------------------------------------------------------------------------
 # NetworkPolicy (optional)
