@@ -278,6 +278,12 @@ jobs:
       - name: cargo test -p api -p aggregator -p notifier -- --ignored (DB-backed tests)
         run: cargo test -p api -p aggregator -p notifier -- --ignored --test-threads=1
 
+      # common::pg's pool-settings tests (statement/idle timeouts actually
+      # applied, a timed-out statement cancelled without leaking, acquire
+      # timeout). Behind common's `postgres` feature.
+      - name: cargo test -p common --features postgres pg::tests -- --ignored (DB-backed tests)
+        run: cargo test -p common --features postgres pg::tests -- --ignored --test-threads=1
+
       # Every ignored enricher test except the LLM-gated live evals and the
       # offline replay harness (needs an exported history file): the
       # DB-backed process_incident/reclaim/carry-forward/query tests, which
@@ -510,6 +516,37 @@ jobs:
             frontend/e2e-report/
             frontend/test-results/
           retention-days: 7
+
+  # A4 (DB review 2026-09-27): a migration added by this PR/push must have a
+  # version above every migration already on the base. sqlx applies a
+  # missing lower version late and silently, out of order. Edits to merged
+  # migrations are caught by crates/api/tests/migration_checksums.rs.
+  migration-order:
+    name: migration versions are newer than the base
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check migration order
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$(git merge-base "origin/$BASE_REF" HEAD)"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            base="$BEFORE"
+          else
+            echo "no usable base commit (new branch or force push); skipping"
+            exit 0
+          fi
+          bash scripts/check-migration-order.sh "$base"
 
   # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
   # `helm lint` + `helm template` against both the chart's own defaults and

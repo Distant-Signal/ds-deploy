@@ -150,6 +150,14 @@ spec:
             # PGPASSWORD must stay immediately before DATABASE_URL -- the
             # kubelet only expands $(VAR) from EARLIER entries in this list.
             {{- include "distant-signal.databaseEnv" . | nindent 12 }}
+            - name: DATABASE_MAX_CONNECTIONS
+              value: {{ .Values.api.database.maxConnections | int | quote }}
+            # The dedicated startup migration connection; see
+            # api.migrations in values.yaml and crates/api/src/migrate.rs.
+            - name: MIGRATION_LOCK_TIMEOUT_SECS
+              value: {{ .Values.api.migrations.lockTimeoutSecs | int | quote }}
+            - name: MIGRATION_STATEMENT_TIMEOUT_SECS
+              value: {{ .Values.api.migrations.statementTimeoutSecs | int | quote }}
             - name: INTERNAL_OAUTH_ISSUER_URL
               value: {{ .Values.api.internalOauth.issuerUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID

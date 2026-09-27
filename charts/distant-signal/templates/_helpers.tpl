@@ -554,8 +554,9 @@ same shape as pollerIrishRailGtfs/pollerIrishRailLive above.
 {{- end }}
 
 {{/*
-Environment entries giving a workload a working DATABASE_URL. Takes root.
-Used identically by api-deployment.yaml and aggregator-deployment.yaml.
+Environment entries giving a workload a working DATABASE_URL, plus the pool
+session settings from `databasePool` (DATABASE_*_SECS). Takes root. Used
+identically by the api, aggregator, notifier and enricher Deployments.
 
 WHY THE $(PGPASSWORD) INDIRECTION: crates/api/src/data/config.rs and
 crates/aggregator/src/config.rs both want ONE `DATABASE_URL` string that
@@ -593,7 +594,14 @@ the default path is never affected.
   value: {{ .Values.externalDatabase.url | quote }}
 {{- else -}}
 {{- fail "postgresql.enabled is false but no external database is configured. Set externalDatabase.existingSecret (preferred) together with externalDatabase.existingSecretUrlKey, or set externalDatabase.url, or re-enable the bundled database with postgresql.enabled=true." -}}
-{{- end -}}
+{{- end }}
+{{- /* Pool session settings, read by crates/common/src/pg.rs. */}}
+- name: DATABASE_STATEMENT_TIMEOUT_SECS
+  value: {{ .Values.databasePool.statementTimeoutSecs | int | quote }}
+- name: DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_SECS
+  value: {{ .Values.databasePool.idleInTransactionTimeoutSecs | int | quote }}
+- name: DATABASE_ACQUIRE_TIMEOUT_SECS
+  value: {{ .Values.databasePool.acquireTimeoutSecs | int | quote }}
 {{- end }}
 
 {{/*

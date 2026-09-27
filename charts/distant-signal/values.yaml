@@ -204,6 +204,40 @@ postgresql:
     # can SIGBUS on nodes that have hugepages configured but not granted
     # to this cgroup. Quoted: a bare `off` is a YAML boolean.
     huge_pages: "off"
+    # Postgres default 100. The services' pools add up to api 50 per
+    # replica (`api.database.maxConnections`) + aggregator 10 + notifier 5 +
+    # enricher 5 = 70 at `api.replicaCount: 1`, but 120 at 2 replicas --
+    # past the default (97 usable by non-superusers) before counting psql,
+    # kubectl exec and the migration connection (INF-7, 2026-09-27). 200
+    # leaves room for 2 api replicas plus maintenance; each slot costs a
+    # little shared memory, not a backend, until it is used. Needs a
+    # restart.
+    max_connections: 200
+    # --- Observability (DB review 2026-09-27, F6: slow queries were
+    # invisible). ---
+    # Per-query statistics: `SELECT ... FROM pg_stat_statements`. The
+    # extension itself is created by migration
+    # 20260927070000_pg_stat_statements.sql. A preload library only loads at
+    # server start, so this takes effect on the next Postgres restart (any
+    # change to this `config` block rolls the StatefulSet, which restarts
+    # it). Costs a few % of CPU on very hot tiny queries and ~5000 x ~1KB of
+    # shared memory.
+    shared_preload_libraries: "pg_stat_statements"
+    # Top-level statements only (not statements run inside functions).
+    pg_stat_statements.track: "top"
+    # Log every statement that runs 1s or longer, with its duration. Expect
+    # a line per schedule-publish bulk batch (3-8s each, a few per day).
+    log_min_duration_statement: "1s"
+    # ...but never their bind parameters: the bulk schedule inserts bind
+    # arrays of ~250k rows, and some parameters are user data or session
+    # tokens.
+    log_parameter_max_length: 0
+    # Log a lock wait that lasts longer than deadlock_timeout (1s).
+    log_lock_waits: "on"
+    # I/O timings in EXPLAIN (ANALYZE, BUFFERS), pg_stat_statements and
+    # pg_stat_database. Cheap on Linux's clock source; verify with
+    # pg_test_timing if in doubt.
+    track_io_timing: "on"
   # A memory-backed /dev/shm for Postgres's dynamic shared memory
   # (dynamic_shared_memory_type=posix). The runtime default is 64MiB, and
   # that has ALREADY FAILED IN PRODUCTION: a manual
@@ -293,6 +327,26 @@ externalDatabase:
   existingSecret: ""
   # -- Key within `existingSecret` holding the URL.
   existingSecretUrlKey: database-url
+
+# Session settings every Postgres pool (api, aggregator, notifier, enricher)
+# sends at connect time -- see crates/common/src/pg.rs. Rendered as the
+# DATABASE_* env vars by the `distant-signal.databaseEnv` helper. Seconds;
+# 0 disables a timeout (falls back to the server's own setting, which is 0
+# on the bundled Postgres). Each connection also reports
+# `application_name` (distant-signal-api, -aggregator, -notifier,
+# -enricher, -api-migrations) in pg_stat_activity.
+databasePool:
+  # -- Server-side statement_timeout. Code paths that legitimately run
+  # longer raise it for their own transaction with SET LOCAL: schedule
+  # publish chunks (120s), retention prunes and archive batches (600s).
+  statementTimeoutSecs: 60
+  # -- idle_in_transaction_session_timeout: ends a session that opened a
+  # transaction and stopped talking, which would otherwise hold its locks
+  # and pin vacuum's xmin horizon.
+  idleInTransactionTimeoutSecs: 30
+  # -- How long a request waits for a free pool connection before failing
+  # (sqlx's own default is 30s).
+  acquireTimeoutSecs: 5
 
 # ---------------------------------------------------------------------------
 # Rail Data Marketplace pollers
@@ -805,12 +859,38 @@ api:
   # and keep collecting real-world monitoring data as an ongoing test,
   # rather than hold the switch off pending a larger sample first.
   fullCoverageEnabledDefault: true
+  database:
+    # -- api's Postgres pool size, per replica (DATABASE_MAX_CONNECTIONS).
+    # Pools: api this x replicaCount, aggregator 10, notifier 5, enricher 5
+    # -- keep the sum under postgresql.config.max_connections minus a few
+    # for psql/kubectl exec and the migration connection. Timeouts shared by
+    # every pool are in `databasePool`.
+    maxConnections: 50
+  # Settings for the dedicated connection api migrates on at startup,
+  # before it binds (crates/api/src/migrate.rs). It first drops any INVALID
+  # index a failed CREATE INDEX CONCURRENTLY left behind, so a retry
+  # rebuilds it instead of crash-looping on "relation already exists".
+  migrations:
+    # -- lock_timeout: a DDL statement that cannot get its lock within this
+    # fails (and the pod restarts and retries) instead of queueing behind a
+    # long transaction -- and blocking every other query on that table
+    # behind its own lock request -- until the startup probe kills it.
+    # Also bounds a CREATE INDEX CONCURRENTLY's wait for old transactions.
+    lockTimeoutSecs: 10
+    # -- statement_timeout per migration statement. MUST stay below the
+    # startup probe budget (`probes.startup`, 150 x 2s = 300s) so a slow
+    # statement fails with a logged error rather than a SIGKILL. It is per
+    # statement: several long ones can still add up past 300s. A migration
+    # that needs longer: raise this and the startup probe together.
+    statementTimeoutSecs: 240
   probes:
     # -- Path served by crates/api/src/routes/health.rs, nested under /public
     # by main.rs. Changing this must be matched in tests/test-api-health.yaml.
     path: /public/health
     startup:
-      # 150 x 2s = 300s (5 minutes) of headroom. The api runs
+      # 150 x 2s = 300s (5 minutes) of headroom. `api.migrations` below
+      # bounds each migration statement inside it (240s statement_timeout,
+      # 10s lock_timeout): raise the two together. The api runs
       # sqlx::migrate!() BEFORE it binds its listener
       # (crates/api/src/main.rs:118), so /public/health does not answer at
       # all until every pending migration has committed -- the startup

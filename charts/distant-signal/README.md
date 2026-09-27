@@ -760,6 +760,13 @@ override only needs to name the keys it changes:
 | `wal_compression` | `lz4` | `off` | Compresses the full-page images written after each checkpoint. Needs Postgres 15+ built with lz4 (the chart's `postgres:16` image is). |
 | `random_page_cost` | `1.1` | `4` | **Assumes SSD-class storage.** Set `"4"` on spinning disks. |
 | `huge_pages` | `off` | `try` | The pod requests no hugepages. `try` can SIGBUS on nodes where hugepages exist but aren't granted to the pod. |
+| `max_connections` | `200` | `100` | Pools: api `api.database.maxConnections` (50) per replica + aggregator 10 + notifier 5 + enricher 5. 100 is exceeded at 2 api replicas. Needs a restart. |
+| `shared_preload_libraries` | `pg_stat_statements` | `""` | Per-query statistics. Only loads at server start. The extension is created by migration `20260927070000`. |
+| `pg_stat_statements.track` | `top` | `top` | Top-level statements only. Pinned explicitly. |
+| `log_min_duration_statement` | `1s` | `-1` | Logs statements taking 1s or more. Expect one line per schedule-publish bulk batch. |
+| `log_parameter_max_length` | `0` | `-1` | Never log bind parameters: bulk arrays of ~250k rows, user data, session tokens. |
+| `log_lock_waits` | `on` | `off` | Logs lock waits longer than `deadlock_timeout` (1s). |
+| `track_io_timing` | `on` | `off` | I/O timings in `EXPLAIN (ANALYZE, BUFFERS)`, `pg_stat_statements` and `pg_stat_database`. |
 
 `random_page_cost` defaults to `"1.1"`, which assumes SSD-class storage
 (SSD/NVMe, or network block storage backed by it, as most managed
@@ -784,6 +791,55 @@ buffer cache. Because the pod template carries the `helm.sh/chart` and
 `app.kubernetes.io/version` labels, **every chart upgrade restarts
 Postgres anyway**, even when these settings don't change. No config
 checksum annotation is needed.
+
+#### Observability settings (2026-09-27)
+
+`shared_preload_libraries` only takes effect when Postgres restarts. Any
+change to `postgresql.config` rolls the StatefulSet, so the upgrade that
+adds it restarts Postgres. An override that sets its own `postgresql.config`
+keeps these defaults unless it names the same keys, because the keys merge.
+On an external database, set the same parameters in its own configuration.
+The migration creates the extension only if the app role is allowed to, and
+logs a warning otherwise. In that case, run
+`CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` as a privileged role.
+
+#### Connection pools and timeouts
+
+Every pool (api, aggregator, notifier, enricher) sets these at connect time
+(`crates/common/src/pg.rs`):
+
+- `application_name`: `distant-signal-api`, `-aggregator`, `-notifier`,
+  `-enricher`, or `-api-migrations`.
+- `statement_timeout`, from `databasePool.statementTimeoutSecs` (60).
+- `idle_in_transaction_session_timeout`, from
+  `databasePool.idleInTransactionTimeoutSecs` (30).
+
+A pool acquire fails after `databasePool.acquireTimeoutSecs` (5).
+
+Some work is expected to run longer and raises `statement_timeout` for its
+own transaction with `SET LOCAL`:
+
+| Work | `statement_timeout` |
+|---|---|
+| Schedule publish chunks | 120s |
+| Final-chunk delete phase | 120s |
+| Retention prunes | 600s |
+| Archive batches | 600s, plus 15min idle-in-transaction |
+
+api migrates at startup on its own connection, with
+`api.migrations.lockTimeoutSecs` (10) and
+`api.migrations.statementTimeoutSecs` (240, below the 300s startup-probe
+budget). Before it migrates, it drops any INVALID index that a failed
+`CREATE INDEX CONCURRENTLY` left behind.
+
+| Value | Default | Description |
+|---|---|---|
+| `databasePool.statementTimeoutSecs` | `60` | `statement_timeout` for every pooled connection. `0` disables it. |
+| `databasePool.idleInTransactionTimeoutSecs` | `30` | `idle_in_transaction_session_timeout`. `0` disables it. |
+| `databasePool.acquireTimeoutSecs` | `5` | How long to wait for a free pool connection. |
+| `api.database.maxConnections` | `50` | api pool size per replica. |
+| `api.migrations.lockTimeoutSecs` | `10` | `lock_timeout` for startup migrations. |
+| `api.migrations.statementTimeoutSecs` | `240` | `statement_timeout` for each startup migration statement. Keep it below the startup probe budget. |
 
 ### externalDatabase
 
