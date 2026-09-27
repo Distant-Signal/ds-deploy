@@ -108,6 +108,16 @@ spec:
           # against SFTPGo's real Go source -- never the SFTP-login *user*
           # DTD's push client needs).
           command: ["/bin/sh", "/scripts/entrypoint.sh"]
+          # INF-9: SFTPGo has no health endpoint this chart configures, so a
+          # TCP check on the SFTP port -- restarts a hung sftpd, generous
+          # enough (3 min) never to trip on a slow start.
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.scheduleFeed.sftp.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
           # This env block, the host-key mount path below, and SFTPGo's
           # sftpd port-binding env var name are otherwise unchanged from
           # this chart's earlier version -- still UNVERIFIED against a real
@@ -198,8 +208,13 @@ spec:
           imagePullPolicy: {{ .Values.scheduleFeed.ingest.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          {{- if .Values.metrics.enabled }}
+          # SVC-08/INF-9: /livez restarts a wedged scan loop.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" . "port" .Values.workerHealth.port) | nindent 10 }}
           ports:
+            - name: health
+              containerPort: {{ .Values.workerHealth.port }}
+              protocol: TCP
+          {{- if .Values.metrics.enabled }}
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
               protocol: TCP
@@ -253,6 +268,11 @@ spec:
             - name: METRICS_PORT
               value: {{ .Values.metrics.port | quote }}
             {{- end }}
+            # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.workerHealth.port) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.scheduleFeed.ingest.progressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ .Values.scheduleFeed.logLevel | quote }}
           volumeMounts:
@@ -267,8 +287,13 @@ spec:
           imagePullPolicy: {{ .Values.scheduleFeed.reference.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          {{- if .Values.metrics.enabled }}
+          # SVC-08/INF-9: /livez restarts a wedged publish loop.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" . "port" .Values.scheduleFeed.reference.healthPort) | nindent 10 }}
           ports:
+            - name: ref-health
+              containerPort: {{ .Values.scheduleFeed.reference.healthPort }}
+              protocol: TCP
+          {{- if .Values.metrics.enabled }}
             - name: ref-metrics
               containerPort: {{ .Values.scheduleFeed.reference.metricsPort }}
               protocol: TCP
@@ -370,6 +395,11 @@ spec:
             - name: METRICS_PORT
               value: {{ .Values.scheduleFeed.reference.metricsPort | quote }}
             {{- end }}
+            # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.scheduleFeed.reference.healthPort) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.scheduleFeed.reference.progressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ .Values.scheduleFeed.logLevel | quote }}
           # READ-ONLY: this container never writes to the shared PVC --

@@ -706,6 +706,75 @@ jobs:
             --show-only templates/movement-relay-deployment.yaml)
           grep -A1 'name: MOVEMENT_STREAM_MAXLEN' <<<"$relay" | grep -q 'value: "1048576"'
 
+      # Reboot resilience: redis must roll with Recreate (single RWO AOF
+      # volume, INF-1); postgres needs a startupProbe so WAL redo is never
+      # killed by liveness (INF-4); the frontend probes must hit the
+      # dependency-free /healthz (FE-1); every background worker needs a
+      # /livez liveness probe (SVC-08/INF-9), and the DB-backed ones a
+      # /healthz readiness probe (INF-5).
+      - name: helm template (reboot resilience probes)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+
+          redis=$(render --show-only templates/redis-deployment.yaml)
+          grep -A1 '^  strategy:' <<<"$redis" | grep -q 'type: Recreate' \
+            || fail "redis Deployment must use strategy Recreate"
+
+          pg=$(render --show-only templates/postgres-statefulset.yaml)
+          grep -A5 'startupProbe:' <<<"$pg" | grep -q 'pg_isready' \
+            || fail "postgres must have a pg_isready startupProbe"
+          grep -A10 'startupProbe:' <<<"$pg" | grep -q 'failureThreshold: 90' \
+            || fail "postgres startupProbe budget must default to 90 x 10s"
+
+          fe=$(render --show-only templates/frontend-deployment.yaml)
+          [ "$(grep -c 'path: /healthz' <<<"$fe")" -eq 2 ] \
+            || fail "frontend readiness and liveness must both hit /healthz"
+
+          for t in aggregator notifier enricher; do
+            out=$(render --show-only "templates/$t-deployment.yaml")
+            grep -A2 'livenessProbe:' <<<"$out" | grep -q 'path: /livez' \
+              || fail "$t needs a /livez liveness probe"
+            grep -A2 'readinessProbe:' <<<"$out" | grep -q 'path: /healthz' \
+              || fail "$t needs a /healthz readiness probe"
+            grep -q 'name: HEALTH_BIND_URL' <<<"$out" || fail "$t needs HEALTH_BIND_URL"
+          done
+
+          pollers=$(render -f charts/distant-signal/values-example.yaml \
+            --set pollerIrishRailGtfs.enabled=true \
+            --set pollerIrishRailLive.enabled=true \
+            --set pollerNirStations.enabled=true \
+            --show-only templates/poller-deployments.yaml \
+            --show-only templates/poller-irish-rail-gtfs-deployment.yaml \
+            --show-only templates/poller-irish-rail-live-deployment.yaml \
+            --show-only templates/poller-nir-stations-deployment.yaml)
+          deployments=$(grep -c '^kind: Deployment' <<<"$pollers")
+          probes=$(grep -c 'path: /livez' <<<"$pollers")
+          [ "$deployments" -ge 4 ] || fail "expected the pollers to render, got $deployments"
+          [ "$probes" -eq "$deployments" ] \
+            || fail "every poller needs a /livez liveness probe ($probes of $deployments)"
+
+          feed=$(render --set scheduleFeed.enabled=true --set scheduleFeed.sftp.authMethod=password \
+            --show-only templates/schedulefeed-deployment.yaml)
+          [ "$(grep -c 'path: /livez' <<<"$feed")" -eq 2 ] \
+            || fail "schedulefeed ingest and reference need /livez liveness probes"
+          grep -q 'tcpSocket:' <<<"$feed" || fail "schedulefeed sftp needs a tcpSocket liveness probe"
+          grep -A1 'name: HEALTH_BIND_URL' <<<"$feed" | grep -q '0.0.0.0:8091' \
+            || fail "schedulefeed reference must bind its own health port"
+
       # metrics.prometheusRule: disabled (the default) must render no
       # PrometheusRule; enabled must render one whose every alert name
       # starts with `DistantSignal` -- the cluster's own rules

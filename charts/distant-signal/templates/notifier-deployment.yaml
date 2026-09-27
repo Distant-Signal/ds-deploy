@@ -44,11 +44,16 @@ spec:
           imagePullPolicy: {{ .Values.notifier.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          # No probes. The optional /metrics listener (push queue depth,
-          # in-flight, sends, drops) is a scrape target, not a health signal,
-          # same as aggregator/enricher.
-          {{- if .Values.metrics.enabled }}
+          # SVC-08/INF-9/INF-5: /livez restarts a wedged loop; /healthz keeps
+          # the pod NotReady until the initial Postgres connection is up. The
+          # optional /metrics listener (push queue depth, in-flight, sends,
+          # drops) is a scrape target, not a health signal.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" . "port" .Values.workerHealth.port "readiness" true) | nindent 10 }}
           ports:
+            - name: health
+              containerPort: {{ .Values.workerHealth.port }}
+              protocol: TCP
+          {{- if .Values.metrics.enabled }}
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
               protocol: TCP
@@ -135,6 +140,11 @@ spec:
             # field declares), so notifier's log level was permanently
             # stuck at config.rs's own "info" default regardless of what
             # notifier.logLevel was set to.
+            # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.workerHealth.port) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.notifier.progressStallSecs | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.notifier.logLevel | quote }}
             {{- with .Values.notifier.extraEnv }}

@@ -42,8 +42,14 @@ spec:
           imagePullPolicy: {{ .Values.pollerIrishRailGtfs.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          {{- if .Values.metrics.enabled }}
+          # SVC-08/INF-9: /livez restarts a wedged poll loop. Liveness only:
+          # nothing routes traffic to a poller.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" . "port" .Values.workerHealth.port) | nindent 10 }}
           ports:
+            - name: health
+              containerPort: {{ .Values.workerHealth.port }}
+              protocol: TCP
+          {{- if .Values.metrics.enabled }}
             - name: metrics
               containerPort: {{ .Values.pollerIrishRailGtfs.metricsPort }}
               protocol: TCP
@@ -79,6 +85,11 @@ spec:
             - name: METRICS_PORT
               value: {{ .Values.pollerIrishRailGtfs.metricsPort | quote }}
             {{- end }}
+            # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.workerHealth.port) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.pollerIrishRailGtfs.progressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ .Values.pollerIrishRailGtfs.logLevel | quote }}
             {{- with .Values.pollerIrishRailGtfs.extraEnv }}

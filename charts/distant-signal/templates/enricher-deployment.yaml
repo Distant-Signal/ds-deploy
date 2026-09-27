@@ -55,13 +55,14 @@ spec:
           imagePullPolicy: {{ .Values.enricher.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          # No probes: like aggregator, this binary exposes no HTTP surface
-          # for health checks. It DOES now optionally expose a /metrics
-          # listener (see docs/superpowers/specs/2026-08-29-metrics-design.md)
-          # -- that's a scrape target, not a liveness/readiness signal, so no
-          # probe is added here even with metrics.enabled=true.
-          {{- if .Values.metrics.enabled }}
+          # SVC-08/INF-9/INF-5: /livez restarts a wedged stream loop; /healthz
+          # keeps the pod NotReady until Postgres and Redis are both up.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" . "port" .Values.workerHealth.port "readiness" true) | nindent 10 }}
           ports:
+            - name: health
+              containerPort: {{ .Values.workerHealth.port }}
+              protocol: TCP
+          {{- if .Values.metrics.enabled }}
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
               protocol: TCP
@@ -99,6 +100,11 @@ spec:
               value: {{ .Values.enricher.reclaimIntervalSecs | quote }}
             - name: RECLAIM_MIN_IDLE_SECS
               value: {{ .Values.enricher.reclaimMinIdleSecs | quote }}
+            # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.workerHealth.port) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.enricher.progressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ .Values.enricher.logLevel | quote }}
             {{- with .Values.enricher.extraEnv }}

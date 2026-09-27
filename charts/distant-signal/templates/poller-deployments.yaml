@@ -59,12 +59,16 @@ spec:
           imagePullPolicy: {{ $poller.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          # No probes: none of the pollers expose an HTTP surface for
-          # health checks. Each DOES now optionally expose a /metrics
-          # listener when metrics.enabled -- a scrape target, not a
-          # liveness/readiness signal.
-          {{- if $root.Values.metrics.enabled }}
+          # SVC-08/INF-9: /livez restarts a wedged poll loop. Liveness only:
+          # nothing routes traffic to a poller. Between polls the loop counts
+          # as alive (a 24h poller is not "stalled" for 24h); only a single
+          # poll running past PROGRESS_STALL_SECS is.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" $root "port" $root.Values.workerHealth.port) | nindent 10 }}
           ports:
+            - name: health
+              containerPort: {{ $root.Values.workerHealth.port }}
+              protocol: TCP
+          {{- if $root.Values.metrics.enabled }}
             - name: metrics
               containerPort: {{ $root.Values.metrics.port }}
               protocol: TCP
@@ -138,6 +142,11 @@ spec:
             - name: DLR_PILOT_STOP_POINT_ID
               value: {{ $poller.dlrPilotStopPointId | quote }}
             {{- end }}
+            # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int $root.Values.workerHealth.port) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ $poller.progressStallSecs | default $root.Values.workerHealth.pollerProgressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ $poller.logLevel | quote }}
             {{- with $poller.extraEnv }}

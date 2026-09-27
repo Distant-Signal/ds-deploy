@@ -121,6 +121,17 @@ postgresql:
   service:
     # -- Port the headless Service and the container listen on.
     port: 5432
+  probes:
+    # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
+    # succeeds, so crash recovery (WAL redo after a node reboot) is never
+    # killed mid-way. periodSeconds x failureThreshold = 10s x 90 = 15
+    # minutes, generous for up to max_wal_size (4GB) of redo while every
+    # other pod on the node is also starting; the 2026-09-27 00:29 recovery
+    # replayed 1.7GB in 20s on an idle node. After startup the liveness probe
+    # keeps its normal 60s (10s x 6) budget.
+    startup:
+      periodSeconds: 10
+      failureThreshold: 90
   persistence:
     # -- Attach a PersistentVolumeClaim. When false, an emptyDir is used and
     # ALL DATA IS LOST when the pod is rescheduled -- ephemeral testing only.
@@ -1109,6 +1120,8 @@ devAuthentik:
 # replicas: 1 with strategy Recreate for the same reason -- a RollingUpdate
 # would briefly run two.
 aggregator:
+  # -- /livez stall window (see workerHealth): one aggregation pass plus the retention prunes (and cold-archive uploads when archive.enabled).
+  progressStallSecs: 1800
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/aggregator
     tag: ""
@@ -1287,6 +1300,8 @@ archive:
 # would double-send every push.
 # ---------------------------------------------------------------------------
 notifier:
+  # -- /livez stall window (see workerHealth): one cycle can legitimately take tens of minutes while push endpoints time out (SVC-02).
+  progressStallSecs: 3600
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/notifier
     tag: ""
@@ -1530,6 +1545,8 @@ redis:
 # enricher (crates/enricher/src/config.rs)
 # ---------------------------------------------------------------------------
 enricher:
+  # -- /livez stall window (see workerHealth): one incident's extraction is up to three LLM calls of llmRequestTimeoutSecs (300s) each.
+  progressStallSecs: 1800
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/enricher
     tag: ""
@@ -1956,6 +1973,8 @@ movementRelay:
 # Call #2.
 # ---------------------------------------------------------------------------
 pollerIrishRailGtfs:
+  # -- /livez stall window (see workerHealth): one GTFS download plus up to 15 minutes of ingest-POST retries.
+  progressStallSecs: 1800
   enabled: false
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-gtfs
@@ -2012,6 +2031,8 @@ pollerIrishRailGtfs:
 # either.
 # ---------------------------------------------------------------------------
 pollerIrishRailLive:
+  # -- /livez stall window (see workerHealth): one sampling cycle (240s budget) plus its ingest-POST retries.
+  progressStallSecs: 1800
   enabled: false
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-live
@@ -2066,6 +2087,8 @@ pollerIrishRailLive:
 # generic `.Values.pollers` map's RDM-API-key shape.
 # ---------------------------------------------------------------------------
 pollerNirStations:
+  # -- /livez stall window (see workerHealth): one CSV download plus up to 15 minutes of ingest-POST retries.
+  progressStallSecs: 1800
   enabled: false
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/poller-nir-stations
@@ -2227,6 +2250,9 @@ scheduleFeed:
     # environment finds DTD's push client wants one.
     folderPath: ""
   ingest:
+    # -- /livez stall window (see workerHealth) for one scan cycle, which
+    # includes posting a whole delivery to api. Served on workerHealth.port.
+    progressStallSecs: 1800
     image:
       repository: ghcr.io/fasterspeeding/distant-signal/schedule-ingest
       tag: ""
@@ -2281,6 +2307,13 @@ scheduleFeed:
   # STANOX->CRS table and POSTs it to api's /private/stanox-crs. See
   # docs/superpowers/specs/2026-09-01-schedule-ingest-stanox-crs-table-design.md.
   reference:
+    # -- Health port. Must differ from workerHealth.port: this container
+    # shares its pod (network namespace) with the ingest container.
+    healthPort: 8091
+    # -- /livez stall window (see workerHealth). One cycle publishes every
+    # derived product of a full-timetable delivery with per-product retries,
+    # so it gets far more room than the other workers.
+    progressStallSecs: 7200
     image:
       repository: ghcr.io/fasterspeeding/distant-signal/schedule-reference
       tag: ""
@@ -2484,9 +2517,11 @@ frontend:
     type: ClusterIP
     port: 3000
   probes:
-    # -- Next.js ships no dedicated health route, so both probes hit "/".
-    # Change this if one is ever added.
-    path: /
+    # -- Dependency-free health route (frontend/app/healthz/route.ts). It
+    # must never call the api: "/" server-renders 5-7 api calls, so probing
+    # it killed the frontend whenever the api was down (FE-1, every node
+    # reboot), and CrashLoopBackOff then kept it down after the api was back.
+    path: /healthz
     readiness:
       periodSeconds: 10
       failureThreshold: 3
@@ -2584,6 +2619,35 @@ ingress:
 # ---------------------------------------------------------------------------
 # Metrics (Prometheus)
 # ---------------------------------------------------------------------------
+# -- Health endpoints of the background workers (aggregator, notifier,
+# enricher, every poller, scheduleFeed's ingest/reference containers):
+# SVC-08/INF-9 (no liveness probes: a wedged loop was never restarted) and
+# INF-5 (readiness false until the initial database connection is up). See
+# the "distant-signal.workerHealthProbes" helper for the /livez vs /healthz
+# semantics. Each component's own `progressStallSecs` sets how long ONE loop
+# iteration may run before /livez reports "stalled"; waiting for the next
+# iteration never counts, so a 24h poller is not "stalled" between polls.
+workerHealth:
+  # -- Port every single-Rust-container worker pod serves /livez and
+  # /healthz on (scheduleFeed.reference uses its own healthPort, as it shares
+  # a pod with scheduleFeed's ingest container).
+  port: 8090
+  # -- Generous: the stall window itself already absorbs slow iterations, so
+  # this only has to ride out a GC-pause-sized blip. 6 x 30s = 3 minutes.
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  # -- Stall window for the pollers in `.Values.pollers` (no per-poller
+  # override needed so far): one fetch plus up to 15 minutes of ingest-POST
+  # retries (SVC-09).
+  pollerProgressStallSecs: 1800
+
 metrics:
   # Cheap, in-process, no new runtime dependency once the images are built
   # -- unlike podMonitor.enabled below, safe to default on. Renders the

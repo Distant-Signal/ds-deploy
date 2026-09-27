@@ -36,6 +36,17 @@ spec:
   # plus `--appendonly yes` below) closes that gap for both streams at
   # once.
   replicas: 1
+  # Recreate, not the Deployment default RollingUpdate (INF-1). The AOF
+  # lives on a single ReadWriteOnce PVC, and on a single-node cluster an
+  # RWO volume mounts happily into BOTH the old and the new pod, so a
+  # rolling update would run two redis-servers against the same
+  # appendonlydir/ for the overlap window: writes to the old pod after the
+  # new one loaded the AOF are lost, and both processes append to the same
+  # incr file, corrupting the AOF for the next restart. Same reasoning as
+  # every other stateful singleton in this chart (schedulefeed, aggregator,
+  # notifier, api).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "redis") | nindent 6 }}

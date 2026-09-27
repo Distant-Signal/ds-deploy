@@ -104,13 +104,31 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 5
             failureThreshold: 10
+          # INF-4: crash recovery (WAL redo after an unclean shutdown, e.g. a
+          # node reboot) answers "not yet accepting connections", which
+          # pg_isready reports as a failure. Without a startupProbe the
+          # liveness probe below would SIGTERM Postgres mid-redo and the next
+          # start would replay the same WAL again -- a recovery loop that
+          # never converges. Liveness (and readiness) only start once this
+          # succeeds, so redo gets the whole startup budget:
+          # periodSeconds x failureThreshold (default 10s x 90 = 15 min),
+          # sized for up to max_wal_size (4GB) of redo on a node that is
+          # also starting every other pod at once.
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port }}
+            periodSeconds: {{ .Values.postgresql.probes.startup.periodSeconds }}
+            timeoutSeconds: 5
+            failureThreshold: {{ .Values.postgresql.probes.startup.failureThreshold }}
           livenessProbe:
             exec:
               command:
                 - sh
                 - -c
                 - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port }}
-            initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 6

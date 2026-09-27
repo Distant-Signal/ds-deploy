@@ -884,3 +884,39 @@ a missing bucket/secret or a table the binary would refuse anyway.
       key: {{ $a.s3.secretAccessKeyKey }}
 {{- end -}}
 {{- end }}
+
+{{/*
+Background-worker health (SVC-08/INF-9, INF-5): the `health` container port,
+the HEALTH_BIND_URL/PROGRESS_STALL_SECS env vars are written out literally
+in each template (the crates' chart_env_wiring_tests grep the template text),
+and the probes come from here. Every worker serves both paths on
+`port` (crates/health-http::spawn_worker):
+  /livez   -- 503 only once one loop iteration has run longer than
+              PROGRESS_STALL_SECS (idle time between iterations never counts);
+              200 while the worker is still retrying its initial connection,
+              so a liveness restart never adds CrashLoopBackOff delay.
+  /healthz -- additionally 503 until the initial Postgres/Redis connection is
+              up; used as the readiness probe by the DB-backed workers.
+Usage:
+  include "distant-signal.workerHealthProbes" (dict "root" $root "port" 8090 "readiness" true)
+*/}}
+{{- define "distant-signal.workerHealthProbes" -}}
+{{- $h := .root.Values.workerHealth -}}
+{{- if .readiness }}
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: {{ .port }}
+  periodSeconds: {{ $h.readiness.periodSeconds }}
+  timeoutSeconds: {{ $h.readiness.timeoutSeconds }}
+  failureThreshold: {{ $h.readiness.failureThreshold }}
+{{- end }}
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: {{ .port }}
+  initialDelaySeconds: {{ $h.liveness.initialDelaySeconds }}
+  periodSeconds: {{ $h.liveness.periodSeconds }}
+  timeoutSeconds: {{ $h.liveness.timeoutSeconds }}
+  failureThreshold: {{ $h.liveness.failureThreshold }}
+{{- end }}
