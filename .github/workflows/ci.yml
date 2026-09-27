@@ -408,11 +408,12 @@ jobs:
       SSO_POST_LOGIN_REDIRECT_URL: http://localhost:3000/
       VAPID_PUBLIC_KEY: BDummyVapidPublicKeyForLocalDevOnlyNotARealKeyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
       LINES_DIR: ${{ github.workspace }}/lines
-      # Frontend build-time var: NEXT_PUBLIC_-prefixed values are inlined
-      # into the browser bundle at `npm run build`, not read at runtime, so
-      # this must be set before that step (chat.spec.ts's `**/mcp` mocks
+      # The railMcp public URL, read by the frontend server at REQUEST time
+      # (FE-2: frontend/lib/csp.ts's runtimeRailMcpPublicUrl, passed to the
+      # chat page as a prop), not inlined at `npm run build`; it only has
+      # to be in `next start`'s environment. chat.spec.ts's `**/mcp` mocks
       # intercept every request this fixture host resolves to, matching by
-      # path glob rather than by host -- see that file's own comments).
+      # path glob rather than by host -- see that file's own comments.
       NEXT_PUBLIC_RAILMCP_PUBLIC_URL: http://mcp.example.invalid
       # Renders the draft legal pages (/privacy, /terms, /cookies, /contact)
       # so accessibility.spec.ts can sweep them. Read at request time by
@@ -620,9 +621,18 @@ jobs:
           out=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set archive.enabled=true \
             --set archive.s3.bucket=archive-bucket \
-            --set archive.s3.existingSecret=archive-creds)
+            --set archive.s3.existingSecret=archive-creds \
+            --set archive.s3.lifecycleConfirmed=true)
           grep -q 'name: ARCHIVE_S3_SECRET_ACCESS_KEY' <<<"$out"
           grep -q 'name: archive-creds' <<<"$out"
+          # DQ14: enabling the archive without confirming an S3 lifecycle
+          # (expiry) rule on the bucket must fail the render.
+          if helm template distant-signal charts/distant-signal "${base[@]}" \
+              --set archive.enabled=true \
+              --set archive.s3.bucket=archive-bucket \
+              --set archive.s3.existingSecret=archive-creds >/dev/null 2>&1; then
+            echo "archive enabled without lifecycleConfirmed but the render succeeded" >&2; exit 1
+          fi
 
       # postgresql.config must render as sorted `-c name=value` args, with
       # whole YAML numbers as integers (not 1e+08) and bools as on/off,
