@@ -390,7 +390,7 @@ pollers:
     existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-stations
     logLevel: info
     extraEnv: []
-    # Holds the whole ~2,500-row station catalogue in memory to build one
+    # Holds the whole ~2,600-row station catalogue in memory to build one
     # ingest body.
     #
     # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
@@ -398,6 +398,15 @@ pollers:
     # range across all 5 pollers -- 384Mi was ~30-75x that. Halved rather
     # than sized to the snapshot, since these are event-driven workloads
     # that can spike under a burst of incoming messages.
+    #
+    # Size this one from its startup poll, not from `kubectl top`. It sits
+    # idle between the 24-hour polls, and the poll runs at every start. It
+    # fetches the whole ~37MB feed and POSTs a body of about the same size.
+    # Before the 2026-09-27 fix in crates/poller-stations/src/schema.rs,
+    # that poll peaked at ~320MB RSS, so every 192Mi pod was OOMKilled
+    # about 4s after it started. After the fix it peaks at 117-133MB
+    # (VmHWM, release binary, 38.6MB feed rebuilt from production). 192Mi
+    # leaves ~35% headroom for feed growth.
     resources:
       requests:
         cpu: 25m
