@@ -115,6 +115,16 @@ spec:
             # gate on this.
             - name: FULL_COVERAGE_ENABLED_DEFAULT
               value: {{ .Values.aggregator.fullCoverageEnabledDefault | quote }}
+            # Windowed full-coverage severity: off unless
+            # aggregator.fullCoverageWindow.mode says otherwise.
+            - name: FULL_COVERAGE_WINDOW_MODE
+              value: {{ .Values.aggregator.fullCoverageWindow.mode | quote }}
+            - name: FULL_COVERAGE_WINDOW_ENFORCE_LINES
+              value: {{ .Values.aggregator.fullCoverageWindow.enforceLines | quote }}
+            - name: FULL_COVERAGE_WINDOW_MIN_ESCALATION_RANK
+              value: {{ .Values.aggregator.fullCoverageWindow.minEscalationRank | quote }}
+            - name: FULL_COVERAGE_WINDOW_STATS_RETENTION_DAYS
+              value: {{ .Values.aggregator.fullCoverageWindow.retentionDays | quote }}
             {{- /* Optional cold archive (archive.* in values.yaml): nothing at
             all is rendered here when archive.enabled is false. */}}
             {{- if .Values.archive.enabled }}

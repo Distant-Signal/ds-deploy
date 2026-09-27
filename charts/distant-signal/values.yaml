@@ -1177,6 +1177,28 @@ aggregator:
   # Flipped to `true` 2026-09-12 -- see `api.fullCoverageEnabledDefault`
   # above for the full repo-owner decision this mirrors.
   fullCoverageEnabledDefault: true
+  # -- Windowed full-coverage severity
+  # (docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md,
+  # and its "Decisions (2026-09-27)" section). All OFF by default.
+  fullCoverageWindow:
+    # -- off (today's behaviour exactly) | shadow (record a verdict per
+    # line in full_coverage_window_verdicts, change nothing) | enforce
+    # (also escalate the lines named in enforceLines). Rollback: off.
+    mode: "off"
+    # -- Lines enforce may change: comma list, or "*" for every
+    # full-coverage-enabled line (fullCoverageEnabledDefault is true, so
+    # that is every line). EMPTY by default: nothing is enforced until the
+    # pilot lines are named (pick ~5 of different volumes from
+    # `compare_full_coverage --windows --all-lines`).
+    enforceLines: ""
+    # -- Only verdicts of at least this severity_rank are enforced: 4 is
+    # Severe Delays / Part Suspended. Lower tiers (Minor Delays, Reduced
+    # Service; rank 3) are still recorded as would_escalate_to with
+    # below_min_rank, for the evidence to lower this later.
+    minEscalationRank: 4
+    # -- Retention of full_coverage_line_window_stats and
+    # full_coverage_window_verdicts (pruned in every mode).
+    retentionDays: 14
   # -- How long trust_event_backlog rows are kept before aggregator prunes
   # them (crates/aggregator/src/queries.rs::prune_trust_event_backlog).
   # DEFAULT IS 1 DAY, DELIBERATELY -- see
@@ -1787,6 +1809,24 @@ fullCoverageConsumer:
   movementFeed: kafka
   redisAutoclaimMinIdleSecs: 30
   redisGapCheckSecs: 60
+  # -- Windowed full-coverage stats
+  # (docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md).
+  # OFF by default: with enabled=false the consumer writes exactly the
+  # legacy whole-day rows and posts no windows. Turn on only after api
+  # (the /full-coverage-window-stats route and its migrations) and
+  # schedule-reference (operator/train status on the population) are
+  # deployed; aggregator.fullCoverageWindow.mode is a separate switch.
+  windowedStats:
+    enabled: false
+    # -- W: the `recent` window covers trains due in the last W minutes.
+    recentWindowMinutes: 60
+    # -- Windows end this many minutes ago (feed lag p99 + write cadence).
+    graceMinutes: 10
+    # -- Feed health: fewer Activations than this in the last hour, or a
+    # newest event older than feedStaleSecs, marks the write feed_stale
+    # (no window from it may influence severity; no presumed cancellations).
+    activationsMin: 20
+    feedStaleSecs: 300
   logLevel: info
   extraEnv: []
   # Called out by the 2026-09-25 review as one of the two real leak/

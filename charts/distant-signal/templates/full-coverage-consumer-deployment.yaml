@@ -175,6 +175,19 @@ spec:
               value: {{ .Values.fullCoverageConsumer.redisAutoclaimMinIdleSecs | quote }}
             - name: REDIS_GAP_CHECK_SECS
               value: {{ .Values.fullCoverageConsumer.redisGapCheckSecs | quote }}
+            # Windowed stats: off unless windowedStats.enabled.
+            - name: FULL_COVERAGE_WINDOWED_STATS
+              value: {{ .Values.fullCoverageConsumer.windowedStats.enabled | quote }}
+            - name: FULL_COVERAGE_WINDOW_STATS_URL
+              value: {{ printf "%s/private/full-coverage-window-stats" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: FULL_COVERAGE_RECENT_WINDOW_MINUTES
+              value: {{ .Values.fullCoverageConsumer.windowedStats.recentWindowMinutes | quote }}
+            - name: FULL_COVERAGE_GRACE_MINUTES
+              value: {{ .Values.fullCoverageConsumer.windowedStats.graceMinutes | quote }}
+            - name: FULL_COVERAGE_ACTIVATIONS_MIN
+              value: {{ .Values.fullCoverageConsumer.windowedStats.activationsMin | quote }}
+            - name: FULL_COVERAGE_FEED_STALE_SECS
+              value: {{ .Values.fullCoverageConsumer.windowedStats.feedStaleSecs | quote }}
             - name: METRICS_ENABLED
               value: {{ .Values.metrics.enabled | quote }}
             {{- if .Values.metrics.enabled }}
