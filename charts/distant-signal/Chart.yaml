@@ -1,8 +1,10 @@
 apiVersion: v2
 name: distant-signal
 description: >-
-  National Rail status stack: PostgreSQL, the api, the aggregator, the
-  frontend and five optional pollers (four Rail Data Marketplace, plus TfL),
+  National Rail status stack: PostgreSQL, Redis, the api, the aggregator,
+  the enricher, the notifier, the frontend and the TRUST movement-stream
+  consumers, plus optional pollers (four Rail Data Marketplace, TfL, and
+  three island-of-Ireland), movement-relay and the CIF schedule-feed pod,
   mirroring the topology of the repository's docker-compose.yml.
 type: application
 
@@ -47,9 +49,9 @@ appVersion: "0.1.0"
 # the automatic `kubernetes.io/metadata.name` label, which is GA from 1.22.
 kubeVersion: ">=1.23.0-0"
 
-home: https://github.com/FasterSpeeding/nr-status-v2
+home: https://github.com/FasterSpeeding/Distant-Signal
 sources:
-  - https://github.com/FasterSpeeding/nr-status-v2
+  - https://github.com/FasterSpeeding/Distant-Signal
 
 # Deliberately no `dependencies:` — the chart bundles its own PostgreSQL
 # StatefulSet rather than pulling a subchart, so `helm dependency update` is

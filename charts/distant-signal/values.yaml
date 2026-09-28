@@ -1,6 +1,6 @@
 # Values for the distant-signal chart.
 #
-# The layout mirrors .env.example so the docker-compose path and the Helm
+# The layout mirrors local.env.example so the docker-compose path and the Helm
 # path do not drift. Every service section names the crate whose
 # `config.rs` defines its environment contract.
 
@@ -372,12 +372,12 @@ databasePool:
 # ---------------------------------------------------------------------------
 # Rail Data Marketplace pollers
 # ---------------------------------------------------------------------------
-# ALL FOUR ARE DISABLED BY DEFAULT. As documented in .env.example, no
-# confirmed RDM endpoint exists for any of these feeds -- every base URL in
-# the repository today is a deliberately non-functional `*.example.invalid`
-# placeholder. A default install therefore brings up postgres + api +
-# aggregator + frontend and works immediately, instead of four pods logging
-# connection failures.
+# ALL FIVE ARE DISABLED BY DEFAULT. As documented in local.env.example, no
+# confirmed RDM endpoint exists for any of the four RDM feeds -- every RDM
+# base URL in the repository today is a deliberately non-functional
+# `*.example.invalid` placeholder. A default install therefore works
+# immediately, instead of four pods logging connection failures. `tfl` (not
+# an RDM feed) has a real default baseUrl but is off by default too.
 #
 # Enabling a poller without setting its `baseUrl` aborts rendering with an
 # explicit message rather than deploying a pod that cannot work.
@@ -1820,8 +1820,10 @@ enricher:
 # ---------------------------------------------------------------------------
 # trust-consumer (crates/trust-consumer/src/config.rs)
 #
-# Unlike every poller and unlike enricher, this is a persistent Kafka
-# consumer with real connected/disconnected liveness semantics -- see
+# Unlike every poller and unlike enricher, this is a persistent stream
+# consumer (the movement-events Redis stream by default, or Kafka directly
+# with movementFeed: kafka) with real connected/disconnected liveness
+# semantics -- see
 # templates/trust-consumer-deployment.yaml's probes.
 # ---------------------------------------------------------------------------
 trustConsumer:
@@ -1926,13 +1928,16 @@ trustConsumer:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
-# fullCoverageConsumer -- a second, independent Kafka consumer against the
-# same RDM Train Movements feed trustConsumer reads, correlating every
+# fullCoverageConsumer -- a second, independent consumer of the same RDM
+# Train Movements feed trustConsumer reads (the movement-events Redis stream
+# by default, or Kafka directly with movementFeed: kafka), correlating every
 # event against the FULL scheduled population of every shadow-computed
 # line (docs/superpowers/specs/2026-09-04-option-b-live-consumer-design.md).
-# SHADOW MODE ONLY -- see that design doc's binding condition: nothing
-# reads this component's output into a real line's severity/DataQuality
-# while every lines/*.toml entry's full_coverage_enabled stays false.
+# Originally shadow mode only. That design doc's binding condition (nothing
+# reads this output into a line's severity/DataQuality while every line's
+# full_coverage_enabled stays false) no longer holds by default:
+# api.fullCoverageEnabledDefault and aggregator.fullCoverageEnabledDefault
+# are both `true` (2026-09-12), which treats every line as enabled.
 #
 # Kafka connection settings (brokers/topic/saslMechanism/saslUsername/
 # saslPassword/existingSecret*) are DELIBERATELY NOT repeated here --
@@ -2101,9 +2106,13 @@ trustBacklogConsumer:
 # movementRelay -- the sole real Kafka client against RDM's Train Movements
 # product from Deploy B onward (docs/superpowers/specs/2026-09-04-movement-relay-design.md).
 # Off by default: `movementRelay.enabled: false` means this Deployment does
-# not render at all, and neither trustConsumer nor fullCoverageConsumer's
-# production Kafka behavior changes until a human executes the Deploy B
-# runbook (docs/superpowers/plans/2026-09-04-movement-relay-plan.md).
+# not render at all. Deploy B (the runbook in
+# docs/superpowers/plans/2026-09-04-movement-relay-plan.md) has since
+# happened: trustConsumer.movementFeed and fullCoverageConsumer.movementFeed
+# now default to `redis-stream`, and trustBacklogConsumer only ever reads
+# the stream, so with this left off all three consumers read an empty
+# `movement-events` stream. Enable it (or set both movementFeed values back
+# to `kafka`) for any install that should receive TRUST data.
 #
 # Kafka connection settings here are DELIBERATELY SEPARATE from
 # trustConsumer.kafka.* (unlike fullCoverageConsumer's own values block,
@@ -2362,12 +2371,13 @@ pollerNirStations:
 # scheduleFeed -- OPT-IN CIF SCHEDULE feed SFTP-push receiver
 # (docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md)
 # ---------------------------------------------------------------------------
-# Renders ONE Deployment with TWO containers (an SFTP server and this app's
-# own schedule-ingest verifier) sharing one ReadWriteOnce PVC -- see the
+# Renders ONE Deployment with three containers (an SFTP server, this app's
+# own schedule-ingest verifier, and schedule-reference) sharing one
+# ReadWriteOnce PVC -- see the
 # design doc's "The reader/writer problem push introduces" for why this is
 # one Pod, not two. Off by default: enabling this without a real DTD push
 # account configured (see docs/superpowers/plans/2026-09-01-schedule-feed-push-ingestion.md
-# Task 1) stands up infrastructure nothing can reach yet, which is a
+# Task 1; pruned from the tree in b7f71a8a, read it from the repo history) stands up infrastructure nothing can reach yet, which is a
 # legitimate thing to do ahead of time but not silently assumed to be "done."
 scheduleFeed:
   enabled: false
@@ -2917,14 +2927,17 @@ workerHealth:
 metrics:
   # Cheap, in-process, no new runtime dependency once the images are built
   # -- unlike podMonitor.enabled below, safe to default on. Renders the
-  # metrics containerPort/env on aggregator, enricher, notifier, api and every enabled
-  # poller, plus the prometheus.io/scrape pod annotations (the CRD-free
+  # metrics containerPort/env on every Rust workload (aggregator, enricher,
+  # notifier, api, the consumers, movement-relay, every enabled poller and
+  # schedulefeed), plus the prometheus.io/scrape pod annotations (the CRD-free
   # fallback) on every workload. Setting this false leaves every service
   # working exactly as it does today with metrics wiring absent entirely,
   # not merely un-scraped.
   enabled: true
-  # aggregator, enricher, notifier, api and the five pollers each listen on this port
-  # for their own embedded Prometheus exporter -- aggregator/enricher/the
+  # aggregator, enricher, notifier, api, the five `pollers.*` and schedule-ingest
+  # each listen on this port for their own embedded Prometheus exporter (the
+  # consumers, movement-relay, the three island-of-Ireland pollers and
+  # schedule-reference have their own `metricsPort` values) -- aggregator/enricher/the
   # pollers via crates/common::metrics::install, api via its own
   # crates/api/src/main.rs::spawn_metrics_listener (see
   # docs/superpowers/specs/2026-08-29-metrics-design.md). Until 2026-09-25

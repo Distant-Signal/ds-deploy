@@ -109,7 +109,8 @@ spec:
               value: {{ .Values.aggregator.untrackedTrainsRetentionDays | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see aggregator.fullCoverageEnabledDefault's own comment in
-            # values.yaml. Default false; must be set the same on the api
+            # values.yaml. The binary defaults to false, the chart value to true;
+            # it must be set the same on the api
             # Deployment (api.fullCoverageEnabledDefault) to actually flip
             # full coverage on everywhere, since both services independently
             # gate on this.
