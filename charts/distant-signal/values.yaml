@@ -877,6 +877,18 @@ api:
       # IP). Empty turns the feature off (any bearer is then ignored). Must
       # differ from every group above; api refuses to start otherwise.
       mcp: srv-ds-mcp
+  # -- Network Rail CORPUS as a FALLBACK for the timetable-derived
+  # TIPLOC/STANOX->CRS lookups (CORPUS_FALLBACK_ENABLED; see
+  # crates/api/src/data/corpus_crosswalk.rs). OFF by default. When on, a
+  # TIPLOC or STANOX the timetable crosswalk (tiploc_crs/stanox_crs) has no
+  # CRS for -- a station's platform/bay TIPLOCs, a station absent from the
+  # timetable -- resolves through the CORPUS-derived crosswalk, built with
+  # the conservative inference in reference-data/line-catalogue-validation.md;
+  # the timetable always wins a conflict. Does nothing until CORPUS has been
+  # loaded (scheduleFeed.corpus.enabled). Check `corpus_compare` (in the api
+  # image) before turning it on.
+  corpusFallback:
+    enabled: false
   # -- Authentik/SSO group (via the `groups` OIDC claim, NOT one of the
   # machine/service-account groups above) that grants a real, logged-in
   # user access to the embedded chatbot -- crate::auth::ChatbotAuthorizedUser
