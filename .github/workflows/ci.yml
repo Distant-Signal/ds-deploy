@@ -331,8 +331,19 @@ jobs:
       - name: Lint (eslint)
         run: npm run lint
 
+      # Covers only the files frontend/.prettierignore un-ignores (the
+      # service worker and the JS scripts/configs), not the whole frontend.
+      - name: Format check (prettier)
+        run: npm run format:check
+
       - name: Typecheck (tsc --noEmit)
         run: npx tsc --noEmit
+
+      # The plain-JS files tsconfig.json leaves out (allowJs: false): the
+      # service worker (tsconfig.sw.json, WebWorker lib) and the Node-run
+      # scripts and configs (tsconfig.scripts.json), both checkJs + strict.
+      - name: Typecheck JS scripts (tsc, checkJs)
+        run: npm run typecheck:scripts
 
       - name: npm test (vitest)
         run: npm test
