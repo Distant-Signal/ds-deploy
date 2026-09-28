@@ -3035,6 +3035,16 @@ metrics:
       maxAgeSeconds: 7200
       for: 30m
       severity: warning
+    # DistantSignalLdbwsInvalidCrs: LDBWS answers "Invalid crs code
+    # supplied" for a sampled station (distant_signal_ldbws_invalid_crs_station
+    # {crs} is 1), i.e. a lines/*.toml typo such as "ANV" for Andover's
+    # "ADV" (2026-09-28). The poller stops counting that station as stale
+    # and only re-probes it hourly, so this, not the stale alert, is what
+    # reports it. Only when pollers.ldbws.enabled.
+    ldbwsInvalidCrs:
+      enabled: true
+      for: 15m
+      severity: warning
     # DistantSignalNotifierPushDropped: at least minDrops decided push
     # notifications ended undelivered (queue full, every endpoint failed,
     # or the job errored) within `window`, per reason. Notifier delivery is

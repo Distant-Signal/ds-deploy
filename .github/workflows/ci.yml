@@ -938,6 +938,18 @@ jobs:
             --show-only templates/prometheusrule.yaml)
           grep -q 'alert: DistantSignalPollerFailing' <<<"$pollers"
           grep -q 'alert: DistantSignalLdbwsStationStale' <<<"$pollers"
+          grep -q 'alert: DistantSignalLdbwsInvalidCrs' <<<"$pollers"
+          grep -q 'max by (namespace, crs) (distant_signal_ldbws_invalid_crs_station{' <<<"$pollers"
+          # ...and neither LDBWS alert renders with the ldbws poller off.
+          no_ldbws=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set metrics.prometheusRule.enabled=true \
+            --set pollers.incidents.enabled=true \
+            --set pollers.incidents.baseUrl=https://incidents.example.com \
+            --show-only templates/prometheusrule.yaml)
+          grep -q 'alert: DistantSignalPollerFailing' <<<"$no_ldbws"
+          if grep -q 'alert: DistantSignalLdbws' <<<"$no_ldbws"; then
+            echo "LDBWS alerts rendered with pollers.ldbws disabled" >&2; exit 1
+          fi
 
       # LEG-18 LDBWS volume knobs: off by default, and while off none of
       # their env vars may render (production behaviour is unchanged); set,

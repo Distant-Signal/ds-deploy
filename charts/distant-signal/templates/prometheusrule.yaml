@@ -594,7 +594,8 @@ scoping as above.
 {{- end }}
 {{- $pollerFailuresOn := and ($rule.pollerFailures).enabled $anyPoller }}
 {{- $ldbwsOn := and ($rule.ldbwsStalestStation).enabled (.Values.pollers.ldbws).enabled }}
-{{- if or $pollerFailuresOn $ldbwsOn }}
+{{- $ldbwsInvalidCrsOn := and ($rule.ldbwsInvalidCrs).enabled (.Values.pollers.ldbws).enabled }}
+{{- if or $pollerFailuresOn $ldbwsOn $ldbwsInvalidCrsOn }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -667,7 +668,34 @@ spec:
               {{ .maxAgeSeconds }}s). The rotation (SVC-04) has stopped reaching part
               of the station list, e.g. every cycle runs out of budget first; see
               distant_signal_ldbws_stations_attempted_per_cycle against
-              distant_signal_ldbws_stations_total.
+              distant_signal_ldbws_stations_total. Stations LDBWS rejects as an
+              invalid CRS are excluded here; see DistantSignalLdbwsInvalidCrs.
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ldbwsInvalidCrs }}
+        {{- if $ldbwsInvalidCrsOn }}
+        - alert: DistantSignalLdbwsInvalidCrs
+          expr: |
+            max by (namespace, crs) (distant_signal_ldbws_invalid_crs_station{namespace="{{ $ns }}"}) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "LDBWS rejects sample station {{ "{{ $labels.crs }}" }} as an invalid CRS code"
+            description: >-
+              LDBWS answers "Invalid crs code supplied" for sample station
+              {{ "{{ $labels.crs }}" }} in {{ "{{ $labels.namespace }}" }}, so no line
+              gets LDBWS data from it. It is almost certainly a typo in a
+              lines/*.toml sample_stations entry (e.g. "ANV" for Andover's
+              "ADV"): find the file listing it, fix it, run
+              `cargo run -p line-catalogue-validator` and redeploy api.
+              poller-ldbws excludes the station from
+              distant_signal_ldbws_stalest_station_age_seconds and re-probes it
+              hourly; the alert clears once api stops listing it or LDBWS
+              accepts it.
         {{- end }}
         {{- end }}
 {{- end }}
