@@ -185,6 +185,13 @@ spec:
                   # turned on.
                   - test
                   {{- end }}
+      {{- range .Values.networkPolicy.apiExtraIngressNamespaces }}
+        # networkPolicy.apiExtraIngressNamespaces: a separately-released
+        # in-cluster caller (e.g. the Distant-Signal-MCP in ds-mcp).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+      {{- end }}
       {{- if and .Values.ingress.enabled .Values.ingress.api.enabled }}
         # The api is published externally, so the ingress controller must
         # reach it too. SECURITY: this also exposes /private/*, guarded by

@@ -867,6 +867,16 @@ api:
       # scheduleIngest's group before scheduleFeed.corpus.enabled is set,
       # or every CORPUS load is rejected 403.
       corpus: svc-corpus-ingest
+      # -- The Distant-Signal-MCP's service-account group (a separate
+      # release in its own namespace that calls api's PUBLIC routes
+      # in-cluster with a client-credentials token from the same provider
+      # as the /private callers). Unlike every group above it opens no
+      # /private/* route: a verified token in this group only moves the
+      # MCP's rate-limited public requests onto their own finite budget,
+      # api.rateLimit.mcp below, keyed on the caller (one bucket, not per
+      # IP). Empty turns the feature off (any bearer is then ignored). Must
+      # differ from every group above; api refuses to start otherwise.
+      mcp: srv-ds-mcp
   # -- Authentik/SSO group (via the `groups` OIDC claim, NOT one of the
   # machine/service-account groups above) that grants a real, logged-in
   # user access to the embedded chatbot -- crate::auth::ChatbotAuthorizedUser
@@ -918,6 +928,25 @@ api:
     publicWrite:     # every other non-GET public route
       perMinute: 120
       burst: 60
+    # -- The Distant-Signal-MCP's own budget (5x the public defaults),
+    # used only for requests carrying a verified internal OAuth token in
+    # api.internalOauth.groups.mcp. ONE bucket for the whole service, keyed
+    # `svc:mcp`, not per IP or per MCP user: a runaway loop or a leaked
+    # credential is capped here. Not an exemption; every value must be >= 1.
+    # Login has no MCP budget (the bearer is ignored there). An invalid or
+    # expired bearer gets 401 and another service's token 403 on these
+    # routes, never the anonymous bucket. 429s are counted in
+    # distant_signal_api_rate_limited_total{caller="mcp"}.
+    mcp:
+      tripPlan:
+        perMinute: 100
+        burst: 30
+      trainByUid:
+        perMinute: 600
+        burst: 200
+      publicWrite:
+        perMinute: 600
+        burst: 200
   # -- TRIPS-1: /Trips/plan keeps the built connections graph for this many
   # service dates (~100 MB each; 0 disables the cache), rebuilt after a new
   # schedule publish or after maxAgeSecs.
@@ -3180,6 +3209,11 @@ networkPolicy:
   # consulted when both networkPolicy.enabled and metrics.enabled are true.
   # Same pattern as the existing ingressControllerNamespace value.
   monitoringNamespace: monitoring
+  # -- Extra namespaces allowed to reach api.service.port, matched by
+  # `kubernetes.io/metadata.name`. For callers deployed as separate
+  # releases, e.g. `[ds-mcp]` for the Distant-Signal-MCP, which calls
+  # api's public routes in-cluster. Empty adds nothing.
+  apiExtraIngressNamespaces: []
   # Opt-in egress policies (INF-10, SVC-03 defence in depth) for the
   # notifier, the Kafka/Redis consumers, movement-relay and every poller.
   # OFF by default. Each of those may then reach only DNS (port 53, any

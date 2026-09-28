@@ -214,6 +214,11 @@ spec:
               value: {{ .Values.api.internalOauth.groups.nirStations | quote }}
             - name: INTERNAL_OAUTH_GROUP_CORPUS
               value: {{ .Values.api.internalOauth.groups.corpus | quote }}
+            # Not a /private/* gate: the Distant-Signal-MCP's group, which
+            # only moves its public requests onto api.rateLimit.mcp. Empty
+            # turns that off. See crates/api/src/rate_limit.rs.
+            - name: INTERNAL_OAUTH_GROUP_MCP
+              value: {{ .Values.api.internalOauth.groups.mcp | default "" | quote }}
             # Authentik/SSO end-user group that grants embedded-chatbot
             # access -- see api.chatbotAccessGroup's own comment in
             # values.yaml. NOT one of the INTERNAL_OAUTH_GROUP_* machine
@@ -257,6 +262,18 @@ spec:
               value: {{ .Values.api.rateLimit.publicWrite.perMinute | quote }}
             - name: API_RATE_LIMIT_PUBLIC_WRITE_BURST
               value: {{ .Values.api.rateLimit.publicWrite.burst | quote }}
+            - name: API_RATE_LIMIT_MCP_TRIP_PLAN_PER_MINUTE
+              value: {{ .Values.api.rateLimit.mcp.tripPlan.perMinute | quote }}
+            - name: API_RATE_LIMIT_MCP_TRIP_PLAN_BURST
+              value: {{ .Values.api.rateLimit.mcp.tripPlan.burst | quote }}
+            - name: API_RATE_LIMIT_MCP_TRAIN_BY_UID_PER_MINUTE
+              value: {{ .Values.api.rateLimit.mcp.trainByUid.perMinute | quote }}
+            - name: API_RATE_LIMIT_MCP_TRAIN_BY_UID_BURST
+              value: {{ .Values.api.rateLimit.mcp.trainByUid.burst | quote }}
+            - name: API_RATE_LIMIT_MCP_PUBLIC_WRITE_PER_MINUTE
+              value: {{ .Values.api.rateLimit.mcp.publicWrite.perMinute | quote }}
+            - name: API_RATE_LIMIT_MCP_PUBLIC_WRITE_BURST
+              value: {{ .Values.api.rateLimit.mcp.publicWrite.burst | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_DATES
               value: {{ .Values.api.tripPlanGraphCache.dates | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_MAX_AGE_SECS

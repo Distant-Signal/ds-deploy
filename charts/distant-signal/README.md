@@ -784,7 +784,8 @@ explicit allows:
   `redis.enabled`.
 - **api** ← frontend, every enabled poller, the consumers, schedulefeed, and — when `ingress.enabled` and
   `ingress.api.enabled` — the namespace named by
-  `networkPolicy.ingressControllerNamespace`, all on `api.service.port`.
+  `networkPolicy.ingressControllerNamespace`, plus every namespace in
+  `networkPolicy.apiExtraIngressNamespaces`, all on `api.service.port`.
 - **frontend** ← that same ingress-controller namespace, when
   `ingress.enabled` and `ingress.frontend.enabled`.
 - **api**: `metrics.port` from the namespace named by
@@ -816,6 +817,65 @@ a private address: an external Redis or Postgres, an OAuth token endpoint
 inside the cluster or on a tailnet (`100.64.0.0/10`), a private Kafka broker
 or a proxy. api, frontend, aggregator, enricher, schedulefeed, postgres and
 redis get no egress policy.
+
+## Distant-Signal-MCP as a service caller
+
+The Distant-Signal-MCP is a separate release (its own `ds-mcp` namespace)
+that calls this api's **public** routes in-cluster, directly, not through
+the frontend. Without help it would have no `X-Real-IP`, so every MCP user
+would share the MCP pod's single anonymous bucket. Instead it proves who it
+is with the same internal OAuth2 client-credentials tokens the `/private/*`
+callers use, and gets its own, **finite** budget (`api.rateLimit.mcp`, 5x
+the public defaults), keyed on the caller (`svc:mcp`, one bucket for the
+whole service). It is not exempt: all other validation and timeouts apply,
+and a runaway loop or leaked credential is capped by that budget.
+
+On `/Trips/plan`, `/Train/by-uid/*` and non-GET public routes:
+
+| Request | Result |
+|---|---|
+| No `Authorization: Bearer` | Anonymous, per client IP (unchanged; the frontend never forwards `Authorization`). |
+| Bearer verifies and its `groups` contain `api.internalOauth.groups.mcp` | The MCP budget. |
+| Bearer fails verification (malformed, expired, bad signature, wrong issuer/audience) | `401` with `WWW-Authenticate: Bearer error="invalid_token"`. Never falls back to anonymous. |
+| Bearer verifies but lacks the MCP group | `403`, logged with the token's `sub`. |
+
+Login routes ignore the bearer. With `api.internalOauth.groups.mcp` empty
+the whole feature is inert and any bearer is ignored. End-user auth is the
+session cookie, never `Authorization`, so the bearer does not change who
+the request is as far as any handler is concerned. Rejections are counted in
+`distant_signal_api_rate_limit_service_auth_rejected_total{class,reason}` and
+429s in `distant_signal_api_rate_limited_total{class,caller="mcp"}`.
+
+**What the MCP sends.** Before calling the api (and again before the
+token's `exp`), POST a client-credentials grant to the token endpoint:
+
+```
+POST <internalOauth.tokenUrl>          # e.g. https://sso.example.com/application/o/token/
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials&client_id=<internalOauth.clientId>
+&username=<the MCP service account's username>&password=<its app password/token>
+&scope=<internalOauth.scope, default "groups">
+```
+
+(the same request the pollers make, `crates/common/src/oauth_client.rs`),
+then send `Authorization: Bearer <access_token>` on every api call. The
+token's `aud` must be `internalOauth.clientId` (the same value as
+`api.internalOauth.clientId`), its `iss` must be `api.internalOauth.issuerUrl`,
+and its `groups` claim must contain `api.internalOauth.groups.mcp`. Cache
+the token until shortly before `exp`; don't fetch one per request. On `401`
+refresh the token once; on `429` honour `Retry-After`.
+
+**Operator steps.** In Authentik, under the existing internal-service OAuth2
+provider (the one whose client id is `internalOauth.clientId`): create a
+service account for the MCP (e.g. `srv-ds-mcp`) and a group of the same name
+(`srv-ds-mcp`), add the account to the group, and give the MCP its username
+and app password. Do not add it to any `/private/*` caller group. Then, in
+this chart's values: set `api.internalOauth.groups.mcp` to that group (the
+default is `srv-ds-mcp`), optionally tune `api.rateLimit.mcp`, and, when
+`networkPolicy.enabled`, add the MCP's namespace to
+`networkPolicy.apiExtraIngressNamespaces` (e.g. `[ds-mcp]`); any
+cluster-level default-deny policy needs the same allowance.
 
 ## Enabling the pollers
 
@@ -1070,6 +1130,16 @@ Used only when `postgresql.enabled` is `false`.
 | `api.internalOauth.groups.irishRailLive` | `svc-poller-irish-rail-live` | Required Authentik group for the Irish Rail realtime poller. Not secret. |
 | `api.internalOauth.groups.nirStations` | `svc-poller-nir-stations` | Required Authentik group for the NIR stations poller. Not secret. |
 | `api.internalOauth.groups.corpus` | `svc-corpus-ingest` | Required Authentik group on `POST /private/corpus-locations` (Network Rail CORPUS loads). Add the schedule-ingest service account to it before setting `scheduleFeed.corpus.enabled`. Not secret. |
+| `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account. Opens no `/private/*` route: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. Must differ from every other group (api refuses to start otherwise). See "Distant-Signal-MCP as a service caller" below. |
+| `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). `/private/*` is never limited. |
+| `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off. |
+| `api.rateLimit.login.perMinute` / `.burst` | `10` / `20` | Per client IP, `/public/auth/login` and `/public/auth/callback`. |
+| `api.rateLimit.tripPlan.perMinute` / `.burst` | `20` / `10` | Per client IP, `/Trips/plan`. |
+| `api.rateLimit.trainByUid.perMinute` / `.burst` | `120` / `60` | Per client IP, `/Train/by-uid/*`. |
+| `api.rateLimit.publicWrite.perMinute` / `.burst` | `120` / `60` | Per client IP, every other non-GET public route. |
+| `api.rateLimit.mcp.tripPlan.perMinute` / `.burst` | `100` / `30` | The MCP's own `/Trips/plan` budget: one bucket for the whole service (`svc:mcp`), 5x public. |
+| `api.rateLimit.mcp.trainByUid.perMinute` / `.burst` | `600` / `200` | The MCP's own `/Train/by-uid/*` budget. |
+| `api.rateLimit.mcp.publicWrite.perMinute` / `.burst` | `600` / `200` | The MCP's own public-write budget. Login has no MCP budget: the bearer is ignored there. |
 | `api.probes.path` | `/public/health` | Path all three probes and the `helm test` pod hit. |
 | `api.probes.startup.periodSeconds` | `2` | Startup probe period. |
 | `api.probes.startup.failureThreshold` | `450` | Startup probe failures allowed (450 x 2s = 900s for in-process migrations, matching the Postgres startupProbe's 15 minutes). |
@@ -1093,7 +1163,6 @@ Used only when `postgresql.enabled` is `false`.
 | `api.timeouts.requestTimeoutSecs` | `30` | Public requests still running after this get a 408. |
 | `api.timeouts.privateRequestTimeoutSecs` | `300` | The same for the `/private` ingest routes, which take bodies up to 100 MB. |
 | `api.timeouts.headerReadTimeoutSecs` | `10` | Disconnect an HTTP/1 client that has not sent its full headers within this. |
-| `api.rateLimit` | see `values.yaml` | Per-client-IP rate limits (`crates/api/src/rate_limit.rs`): `enabled`, `trustXRealIp`, and `perMinute`/`burst` for `login`, `tripPlan`, `trainByUid` and `publicWrite`. Exceeding one returns 429 with `Retry-After`; `/private/*` is never limited. `trustXRealIp` keys on the frontend's `X-Real-IP` and is safe only while the api is not exposed directly (keep `ingress.api.enabled` off). |
 | `api.tripPlanGraphCache.dates` | `2` | Service dates whose connections graph `/Trips/plan` keeps built (about 100 MB each). `0` disables the cache. |
 | `api.tripPlanGraphCache.maxAgeSecs` | `600` | Rebuild a cached graph after this long, or after a new schedule publish. |
 | `api.fullCoverageEnabledDefault` | `true` | Treat every catalogued line as `full_coverage_enabled`, whatever its `lines/*.toml` entry says, so TRUST-vs-schedule delay and cancellation data is used everywhere. Set `aggregator.fullCoverageEnabledDefault` to the same value: both services gate on it. |
@@ -1874,6 +1943,7 @@ creates new per-pod series, so that clause fired on every rollout.
 |---|---|---|
 | `networkPolicy.enabled` | `false` | Render default-deny NetworkPolicies with explicit allows. |
 | `networkPolicy.ingressControllerNamespace` | `ingress-nginx` | Namespace the ingress controller runs in, matched by `kubernetes.io/metadata.name`. |
+| `networkPolicy.apiExtraIngressNamespaces` | `[]` | Extra namespaces allowed to reach `api.service.port` (e.g. `[ds-mcp]` for the Distant-Signal-MCP). |
 | `networkPolicy.monitoringNamespace` | `monitoring` | Namespace Prometheus runs in, matched by `kubernetes.io/metadata.name`. Allowed to reach each workload's metrics port. Only used when `metrics.enabled` is true. |
 | `networkPolicy.egress.enabled` | `false` | Render egress policies for the notifier, consumers, movement-relay and pollers (see [NetworkPolicy](#networkpolicy)). |
 | `networkPolicy.egress.privateCidrs` | RFC 1918, CGNAT, loopback, link-local, reserved | IPv4 ranges excluded from the public-internet egress allow. |
