@@ -18,7 +18,9 @@ name: CI
 # commit directly with the fix. Piped's remaining workflows (rustfmt.yml,
 # lint.yml, type-check.yml, py-test.yml, verify-types.yml,
 # freeze-for-pr.yml, ...) are not used here: they are either Python/nox-
-# oriented (this repo has no Python code) or depend on a `justfile` +
+# oriented (this repo's only Python is a standalone script under scripts/,
+# with no package or nox sessions; the `scripts-lint` job below checks it)
+# or depend on a `justfile` +
 # `mise.toml` vendored from the `piped` git submodule via the
 # `just-jobs`/`handle-diff-file` composite actions in Piped-actions, which
 # this repo does not have and this change does not introduce. See the PR
@@ -454,7 +456,7 @@ jobs:
         run: sqlx migrate run
 
       - name: Seed e2e fixtures
-        run: psql "$DATABASE_URL" -f frontend/e2e/fixtures/seed.sql
+        run: psql "${DATABASE_URL}" -f frontend/e2e/fixtures/seed.sql
 
       - name: Start api in the background
         run: |
@@ -541,16 +543,48 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            base="$(git merge-base "origin/$BASE_REF" HEAD)"
-          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
-              && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            base="$BEFORE"
+          if [[ "${EVENT_NAME}" = "pull_request" ]]; then
+            base="$(git merge-base "origin/${BASE_REF}" HEAD)"
+          elif [[ -n "${BEFORE}" ]] && [[ "${BEFORE}" != "0000000000000000000000000000000000000000" ]] \
+              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            base="${BEFORE}"
           else
             echo "no usable base commit (new branch or force push); skipping"
             exit 0
           fi
-          bash scripts/check-migration-order.sh "$base"
+          bash scripts/check-migration-order.sh "${base}"
+
+  # Lint, format-check and type-check the repo's scripts, strict by default:
+  #   - every tracked *.sh: shellcheck with every optional check at style
+  #     severity (.shellcheckrc) and shfmt (style from .editorconfig);
+  #   - scripts/*.py: ruff check (select ALL), ruff format --check and mypy
+  #     --strict (pyproject.toml);
+  #   - the workflow run: blocks: actionlint with SHELLCHECK_OPTS
+  #     '--enable=all --severity=style'. The `actionlint` job above uses
+  #     Piped's reviewdog wrapper, which runs shellcheck with its default
+  #     checks only.
+  # Every tool is pinned in pyproject.toml's `lint` dependency group (pip's
+  # download cache is keyed on that file); scripts/lint-scripts.sh runs the
+  # same checks locally.
+  scripts-lint:
+    name: scripts lint (shellcheck, shfmt, ruff, mypy, actionlint)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install the pinned lint tools
+        run: python -m pip install --group lint
+
+      - name: Lint scripts
+        run: scripts/lint-scripts.sh
 
   # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
   # `helm lint` + `helm template` against both the chart's own defaults and
@@ -615,7 +649,7 @@ jobs:
             --set api.sso.postLoginRedirectUrl=https://app.example.com/
           )
           disabled=$(helm template distant-signal charts/distant-signal "${base[@]}")
-          if grep -q 'ARCHIVE_' <<<"$disabled"; then
+          if grep -q 'ARCHIVE_' <<<"${disabled}"; then
             echo "archive disabled but ARCHIVE_* env rendered" >&2; exit 1
           fi
           out=$(helm template distant-signal charts/distant-signal "${base[@]}" \
@@ -623,8 +657,8 @@ jobs:
             --set archive.s3.bucket=archive-bucket \
             --set archive.s3.existingSecret=archive-creds \
             --set archive.s3.lifecycleConfirmed=true)
-          grep -q 'name: ARCHIVE_S3_SECRET_ACCESS_KEY' <<<"$out"
-          grep -q 'name: archive-creds' <<<"$out"
+          grep -q 'name: ARCHIVE_S3_SECRET_ACCESS_KEY' <<<"${out}"
+          grep -q 'name: archive-creds' <<<"${out}"
           # DQ14: enabling the archive without confirming an S3 lifecycle
           # (expiry) rule on the bucket must fail the render.
           if helm template distant-signal charts/distant-signal "${base[@]}" \
@@ -662,21 +696,21 @@ jobs:
               jit: off
           EOF
           )
-          grep -q -- '- "shared_buffers=1GB"' <<<"$out"
-          grep -q -- '- "effective_cache_size=3584MB"' <<<"$out"
-          grep -q -- '- "max_wal_size=4GB"' <<<"$out"
-          grep -q -- '- "wal_compression=lz4"' <<<"$out"
-          grep -q -- '- "random_page_cost=1.1"' <<<"$out"
-          grep -q -- '- "huge_pages=off"' <<<"$out"
-          grep -q -- '- "temp_file_limit=100000000"' <<<"$out"
-          grep -q -- '- "jit=off"' <<<"$out"
-          grep -q 'mountPath: /dev/shm' <<<"$out"
-          grep -q 'medium: Memory' <<<"$out"
-          grep -q 'sizeLimit: 1Gi' <<<"$out"
-          grep -q 'memory: 5Gi' <<<"$out"
+          grep -q -- '- "shared_buffers=1GB"' <<<"${out}"
+          grep -q -- '- "effective_cache_size=3584MB"' <<<"${out}"
+          grep -q -- '- "max_wal_size=4GB"' <<<"${out}"
+          grep -q -- '- "wal_compression=lz4"' <<<"${out}"
+          grep -q -- '- "random_page_cost=1.1"' <<<"${out}"
+          grep -q -- '- "huge_pages=off"' <<<"${out}"
+          grep -q -- '- "temp_file_limit=100000000"' <<<"${out}"
+          grep -q -- '- "jit=off"' <<<"${out}"
+          grep -q 'mountPath: /dev/shm' <<<"${out}"
+          grep -q 'medium: Memory' <<<"${out}"
+          grep -q 'sizeLimit: 1Gi' <<<"${out}"
+          grep -q 'memory: 5Gi' <<<"${out}"
           bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set postgresql.config=null --set postgresql.shm.enabled=false)
-          if grep -E -q 'args:|/dev/shm|name: dshm' <<<"$bare"; then
+          if grep -E -q 'args:|/dev/shm|name: dshm' <<<"${bare}"; then
             echo "postgres config/shm rendered despite being disabled" >&2; exit 1
           fi
 
@@ -700,10 +734,10 @@ jobs:
           )
           redis=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --show-only templates/redis-deployment.yaml)
-          grep -A1 -- '- --save' <<<"$redis" | grep -q -- '- ""'
-          grep -A1 -- '- --maxmemory$' <<<"$redis" | grep -q -- '- "1536mb"'
-          grep -A1 -- '- --maxmemory-policy' <<<"$redis" | grep -q -- '- "noeviction"'
-          grep -q 'memory: 2560Mi' <<<"$redis"
+          grep -A1 -- '- --save' <<<"${redis}" | grep -q -- '- ""'
+          grep -A1 -- '- --maxmemory$' <<<"${redis}" | grep -q -- '- "1536mb"'
+          grep -A1 -- '- --maxmemory-policy' <<<"${redis}" | grep -q -- '- "noeviction"'
+          grep -q 'memory: 2560Mi' <<<"${redis}"
           # DQ15: 4Gi default (no cluster here, so the existing-PVC lookup is
           # empty and the value renders as-is).
           helm template distant-signal charts/distant-signal "${base[@]}" \
@@ -711,7 +745,7 @@ jobs:
           bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set redis.save=null --set redis.maxmemory=null \
             --show-only templates/redis-deployment.yaml)
-          if grep -E -q -- '- --save|- --maxmemory$' <<<"$bare"; then
+          if grep -E -q -- '- --save|- --maxmemory$' <<<"${bare}"; then
             echo "redis --save/--maxmemory rendered despite being null" >&2; exit 1
           fi
           relay=$(helm template distant-signal charts/distant-signal "${base[@]}" \
@@ -721,7 +755,30 @@ jobs:
             --set movementRelay.kafka.consumerGroup=test-group \
             --set movementRelay.kafka.saslMechanism=PLAIN \
             --show-only templates/movement-relay-deployment.yaml)
-          grep -A1 'name: MOVEMENT_STREAM_MAXLEN' <<<"$relay" | grep -q 'value: "1048576"'
+          grep -A1 'name: MOVEMENT_STREAM_MAXLEN' <<<"${relay}" | grep -q 'value: "1048576"'
+
+      # The sftp entrypoint ConfigMap embeds files/schedule-sftp-entrypoint.sh
+      # (also bind-mounted by docker-compose.yml) with .Files.Get; the
+      # rendered script must be that file, byte for byte.
+      - name: helm template (sftp entrypoint is the shared script)
+        run: |
+          set -euo pipefail
+          cm=$(helm template distant-signal charts/distant-signal \
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
+            --set trustConsumer.kafka.topic=test-topic \
+            --set trustConsumer.kafka.saslMechanism=PLAIN \
+            --set enricher.llm.baseUrl=http://llm.example.com/v1 \
+            --set enricher.llm.model=test-model \
+            --set api.sso.issuerUrl=https://sso.example.com \
+            --set api.sso.clientId=test-client \
+            --set api.sso.clientSecret=test-secret \
+            --set api.sso.redirectUrl=https://app.example.com/callback \
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
+            --set scheduleFeed.enabled=true \
+            --set scheduleFeed.sftp.authMethod=password \
+            --show-only templates/schedulefeed-configmap.yaml)
+          script=$(sed -n '/^  entrypoint.sh: |$/,$p' <<<"${cm}" | tail -n +2 | sed 's/^    //')
+          diff -u charts/distant-signal/files/schedule-sftp-entrypoint.sh <(printf '%s\n' "${script}")
 
       # INF-3 Redis AUTH. Off (the default) must render no REDIS_PASSWORD,
       # no --requirepass and no redis-password Secret key. On must give all
@@ -753,32 +810,37 @@ jobs:
           fail() { echo "$1" >&2; exit 1; }
 
           off=$(render)
-          if grep -E -q 'REDIS_PASSWORD|REDISCLI_AUTH|requirepass|redis-password' <<<"$off"; then
+          if grep -E -q 'REDIS_PASSWORD|REDISCLI_AUTH|requirepass|redis-password' <<<"${off}"; then
             fail "redis.auth disabled but auth settings rendered"
           fi
 
           on=$(render --set redis.auth.enabled=true \
             --set redis.auth.existingSecret=redis-auth --set redis.auth.existingSecretKey=pw)
-          [ "$(grep -c 'name: REDIS_PASSWORD' <<<"$on")" -eq 7 ] \
+          n_pw=$(grep -c 'name: REDIS_PASSWORD' <<<"${on}" || true)
+          [[ "${n_pw}" -eq 7 ]] \
             || fail "expected REDIS_PASSWORD on the six clients plus redis"
-          [ "$(grep -A3 'name: REDIS_PASSWORD' <<<"$on" | grep -c 'name: redis-auth')" -eq 7 ] \
+          n_secret=$(grep -A3 'name: REDIS_PASSWORD' <<<"${on}" | grep -c 'name: redis-auth' || true)
+          [[ "${n_secret}" -eq 7 ]] \
             || fail "REDIS_PASSWORD must come from redis.auth.existingSecret"
-          grep -A1 'name: REDIS_URL' <<<"$on" | grep 'value:' | grep -q -v '@' \
+          grep -A1 'name: REDIS_URL' <<<"${on}" | grep 'value:' | grep -q -v '@' \
             || fail "REDIS_URL must stay credential-free"
           redis=$(render --set redis.auth.enabled=true --set redis.auth.existingSecret=redis-auth \
             --show-only templates/redis-deployment.yaml)
-          grep -A1 -- '- --requirepass' <<<"$redis" | grep -q -- '- "$(REDIS_PASSWORD)"' \
+          # shellcheck disable=SC2016 # "$(REDIS_PASSWORD)" is Kubernetes env-var syntax matched literally, not a shell expansion
+          grep -A1 -- '- --requirepass' <<<"${redis}" | grep -q -- '- "$(REDIS_PASSWORD)"' \
             || fail "redis must start with --requirepass from the Secret"
-          grep -q 'name: REDISCLI_AUTH' <<<"$redis" || fail "redis probes must authenticate"
+          grep -q 'name: REDISCLI_AUTH' <<<"${redis}" || fail "redis probes must authenticate"
 
           gen=$(render --set redis.auth.enabled=true)
-          grep -q '  redis-password: ' <<<"$gen" || fail "chart-generated redis-password missing"
+          grep -q '  redis-password: ' <<<"${gen}" || fail "chart-generated redis-password missing"
 
           step1=$(render --set redis.auth.enabled=true --set redis.auth.requirePass=false \
             --set redis.auth.existingSecret=redis-auth --show-only templates/redis-deployment.yaml)
-          [ "$step1" = "$(render --show-only templates/redis-deployment.yaml)" ] \
+          redis_default=$(render --show-only templates/redis-deployment.yaml)
+          [[ "${step1}" = "${redis_default}" ]] \
             || fail "requirePass=false must leave the Redis Deployment unchanged"
 
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if render --set redis.enabled=false --set redis.externalUrl=redis://ext:6379 \
               --set redis.auth.enabled=true >/dev/null 2>&1; then
             fail "external Redis with auth but no existingSecret must fail the render"
@@ -812,32 +874,33 @@ jobs:
           fail() { echo "$1" >&2; exit 1; }
 
           redis=$(render --show-only templates/redis-deployment.yaml)
-          grep -A1 '^  strategy:' <<<"$redis" | grep -q 'type: Recreate' \
+          grep -A1 '^  strategy:' <<<"${redis}" | grep -q 'type: Recreate' \
             || fail "redis Deployment must use strategy Recreate"
 
           pg=$(render --show-only templates/postgres-statefulset.yaml)
-          grep -A5 'startupProbe:' <<<"$pg" | grep -q 'pg_isready' \
+          grep -A5 'startupProbe:' <<<"${pg}" | grep -q 'pg_isready' \
             || fail "postgres must have a pg_isready startupProbe"
-          grep -A10 'startupProbe:' <<<"$pg" | grep -q 'failureThreshold: 90' \
+          grep -A10 'startupProbe:' <<<"${pg}" | grep -q 'failureThreshold: 90' \
             || fail "postgres startupProbe budget must default to 90 x 10s"
 
           api=$(render --show-only templates/api-deployment.yaml)
-          grep -A6 'startupProbe:' <<<"$api" | grep -q 'periodSeconds: 2' \
+          grep -A6 'startupProbe:' <<<"${api}" | grep -q 'periodSeconds: 2' \
             || fail "api startupProbe period must default to 2s"
-          grep -A6 'startupProbe:' <<<"$api" | grep -q 'failureThreshold: 450' \
+          grep -A6 'startupProbe:' <<<"${api}" | grep -q 'failureThreshold: 450' \
             || fail "api startupProbe budget must default to 450 x 2s (900s, matching postgres)"
 
           fe=$(render --show-only templates/frontend-deployment.yaml)
-          [ "$(grep -c 'path: /healthz' <<<"$fe")" -eq 2 ] \
+          n_healthz=$(grep -c 'path: /healthz' <<<"${fe}" || true)
+          [[ "${n_healthz}" -eq 2 ]] \
             || fail "frontend readiness and liveness must both hit /healthz"
 
           for t in aggregator notifier enricher; do
-            out=$(render --show-only "templates/$t-deployment.yaml")
-            grep -A2 'livenessProbe:' <<<"$out" | grep -q 'path: /livez' \
-              || fail "$t needs a /livez liveness probe"
-            grep -A2 'readinessProbe:' <<<"$out" | grep -q 'path: /healthz' \
-              || fail "$t needs a /healthz readiness probe"
-            grep -q 'name: HEALTH_BIND_URL' <<<"$out" || fail "$t needs HEALTH_BIND_URL"
+            out=$(render --show-only "templates/${t}-deployment.yaml")
+            grep -A2 'livenessProbe:' <<<"${out}" | grep -q 'path: /livez' \
+              || fail "${t} needs a /livez liveness probe"
+            grep -A2 'readinessProbe:' <<<"${out}" | grep -q 'path: /healthz' \
+              || fail "${t} needs a /healthz readiness probe"
+            grep -q 'name: HEALTH_BIND_URL' <<<"${out}" || fail "${t} needs HEALTH_BIND_URL"
           done
 
           # The movement-stream consumers and movement-relay: /healthz is
@@ -852,12 +915,12 @@ jobs:
             --set movementRelay.kafka.saslMechanism=PLAIN
           )
           for t in trust-consumer trust-backlog-consumer full-coverage-consumer movement-relay; do
-            out=$(render "${relay[@]}" --show-only "templates/$t-deployment.yaml")
-            grep -A2 'livenessProbe:' <<<"$out" | grep -q 'path: /livez' \
-              || fail "$t liveness must hit /livez, not the Redis/Kafka-dependent /healthz"
-            grep -A2 'readinessProbe:' <<<"$out" | grep -q 'path: /healthz' \
-              || fail "$t needs a /healthz readiness probe"
-            grep -q 'name: PROGRESS_STALL_SECS' <<<"$out" || fail "$t needs PROGRESS_STALL_SECS"
+            out=$(render "${relay[@]}" --show-only "templates/${t}-deployment.yaml")
+            grep -A2 'livenessProbe:' <<<"${out}" | grep -q 'path: /livez' \
+              || fail "${t} liveness must hit /livez, not the Redis/Kafka-dependent /healthz"
+            grep -A2 'readinessProbe:' <<<"${out}" | grep -q 'path: /healthz' \
+              || fail "${t} needs a /healthz readiness probe"
+            grep -q 'name: PROGRESS_STALL_SECS' <<<"${out}" || fail "${t} needs PROGRESS_STALL_SECS"
           done
 
           pollers=$(render -f charts/distant-signal/values-example.yaml \
@@ -868,18 +931,19 @@ jobs:
             --show-only templates/poller-irish-rail-gtfs-deployment.yaml \
             --show-only templates/poller-irish-rail-live-deployment.yaml \
             --show-only templates/poller-nir-stations-deployment.yaml)
-          deployments=$(grep -c '^kind: Deployment' <<<"$pollers")
-          probes=$(grep -c 'path: /livez' <<<"$pollers")
-          [ "$deployments" -ge 4 ] || fail "expected the pollers to render, got $deployments"
-          [ "$probes" -eq "$deployments" ] \
-            || fail "every poller needs a /livez liveness probe ($probes of $deployments)"
+          deployments=$(grep -c '^kind: Deployment' <<<"${pollers}")
+          probes=$(grep -c 'path: /livez' <<<"${pollers}")
+          [[ "${deployments}" -ge 4 ]] || fail "expected the pollers to render, got ${deployments}"
+          [[ "${probes}" -eq "${deployments}" ]] \
+            || fail "every poller needs a /livez liveness probe (${probes} of ${deployments})"
 
           feed=$(render --set scheduleFeed.enabled=true --set scheduleFeed.sftp.authMethod=password \
             --show-only templates/schedulefeed-deployment.yaml)
-          [ "$(grep -c 'path: /livez' <<<"$feed")" -eq 2 ] \
+          n_livez=$(grep -c 'path: /livez' <<<"${feed}" || true)
+          [[ "${n_livez}" -eq 2 ]] \
             || fail "schedulefeed ingest and reference need /livez liveness probes"
-          grep -q 'tcpSocket:' <<<"$feed" || fail "schedulefeed sftp needs a tcpSocket liveness probe"
-          grep -A1 'name: HEALTH_BIND_URL' <<<"$feed" | grep -q '0.0.0.0:8091' \
+          grep -q 'tcpSocket:' <<<"${feed}" || fail "schedulefeed sftp needs a tcpSocket liveness probe"
+          grep -A1 'name: HEALTH_BIND_URL' <<<"${feed}" | grep -q '0.0.0.0:8091' \
             || fail "schedulefeed reference must bind its own health port"
 
       # metrics.prometheusRule: disabled (the default) must render no
@@ -907,28 +971,28 @@ jobs:
             --set movementRelay.kafka.saslMechanism=PLAIN
           )
           disabled=$(helm template distant-signal charts/distant-signal "${base[@]}")
-          if grep -q 'kind: PrometheusRule' <<<"$disabled"; then
+          if grep -q 'kind: PrometheusRule' <<<"${disabled}"; then
             echo "prometheusRule disabled but a PrometheusRule rendered" >&2; exit 1
           fi
           rule=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set metrics.prometheusRule.enabled=true \
             --show-only templates/prometheusrule.yaml)
-          grep -q 'kind: PrometheusRule' <<<"$rule"
-          names=$(sed -n 's/^ *- alert: *//p' <<<"$rule")
-          count=$(grep -c . <<<"$names")
-          if [ "$count" -lt 9 ]; then
-            echo "expected at least 9 alerts, got $count:" >&2; echo "$names" >&2; exit 1
+          grep -q 'kind: PrometheusRule' <<<"${rule}"
+          names=$(sed -n 's/^ *- alert: *//p' <<<"${rule}")
+          count=$(grep -c . <<<"${names}")
+          if [[ "${count}" -lt 9 ]]; then
+            echo "expected at least 9 alerts, got ${count}:" >&2; echo "${names}" >&2; exit 1
           fi
-          if bad=$(grep -v '^DistantSignal' <<<"$names"); then
-            echo "alert names must start with DistantSignal:" >&2; echo "$bad" >&2; exit 1
+          if bad=$(grep -v '^DistantSignal' <<<"${names}"); then
+            echo "alert names must start with DistantSignal:" >&2; echo "${bad}" >&2; exit 1
           fi
           # No "new series" clause (`x unless x offset <window>`): the
           # counters are registered at 0 on startup, and every rollout makes
           # new per-pod series, so that clause fired on every rollout.
-          if grep -n ' unless ' <<<"$rule"; then
+          if grep -n ' unless ' <<<"${rule}"; then
             echo "PrometheusRule must not use an 'x unless x offset' new-series clause" >&2; exit 1
           fi
-          echo "$names"
+          echo "${names}"
           # SVC-04/SVC-08: the poller rules render (as <fullname>-pollers)
           # once a poller is enabled.
           pollers=$(helm template distant-signal charts/distant-signal "${base[@]}" \
@@ -936,18 +1000,18 @@ jobs:
             --set pollers.ldbws.enabled=true \
             --set pollers.ldbws.baseUrl=https://ldbws.example.com \
             --show-only templates/prometheusrule.yaml)
-          grep -q 'alert: DistantSignalPollerFailing' <<<"$pollers"
-          grep -q 'alert: DistantSignalLdbwsStationStale' <<<"$pollers"
-          grep -q 'alert: DistantSignalLdbwsInvalidCrs' <<<"$pollers"
-          grep -q 'max by (namespace, crs) (distant_signal_ldbws_invalid_crs_station{' <<<"$pollers"
+          grep -q 'alert: DistantSignalPollerFailing' <<<"${pollers}"
+          grep -q 'alert: DistantSignalLdbwsStationStale' <<<"${pollers}"
+          grep -q 'alert: DistantSignalLdbwsInvalidCrs' <<<"${pollers}"
+          grep -q 'max by (namespace, crs) (distant_signal_ldbws_invalid_crs_station{' <<<"${pollers}"
           # ...and neither LDBWS alert renders with the ldbws poller off.
           no_ldbws=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set metrics.prometheusRule.enabled=true \
             --set pollers.incidents.enabled=true \
             --set pollers.incidents.baseUrl=https://incidents.example.com \
             --show-only templates/prometheusrule.yaml)
-          grep -q 'alert: DistantSignalPollerFailing' <<<"$no_ldbws"
-          if grep -q 'alert: DistantSignalLdbws' <<<"$no_ldbws"; then
+          grep -q 'alert: DistantSignalPollerFailing' <<<"${no_ldbws}"
+          if grep -q 'alert: DistantSignalLdbws' <<<"${no_ldbws}"; then
             echo "LDBWS alerts rendered with pollers.ldbws disabled" >&2; exit 1
           fi
 
@@ -974,7 +1038,7 @@ jobs:
           knobs='HOURLY_REQUEST_BUDGET|SAMPLE_PINNED_LINES_ONLY|SAMPLE_MAX_STATIONS'
           off=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --show-only templates/poller-deployments.yaml)
-          if grep -nE "name: ($knobs)\$" <<<"$off"; then
+          if grep -nE "name: (${knobs})\$" <<<"${off}"; then
             echo "LDBWS volume knobs are off by default but their env rendered" >&2; exit 1
           fi
           on=$(helm template distant-signal charts/distant-signal "${base[@]}" \
@@ -982,9 +1046,9 @@ jobs:
             --set pollers.ldbws.samplePinnedLinesOnly=true \
             --set pollers.ldbws.sampleMaxStations=150 \
             --show-only templates/poller-deployments.yaml)
-          grep -A1 'name: HOURLY_REQUEST_BUDGET$' <<<"$on" | grep -q 'value: "5000"'
-          grep -A1 'name: SAMPLE_PINNED_LINES_ONLY$' <<<"$on" | grep -q 'value: "true"'
-          grep -A1 'name: SAMPLE_MAX_STATIONS$' <<<"$on" | grep -q 'value: "150"'
+          grep -A1 'name: HOURLY_REQUEST_BUDGET$' <<<"${on}" | grep -q 'value: "5000"'
+          grep -A1 'name: SAMPLE_PINNED_LINES_ONLY$' <<<"${on}" | grep -q 'value: "true"'
+          grep -A1 'name: SAMPLE_MAX_STATIONS$' <<<"${on}" | grep -q 'value: "150"'
 
       # The PodMonitor must select every workload that serves a port named
       # "metrics". trust-backlog-consumer was missing (INF-6), so the
@@ -1008,7 +1072,7 @@ jobs:
           pm=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --show-only templates/podmonitor.yaml)
           for c in api aggregator enricher notifier trust-consumer trust-backlog-consumer full-coverage-consumer; do
-            grep -q -- "- $c\$" <<<"$pm" || { echo "PodMonitor must select $c" >&2; exit 1; }
+            grep -q -- "- ${c}\$" <<<"${pm}" || { echo "PodMonitor must select ${c}" >&2; exit 1; }
           done
 
       # INF-7: with the bundled Postgres, api replicas x pool plus the other
@@ -1065,12 +1129,12 @@ jobs:
           policy() { awk -v n="$1" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}'; }
 
           feed=$(render --show-only templates/networkpolicy.yaml | policy distant-signal-schedulefeed)
-          [ -n "$feed" ] || fail "no schedulefeed NetworkPolicy rendered"
-          grep -q 'port: 2022' <<<"$feed" || fail "schedulefeed policy must allow SFTP on 2022"
-          if grep -q 'ipBlock' <<<"$feed"; then fail "empty allowedCidrs must not restrict SFTP sources"; fi
+          [[ -n "${feed}" ]] || fail "no schedulefeed NetworkPolicy rendered"
+          grep -q 'port: 2022' <<<"${feed}" || fail "schedulefeed policy must allow SFTP on 2022"
+          if grep -q 'ipBlock' <<<"${feed}"; then fail "empty allowedCidrs must not restrict SFTP sources"; fi
           feed=$(render --set 'scheduleFeed.sftp.allowedCidrs={203.0.113.0/24}' \
             --show-only templates/networkpolicy.yaml | policy distant-signal-schedulefeed)
-          grep -q 'cidr: "203.0.113.0/24"' <<<"$feed" || fail "allowedCidrs must render as ipBlocks"
+          grep -q 'cidr: "203.0.113.0/24"' <<<"${feed}" || fail "allowedCidrs must render as ipBlocks"
 
           # INF-10: every background worker has its own policy, admitting its
           # health port (kubelet probes). Egress policies are opt-in.
@@ -1086,15 +1150,15 @@ jobs:
           for c in aggregator:8090 enricher:8090 notifier:8090 trust-consumer:8081 \
               trust-backlog-consumer:8083 full-coverage-consumer:8082 movement-relay:8083 \
               poller-irish-rail-gtfs:8090 poller-irish-rail-live:8090 poller-nir-stations:8090; do
-            p=$(policy "distant-signal-${c%%:*}" <<<"$all")
-            [ -n "$p" ] || fail "no NetworkPolicy for ${c%%:*}"
-            grep -q "port: ${c##*:}\$" <<<"$p" || fail "${c%%:*} policy must admit health port ${c##*:}"
+            p=$(policy "distant-signal-${c%%:*}" <<<"${all}")
+            [[ -n "${p}" ]] || fail "no NetworkPolicy for ${c%%:*}"
+            grep -q "port: ${c##*:}\$" <<<"${p}" || fail "${c%%:*} policy must admit health port ${c##*:}"
           done
-          if grep -q -- '- Egress' <<<"$all"; then fail "egress policies must be opt-in"; fi
+          if grep -q -- '- Egress' <<<"${all}"; then fail "egress policies must be opt-in"; fi
           eg=$(render --set networkPolicy.egress.enabled=true --show-only templates/networkpolicy.yaml)
-          notifier=$(policy distant-signal-notifier <<<"$eg")
-          grep -q -- '- Egress' <<<"$notifier" || fail "notifier must get an egress policy"
-          grep -q -- '- 10.0.0.0/8' <<<"$notifier" || fail "notifier egress must exclude private ranges"
+          notifier=$(policy distant-signal-notifier <<<"${eg}")
+          grep -q -- '- Egress' <<<"${notifier}" || fail "notifier must get an egress policy"
+          grep -q -- '- 10.0.0.0/8' <<<"${notifier}" || fail "notifier egress must exclude private ranges"
 
       - name: helm template (values-example.yaml)
         run: |

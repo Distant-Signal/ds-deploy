@@ -508,12 +508,12 @@ jobs:
           set -euo pipefail
           short_sha="${GITHUB_SHA:0:7}"
           base_version="$(sed -n 's/^version: *"\?\([^"[:space:]]*\)"\?.*/\1/p' charts/distant-signal/Chart.yaml)"
-          if [ -z "${base_version}" ]; then
+          if [[ -z "${base_version}" ]]; then
             echo "::error::could not parse version: from charts/distant-signal/Chart.yaml" >&2
             exit 1
           fi
-          echo "chart_version=${base_version}+build.${GITHUB_RUN_NUMBER}.sha.${short_sha}" >> "$GITHUB_OUTPUT"
-          echo "app_version=sha-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "chart_version=${base_version}+build.${GITHUB_RUN_NUMBER}.sha.${short_sha}" >> "${GITHUB_OUTPUT}"
+          echo "app_version=sha-${short_sha}" >> "${GITHUB_OUTPUT}"
 
       # `helm package` (see its own `--help`) has no `--values`/`-f`/`--set`
       # flag of any kind -- it just tars up whatever is already on disk at
@@ -576,16 +576,16 @@ jobs:
 
           shopt -s nullglob
           digest_files=(/tmp/image-digests/*.txt)
-          if [ ${#digest_files[@]} -eq 0 ]; then
+          if [[ ${#digest_files[@]} -eq 0 ]]; then
             echo "::warning::no image-digest-* artifacts found -- every service's image.digest stays empty, the packaged chart falls back to tag/appVersion-based image references for all of them."
           fi
 
           pinned=0
           for f in "${digest_files[@]}"; do
-            line="$(cat "$f")"
+            line="$(cat "${f}")"
             service="${line%%=*}"
             digest="${line#*=}"
-            if [ -z "${service}" ] || [ -z "${digest}" ] || [ "${line}" = "${service}" ]; then
+            if [[ -z "${service}" ]] || [[ -z "${digest}" ]] || [[ "${line}" = "${service}" ]]; then
               echo "::error::malformed digest file ${f}: '${line}' (expected service=sha256:...)" >&2
               exit 1
             fi
@@ -594,7 +594,7 @@ jobs:
               exit 1
             fi
             path="${SERVICE_TO_PATH[${service}]:-}"
-            if [ -z "${path}" ]; then
+            if [[ -z "${path}" ]]; then
               echo "::error::no values.yaml path mapping for service '${service}' (from ${f}) -- update this step's SERVICE_TO_PATH to match containers.yml's matrix and values.yaml." >&2
               exit 1
             fi
@@ -612,7 +612,7 @@ jobs:
             --app-version "${{ steps.version.outputs.app_version }}" \
             --destination /tmp/helm-package
           chart_tgz=$(find /tmp/helm-package -maxdepth 1 -name 'distant-signal-*.tgz' -print -quit)
-          echo "chart_tgz=${chart_tgz}" >> "$GITHUB_OUTPUT"
+          echo "chart_tgz=${chart_tgz}" >> "${GITHUB_OUTPUT}"
 
       - name: helm push
         id: push
@@ -621,15 +621,15 @@ jobs:
           DEST: oci://${{ env.REGISTRY }}/fasterspeeding/charts
         run: |
           set -euo pipefail
-          helm push "$CHART_TGZ" "$DEST" 2>&1 | tee /tmp/helm-push.log
+          helm push "${CHART_TGZ}" "${DEST}" 2>&1 | tee /tmp/helm-push.log
           # `helm push` reports what it pushed as "Pushed: <ref>" and
           # "Digest: sha256:...". Sign that exact digest, never a tag.
           digest=$(sed -n 's/^Digest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' /tmp/helm-push.log | head -n 1)
-          if [ -z "$digest" ]; then
+          if [[ -z "${digest}" ]]; then
             echo "::error::could not read the pushed chart's digest from helm push's output" >&2
             exit 1
           fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
       # INF-12: sign the chart the same way build-and-push signs every image
       # (keyless, sigstore's public Fulcio/Rekor), then verify the signature
@@ -651,7 +651,7 @@ jobs:
           IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          cosign sign --yes "$CHART_REF"
-          cosign verify "$CHART_REF" \
+          cosign sign --yes "${CHART_REF}"
+          cosign verify "${CHART_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity "$IDENTITY" > /dev/null
+            --certificate-identity "${IDENTITY}" > /dev/null
