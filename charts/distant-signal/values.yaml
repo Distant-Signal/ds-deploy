@@ -859,6 +859,13 @@ api:
       irishRailGtfs: svc-poller-irish-rail-gtfs
       irishRailLive: svc-poller-irish-rail-live
       nirStations: svc-poller-nir-stations
+      # Gates POST /private/corpus-locations (Network Rail CORPUS loads,
+      # scheduleFeed.corpus below). The caller is schedule-ingest's OWN
+      # service account (scheduleFeed.ingest.internalOauthUsername), which
+      # must be added to this group in Authentik in addition to
+      # scheduleIngest's group before scheduleFeed.corpus.enabled is set,
+      # or every CORPUS load is rejected 403.
+      corpus: svc-corpus-ingest
   # -- Authentik/SSO group (via the `groups` OIDC claim, NOT one of the
   # machine/service-account groups above) that grants a real, logged-in
   # user access to the embedded chatbot -- crate::auth::ChatbotAuthorizedUser
@@ -2527,6 +2534,39 @@ scheduleFeed:
         memory: 128Mi
       limits:
         memory: 256Mi
+    # -- Case-insensitive `*` globs (comma-separated) naming CIF deliveries
+    # in the landing folder. `*.zip` keeps the owner's "match by shape, not
+    # by the timetable_full.zip name" rule; set "timetable_full.zip" to pin
+    # the exact name.
+    cifFilePattern: "*.zip"
+    # -- Globs that are never CIF deliveries even when they match
+    # cifFilePattern. The same SFTP account also receives
+    # CORPUSExtract.json.gz (CORPUS) and CORPUSExtract.csv.gz (SMART berth
+    # data); a zip of either must never be published as the timetable.
+    cifExcludePattern: "CORPUSExtract*"
+  # -- Network Rail CORPUS location reference data, pushed by RDM to the SAME
+  # SFTP account and landing folder as the CIF feed and loaded by the
+  # `ingest` container into api's corpus_locations table (whole-table
+  # replace per delivery). OFF by default: while off, a CORPUS file is left
+  # in the landing folder with a one-time "stray file" warning. Before
+  # enabling, add the schedule-ingest service account
+  # (ingest.internalOauthUsername) to api.internalOauth.groups.corpus in
+  # Authentik. See docs/superpowers/specs/2026-09-28-corpus-sftp-ingest-design.md.
+  corpus:
+    enabled: false
+    # -- Globs naming the CORPUS extract. Only this gzipped-JSON shape is
+    # loaded; CORPUSExtract.csv.gz (SMART) is deliberately ignored.
+    filePattern: "CORPUSExtract.json.gz"
+    # -- An extract with fewer rows is rejected (real: ~56,000), so a
+    # truncated or placeholder file cannot wipe the table.
+    minRows: 10000
+    # -- gzip-bomb guard: the most bytes an extract may decompress to (the
+    # real one is ~7 MB).
+    maxDecompressedBytes: 268435456
+    # -- Processed extracts are moved out of the landing folder into
+    # /data/schedule-feed/corpus/ (rejected ones into corpus/rejected/);
+    # this many of each are kept.
+    retentionKeep: 3
   # -- Third sibling container in this same Pod (crates/schedule-reference):
   # once `ingest` has moved a verified-complete delivery into
   # storage_dir/<n>/, parses that sequence's TI/A records into the
@@ -3071,6 +3111,8 @@ metrics:
     # started, so it publishes nothing.
     # DistantSignalScheduleFeedZipRejected: schedule-ingest quarantined an
     # uploaded delivery zip within `zipRejectedWindow` (PL-5 caps).
+    # DistantSignalCorpusRejected: schedule-ingest refused a CORPUS extract
+    # within `zipRejectedWindow` (only while scheduleFeed.corpus.enabled).
     # DistantSignalScheduleReferencePublishStale: the last fully published
     # delivery is older than `staleAfterHours` (deliveries land nightly).
     # DistantSignalSchedulePublishStagedMismatch: api skipped a publish's

@@ -479,6 +479,30 @@ spec:
               timetable is not refreshed until a new upload replaces it. The
               ingest container's error log names the reason.
         {{- /*
+        CORPUS (scheduleFeed.corpus): schedule-ingest refused a CORPUS
+        extract (not gzip, not the TIPLOCDATA JSON, too few rows, a row
+        without an NLC, or over the decompression cap). The series only
+        exists while CORPUS ingest is enabled. corpus_locations keeps the
+        previous delivery.
+        */}}
+        - alert: DistantSignalCorpusRejected
+          expr: |
+            sum by (namespace) (increase(distant_signal_schedule_feed_corpus_rejected_total{namespace="{{ $ns }}"}[{{ .zipRejectedWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "schedule-ingest rejected a CORPUS extract"
+            description: >-
+              schedule-ingest in {{ "{{ $labels.namespace }}" }} refused to
+              load an uploaded CORPUS extract and moved it to
+              /data/schedule-feed/corpus/rejected/. corpus_locations keeps
+              the previous delivery. The ingest container's error log names
+              the reason.
+        {{- /*
         SCHED-2: the delivery timestamp of the last delivery every product
         of which published (seeded at startup from api's durable marker).
         Deliveries land nightly, so this covers a missing delivery, a

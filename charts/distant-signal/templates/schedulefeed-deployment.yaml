@@ -252,6 +252,25 @@ spec:
               value: {{ .Values.scheduleFeed.ingest.stabilityCycles | quote }}
             - name: API_INGEST_URL
               value: {{ printf "%s/private/schedule-feed-ingests" (include "distant-signal.apiBaseUrl" .) | quote }}
+            # CIF-vs-other routing and Network Rail CORPUS loading --
+            # scheduleFeed.ingest.cif*Pattern / scheduleFeed.corpus in
+            # values.yaml, crates/schedule-ingest/src/{pattern,corpus}.rs.
+            - name: CIF_FILE_PATTERN
+              value: {{ .Values.scheduleFeed.ingest.cifFilePattern | quote }}
+            - name: CIF_EXCLUDE_PATTERN
+              value: {{ .Values.scheduleFeed.ingest.cifExcludePattern | quote }}
+            - name: CORPUS_INGEST_ENABLED
+              value: {{ .Values.scheduleFeed.corpus.enabled | quote }}
+            - name: CORPUS_FILE_PATTERN
+              value: {{ .Values.scheduleFeed.corpus.filePattern | quote }}
+            - name: CORPUS_API_URL
+              value: {{ printf "%s/private/corpus-locations" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: CORPUS_MAX_DECOMPRESSED_BYTES
+              value: {{ .Values.scheduleFeed.corpus.maxDecompressedBytes | int64 | quote }}
+            - name: CORPUS_MIN_ROWS
+              value: {{ .Values.scheduleFeed.corpus.minRows | quote }}
+            - name: CORPUS_RETENTION_KEEP
+              value: {{ .Values.scheduleFeed.corpus.retentionKeep | quote }}
             - name: INTERNAL_OAUTH_TOKEN_URL
               value: {{ .Values.internalOauth.tokenUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID

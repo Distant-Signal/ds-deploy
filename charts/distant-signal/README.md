@@ -977,6 +977,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.internalOauth.groups.trustConsumer` | `svc-trust-consumer` | Required Authentik group for trust-consumer (also accepted on `GET /private/stanox-crs`). Not secret. |
 | `api.internalOauth.groups.scheduleIngest` | `svc-schedule-ingest` | Required Authentik group for schedule-ingest. Not secret. |
 | `api.internalOauth.groups.scheduleReference` | `svc-schedule-reference` | Required Authentik group for schedule-reference (also accepted on `POST /private/stanox-crs`). Not secret. |
+| `api.internalOauth.groups.corpus` | `svc-corpus-ingest` | Required Authentik group on `POST /private/corpus-locations` (Network Rail CORPUS loads). Add the schedule-ingest service account to it before setting `scheduleFeed.corpus.enabled`. Not secret. |
 | `api.probes.path` | `/public/health` | Path all three probes and the `helm test` pod hit. |
 | `api.probes.startup.periodSeconds` | `2` | Startup probe period. |
 | `api.probes.startup.failureThreshold` | `450` | Startup probe failures allowed (450 x 2s = 900s for in-process migrations, matching the Postgres startupProbe's 15 minutes). |
@@ -1317,6 +1318,20 @@ creates new per-pod series, so that clause fired on every rollout.
 | `networkPolicy.egress.privateCidrsV6` | loopback, ULA, link-local, multicast, NAT64/6to4/Teredo | IPv6 ranges excluded from the public-internet egress allow. |
 | `networkPolicy.egress.extraRules` | `[]` | Extra NetworkPolicyEgressRule entries appended to every worker's egress policy. |
 | `scheduleFeed.sftp.allowedCidrs` | `[]` | Source CIDRs allowed to reach SFTP when `networkPolicy.enabled`. Empty allows any source. |
+
+### scheduleFeed: CIF routing and CORPUS
+
+See `docs/superpowers/specs/2026-09-28-corpus-sftp-ingest-design.md`.
+
+| Key | Default | Description |
+|---|---|---|
+| `scheduleFeed.ingest.cifFilePattern` | `*.zip` | Case-insensitive `*` globs (comma-separated) naming CIF deliveries in the landing folder. |
+| `scheduleFeed.ingest.cifExcludePattern` | `CORPUSExtract*` | Globs that are never CIF deliveries, so a CORPUS or SMART file pushed as a zip is never published as the timetable. |
+| `scheduleFeed.corpus.enabled` | `false` | Load Network Rail CORPUS (`CORPUSExtract.json.gz`, pushed to the same SFTP account and folder) into `corpus_locations`. Off: the file stays in the landing folder with a one-time stray warning. |
+| `scheduleFeed.corpus.filePattern` | `CORPUSExtract.json.gz` | Globs naming the CORPUS extract. `CORPUSExtract.csv.gz` (SMART berth data) is deliberately ignored. |
+| `scheduleFeed.corpus.minRows` | `10000` | Fewer rows than this rejects the extract instead of replacing the table. |
+| `scheduleFeed.corpus.maxDecompressedBytes` | `268435456` | gzip-bomb guard. |
+| `scheduleFeed.corpus.retentionKeep` | `3` | Processed (and, separately, rejected) extracts kept under `/data/schedule-feed/corpus/`. |
 
 ### tests
 

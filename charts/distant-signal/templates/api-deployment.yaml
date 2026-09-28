@@ -212,6 +212,8 @@ spec:
               value: {{ .Values.api.internalOauth.groups.irishRailLive | quote }}
             - name: INTERNAL_OAUTH_GROUP_NIR_STATIONS
               value: {{ .Values.api.internalOauth.groups.nirStations | quote }}
+            - name: INTERNAL_OAUTH_GROUP_CORPUS
+              value: {{ .Values.api.internalOauth.groups.corpus | quote }}
             # Authentik/SSO end-user group that grants embedded-chatbot
             # access -- see api.chatbotAccessGroup's own comment in
             # values.yaml. NOT one of the INTERNAL_OAUTH_GROUP_* machine
