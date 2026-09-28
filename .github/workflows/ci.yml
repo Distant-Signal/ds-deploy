@@ -597,6 +597,13 @@ jobs:
       - name: Lint scripts
         run: scripts/lint-scripts.sh
 
+      # Every chart values.yaml key needs a row in the chart README's "Values
+      # reference" tables, and every row must name a real key.
+      # `scripts/chart-values-doc.py table <section>` drafts missing rows.
+      # Here rather than in helm-lint: it needs the pinned PyYAML above.
+      - name: chart values reference is complete
+        run: python scripts/chart-values-doc.py check
+
   # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
   # `helm lint` + `helm template` against both the chart's own defaults and
   # values-example.yaml (which turns on the optional pollers/devAuthentik
@@ -615,14 +622,6 @@ jobs:
 
       - name: helm lint (default values)
         run: helm lint charts/distant-signal
-
-      # Every values.yaml key needs a row in the chart README's "Values
-      # reference" tables, and every row must name a real key.
-      # `scripts/chart-values-doc.py table <section>` drafts missing rows.
-      - name: chart values reference is complete
-        run: |
-          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y python3-yaml
-          python3 scripts/chart-values-doc.py check
 
       - name: helm lint (values-example.yaml)
         run: helm lint charts/distant-signal -f charts/distant-signal/values-example.yaml
@@ -819,31 +818,37 @@ jobs:
           )
           render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
           fail() { echo "$1" >&2; exit 1; }
-          env_value() { grep -A1 "name: $1\$" | grep -q "value: \"$2\""; }
+          # expect_env NAME VALUE MESSAGE <<<"${manifest}": fail unless env var
+          # NAME is set to VALUE.
+          expect_env() {
+            if ! grep -A1 "name: ${1}\$" | grep -q "value: \"${2}\""; then fail "${3}"; fi
+          }
 
           relay=$(render "${kafka[@]}" --show-only templates/movement-relay-deployment.yaml)
-          env_value KAFKA_BROKERS kafka.example.com:9094 <<<"$relay" || fail "brokers must fall back to trustConsumer"
-          env_value KAFKA_TOPIC test-topic <<<"$relay" || fail "topic must fall back to trustConsumer"
-          env_value KAFKA_CONSUMER_GROUP distant-signal-trust-consumer <<<"$relay" \
-            || fail "consumer group must fall back to trustConsumer"
-          grep -A4 'name: KAFKA_SASL_USERNAME' <<<"$relay" | grep -q 'key: kafka-sasl-username' \
+          expect_env KAFKA_BROKERS kafka.example.com:9094 "brokers must fall back to trustConsumer" <<<"${relay}"
+          expect_env KAFKA_TOPIC test-topic "topic must fall back to trustConsumer" <<<"${relay}"
+          expect_env KAFKA_CONSUMER_GROUP distant-signal-trust-consumer \
+            "consumer group must fall back to trustConsumer" <<<"${relay}"
+          grep -A4 'name: KAFKA_SASL_USERNAME' <<<"${relay}" | grep -q 'key: kafka-sasl-username' \
             || fail "with no credential of its own the relay must read trust-consumer's"
 
           own=$(render "${kafka[@]}" --set movementRelay.kafka.brokers=relay.example.com:9094 \
             --set movementRelay.kafka.consumerGroup=relay-group \
             --set movementRelay.kafka.saslUsername=u --set movementRelay.kafka.saslPassword=p)
-          env_value KAFKA_BROKERS relay.example.com:9094 <<<"$own" || fail "movementRelay.kafka.brokers must win"
-          env_value KAFKA_CONSUMER_GROUP relay-group <<<"$own" || fail "movementRelay.kafka.consumerGroup must win"
-          grep -A4 'name: KAFKA_SASL_USERNAME' <<<"$own" | grep -q 'key: movement-relay-kafka-sasl-username' \
+          expect_env KAFKA_BROKERS relay.example.com:9094 "movementRelay.kafka.brokers must win" <<<"${own}"
+          expect_env KAFKA_CONSUMER_GROUP relay-group "movementRelay.kafka.consumerGroup must win" <<<"${own}"
+          grep -A4 'name: KAFKA_SASL_USERNAME' <<<"${own}" | grep -q 'key: movement-relay-kafka-sasl-username' \
             || fail "an inline relay credential must use the movement-relay-kafka-sasl-* keys"
-          grep -q '  movement-relay-kafka-sasl-username: ' <<<"$own" || fail "inline relay credential not rendered"
+          grep -q '  movement-relay-kafka-sasl-username: ' <<<"${own}" || fail "inline relay credential not rendered"
 
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if err=$(render 2>&1 >/dev/null); then fail "no Kafka config but the render succeeded"; fi
-          grep -q 'movementRelay.enabled=false' <<<"$err" || fail "missing-Kafka error must mention the opt-out: $err"
+          grep -q 'movementRelay.enabled=false' <<<"${err}" || fail "missing-Kafka error must mention the opt-out: ${err}"
 
           off=$(render --set movementRelay.enabled=false)
-          if grep -E -q 'component: movement-relay|name: distant-signal-movement-relay|movement-relay-kafka-sasl' <<<"$off"; then fail "movementRelay.enabled=false still rendered movement-relay"; fi
+          if grep -E -q 'component: movement-relay|name: distant-signal-movement-relay|movement-relay-kafka-sasl' <<<"${off}"; then fail "movementRelay.enabled=false still rendered movement-relay"; fi
 
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if render "${kafka[@]}" --set trustConsumer.movementFeed=kafka >/dev/null 2>&1; then
             fail "trust-consumer on Kafka sharing the relay's group must fail the render"
           fi
