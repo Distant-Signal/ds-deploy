@@ -470,14 +470,67 @@ Task 12).
 {{- end }}
 
 {{/*
-Resolved Secret name for movement-relay's Kafka SASL credential --
-mirrors trustConsumerSecretName's exact shape. No OAuth username/password
-secret keys needed here (unlike every other crate in this repo):
-movement-relay never calls api, so it has no internal-OAuth credential at
-all.
+movement-relay's effective Kafka connection settings. Each
+movementRelay.kafka.* field falls back to the matching trustConsumer.kafka.*
+field when left empty, so an install configures its one RDM Train Movements
+connection once (in either place) and movement-relay, which is on by
+default, picks it up. RDM issues one consumer group per account, so the
+fallback group is the one trust-consumer would otherwise have used; the
+consumer-group collision guard in movement-relay-deployment.yaml stops a
+consumer that still reads Kafka directly from sharing it.
 */}}
+{{- define "distant-signal.movementRelayKafkaBrokers" -}}
+{{- .Values.movementRelay.kafka.brokers | default .Values.trustConsumer.kafka.brokers }}
+{{- end }}
+
+{{- define "distant-signal.movementRelayKafkaTopic" -}}
+{{- .Values.movementRelay.kafka.topic | default .Values.trustConsumer.kafka.topic }}
+{{- end }}
+
+{{- define "distant-signal.movementRelayKafkaConsumerGroup" -}}
+{{- .Values.movementRelay.kafka.consumerGroup | default .Values.trustConsumer.kafka.consumerGroup }}
+{{- end }}
+
+{{- define "distant-signal.movementRelayKafkaSaslMechanism" -}}
+{{- .Values.movementRelay.kafka.saslMechanism | default .Values.trustConsumer.kafka.saslMechanism }}
+{{- end }}
+
+{{/*
+Non-empty when movement-relay has its OWN SASL credential configured:
+movementRelay.kafka.existingSecret, or an inline saslUsername/saslPassword
+(rendered into the chart Secret as movement-relay-kafka-sasl-*). Otherwise
+movement-relay reads trust-consumer's credential exactly as trust-consumer
+itself would (trustConsumer.kafka.existingSecret or the chart Secret, with
+trustConsumer.kafka.existingSecret*Key). No OAuth username/password keys
+here (unlike every other crate in this repo): movement-relay never calls
+api.
+*/}}
+{{- define "distant-signal.movementRelayOwnKafkaCredential" -}}
+{{- if or .Values.movementRelay.kafka.existingSecret .Values.movementRelay.kafka.saslUsername .Values.movementRelay.kafka.saslPassword }}true{{ end }}
+{{- end }}
+
 {{- define "distant-signal.movementRelaySecretName" -}}
+{{- if include "distant-signal.movementRelayOwnKafkaCredential" . }}
 {{- default (include "distant-signal.secretName" .) .Values.movementRelay.kafka.existingSecret }}
+{{- else }}
+{{- default (include "distant-signal.secretName" .) .Values.trustConsumer.kafka.existingSecret }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.movementRelaySaslUsernameKey" -}}
+{{- if include "distant-signal.movementRelayOwnKafkaCredential" . }}
+{{- .Values.movementRelay.kafka.existingSecretUsernameKey }}
+{{- else }}
+{{- .Values.trustConsumer.kafka.existingSecretUsernameKey }}
+{{- end }}
+{{- end }}
+
+{{- define "distant-signal.movementRelaySaslPasswordKey" -}}
+{{- if include "distant-signal.movementRelayOwnKafkaCredential" . }}
+{{- .Values.movementRelay.kafka.existingSecretPasswordKey }}
+{{- else }}
+{{- .Values.trustConsumer.kafka.existingSecretPasswordKey }}
+{{- end }}
 {{- end }}
 
 {{/*

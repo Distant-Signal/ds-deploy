@@ -10,7 +10,7 @@ order is stable: incidents, ldbws, stations, tfl, tocs.
 {{- range $name, $poller := .Values.pollers }}
 {{- if $poller.enabled }}
 {{- if not $poller.baseUrl }}
-{{- fail (printf "pollers.%s.enabled is true but pollers.%s.baseUrl is empty. Set it to the confirmed Rail Data Marketplace base URL for this feed (see .env.example -- no confirmed endpoint exists for any of the four feeds yet), or set pollers.%s.enabled=false." $name $name $name) }}
+{{- fail (printf "pollers.%s.enabled is true but pollers.%s.baseUrl is empty. Set it to this feed's base URL (for the four Rail Data Marketplace pollers -- incidents, stations, tocs, ldbws -- the URL from your RDM subscription; tfl defaults to https://api.tfl.gov.uk). See the chart README's \"Enabling the pollers\" and local.env.example / dev.env.example in the repository root, or set pollers.%s.enabled=false." $name $name $name) }}
 {{- end }}
 {{- $component := printf "poller-%s" $name }}
 ---

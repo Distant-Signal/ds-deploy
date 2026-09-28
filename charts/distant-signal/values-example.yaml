@@ -2,10 +2,10 @@
 #
 #   helm template distant-signal ./charts/distant-signal -f charts/distant-signal/values-example.yaml
 #
-# Every RDM base URL below is still a placeholder host -- as of this chart's
-# writing no confirmed Rail Data Marketplace endpoint exists for any of the
-# four feeds (see .env.example in the repository root). Replace them, and the
-# API keys, with real values before installing this for real.
+# Every RDM base URL below is a placeholder host. Replace them, and the API
+# keys, with the real product URLs and keys from your Rail Data Marketplace
+# subscription before installing this for real (production runs all four RDM
+# pollers; see local.env.example in the repository root).
 
 imagePullSecrets:
   - name: registry-creds
@@ -211,6 +211,20 @@ pollerNirStations:
   enabled: true
   internalOauthUsername: svc-poller-nir-stations
   internalOauthPassword: replace-me-poller-nir-stations-app-password
+
+# RDM Train Movements (Kafka). movement-relay is on by default and is the
+# only Kafka client; with movementRelay.kafka.* left empty it uses these
+# values and this credential. REQUIRED unless movementRelay.enabled=false.
+trustConsumer:
+  kafka:
+    brokers: kafka.example.com:9092
+    topic: TRAIN_MVT_ALL_TOC
+    # The RDM-issued group id. RDM issues one per account, and
+    # movement-relay holds it.
+    consumerGroup: SC-replace-me-rdm-consumer-group
+    saslMechanism: PLAIN
+    saslUsername: replace-me-rdm-kafka-username
+    saslPassword: replace-me-rdm-kafka-password
 
 metrics:
   podMonitor:

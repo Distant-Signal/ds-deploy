@@ -104,13 +104,13 @@ frontend is reachable at exactly http://localhost:3000, e.g.:
 {{- range $name, $poller := .Values.pollers }}{{- if $poller.enabled }}{{- $anyPoller = true }}{{- end }}{{- end }}
 {{- if not $anyPoller }}
 
-No RDM pollers are enabled, so no external feed data is being ingested. This
-is the default: as documented in .env.example, no confirmed Rail Data
-Marketplace endpoint exists for any of the four feeds yet. Once you have real
-account data, enable a poller with, for example:
+No pollers are enabled, so no incident, station, TOC, departure-board or TfL
+data is being ingested. This is the default: each Rail Data Marketplace
+feed's base URL and API key come from your own RDM subscription. Enable a
+poller with, for example:
 
   --set pollers.incidents.enabled=true \
-  --set pollers.incidents.baseUrl=https://<your-rdm-host>/... \
+  --set pollers.incidents.baseUrl=https://api1.raildata.org.uk/<product-slug>/... \
   --set pollers.incidents.apiKey=<your-key>
 {{- end }}
 

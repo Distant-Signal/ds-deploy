@@ -372,12 +372,13 @@ databasePool:
 # ---------------------------------------------------------------------------
 # Rail Data Marketplace pollers
 # ---------------------------------------------------------------------------
-# ALL FIVE ARE DISABLED BY DEFAULT. As documented in local.env.example, no
-# confirmed RDM endpoint exists for any of the four RDM feeds -- every RDM
-# base URL in the repository today is a deliberately non-functional
-# `*.example.invalid` placeholder. A default install therefore works
-# immediately, instead of four pods logging connection failures. `tfl` (not
-# an RDM feed) has a real default baseUrl but is off by default too.
+# ALL FIVE ARE DISABLED BY DEFAULT. The four RDM feeds are real and
+# production runs all four, but each base URL and API key comes from the
+# operator's own Rail Data Marketplace subscription (the repository owner
+# accepted the RDM terms for the current and planned use on 2026-09-27), so
+# the chart ships no default `baseUrl` for them. A default install therefore
+# works immediately, instead of four pods that cannot authenticate. `tfl`
+# (not an RDM feed) has a real default baseUrl but is off by default too.
 #
 # Enabling a poller without setting its `baseUrl` aborts rendering with an
 # explicit message rather than deploying a pod that cannot work.
@@ -1381,8 +1382,9 @@ archive:
   # -- What to do when an upload fails. `retain` (default): keep the rows,
   # roll the batch back and retry next retention cycle -- the table grows
   # past its window while storage is unreachable
-  # (aggregator_archive_upload_failures_total counts these). `delete`:
-  # delete the rows anyway, unarchived, as if archiving were disabled.
+  # (distant_signal_aggregator_archive_upload_failures_total counts these).
+  # `delete`: delete the rows anyway, unarchived, as if archiving were
+  # disabled.
   failurePolicy: retain
   s3:
     # -- S3 endpoint URL, e.g. https://thoth.<tailnet>.ts.net. Empty means
@@ -2105,25 +2107,29 @@ trustBacklogConsumer:
 # ---------------------------------------------------------------------------
 # movementRelay -- the sole real Kafka client against RDM's Train Movements
 # product from Deploy B onward (docs/superpowers/specs/2026-09-04-movement-relay-design.md).
-# Off by default: `movementRelay.enabled: false` means this Deployment does
-# not render at all. Deploy B (the runbook in
-# docs/superpowers/plans/2026-09-04-movement-relay-plan.md) has since
-# happened: trustConsumer.movementFeed and fullCoverageConsumer.movementFeed
-# now default to `redis-stream`, and trustBacklogConsumer only ever reads
-# the stream, so with this left off all three consumers read an empty
-# `movement-events` stream. Enable it (or set both movementFeed values back
-# to `kafka`) for any install that should receive TRUST data.
+# On by default: trustConsumer.movementFeed and
+# fullCoverageConsumer.movementFeed default to `redis-stream`, and
+# trustBacklogConsumer only ever reads the stream, so all three read the
+# `movement-events` stream that only this Deployment writes. With it off
+# they run on an empty stream. Set `enabled: false` only for an install
+# that does not ingest TRUST data at all (or that moves both movementFeed
+# values back to the legacy `kafka` path).
 #
-# Kafka connection settings here are DELIBERATELY SEPARATE from
-# trustConsumer.kafka.* (unlike fullCoverageConsumer's own values block,
-# which reuses trustConsumer.kafka.* by design) -- Decision 4's own B2 step
-# describes the real credential as MOVING from trustConsumer.kafka.* to
-# movementRelay.kafka.* during the cutover, which only makes sense if these
-# are genuinely separate value paths an operator sets independently, not
-# the same one two components both read.
+# Kafka connection: every movementRelay.kafka.* field that is left empty
+# falls back to the matching trustConsumer.kafka.* field (brokers, topic,
+# consumerGroup, saslMechanism), and with no credential of its own
+# (existingSecret, or saslUsername/saslPassword) movement-relay reads
+# trustConsumer's SASL credential. So configuring the RDM connection once in
+# trustConsumer.kafka.* is enough. Set values here to give the relay a
+# separate connection or credential. The render fails with a clear error if
+# the relay is enabled and neither place has brokers, topic, consumer group
+# and SASL mechanism, and also if a consumer still on movementFeed=kafka
+# would share the relay's consumer group (they would split its partitions).
 # ---------------------------------------------------------------------------
 movementRelay:
-  enabled: false
+  # -- Deploy movement-relay, the Kafka -> Redis-stream relay the three
+  # movement consumers read from.
+  enabled: true
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/movement-relay
     tag: ""
@@ -2132,19 +2138,25 @@ movementRelay:
     digest: ""
     pullPolicy: IfNotPresent
   kafka:
+    # -- Kafka broker address(es). Empty: trustConsumer.kafka.brokers.
     brokers: ""
+    # -- Train Movements topic. Empty: trustConsumer.kafka.topic.
     topic: ""
+    # -- RDM-issued consumer group id (SC-... in production). Empty:
+    # trustConsumer.kafka.consumerGroup.
     consumerGroup: ""
+    # -- SASL mechanism (e.g. PLAIN). Empty: trustConsumer.kafka.saslMechanism.
     saslMechanism: ""
+    # -- movement-relay's own SASL credential, rendered into the chart
+    # Secret. Leave both empty (with existingSecret empty) to use
+    # trustConsumer's credential.
     saslUsername: ""
     saslPassword: ""
+    # -- Pre-existing Secret holding movement-relay's own SASL credential.
     existingSecret: ""
-    # -- NOT "kafka-sasl-username"/"kafka-sasl-password": those keys are
-    # trustConsumer's own, in the SAME chart-rendered Secret whenever
-    # movementRelay.kafka.existingSecret is left unset (the default
-    # distant-signal.secretName is shared) -- reusing them here would read
-    # trustConsumer's credential instead of movement-relay's own. See
-    # secret.yaml's own comment on why these are separate data keys.
+    # -- Key names for movement-relay's own credential. NOT
+    # "kafka-sasl-username"/"kafka-sasl-password": those are trustConsumer's
+    # keys in the same chart-rendered Secret. See secret.yaml's comment.
     existingSecretUsernameKey: movement-relay-kafka-sasl-username
     existingSecretPasswordKey: movement-relay-kafka-sasl-password
   streamLagPollSecs: 30

@@ -4,17 +4,16 @@ Deploys the whole National Rail status stack into a single namespace: a
 bundled single-replica **PostgreSQL** StatefulSet, a bundled single-replica
 **Redis** (persistent by default — see "Using an external Redis" below),
 the **api**, the **aggregator**, the **enricher**, the **notifier**, the
-**frontend** and the three movement-stream consumers (**trust-consumer**,
-**full-coverage-consumer**, **trust-backlog-consumer**), plus these
-optional, off-by-default workloads:
+**frontend**, the three movement-stream consumers (**trust-consumer**,
+**full-coverage-consumer**, **trust-backlog-consumer**) and
+**movement-relay** (`movementRelay`), the one Kafka client for RDM's Train
+Movements feed, which fills the `movement-events` Redis stream the three
+consumers read. It also has these optional, off-by-default workloads:
 
 - five **pollers** under `pollers.*` — four Rail Data Marketplace pollers
   (incidents, stations, tocs, ldbws) plus a TfL Unified API poller (tfl);
 - three island-of-Ireland pollers (`pollerIrishRailGtfs`,
   `pollerIrishRailLive`, `pollerNirStations`);
-- **movement-relay** (`movementRelay`), the one Kafka client for RDM's
-  Train Movements feed, which fills the `movement-events` Redis stream the
-  three consumers read (they sit idle without it);
 - the **schedulefeed** pod (`scheduleFeed`): an SFTP server for the pushed
   CIF timetable delivery, with `schedule-ingest` and `schedule-reference`
   containers alongside it.
@@ -159,20 +158,26 @@ helm install distant-signal ./charts/distant-signal -n distant-signal --create-n
   --set api.sso.clientId=distant-signal \
   --set api.sso.clientSecret=your-oidc-client-secret \
   --set api.sso.redirectUrl=https://status.example.com/api/auth/callback \
-  --set api.sso.postLoginRedirectUrl=https://status.example.com/
+  --set api.sso.postLoginRedirectUrl=https://status.example.com/ \
+  --set trustConsumer.kafka.brokers=kafka.example.com:9092 \
+  --set trustConsumer.kafka.topic=TRAIN_MVT_ALL_TOC \
+  --set trustConsumer.kafka.consumerGroup=SC-your-rdm-group-id \
+  --set trustConsumer.kafka.saslMechanism=PLAIN \
+  --set trustConsumer.kafka.saslUsername=your-rdm-kafka-username \
+  --set trustConsumer.kafka.saslPassword=your-rdm-kafka-password
 ```
 
 An install brings up **postgres + redis + api + aggregator + enricher +
 notifier + frontend + trust-consumer + full-coverage-consumer +
-trust-backlog-consumer**, with **every poller, movement-relay and the
+trust-backlog-consumer + movement-relay**, with **every poller and the
 schedulefeed pod off**. See "Enabling the pollers" below for why the
-pollers are off. The three consumers read the `movement-events` Redis
-stream, which stays empty until `movementRelay.enabled` is set.
+pollers are off.
 
-`enricher.llm.baseUrl`, `enricher.llm.model` and the five `api.sso.*`
-values above are the chart's **required** values; everything else has a
-working default. Leaving any of them empty **aborts the render** with an
-explicit message rather than deploying a pod that cannot work:
+`enricher.llm.baseUrl`, `enricher.llm.model`, the five `api.sso.*` values
+and the RDM Train Movements Kafka connection above are the chart's
+**required** values; everything else has a working default. Leaving any of
+them empty **aborts the render** with an explicit message rather than
+deploying a pod that cannot work:
 
 - The enricher has no `enabled` toggle, and `baseUrl`/`model` become plain
   (non-optional) env vars on its binary, so an empty value would deploy a
@@ -182,6 +187,19 @@ explicit message rather than deploying a pod that cannot work:
   `crates/api/src/data/config.rs`, so an api container missing any of them
   exits immediately with "the following required arguments were not
   provided" and `CrashLoopBackOff`s. See "Single sign-on (OIDC)" below.
+- movement-relay is on by default because the three consumers read only
+  the stream it writes. Each `movementRelay.kafka.*` value that is left
+  empty falls back to the matching `trustConsumer.kafka.*` value (brokers,
+  topic, consumer group, SASL mechanism), and without a credential of its
+  own it reads trust-consumer's SASL credential, so the one
+  `trustConsumer.kafka.*` block above configures it. The render fails if
+  neither block has brokers, topic, consumer group and SASL mechanism. For
+  an install that does not ingest TRUST train movements, set
+  `movementRelay.enabled=false` instead; the three consumers then run on
+  an empty stream. The render also fails if `trustConsumer.movementFeed`
+  or `fullCoverageConsumer.movementFeed` is `kafka` and that consumer
+  shares movement-relay's consumer group, since two members of one group
+  split its partitions.
 
 The enricher is a strictly additive signal: its extractions only adjust
 the severity an incident already gives a line (a high-confidence
@@ -219,6 +237,18 @@ Read the next section before upgrading if you rely on generated secrets.
 > so. That lookup sees nothing under `helm template`, `--dry-run` or Argo CD,
 > which is why the pin is still required there. On an expandable class the
 > PVC is resized to 4Gi in place.
+
+> **Upgrade note: movement-relay on by default (2026-09-28).**
+> `movementRelay.enabled` now defaults to `true`, taking any empty
+> `movementRelay.kafka.*` value from `trustConsumer.kafka.*`. An install
+> that already sets `movementRelay.enabled` explicitly is unaffected. One
+> that left it at the old `false` default gains a movement-relay pod, and
+> its render fails unless `trustConsumer.kafka.*` (or
+> `movementRelay.kafka.*`) holds the Kafka connection; set
+> `movementRelay.enabled=false` to keep the old behaviour. If such an
+> install also runs `trustConsumer.movementFeed=kafka`, the render fails
+> until that is switched to `redis-stream` or the relay is turned off,
+> because the two would share one consumer group.
 
 `api` and `aggregator` roll concurrently with no ordering guarantee between
 them. When a release adds a database migration that `aggregator` depends on
@@ -801,13 +831,14 @@ redis get no egress policy.
 (`/private/sample-stations`), which is a second api endpoint separate from
 its ingest path.
 
-**All five are disabled by default.** For the four RDM pollers, as
-documented in `local.env.example`, no confirmed Rail Data Marketplace
-endpoint exists for any of the four feeds — every RDM base URL in the
-repository today is a deliberately non-functional `*.example.invalid`
-placeholder, so `pollers.<name>.baseUrl` defaults to `""`. A default install
-therefore works immediately instead of running four pods that log
-connection failures. `tfl` has a working default `baseUrl`
+**All five are disabled by default.** The four RDM feeds are real, and
+production runs all four, but each base URL and API key comes from the
+operator's own Rail Data Marketplace subscription (the repository owner
+accepted the RDM terms for the current and planned use on 2026-09-27). The
+chart therefore ships no RDM base URL: `pollers.<name>.baseUrl` defaults to
+`""`, and `local.env.example` uses non-resolving `*.example.invalid`
+placeholders. A default install works immediately instead of running four
+pods that cannot authenticate. `tfl` has a working default `baseUrl`
 (`https://api.tfl.gov.uk`) but is still off by default; it reads its
 subscription key from `TFL_APP_KEY` rather than `RDM_API_KEY`.
 
@@ -835,11 +866,16 @@ helm upgrade distant-signal ./charts/distant-signal -n distant-signal \
 | `nameOverride` | `""` | Override the chart name used in resource names and labels. |
 | `fullnameOverride` | `""` | Override the fully-qualified release name entirely. |
 | `imagePullSecrets` | `[]` | Image pull secrets applied to every pod in the chart. |
+| `global.imageRegistry` | `""` | Registry (and optional path prefix) put in front of every image in place of the registry its `image.repository` carries, e.g. `registry.example.com/myfork`. Empty keeps each repository as written. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount for the chart's workloads. |
 | `serviceAccount.name` | `""` | Name to use. Empty + `create` uses the fullname. |
 | `serviceAccount.annotations` | `{}` | Annotations for the ServiceAccount (e.g. workload identity). |
 
 ### Shared secrets
+
+| Key | Default | Description |
+|---|---|---|
+| `secrets` | `{}` | Reserved for a future chart-wide secret not tied to one service; currently unused. |
 
 `secrets` is currently empty — reserved for any future chart-wide secret
 that isn't tied to one specific service. The shared internal-token header
@@ -871,6 +907,8 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.image.tag` | `16.15-trixie@sha256:…` | Postgres 16, the major the compose stack uses, digest-pinned in the tag. |
 | `postgresql.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `postgresql.service.port` | `5432` | Port the headless Service and the container listen on. |
+| `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
+| `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |
 | `postgresql.persistence.size` | `20Gi` | Requested volume size. |
 | `postgresql.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
@@ -1042,6 +1080,25 @@ Used only when `postgresql.enabled` is `false`.
 | `api.probes.liveness.periodSeconds` | `10` | Liveness probe period. |
 | `api.probes.liveness.failureThreshold` | `3` | Liveness probe failures allowed. |
 | `api.probes.liveness.timeoutSeconds` | `3` | Liveness probe timeout. |
+| `api.reconciliationSweepIntervalSecs` | `300` | How often the reconciliation sweep retries fixing a stuck tracked-train row. |
+| `api.scheduleEnrichmentGraceMinutes` | `30` | How long past a train's origin departure the reconciliation sweep waits before trying a schedule-only match. |
+| `api.backlogMatchSweepIntervalSecs` | `300` | How often still-pending pins are matched against the TRUST event backlog. |
+| `api.sessionCleanupIntervalSecs` | `3600` | How often expired sessions are deleted; the personal-data retention limits below run on the same sweep. |
+| `api.pastTravelRetentionDays` | `548` | Days after the travel date that tracked trains, tickets, journeys and template skip markers are kept (18 months). `0` disables. See `docs/personal-data-retention.md`. |
+| `api.stalePushSubscriptionDays` | `365` | Drop push subscriptions whose user has not logged in (and that were not renewed) for this many days. `0` disables. |
+| `api.inactiveAccountRetentionDays` | `0` | Delete accounts with no login and no live session for this many days. Off by default: users without an email address cannot be warned, so enabling it is an operator decision the privacy notice must state. |
+| `api.chatbotAccessGroup` | `distant-signal-chatbot-users` | SSO group (from the `groups` OIDC claim) that grants a logged-in user the embedded chatbot. |
+| `api.adminGroup` | `""` | SSO group whose members may end any user's sessions (`POST /api/admin/users/revoke-sessions`). Empty: nobody is an admin. Read at login. See `docs/session-revocation.md`. |
+| `api.oidcStoredGroupsExtra` | `mcp-users,mcp-live-boards` | Extra IdP groups kept on the user at login besides `chatbotAccessGroup` and `adminGroup`; every other group is dropped. Comma-separated; `""` keeps none. The default is the two groups the distant-signal-mcp adapter reads. |
+| `api.timeouts.requestTimeoutSecs` | `30` | Public requests still running after this get a 408. |
+| `api.timeouts.privateRequestTimeoutSecs` | `300` | The same for the `/private` ingest routes, which take bodies up to 100 MB. |
+| `api.timeouts.headerReadTimeoutSecs` | `10` | Disconnect an HTTP/1 client that has not sent its full headers within this. |
+| `api.rateLimit` | see `values.yaml` | Per-client-IP rate limits (`crates/api/src/rate_limit.rs`): `enabled`, `trustXRealIp`, and `perMinute`/`burst` for `login`, `tripPlan`, `trainByUid` and `publicWrite`. Exceeding one returns 429 with `Retry-After`; `/private/*` is never limited. `trustXRealIp` keys on the frontend's `X-Real-IP` and is safe only while the api is not exposed directly (keep `ingress.api.enabled` off). |
+| `api.tripPlanGraphCache.dates` | `2` | Service dates whose connections graph `/Trips/plan` keeps built (about 100 MB each). `0` disables the cache. |
+| `api.tripPlanGraphCache.maxAgeSecs` | `600` | Rebuild a cached graph after this long, or after a new schedule publish. |
+| `api.fullCoverageEnabledDefault` | `true` | Treat every catalogued line as `full_coverage_enabled`, whatever its `lines/*.toml` entry says, so TRUST-vs-schedule delay and cancellation data is used everywhere. Set `aggregator.fullCoverageEnabledDefault` to the same value: both services gate on it. |
+| `api.malloc.arenaMax` | `"2"` | `MALLOC_ARENA_MAX`: caps glibc's retained per-arena memory. |
+| `api.malloc.mmapThreshold` | `"131072"` | `MALLOC_MMAP_THRESHOLD_` in bytes: allocations at least this large are returned to the OS on free. |
 | `api.extraEnv` | `[]` | Extra env vars appended to the container. |
 | `api.resources` | requests `200m`/`1Gi`, limit `3Gi` | Container resource requests/limits. Deliberately generous, stopgap-derived sizes (production's OOM-era overrides); the raw-JSON population relay, ETag reloads and `api.malloc` tuning should bring real usage well below them. Resize from live `kubectl top`. |
 | `api.nodeSelector` | `{}` | Pod node selector. |
@@ -1089,6 +1146,18 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 | `aggregator.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `aggregator.pollIntervalSecs` | `60` | Recompute cadence. |
 | `aggregator.historyRetentionDays` | `7` | How long `line_status_history` rows are kept. |
+| `aggregator.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one aggregation pass. |
+| `aggregator.dailyStatsRetentionDays` | `300` | Days `line_status_daily_stats` (LDBWS-derived) rows are kept. Must stay under 365: the RDM Live Departure Board licence requires deleting received data within a year. |
+| `aggregator.halfHourlyStatsRetentionHours` | `840` | Hours `line_status_half_hourly_stats` rows are kept (35 days). |
+| `aggregator.fullCoverageEnabledDefault` | `true` | See `api.fullCoverageEnabledDefault`; set both to the same value. |
+| `aggregator.fullCoverageWindow.mode` | `off` | Windowed full-coverage severity: `off`, `shadow` (record a verdict per line, change nothing) or `enforce` (also escalate the lines in `enforceLines`). |
+| `aggregator.fullCoverageWindow.enforceLines` | `""` | Lines `enforce` may change: comma list, or `*` for every full-coverage-enabled line. Empty enforces nothing. |
+| `aggregator.fullCoverageWindow.minEscalationRank` | `4` | Only verdicts of at least this severity rank are enforced (4 is Severe Delays / Part Suspended). |
+| `aggregator.fullCoverageWindow.retentionDays` | `14` | Days window stats and verdicts are kept (pruned in every mode). |
+| `aggregator.trustEventBacklogRetentionDays` | `1` | Days `trust_event_backlog` rows are kept. Deliberately 1: a TRUST licensing safeguard. |
+| `aggregator.scheduleDestinationDeparturesRetentionDays` | `8` | Service dates of `schedule_destination_departures` kept (about 377,000 rows a day); covers the train search's 7-day backward window. |
+| `aggregator.trainsRetentionDays` | `30` | Days a `trains` row (with its movement events and current state) is kept when a user tracked it. |
+| `aggregator.untrackedTrainsRetentionDays` | `14` | Days a `trains` row is kept when nobody tracked it. |
 | `aggregator.logLevel` | `info` | `RUST_LOG` value. |
 | `aggregator.extraEnv` | `[]` | Extra env vars appended to the container. |
 | `aggregator.resources` | requests `100m`/`256Mi`, limit `384Mi` | Container resource requests/limits. |
@@ -1097,6 +1166,70 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 | `aggregator.affinity` | `{}` | Pod affinity rules. |
 | `aggregator.podAnnotations` | `{}` | Pod annotations. |
 | `aggregator.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
+### archive
+
+Cold archive of pruned rows to S3-compatible storage, run by the aggregator.
+See "Cold archive (optional)" above and `docs/cold-archive.md`. Off by
+default; nothing here is rendered unless `archive.enabled` is `true`.
+
+| Key | Default | Description |
+|---|---|---|
+| `archive.enabled` | `false` | Upload rows to S3 before the aggregator's retention prune deletes them. |
+| `archive.tables` | `[trains]` | Tables to archive (explicit opt-in). `trains` archives each trains row with its movement events (without `raw_body`) and current state. `trust_event_backlog` and every LDBWS-derived table are refused: their retention is a licensing safeguard. |
+| `archive.failurePolicy` | `retain` | On a failed upload: `retain` keeps the rows and retries next cycle; `delete` prunes them unarchived. |
+| `archive.s3.endpoint` | `""` | S3 endpoint URL. Empty means AWS's regional endpoint. |
+| `archive.s3.bucket` | `""` | **Required** when enabled. |
+| `archive.s3.prefix` | `""` | Key prefix inside the bucket, e.g. `distant-signal/archive`. |
+| `archive.s3.region` | `us-east-1` | Region used for request signing; most non-AWS servers accept any value. |
+| `archive.s3.pathStyle` | `true` | Path-style addressing (`https://endpoint/bucket/key`), which most non-AWS servers need. `false` is virtual-hosted style. |
+| `archive.s3.allowHttp` | `false` | Permit a plain `http://` endpoint. |
+| `archive.s3.lifecycleConfirmed` | `false` | **Must be `true`** when enabled, or the render fails. Confirms the bucket has an S3 lifecycle expiration rule: nothing in the app ever deletes an archived object. |
+| `archive.s3.existingSecret` | `""` | **Required** when enabled: pre-existing Secret holding the access key pair. The chart never renders these credentials. |
+| `archive.s3.accessKeyIdKey` | `access-key-id` | Key within `archive.s3.existingSecret` for the access key id. |
+| `archive.s3.secretAccessKeyKey` | `secret-access-key` | Key within `archive.s3.existingSecret` for the secret access key. |
+
+### notifier
+
+Web Push for pinned lines, tracked trains and journeys. A singleton loop
+(`replicas: 1`, `strategy: Recreate`): two replicas would send every push
+twice.
+
+| Key | Default | Description |
+|---|---|---|
+| `notifier.image.repository` | `ghcr.io/fasterspeeding/distant-signal/notifier` | notifier image repository. |
+| `notifier.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `notifier.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `notifier.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `notifier.progressStallSecs` | `900` | `/livez` stall window (`PROGRESS_STALL_SECS`, see `workerHealth`). |
+| `notifier.pollIntervalSecs` | `60` | How often line status and tracked trains are polled for changes. |
+| `notifier.cooldownMinutes` | `20` | How long a de-escalation or lateral line notification is suppressed after the last one sent to the same user for the same line. |
+| `notifier.trainDelayThresholdMinutes` | `15` | Delay, in minutes, at or above which a tracked train's delay is worth a notification. |
+| `notifier.cursorGraceSeconds` | `120` | How long a cursor watermark proposal must age before it is promoted to the cursor's `last_processed_id`. |
+| `notifier.forwardQueuePollIntervalSecs` | `15` | Poll cadence for the forwarding queue (notifications api hands over), faster than `pollIntervalSecs`. |
+| `notifier.skipCheckPollIntervalSecs` | `90` | Cadence of the station-skip check for tracked journeys. |
+| `notifier.templateSweepPollIntervalSecs` | `3600` | Cadence of the recurring-journey materialisation sweep. |
+| `notifier.autoCommitLeadMinutes` | `120` | Lead time, in minutes, for the commit check on `auto`-mode journey legs. |
+| `notifier.push.workers` | `8` | Notifications sent at once (each fans out to all of that user's subscriptions). |
+| `notifier.push.queueCapacity` | `1024` | Notifications waiting for a worker. Beyond this new ones are dropped (`distant_signal_notifier_push_dropped_total`). |
+| `notifier.push.perUserInFlight` | `2` | At most this many of one user's notifications in flight, so one user's slow endpoints cannot take the whole pool. |
+| `notifier.push.perUserQueued` | `64` | At most this many of one user's notifications waiting. |
+| `notifier.push.pruneAfterTimeouts` | `3` | Delete a subscription after this many consecutive timeouts (in-memory count, reset on restart). |
+| `notifier.push.shutdownGraceSecs` | `20` | On SIGTERM, seconds to let queued and in-flight pushes finish. |
+| `notifier.vapid.subject` | `""` | `mailto:` or `https:` contact for the VAPID `sub` claim (RFC 8292). |
+| `notifier.vapid.publicKey` | `""` | VAPID public key (uncompressed, base64url). Must pair with `privateKey`: generate with `openssl ecparam -genkey -name prime256v1`. Never auto-generated. |
+| `notifier.vapid.privateKey` | `""` | VAPID private key (PEM EC). Never auto-generated. |
+| `notifier.vapid.existingSecret` | `""` | Read the VAPID key pair from this pre-existing Secret instead. |
+| `notifier.vapid.existingSecretPublicKeyKey` | `vapid-public-key` | Key within `notifier.vapid.existingSecret` for the public key. |
+| `notifier.vapid.existingSecretPrivateKeyKey` | `vapid-private-key` | Key within `notifier.vapid.existingSecret` for the private key. |
+| `notifier.logLevel` | `info` | `LOG_LEVEL` value. |
+| `notifier.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `notifier.resources` | requests `50m`/`128Mi`, limit `384Mi` | Container resource requests/limits. |
+| `notifier.nodeSelector` | `{}` | Pod node selector. |
+| `notifier.tolerations` | `[]` | Pod tolerations. |
+| `notifier.affinity` | `{}` | Pod affinity rules. |
+| `notifier.podAnnotations` | `{}` | Pod annotations. |
+| `notifier.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 
 ### redis
 
@@ -1158,6 +1291,7 @@ pod that fails every request forever.
 | `enricher.sweepIntervalSecs` | `3600` | Cadence of the backstop sweep that re-checks every uncleared incident's text hash and model version. |
 | `enricher.reclaimIntervalSecs` | `60` | How often the reclaim loop checks for stream entries stuck unacked past `reclaimMinIdleSecs` (a timed-out request, or a crash between processing and acking). |
 | `enricher.reclaimMinIdleSecs` | `1000` | How long a pending entry must sit unacked before it's eligible for reclaim, i.e. the retry delay for a failed extraction. Entries whose incident is still being processed are skipped, so this is not a correctness bound; keeping it above `3 * llmRequestTimeoutSecs` avoids needless claim-and-skip passes. |
+| `enricher.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one incident is up to three LLM calls of `llmRequestTimeoutSecs`. |
 | `enricher.logLevel` | `info` | `RUST_LOG` value. |
 | `enricher.extraEnv` | `[]` | Extra env vars appended to the container. The off-by-default enricher settings below are set here. |
 | `enricher.resources` | requests `50m`/`128Mi`, limit `256Mi` | Container resource requests/limits. |
@@ -1196,6 +1330,168 @@ enricher:
     - { name: CARRY_FORWARD_SEMANTIC_NOOPS, value: "true" }
 ```
 
+### trustConsumer
+
+Resolves tracked trains from TRUST train movements. By default it reads
+movement-relay's `movement-events` stream; `trustConsumer.kafka.*` is also
+the Kafka connection movement-relay falls back to (see `movementRelay`).
+
+| Key | Default | Description |
+|---|---|---|
+| `trustConsumer.image.repository` | `ghcr.io/fasterspeeding/distant-signal/trust-consumer` | trust-consumer image repository. |
+| `trustConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `trustConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `trustConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `trustConsumer.kafka.brokers` | `""` | RDM Train Movements broker address(es). Used by movement-relay when `movementRelay.kafka.brokers` is empty, and by trust-consumer itself only with `movementFeed: kafka` (then **required**). |
+| `trustConsumer.kafka.topic` | `""` | Train Movements topic (production: `TRAIN_MVT_ALL_TOC`). Same fallback and requirement as `brokers`. |
+| `trustConsumer.kafka.consumerGroup` | `distant-signal-trust-consumer` | Kafka consumer group. For RDM this must be the RDM-issued `SC-...` id; RDM issues one per account, and movement-relay holds it. |
+| `trustConsumer.kafka.saslMechanism` | `""` | SASL mechanism (production: `PLAIN`). Same fallback and requirement as `brokers`. |
+| `trustConsumer.kafka.saslUsername` | `""` | SASL username, rendered into the chart Secret as `kafka-sasl-username`. Never auto-generated. |
+| `trustConsumer.kafka.saslPassword` | `""` | SASL password, rendered as `kafka-sasl-password`. Never auto-generated. |
+| `trustConsumer.kafka.existingSecret` | `""` | Read the SASL credential from this pre-existing Secret instead. |
+| `trustConsumer.kafka.existingSecretUsernameKey` | `kafka-sasl-username` | Key for the SASL username. |
+| `trustConsumer.kafka.existingSecretPasswordKey` | `kafka-sasl-password` | Key for the SASL password. |
+| `trustConsumer.existingSecret` | `""` | Read this service's internal OAuth2 credential from a pre-existing Secret instead of the chart-rendered one. |
+| `trustConsumer.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-trust-consumer`). |
+| `trustConsumer.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
+| `trustConsumer.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-trust-consumer` | Key for the OAuth2 username in `trustConsumer.existingSecret`. |
+| `trustConsumer.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-trust-consumer` | Key for the OAuth2 password in `trustConsumer.existingSecret`. |
+| `trustConsumer.referenceReloadSecs` | `60` | How often the active-tracked-trains reference set is reloaded from api. |
+| `trustConsumer.stanoxCrsReloadSecs` | `3600` | How often the live STANOX-to-CRS table is reloaded from api's `/private/stanox-crs`. |
+| `trustConsumer.retentionDays` | `90` | Days `train_movement_events` rows are kept before pruning. |
+| `trustConsumer.healthPort` | `8081` | Port for `/healthz` (readiness) and `/livez` (liveness). |
+| `trustConsumer.progressStallSecs` | `300` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
+| `trustConsumer.replicaCount` | `1` | Replicas. Exists so trust-consumer can be scaled to 0 through `helm upgrade`. |
+| `trustConsumer.movementFeed` | `redis-stream` | `redis-stream` reads movement-relay's stream. `kafka` is the legacy direct connection (no dead-letter stream, no gap check, and it needs its own consumer group). |
+| `trustConsumer.redisAutoclaimMinIdleSecs` | `30` | How long an entry may sit unacknowledged in this consumer's pending list before the periodic sweep reclaims it. |
+| `trustConsumer.redisGapCheckSecs` | `60` | How often the consumer group's position is compared with the stream's oldest entry to detect a gap (`redis-stream` only). |
+| `trustConsumer.metricsPort` | `9095` | Prometheus `/metrics` port. |
+| `trustConsumer.logLevel` | `info` | `RUST_LOG` value. |
+| `trustConsumer.trustTimestampCorrectionEnabled` | `true` | Kill switch for the TRUST timestamp Europe/London-mislabelling correction (`crates/common/src/trust_timestamp.rs`). |
+| `trustConsumer.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `trustConsumer.resources` | requests `200m`/`256Mi`, limit `384Mi` | Container resource requests/limits. |
+| `trustConsumer.nodeSelector` | `{}` | Pod node selector. |
+| `trustConsumer.tolerations` | `[]` | Pod tolerations. |
+| `trustConsumer.affinity` | `{}` | Pod affinity rules. |
+| `trustConsumer.podAnnotations` | `{}` | Pod annotations. |
+| `trustConsumer.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
+### fullCoverageConsumer
+
+Computes whole-network delay and cancellation stats per line from the
+movement stream and the CIF schedule population. It reuses
+`trustConsumer.kafka.*` (except the consumer group) when `movementFeed` is
+`kafka`.
+
+| Key | Default | Description |
+|---|---|---|
+| `fullCoverageConsumer.image.repository` | `ghcr.io/fasterspeeding/distant-signal/full-coverage-consumer` | full-coverage-consumer image repository. |
+| `fullCoverageConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `fullCoverageConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `fullCoverageConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `fullCoverageConsumer.kafka.consumerGroup` | `distant-signal-full-coverage-consumer` | Kafka consumer group, used only with `movementFeed: kafka`. |
+| `fullCoverageConsumer.existingSecret` | `""` | Read this service's internal OAuth2 credential from a pre-existing Secret instead of the chart-rendered one. |
+| `fullCoverageConsumer.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-full-coverage-consumer`). |
+| `fullCoverageConsumer.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
+| `fullCoverageConsumer.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-full-coverage-consumer` | Key for the OAuth2 username in `fullCoverageConsumer.existingSecret`. |
+| `fullCoverageConsumer.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-full-coverage-consumer` | Key for the OAuth2 password in `fullCoverageConsumer.existingSecret`. |
+| `fullCoverageConsumer.shadowLines` | `*` | Comma-separated line ids to compute, or `*` for every catalogued line with at least one TIPLOC. Does not decide whether the stats are shown; that is `api`/`aggregator.fullCoverageEnabledDefault` and each line's `full_coverage_enabled`. |
+| `fullCoverageConsumer.populationReloadSecs` | `300` | How often the per-line schedule population is reloaded from api. |
+| `fullCoverageConsumer.stanoxCrsReloadSecs` | `3600` | How often the STANOX-to-CRS table is reloaded from api. |
+| `fullCoverageConsumer.statsWriteIntervalSecs` | `60` | How often computed stats are posted to api. |
+| `fullCoverageConsumer.healthPort` | `8082` | Port for `/healthz` (readiness) and `/livez` (liveness). |
+| `fullCoverageConsumer.progressStallSecs` | `900` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
+| `fullCoverageConsumer.metricsPort` | `9093` | Prometheus `/metrics` port. |
+| `fullCoverageConsumer.replicaCount` | `1` | Replicas. |
+| `fullCoverageConsumer.movementFeed` | `redis-stream` | See `trustConsumer.movementFeed`. |
+| `fullCoverageConsumer.redisAutoclaimMinIdleSecs` | `30` | See `trustConsumer.redisAutoclaimMinIdleSecs`. |
+| `fullCoverageConsumer.redisGapCheckSecs` | `60` | See `trustConsumer.redisGapCheckSecs`. |
+| `fullCoverageConsumer.windowedStats.enabled` | `false` | Windowed full-coverage stats (`docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md`). Off: only the whole-day rows are written. Turn on only after api and schedule-reference support it; `aggregator.fullCoverageWindow.mode` is a separate switch. |
+| `fullCoverageConsumer.windowedStats.recentWindowMinutes` | `60` | The `recent` window covers trains due in the last this-many minutes. |
+| `fullCoverageConsumer.windowedStats.graceMinutes` | `10` | Windows end this many minutes ago (feed lag p99 plus the write cadence). |
+| `fullCoverageConsumer.windowedStats.activationsMin` | `20` | Fewer Activations than this in the last hour marks the write `feed_stale`, so its windows cannot affect severity. |
+| `fullCoverageConsumer.windowedStats.feedStaleSecs` | `300` | A newest consumed movement older than this also marks the write `feed_stale`. |
+| `fullCoverageConsumer.logLevel` | `info` | `RUST_LOG` value. |
+| `fullCoverageConsumer.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `fullCoverageConsumer.resources` | requests `200m`/`512Mi`, limit `1Gi` | Container resource requests/limits. Holds per-line population caches, so it scales with the line catalogue. |
+| `fullCoverageConsumer.nodeSelector` | `{}` | Pod node selector. |
+| `fullCoverageConsumer.tolerations` | `[]` | Pod tolerations. |
+| `fullCoverageConsumer.affinity` | `{}` | Pod affinity rules. |
+| `fullCoverageConsumer.podAnnotations` | `{}` | Pod annotations. |
+| `fullCoverageConsumer.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
+### trustBacklogConsumer
+
+Keeps a short backlog of TRUST events at key journey points on catalogued
+lines, so a train pinned after it has already departed can still be matched.
+Always reads movement-relay's stream (there is no Kafka mode).
+
+| Key | Default | Description |
+|---|---|---|
+| `trustBacklogConsumer.image.repository` | `ghcr.io/fasterspeeding/distant-signal/trust-backlog-consumer` | trust-backlog-consumer image repository. |
+| `trustBacklogConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `trustBacklogConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `trustBacklogConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `trustBacklogConsumer.existingSecret` | `""` | Read this service's internal OAuth2 credential from a pre-existing Secret instead of the chart-rendered one. |
+| `trustBacklogConsumer.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-trust-backlog-consumer`). |
+| `trustBacklogConsumer.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
+| `trustBacklogConsumer.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-trust-backlog-consumer` | Key for the OAuth2 username in `trustBacklogConsumer.existingSecret`. |
+| `trustBacklogConsumer.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-trust-backlog-consumer` | Key for the OAuth2 password in `trustBacklogConsumer.existingSecret`. |
+| `trustBacklogConsumer.stanoxCrsReloadSecs` | `3600` | How often the STANOX-to-CRS table is reloaded from api. |
+| `trustBacklogConsumer.redisAutoclaimMinIdleSecs` | `30` | See `trustConsumer.redisAutoclaimMinIdleSecs`. |
+| `trustBacklogConsumer.redisGapCheckSecs` | `60` | See `trustConsumer.redisGapCheckSecs`. |
+| `trustBacklogConsumer.healthPort` | `8083` | Port for `/healthz` (readiness) and `/livez` (liveness). |
+| `trustBacklogConsumer.progressStallSecs` | `300` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
+| `trustBacklogConsumer.metricsPort` | `9096` | Prometheus `/metrics` port. |
+| `trustBacklogConsumer.retentionDaysWarningAcknowledged` | `false` | Documentation-only flag; the binary does not read it. The retention safeguard is `aggregator.trustEventBacklogRetentionDays`. |
+| `trustBacklogConsumer.logLevel` | `info` | `RUST_LOG` value. |
+| `trustBacklogConsumer.trustTimestampCorrectionEnabled` | `true` | See `trustConsumer.trustTimestampCorrectionEnabled`. |
+| `trustBacklogConsumer.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `trustBacklogConsumer.resources` | requests `50m`/`128Mi`, limit `256Mi` | Container resource requests/limits. |
+| `trustBacklogConsumer.nodeSelector` | `{}` | Pod node selector. |
+| `trustBacklogConsumer.tolerations` | `[]` | Pod tolerations. |
+| `trustBacklogConsumer.affinity` | `{}` | Pod affinity rules. |
+| `trustBacklogConsumer.podAnnotations` | `{}` | Pod annotations. |
+| `trustBacklogConsumer.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
+### movementRelay
+
+The one Kafka client for RDM's Train Movements feed: it copies every
+message into the `movement-events` Redis stream the three consumers above
+read. On by default. Each empty `movementRelay.kafka.*` connection value
+falls back to the matching `trustConsumer.kafka.*` value, and without a
+credential of its own it uses trust-consumer's; see "Install" above.
+
+| Key | Default | Description |
+|---|---|---|
+| `movementRelay.enabled` | `true` | Deploy movement-relay. Set `false` only for an install that does not ingest TRUST movements. |
+| `movementRelay.image.repository` | `ghcr.io/fasterspeeding/distant-signal/movement-relay` | movement-relay image repository. |
+| `movementRelay.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `movementRelay.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `movementRelay.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `movementRelay.kafka.brokers` | `""` | Broker address(es). Empty: `trustConsumer.kafka.brokers`. |
+| `movementRelay.kafka.topic` | `""` | Train Movements topic. Empty: `trustConsumer.kafka.topic`. |
+| `movementRelay.kafka.consumerGroup` | `""` | RDM-issued consumer group id (`SC-...`). Empty: `trustConsumer.kafka.consumerGroup`. The render fails if a consumer on `movementFeed: kafka` would share it. |
+| `movementRelay.kafka.saslMechanism` | `""` | SASL mechanism. Empty: `trustConsumer.kafka.saslMechanism`. |
+| `movementRelay.kafka.saslUsername` | `""` | movement-relay's own SASL username, rendered into the chart Secret as `movement-relay-kafka-sasl-username`. With this, `saslPassword` and `existingSecret` all empty, trust-consumer's credential is used. |
+| `movementRelay.kafka.saslPassword` | `""` | movement-relay's own SASL password (`movement-relay-kafka-sasl-password`). |
+| `movementRelay.kafka.existingSecret` | `""` | Read movement-relay's own SASL credential from this pre-existing Secret. |
+| `movementRelay.kafka.existingSecretUsernameKey` | `movement-relay-kafka-sasl-username` | Key for movement-relay's own SASL username. |
+| `movementRelay.kafka.existingSecretPasswordKey` | `movement-relay-kafka-sasl-password` | Key for movement-relay's own SASL password. |
+| `movementRelay.streamLagPollSecs` | `30` | How often consumer-group lag on the stream is polled for the lag gauge. |
+| `movementRelay.streamMaxLen` | `1048576` | `MAXLEN ~` cap on the `movement-events` stream, in entries: about 24 hours of traffic and the consumers' only replay window. Move `redis.maxmemory`/`redis.resources` with it (about 100 MiB per 100,000 entries). Minimum 1000. |
+| `movementRelay.healthPort` | `8083` | Port for `/healthz` (readiness: partition assignment confirmed) and `/livez` (liveness). |
+| `movementRelay.progressStallSecs` | `900` | `/livez` answers 503 once no relay-loop iteration has completed for this many seconds (waiting for Kafka never counts). |
+| `movementRelay.metricsPort` | `9094` | Prometheus `/metrics` port. |
+| `movementRelay.logLevel` | `info` | `RUST_LOG` value. |
+| `movementRelay.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `movementRelay.resources` | requests `100m`/`128Mi`, limit `192Mi` | Container resource requests/limits. |
+| `movementRelay.nodeSelector` | `{}` | Pod node selector. |
+| `movementRelay.tolerations` | `[]` | Pod tolerations. |
+| `movementRelay.affinity` | `{}` | Pod affinity rules. |
+| `movementRelay.podAnnotations` | `{}` | Pod annotations. |
+| `movementRelay.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
 ### frontend
 
 | Key | Default | Description |
@@ -1214,6 +1510,7 @@ enricher:
 | `frontend.probes.liveness.periodSeconds` | `10` | Liveness probe period. |
 | `frontend.probes.liveness.failureThreshold` | `3` | Liveness probe failures allowed. |
 | `frontend.probes.liveness.timeoutSeconds` | `3` | Liveness probe timeout. |
+| `frontend.siteUrl` | `""` | The deployment's public origin (e.g. `https://rail.example.com`), used for share and invite links and same-origin checks. Set it in production. Empty derives it from `ingress.frontend.host` when this chart's ingress publishes the frontend. |
 | `frontend.apiBaseUrl` | `""` | Override `API_BASE_URL`. Empty uses the in-cluster api Service. |
 | `frontend.legalPagesPublished` | `false` | Publish the DRAFT legal pages (`/privacy`, `/terms`, `/cookies`, `/contact`) and their footer links. Off by default: the text needs the operator's and a lawyer's review, and the operator values in `frontend/lib/legal.ts` must be filled in first. Even when `true`, the pages stay 404 while any placeholder is left in that file. `/attribution` is always public. |
 | `frontend.extraEnv` | `[]` | Extra env vars appended to the container. |
@@ -1292,6 +1589,194 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.ldbws.samplePinnedLinesOnly` | `false` | ldbws only (LEG-18): sample only stations on lines some user has pinned. |
 | `pollers.ldbws.sampleMaxStations` | `0` | ldbws only (LEG-18): cap on sample stations, chosen line-fairly by api, most-pinned lines first. `0` = no cap. |
 
+### pollerIrishRailGtfs
+
+Island-of-Ireland stations and lines from Transport for Ireland's public
+Irish Rail GTFS zip. Off by default; no API key needed.
+
+| Key | Default | Description |
+|---|---|---|
+| `pollerIrishRailGtfs.enabled` | `false` | Deploy the poller. |
+| `pollerIrishRailGtfs.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-gtfs` | Image repository. |
+| `pollerIrishRailGtfs.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `pollerIrishRailGtfs.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `pollerIrishRailGtfs.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `pollerIrishRailGtfs.gtfsUrl` | `https://www.transportforireland.ie/transitData/Data/GTFS_Irish_Rail.zip` | GTFS zip URL (public, key-free). |
+| `pollerIrishRailGtfs.apiStationsIngestPath` | `/private/island-of-ireland-stations` | api ingest path for stations. |
+| `pollerIrishRailGtfs.apiLinesIngestPath` | `/private/island-of-ireland-lines` | api ingest path for lines. |
+| `pollerIrishRailGtfs.pollIntervalSecs` | `86400` | Poll cadence. The feed's real refresh cadence is unknown; 24h matches the other reference-data pollers. |
+| `pollerIrishRailGtfs.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one download plus up to 15 minutes of ingest retries. |
+| `pollerIrishRailGtfs.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-poller-irish-rail-gtfs`). |
+| `pollerIrishRailGtfs.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
+| `pollerIrishRailGtfs.existingSecret` | `""` | Read the OAuth2 credential from this pre-existing Secret instead of the chart-rendered one. |
+| `pollerIrishRailGtfs.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-poller-irish-rail-gtfs` | Key for the OAuth2 username. |
+| `pollerIrishRailGtfs.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-irish-rail-gtfs` | Key for the OAuth2 password. |
+| `pollerIrishRailGtfs.logLevel` | `info` | `RUST_LOG` value. |
+| `pollerIrishRailGtfs.metricsPort` | `9091` | Prometheus `/metrics` port. |
+| `pollerIrishRailGtfs.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `pollerIrishRailGtfs.resources` | requests `100m`/`256Mi`, limit `768Mi` | Container resource requests/limits. The whole GTFS archive is held in memory. |
+| `pollerIrishRailGtfs.nodeSelector` | `{}` | Pod node selector. |
+| `pollerIrishRailGtfs.tolerations` | `[]` | Pod tolerations. |
+| `pollerIrishRailGtfs.affinity` | `{}` | Pod affinity rules. |
+| `pollerIrishRailGtfs.podAnnotations` | `{}` | Pod annotations. |
+| `pollerIrishRailGtfs.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
+### pollerIrishRailLive
+
+Live departure samples from Irish Rail's public realtime API. Off by
+default; no API key needed.
+
+| Key | Default | Description |
+|---|---|---|
+| `pollerIrishRailLive.enabled` | `false` | Deploy the poller. |
+| `pollerIrishRailLive.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-live` | Image repository. |
+| `pollerIrishRailLive.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `pollerIrishRailLive.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `pollerIrishRailLive.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `pollerIrishRailLive.irishRailBaseUrl` | `http://api.irishrail.ie/realtime/realtime.asmx` | Irish Rail realtime service root (public, key-free). |
+| `pollerIrishRailLive.apiIngestPath` | `/private/island-of-ireland-station-samples` | api ingest path for samples. |
+| `pollerIrishRailLive.pollIntervalSecs` | `300` | Poll cadence. Conservative: the API's rate limits are unknown and every station is sampled. |
+| `pollerIrishRailLive.stationCodesOverride` | `""` | Comma-separated station-code allowlist. Empty polls every station the API lists. |
+| `pollerIrishRailLive.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one sampling cycle plus its ingest retries. |
+| `pollerIrishRailLive.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-poller-irish-rail-live`). |
+| `pollerIrishRailLive.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
+| `pollerIrishRailLive.existingSecret` | `""` | Read the OAuth2 credential from this pre-existing Secret instead of the chart-rendered one. |
+| `pollerIrishRailLive.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-poller-irish-rail-live` | Key for the OAuth2 username. |
+| `pollerIrishRailLive.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-irish-rail-live` | Key for the OAuth2 password. |
+| `pollerIrishRailLive.logLevel` | `info` | `RUST_LOG` value. |
+| `pollerIrishRailLive.metricsPort` | `9091` | Prometheus `/metrics` port. |
+| `pollerIrishRailLive.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `pollerIrishRailLive.resources` | requests `25m`/`64Mi`, limit `256Mi` | Container resource requests/limits. |
+| `pollerIrishRailLive.nodeSelector` | `{}` | Pod node selector. |
+| `pollerIrishRailLive.tolerations` | `[]` | Pod tolerations. |
+| `pollerIrishRailLive.affinity` | `{}` | Pod affinity rules. |
+| `pollerIrishRailLive.podAnnotations` | `{}` | Pod annotations. |
+| `pollerIrishRailLive.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
+### pollerNirStations
+
+Northern Ireland Railways stations and halts from OpenDataNI's public CSVs.
+Off by default; no API key needed.
+
+| Key | Default | Description |
+|---|---|---|
+| `pollerNirStations.enabled` | `false` | Deploy the poller. |
+| `pollerNirStations.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-nir-stations` | Image repository. |
+| `pollerNirStations.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `pollerNirStations.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `pollerNirStations.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `pollerNirStations.stationsCsvUrl` | OpenDataNI `translink_rail_stations.csv` | Stations CSV URL (see values.yaml for the full URL). |
+| `pollerNirStations.haltsCsvUrl` | OpenDataNI `translink_halts.csv` | Halts CSV URL (see values.yaml for the full URL). |
+| `pollerNirStations.apiStationsIngestPath` | `/private/island-of-ireland-stations` | api ingest path for stations. |
+| `pollerNirStations.apiLinesIngestPath` | `/private/island-of-ireland-lines` | api ingest path for lines. |
+| `pollerNirStations.pollIntervalSecs` | `86400` | Poll cadence. The CSVs change irregularly. |
+| `pollerNirStations.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one download plus up to 15 minutes of ingest retries. |
+| `pollerNirStations.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-poller-nir-stations`). |
+| `pollerNirStations.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
+| `pollerNirStations.existingSecret` | `""` | Read the OAuth2 credential from this pre-existing Secret instead of the chart-rendered one. |
+| `pollerNirStations.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-poller-nir-stations` | Key for the OAuth2 username. |
+| `pollerNirStations.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-nir-stations` | Key for the OAuth2 password. |
+| `pollerNirStations.logLevel` | `info` | `RUST_LOG` value. |
+| `pollerNirStations.metricsPort` | `9091` | Prometheus `/metrics` port. |
+| `pollerNirStations.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `pollerNirStations.resources` | requests `25m`/`64Mi`, limit `256Mi` | Container resource requests/limits. |
+| `pollerNirStations.nodeSelector` | `{}` | Pod node selector. |
+| `pollerNirStations.tolerations` | `[]` | Pod tolerations. |
+| `pollerNirStations.affinity` | `{}` | Pod affinity rules. |
+| `pollerNirStations.podAnnotations` | `{}` | Pod annotations. |
+| `pollerNirStations.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
+### scheduleFeed
+
+The schedulefeed pod: an SFTP server (SFTPGo) that receives the pushed CIF
+timetable, `schedule-ingest` (waits for a complete delivery and posts it
+to api) and `schedule-reference` (derives the schedule products from it).
+Off by default.
+
+| Key | Default | Description |
+|---|---|---|
+| `scheduleFeed.enabled` | `false` | Deploy the schedulefeed pod, Service and PVC. |
+| `scheduleFeed.sftp.image.repository` | `drakkan/sftpgo` | SFTP server image. |
+| `scheduleFeed.sftp.image.tag` | `v2.7.5@sha256:…` | Must be a real `drakkan/sftpgo` tag: an empty tag would fall back to this chart's version. |
+| `scheduleFeed.sftp.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `scheduleFeed.sftp.port` | `2022` | SFTP container and Service port. |
+| `scheduleFeed.sftp.allowedCidrs` | `[]` | See the networkPolicy table below. |
+| `scheduleFeed.sftp.publicHostname` | `""` | Informational only: the public hostname pointed at the Service, shown in NOTES.txt with the other details to give the feed provider. |
+| `scheduleFeed.sftp.username` | `dtd-push` | The push account's username on this server. |
+| `scheduleFeed.sftp.authMethod` | `""` | `password` or `public-key`. No default: enabling without it fails the render. |
+| `scheduleFeed.sftp.password` | `""` | Push account password (`authMethod: password`). Generated and preserved across upgrades when empty; NOTES.txt shows how to read it back. |
+| `scheduleFeed.sftp.publicKey` | `""` | The feed provider's public key (`authMethod: public-key`). |
+| `scheduleFeed.sftp.existingSecret` | `""` | Read the SFTP credentials from this pre-existing Secret instead. |
+| `scheduleFeed.sftp.existingSecretPasswordKey` | `schedule-sftp-password` | Key for the push account password. |
+| `scheduleFeed.sftp.existingSecretPublicKeyKey` | `schedule-sftp-dtd-public-key` | Key for the provider's public key. |
+| `scheduleFeed.sftp.existingSecretHostKey` | `""` | Pre-existing Secret holding this server's own SSH host key (not the provider's). Empty: the chart generates and preserves one. |
+| `scheduleFeed.sftp.destinationFolder` | `incoming` | Folder on the PVC the push account is chrooted to; also schedule-ingest's `WATCH_DIR`. |
+| `scheduleFeed.sftp.folderPath` | `""` | Optional subfolder within `destinationFolder`. |
+| `scheduleFeed.sftp.resources` | requests `25m`/`64Mi`, limit `128Mi` | SFTP container resource requests/limits. |
+| `scheduleFeed.ingest.image.repository` | `ghcr.io/fasterspeeding/distant-signal/schedule-ingest` | schedule-ingest image repository. |
+| `scheduleFeed.ingest.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `scheduleFeed.ingest.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `scheduleFeed.ingest.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `scheduleFeed.ingest.checkTimes` | `22:00,22:30,…,01:30,16:00` | Europe/London times of the provider's delivery window. Only the last entry matters now: after it an incomplete delivery is logged as an error. Scanning is driven by `pollIntervalSecs`. |
+| `scheduleFeed.ingest.pollIntervalSecs` | `120` | Seconds between scans of the watch folder. |
+| `scheduleFeed.ingest.retentionKeepDeliveries` | `2` | Complete deliveries kept on disk (current plus fallback). |
+| `scheduleFeed.ingest.stabilityCycles` | `5` | Consecutive unchanged scans before a file is treated as complete. |
+| `scheduleFeed.ingest.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`) for one scan cycle, including posting a delivery to api. |
+| `scheduleFeed.ingest.existingSecret` | `""` | Read schedule-ingest's internal OAuth2 credential from this pre-existing Secret. |
+| `scheduleFeed.ingest.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-schedule-ingest`). |
+| `scheduleFeed.ingest.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
+| `scheduleFeed.ingest.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-schedule-ingest` | Key for the OAuth2 username. |
+| `scheduleFeed.ingest.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-schedule-ingest` | Key for the OAuth2 password. |
+| `scheduleFeed.ingest.resources` | requests `50m`/`128Mi`, limit `256Mi` | schedule-ingest container resource requests/limits. |
+| `scheduleFeed.reference.image.repository` | `ghcr.io/fasterspeeding/distant-signal/schedule-reference` | schedule-reference image repository. |
+| `scheduleFeed.reference.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `scheduleFeed.reference.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `scheduleFeed.reference.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `scheduleFeed.reference.pollIntervalSecs` | `1800` | How often the storage folder is checked for a new complete delivery. |
+| `scheduleFeed.reference.healthPort` | `8091` | Health port. Must differ from `workerHealth.port`, which the ingest container in the same pod uses. |
+| `scheduleFeed.reference.progressStallSecs` | `7200` | `/livez` stall window: one cycle publishes every derived product of a full timetable. |
+| `scheduleFeed.reference.metricsPort` | `9092` | Prometheus `/metrics` port. Must differ from `metrics.port`, which the ingest container uses. |
+| `scheduleFeed.reference.existingSecret` | `""` | Read schedule-reference's internal OAuth2 credential from this pre-existing Secret. |
+| `scheduleFeed.reference.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-schedule-reference`). |
+| `scheduleFeed.reference.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
+| `scheduleFeed.reference.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-schedule-reference` | Key for the OAuth2 username. |
+| `scheduleFeed.reference.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-schedule-reference` | Key for the OAuth2 password. |
+| `scheduleFeed.reference.resources` | requests `250m`/`3Gi`, limit `4Gi` | schedule-reference container resource requests/limits: the largest in the chart, since it parses the whole timetable. |
+| `scheduleFeed.service.type` | `LoadBalancer` | `LoadBalancer`, or `NodePort` behind an external load balancer. Not an Ingress: SFTP is not HTTP. |
+| `scheduleFeed.service.annotations` | `{}` | Service annotations. |
+| `scheduleFeed.service.nodePort` | `null` | Explicit NodePort for the SFTP port. Empty lets Kubernetes assign one. |
+| `scheduleFeed.persistence.enabled` | `true` | Attach a PVC for deliveries. |
+| `scheduleFeed.persistence.size` | `5Gi` | Requested volume size. |
+| `scheduleFeed.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
+| `scheduleFeed.persistence.accessModes` | `[ReadWriteOnce]` | PVC access modes. |
+| `scheduleFeed.persistence.existingClaim` | `""` | Use this existing PVC instead of creating one. |
+| `scheduleFeed.logLevel` | `info` | `RUST_LOG` value for both Rust containers. |
+| `scheduleFeed.resources` | `{}` | Fallback for any container whose own `resources` is empty. |
+| `scheduleFeed.nodeSelector` | `{}` | Pod node selector. |
+| `scheduleFeed.tolerations` | `[]` | Pod tolerations. |
+| `scheduleFeed.affinity` | `{}` | Pod affinity rules. |
+| `scheduleFeed.podAnnotations` | `{}` | Pod annotations. |
+| `scheduleFeed.podSecurityContext` | `{fsGroup: 1000}` | `fsGroup: 1000` is required: the SFTPGo image runs as UID 1000 and does not chown a fresh volume. |
+
+### workerHealth
+
+Shared `/livez` and `/healthz` settings for the single-container workers
+(aggregator, enricher, notifier, every poller including the island-of-Ireland ones, and schedule-ingest). Each
+worker's own `progressStallSecs` sets how long its loop may go without
+progress before `/livez` fails.
+
+| Key | Default | Description |
+|---|---|---|
+| `workerHealth.port` | `8090` | Port the workers serve `/livez` and `/healthz` on. |
+| `workerHealth.liveness.initialDelaySeconds` | `30` | Liveness probe initial delay. |
+| `workerHealth.liveness.periodSeconds` | `30` | Liveness probe period. |
+| `workerHealth.liveness.timeoutSeconds` | `5` | Liveness probe timeout. |
+| `workerHealth.liveness.failureThreshold` | `6` | Liveness failures allowed (6 x 30s = 3 minutes on top of the stall window). |
+| `workerHealth.readiness.periodSeconds` | `10` | Readiness probe period. |
+| `workerHealth.readiness.timeoutSeconds` | `3` | Readiness probe timeout. |
+| `workerHealth.readiness.failureThreshold` | `3` | Readiness failures allowed. |
+| `workerHealth.pollerProgressStallSecs` | `1800` | Stall window for every poller under `pollers`: one fetch plus up to 15 minutes of ingest retries. |
+
 ### ingress
 
 | Key | Default | Description |
@@ -1335,7 +1820,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; the repo-relative doc path is appended. |
-| `metrics.prometheusRule.<alert>.enabled` / `.for` / `.severity` / thresholds | see `values.yaml` | Per-alert toggles, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `archiveUploadFailures`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `archiveUploadFailures`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
 
 #### Alerts
 

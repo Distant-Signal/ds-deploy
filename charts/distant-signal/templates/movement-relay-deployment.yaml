@@ -1,15 +1,37 @@
 {{- if .Values.movementRelay.enabled }}
-{{- if not .Values.movementRelay.kafka.brokers }}
-{{- fail "movementRelay.kafka.brokers is empty. Set it to the RDM Train Movements Kafka broker address(es) once movementRelay.enabled=true -- see docs/superpowers/plans/2026-09-04-movement-relay-plan.md's Deploy B runbook." }}
+{{- /*
+On by default: trust-consumer, full-coverage-consumer and
+trust-backlog-consumer all read the movement-events stream that only this
+Deployment writes. Each Kafka setting falls back to trustConsumer.kafka.*
+(see _helpers.tpl), so these guards fire only when neither place is set.
+*/}}
+{{- $brokers := include "distant-signal.movementRelayKafkaBrokers" . }}
+{{- $topic := include "distant-signal.movementRelayKafkaTopic" . }}
+{{- $group := include "distant-signal.movementRelayKafkaConsumerGroup" . }}
+{{- $mechanism := include "distant-signal.movementRelayKafkaSaslMechanism" . }}
+{{- $optOut := "or set movementRelay.enabled=false if this install does not ingest TRUST train movements (trust-consumer, full-coverage-consumer and trust-backlog-consumer then read an empty stream)" }}
+{{- if not $brokers }}
+{{- fail (printf "movement-relay is enabled (the default) but has no Kafka broker. Set movementRelay.kafka.brokers or trustConsumer.kafka.brokers to the RDM Train Movements broker address(es), %s." $optOut) }}
 {{- end }}
-{{- if not .Values.movementRelay.kafka.topic }}
-{{- fail "movementRelay.kafka.topic is empty. Set it to the confirmed RDM Train Movements Kafka topic name." }}
+{{- if not $topic }}
+{{- fail (printf "movement-relay is enabled (the default) but has no Kafka topic. Set movementRelay.kafka.topic or trustConsumer.kafka.topic to the RDM Train Movements topic, %s." $optOut) }}
 {{- end }}
-{{- if not .Values.movementRelay.kafka.consumerGroup }}
-{{- fail "movementRelay.kafka.consumerGroup is empty. Set it to the real, RDM-issued consumer group id (SC-... in production) -- see the design doc's 'Why this exists' section. Unlike trustConsumer.kafka.consumerGroup, this field has NO sensible default: guessing wrong here risks colliding with a real group id." }}
+{{- if not $group }}
+{{- fail (printf "movement-relay is enabled (the default) but has no Kafka consumer group. Set movementRelay.kafka.consumerGroup or trustConsumer.kafka.consumerGroup to the RDM-issued group id (SC-... in production), %s." $optOut) }}
 {{- end }}
-{{- if not .Values.movementRelay.kafka.saslMechanism }}
-{{- fail "movementRelay.kafka.saslMechanism is empty. Set it to the confirmed RDM Kafka product's SASL mechanism." }}
+{{- if not $mechanism }}
+{{- fail (printf "movement-relay is enabled (the default) but has no Kafka SASL mechanism. Set movementRelay.kafka.saslMechanism or trustConsumer.kafka.saslMechanism (e.g. PLAIN), %s." $optOut) }}
+{{- end }}
+{{- /*
+Two members of one consumer group split its partitions, so each would see
+only part of the feed. Refuse a consumer still on the legacy direct Kafka
+path sharing movement-relay's group.
+*/}}
+{{- if and (eq .Values.trustConsumer.movementFeed "kafka") (eq $group .Values.trustConsumer.kafka.consumerGroup) }}
+{{- fail (printf "trustConsumer.movementFeed=kafka and movement-relay would join the same Kafka consumer group (%s) and split its partitions. Use trustConsumer.movementFeed=redis-stream (the default), or set movementRelay.enabled=false to keep the legacy direct connection." $group) }}
+{{- end }}
+{{- if and (eq .Values.fullCoverageConsumer.movementFeed "kafka") (eq $group .Values.fullCoverageConsumer.kafka.consumerGroup) }}
+{{- fail (printf "fullCoverageConsumer.movementFeed=kafka and movement-relay would join the same Kafka consumer group (%s) and split its partitions. Use fullCoverageConsumer.movementFeed=redis-stream (the default), or set movementRelay.enabled=false." $group) }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -99,23 +121,23 @@ spec:
             failureThreshold: 6
           env:
             - name: KAFKA_BROKERS
-              value: {{ .Values.movementRelay.kafka.brokers | quote }}
+              value: {{ $brokers | quote }}
             - name: KAFKA_TOPIC
-              value: {{ .Values.movementRelay.kafka.topic | quote }}
+              value: {{ $topic | quote }}
             - name: KAFKA_CONSUMER_GROUP
-              value: {{ .Values.movementRelay.kafka.consumerGroup | quote }}
+              value: {{ $group | quote }}
             - name: KAFKA_SASL_MECHANISM
-              value: {{ .Values.movementRelay.kafka.saslMechanism | quote }}
+              value: {{ $mechanism | quote }}
             - name: KAFKA_SASL_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: {{ include "distant-signal.movementRelaySecretName" . }}
-                  key: {{ .Values.movementRelay.kafka.existingSecretUsernameKey }}
+                  key: {{ include "distant-signal.movementRelaySaslUsernameKey" . }}
             - name: KAFKA_SASL_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "distant-signal.movementRelaySecretName" . }}
-                  key: {{ .Values.movementRelay.kafka.existingSecretPasswordKey }}
+                  key: {{ include "distant-signal.movementRelaySaslPasswordKey" . }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisPasswordEnv" . }}
