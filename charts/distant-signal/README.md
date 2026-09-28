@@ -1402,7 +1402,7 @@ See `docs/superpowers/specs/2026-09-28-corpus-sftp-ingest-design.md`.
 
 | Key | Default | Description |
 |---|---|---|
-| `scheduleFeed.ingest.cifFilePattern` | `*.zip` | Case-insensitive `*` globs (comma-separated) naming CIF deliveries in the landing folder. |
+| `scheduleFeed.ingest.cifFilePattern` | `timetable_full.zip` | Case-insensitive `*` globs (comma-separated) naming CIF deliveries in the landing folder. Locked to DTD's exact delivery name. |
 | `scheduleFeed.ingest.cifExcludePattern` | `CORPUSExtract*` | Globs that are never CIF deliveries, so a CORPUS or SMART file pushed as a zip is never published as the timetable. |
 | `scheduleFeed.corpus.enabled` | `false` | Load Network Rail CORPUS (`CORPUSExtract.json.gz`, pushed to the same SFTP account and folder) into `corpus_locations`. Off: the file stays in the landing folder with a one-time stray warning. |
 | `scheduleFeed.corpus.filePattern` | `CORPUSExtract.json.gz` | Globs naming the CORPUS extract. `CORPUSExtract.csv.gz` (SMART berth data) is deliberately ignored. |

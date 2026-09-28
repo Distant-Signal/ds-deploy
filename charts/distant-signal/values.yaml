@@ -2518,7 +2518,7 @@ scheduleFeed:
     # a single overwritten-in-place zip with no sequence number, so
     # schedule-ingest now keys retained deliveries by their own timestamp
     # instead -- see docs/superpowers/specs/2026-09-03-schedule-feed-zip-delivery-correction.md.
-    retentionKeepDeliveries: 2
+    retentionKeepDeliveries: 3
     # -- Consecutive stable (unchanged mtime/size) polls before a file is
     # treated as complete. Raised from this crate's original default of 2
     # alongside shrinking pollIntervalSecs to 120s, so the time-based
@@ -2545,10 +2545,10 @@ scheduleFeed:
       limits:
         memory: 256Mi
     # -- Case-insensitive `*` globs (comma-separated) naming CIF deliveries
-    # in the landing folder. `*.zip` keeps the owner's "match by shape, not
-    # by the timetable_full.zip name" rule; set "timetable_full.zip" to pin
-    # the exact name.
-    cifFilePattern: "*.zip"
+    # in the landing folder. Locked to DTD's exact delivery name
+    # (2026-09-28) because the same SFTP account also receives other feeds;
+    # every other file is logged once as a stray and left alone.
+    cifFilePattern: "timetable_full.zip"
     # -- Globs that are never CIF deliveries even when they match
     # cifFilePattern. The same SFTP account also receives
     # CORPUSExtract.json.gz (CORPUS) and CORPUSExtract.csv.gz (SMART berth
