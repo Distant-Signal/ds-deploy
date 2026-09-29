@@ -287,6 +287,8 @@ spec:
               value: {{ .Values.api.tripPlanLive.enabled | quote }}
             - name: TRIP_PLAN_LIVE_MAX_REPLANS
               value: {{ .Values.api.tripPlanLive.maxReplans | quote }}
+            - name: TRIP_PLAN_LIVE_MAX_REPLANS_OPTIONS
+              value: {{ .Values.api.tripPlanLive.maxReplansOptions | quote }}
             - name: TRIP_PLAN_LIVE_TRUST_MAX_AGE_MINUTES
               value: {{ .Values.api.tripPlanLive.trustMaxAgeMinutes | quote }}
             - name: TRIP_PLAN_LIVE_HORIZON_MINUTES

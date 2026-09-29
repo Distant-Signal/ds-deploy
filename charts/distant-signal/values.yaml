@@ -973,8 +973,11 @@ api:
   # the kill-switch (every plan is timetable-only, as with `?live=false`).
   tripPlanLive:
     enabled: true
-    # Extra planning passes when newly read live data changes the plan.
+    # Extra planning passes when newly read live data changes the plan:
+    # maxReplans for results=fastest (CSA, cheap), maxReplansOptions for
+    # results=options (RAPTOR; 1 keeps the worst case near 1 s).
     maxReplans: 3
+    maxReplansOptions: 1
     # Ignore a TRUST delay whose train state is older than this.
     trustMaxAgeMinutes: 30
     # Only legs booked to depart between lookbackMinutes ago and

@@ -1167,7 +1167,8 @@ Used only when `postgresql.enabled` is `false`.
 | `api.tripPlanGraphCache.dates` | `2` | Service dates whose connections graph `/Trips/plan` keeps built (about 100 MB each). `0` disables the cache. |
 | `api.tripPlanGraphCache.maxAgeSecs` | `600` | Rebuild a cached graph after this long, or after a new schedule publish. |
 | `api.tripPlanLive.enabled` | `true` | Apply TRUST and Darwin data to `/Trips/plan` for today's and yesterday's service dates: cancelled trains and calls are withdrawn, known delays applied, and the plan re-run. `false` is the kill-switch: every plan is timetable-only, as with `?live=false`. |
-| `api.tripPlanLive.maxReplans` | `3` | Extra planning passes per request when newly read live data changes the plan. |
+| `api.tripPlanLive.maxReplans` | `3` | Extra planning passes per `results=fastest` request when newly read live data changes the plan. |
+| `api.tripPlanLive.maxReplansOptions` | `1` | The same for `results=options` (RAPTOR, the expensive pass); 1 keeps the worst case near 1 s. |
 | `api.tripPlanLive.trustMaxAgeMinutes` | `30` | Ignore a TRUST delay whose train state was last updated longer ago than this. Actual times and cancellations are always used. |
 | `api.tripPlanLive.horizonMinutes` / `.lookbackMinutes` | `180` / `120` | Only legs booked to depart between `lookbackMinutes` ago and `horizonMinutes` ahead get live data. |
 | `api.tripPlanLive.maxTrains` | `60` | Most trains whose live data one request reads. |
