@@ -965,6 +965,24 @@ api:
   tripPlanGraphCache:
     dates: 2
     maxAgeSecs: 600
+  # -- /Trips/plan live overlay
+  # (docs/superpowers/specs/2026-09-28-trips-plan-live-overlay-design.md):
+  # for today's and yesterday's service dates, TRUST and Darwin facts are
+  # applied to the timetable plan (cancelled trains withdrawn, known delays
+  # applied) and the plan re-run while they change it. `enabled: false` is
+  # the kill-switch (every plan is timetable-only, as with `?live=false`).
+  tripPlanLive:
+    enabled: true
+    # Extra planning passes when newly read live data changes the plan.
+    maxReplans: 3
+    # Ignore a TRUST delay whose train state is older than this.
+    trustMaxAgeMinutes: 30
+    # Only legs booked to depart between lookbackMinutes ago and
+    # horizonMinutes ahead get live data.
+    horizonMinutes: 180
+    lookbackMinutes: 120
+    # Most trains whose live data one request reads.
+    maxTrains: 60
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `data::station_stats::full_coverage_enabled_for` (crates/api) treats

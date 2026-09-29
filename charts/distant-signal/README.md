@@ -1166,6 +1166,11 @@ Used only when `postgresql.enabled` is `false`.
 | `api.corpusFallback.enabled` | `false` | Use Network Rail CORPUS as a fallback for TIPLOC/STANOX→CRS lookups the timetable has no CRS for; the timetable always wins a conflict. Does nothing until CORPUS is loaded (`scheduleFeed.corpus.enabled`). Review `corpus_compare` (in the api image) first. |
 | `api.tripPlanGraphCache.dates` | `2` | Service dates whose connections graph `/Trips/plan` keeps built (about 100 MB each). `0` disables the cache. |
 | `api.tripPlanGraphCache.maxAgeSecs` | `600` | Rebuild a cached graph after this long, or after a new schedule publish. |
+| `api.tripPlanLive.enabled` | `true` | Apply TRUST and Darwin data to `/Trips/plan` for today's and yesterday's service dates: cancelled trains and calls are withdrawn, known delays applied, and the plan re-run. `false` is the kill-switch: every plan is timetable-only, as with `?live=false`. |
+| `api.tripPlanLive.maxReplans` | `3` | Extra planning passes per request when newly read live data changes the plan. |
+| `api.tripPlanLive.trustMaxAgeMinutes` | `30` | Ignore a TRUST delay whose train state was last updated longer ago than this. Actual times and cancellations are always used. |
+| `api.tripPlanLive.horizonMinutes` / `.lookbackMinutes` | `180` / `120` | Only legs booked to depart between `lookbackMinutes` ago and `horizonMinutes` ahead get live data. |
+| `api.tripPlanLive.maxTrains` | `60` | Most trains whose live data one request reads. |
 | `api.fullCoverageEnabledDefault` | `true` | Treat every catalogued line as `full_coverage_enabled`, whatever its `lines/*.toml` entry says, so TRUST-vs-schedule delay and cancellation data is used everywhere. Set `aggregator.fullCoverageEnabledDefault` to the same value: both services gate on it. |
 | `api.malloc.arenaMax` | `"2"` | `MALLOC_ARENA_MAX`: caps glibc's retained per-arena memory. |
 | `api.malloc.mmapThreshold` | `"131072"` | `MALLOC_MMAP_THRESHOLD_` in bytes: allocations at least this large are returned to the OS on free. |

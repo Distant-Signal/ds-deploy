@@ -281,6 +281,20 @@ spec:
               value: {{ .Values.api.tripPlanGraphCache.dates | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_MAX_AGE_SECS
               value: {{ .Values.api.tripPlanGraphCache.maxAgeSecs | quote }}
+            # The /Trips/plan live overlay -- see api.tripPlanLive in
+            # values.yaml.
+            - name: TRIP_PLAN_LIVE_ENABLED
+              value: {{ .Values.api.tripPlanLive.enabled | quote }}
+            - name: TRIP_PLAN_LIVE_MAX_REPLANS
+              value: {{ .Values.api.tripPlanLive.maxReplans | quote }}
+            - name: TRIP_PLAN_LIVE_TRUST_MAX_AGE_MINUTES
+              value: {{ .Values.api.tripPlanLive.trustMaxAgeMinutes | quote }}
+            - name: TRIP_PLAN_LIVE_HORIZON_MINUTES
+              value: {{ .Values.api.tripPlanLive.horizonMinutes | quote }}
+            - name: TRIP_PLAN_LIVE_LOOKBACK_MINUTES
+              value: {{ .Values.api.tripPlanLive.lookbackMinutes | quote }}
+            - name: TRIP_PLAN_LIVE_MAX_TRAINS
+              value: {{ .Values.api.tripPlanLive.maxTrains | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see api.fullCoverageEnabledDefault's own comment in values.yaml.
             # The binary defaults to false, the chart value to true; it must be
