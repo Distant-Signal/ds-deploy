@@ -1,4 +1,17 @@
 {{/*
+api.chatbotAccess, validated at render time: `group` (default) or
+`authenticated`. The api would also refuse a bad value at startup (clap),
+but failing the render keeps a typo from crash-looping the api pod.
+*/}}
+{{- define "distant-signal.chatbotAccess" -}}
+{{- $mode := .Values.api.chatbotAccess | default "group" | toString -}}
+{{- if not (has $mode (list "group" "authenticated")) -}}
+{{- fail (printf "api.chatbotAccess must be \"group\" or \"authenticated\", got %q." $mode) -}}
+{{- end -}}
+{{- $mode -}}
+{{- end }}
+
+{{/*
 Chart name, overridable.
 */}}
 {{- define "distant-signal.name" -}}

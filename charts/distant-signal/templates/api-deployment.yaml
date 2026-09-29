@@ -228,6 +228,10 @@ spec:
             # credentials above.
             - name: CHATBOT_ACCESS_GROUP
               value: {{ .Values.api.chatbotAccessGroup | quote }}
+            # `group` or `authenticated` -- see api.chatbotAccess in
+            # values.yaml.
+            - name: CHATBOT_ACCESS
+              value: {{ include "distant-signal.chatbotAccess" . | quote }}
             # Authentik/SSO end-user group allowed to revoke other users'
             # sessions -- see api.adminGroup in values.yaml. Empty = off.
             - name: ADMIN_GROUP

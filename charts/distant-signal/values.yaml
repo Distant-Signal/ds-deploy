@@ -895,7 +895,18 @@ api:
   # checks this against that user's own resolved `groups`. Suggested default
   # only; an operator's actual Authentik group name is not mandated.
   # Supersedes the former per-user `chatbot_allowed_users` DB allowlist.
+  # Only read when chatbotAccess is `group`; there, "" means nobody gets the
+  # chatbot (it does NOT mean everyone -- use chatbotAccess: authenticated).
   chatbotAccessGroup: distant-signal-chatbot-users
+  # -- Who gets the embedded chatbot (/chat): `group` (default) -- logged-in
+  # members of chatbotAccessGroup only; `authenticated` -- every logged-in
+  # user, whatever their groups (logged-out visitors still get the sign-in
+  # prompt). In `authenticated` mode chatbotAccessGroup is ignored and no
+  # longer kept on users.groups, and the frontend drops its "only accounts
+  # that have been given access" notes. Flip it together with
+  # distant-signal-mcp's own ungating: the chat's tools come from that
+  # server, which enforces its own access groups.
+  chatbotAccess: group
   # -- Authentik/SSO end-user group (same `groups` OIDC claim as
   # chatbotAccessGroup) whose members may end any user's sessions through
   # POST /api/admin/users/revoke-sessions. OFF by default: empty means
