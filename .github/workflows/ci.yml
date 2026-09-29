@@ -1080,6 +1080,19 @@ jobs:
           if grep -q 'alert: DistantSignalLdbws' <<<"${no_ldbws}"; then
             echo "LDBWS alerts rendered with pollers.ldbws disabled" >&2; exit 1
           fi
+          # DistantSignalCorpusStale renders only with CORPUS ingest on.
+          feed=(--set metrics.prometheusRule.enabled=true
+            --set scheduleFeed.enabled=true --set scheduleFeed.sftp.authMethod=password
+            --show-only templates/prometheusrule.yaml)
+          corpus_off=$(helm template distant-signal charts/distant-signal "${base[@]}" "${feed[@]}")
+          grep -q 'alert: DistantSignalScheduleReferencePublishStale' <<<"${corpus_off}"
+          if grep -q 'alert: DistantSignalCorpusStale' <<<"${corpus_off}"; then
+            echo "DistantSignalCorpusStale rendered with scheduleFeed.corpus disabled" >&2; exit 1
+          fi
+          corpus_on=$(helm template distant-signal charts/distant-signal "${base[@]}" "${feed[@]}" \
+            --set scheduleFeed.corpus.enabled=true)
+          grep -q 'alert: DistantSignalCorpusStale' <<<"${corpus_on}"
+          grep -q 'distant_signal_api_corpus_last_delivered_at_seconds{.*> 3888000$' <<<"${corpus_on}"
 
       # LEG-18 LDBWS volume knobs: off by default, and while off none of
       # their env vars may render (production behaviour is unchanged); set,

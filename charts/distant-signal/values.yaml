@@ -3179,6 +3179,12 @@ metrics:
     # uploaded delivery zip within `zipRejectedWindow` (PL-5 caps).
     # DistantSignalCorpusRejected: schedule-ingest refused a CORPUS extract
     # within `zipRejectedWindow` (only while scheduleFeed.corpus.enabled).
+    # DistantSignalCorpusStale: the newest loaded CORPUS delivery is older
+    # than `corpusStaleAfterDays` (only while scheduleFeed.corpus.enabled;
+    # never before the first load). CORPUS is published monthly, so 45 days
+    # is one full cycle (at most 31 days) plus two weeks' grace for a late
+    # publication or upload: a single missed month alerts, a slightly late
+    # one does not.
     # DistantSignalScheduleReferencePublishStale: the last fully published
     # delivery is older than `staleAfterHours` (deliveries land nightly).
     # DistantSignalSchedulePublishStagedMismatch: api skipped a publish's
@@ -3193,6 +3199,7 @@ metrics:
       notSeededFor: 30m
       zipRejectedWindow: 6h
       staleAfterHours: 30
+      corpusStaleAfterDays: 45
       mismatchWindow: 6h
       rejectedWindow: 6h
       populationMissingFor: 15m

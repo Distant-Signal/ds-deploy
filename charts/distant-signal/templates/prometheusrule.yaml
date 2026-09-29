@@ -503,6 +503,37 @@ spec:
               the previous delivery. The ingest container's error log names
               the reason.
         {{- /*
+        CORPUS (scheduleFeed.corpus): the newest loaded CORPUS delivery is
+        older than corpusStaleAfterDays. api sets the gauge from
+        corpus_deliveries at startup and after each load, so it survives
+        restarts between monthly deliveries; it does not exist before the
+        first load, so a freshly enabled install waiting for its first
+        delivery does not fire. Renders only while CORPUS ingest is on, so
+        a disabled feature (whose old deliveries still set the gauge) never
+        alerts.
+        */}}
+        {{- if ($.Values.scheduleFeed.corpus).enabled }}
+        - alert: DistantSignalCorpusStale
+          expr: |
+            time() - max by (namespace) (distant_signal_api_corpus_last_delivered_at_seconds{namespace="{{ $ns }}"}) > {{ mul (int .corpusStaleAfterDays) 86400 }}
+          for: 1h
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no CORPUS delivery loaded for {{ .corpusStaleAfterDays }} days"
+            description: >-
+              The newest Network Rail CORPUS extract loaded in
+              {{ "{{ $labels.namespace }}" }} was delivered over
+              {{ .corpusStaleAfterDays }} days ago (CORPUS is published
+              monthly). Either RDM stopped pushing it (check the SFTP
+              corpus folder) or schedule-ingest cannot load it (check
+              DistantSignalCorpusRejected and the ingest container's
+              error log). The previous extract stays in use.
+        {{- end }}
+        {{- /*
         SCHED-2: the delivery timestamp of the last delivery every product
         of which published (seeded at startup from api's durable marker).
         Deliveries land nightly, so this covers a missing delivery, a
