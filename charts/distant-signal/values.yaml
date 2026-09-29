@@ -965,6 +965,11 @@ api:
   tripPlanGraphCache:
     dates: 2
     maxAgeSecs: 600
+  # -- Most `?waypoints=` one /Trips/plan request may name (1-20; values
+  # outside are clamped). Waypoints are searched as one journey whose cost
+  # grows with their number; 20 measured under ~0.35 s (fastest) and ~2 s
+  # (options) on a production-scale day.
+  tripPlanMaxWaypoints: 20
   # -- /Trips/plan live overlay
   # (docs/superpowers/specs/2026-09-28-trips-plan-live-overlay-design.md):
   # for today's and yesterday's service dates, TRUST and Darwin facts are

@@ -281,6 +281,8 @@ spec:
               value: {{ .Values.api.tripPlanGraphCache.dates | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_MAX_AGE_SECS
               value: {{ .Values.api.tripPlanGraphCache.maxAgeSecs | quote }}
+            - name: TRIP_PLAN_MAX_WAYPOINTS
+              value: {{ .Values.api.tripPlanMaxWaypoints | quote }}
             # The /Trips/plan live overlay -- see api.tripPlanLive in
             # values.yaml.
             - name: TRIP_PLAN_LIVE_ENABLED
