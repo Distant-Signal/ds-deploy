@@ -897,37 +897,6 @@ added. */}}
 {{- end }}
 
 {{/*
-railMcp: frontend's own linking config for the derived MCP service
-("distant-signal-mcp", a fork of train-mcp -- see
-docs/superpowers/specs/2026-09-01-train-mcp-integration-design.md
-Decision 1). This chart no longer deploys that service itself -- it is
-expected to run as its own, separately-operated Helm release (that
-project's own chart, or the fork directly). What's left here is only
-frontend's own consumption of it: the shared internal-complete-token
-Secret. Same existingSecret/existingSecretXKey pattern as
-trustConsumerOauthUsernameSecretKey/pollerSecretKey -- one existingSecret
-toggle for the whole component (railMcp.existingSecret), each key
-individually overridable within it.
-*/}}
-{{- define "distant-signal.railMcpSecretName" -}}
-{{- default (include "distant-signal.secretName" .) .Values.railMcp.existingSecret }}
-{{- end }}
-
-{{/* railmcp-internal-complete-token key resolution -- the two Discord
-helpers this chart used to render here (railMcpDiscordClientIdSecretKey,
-railMcpDiscordAllowedUserIdsSecretKey) are retired along with
-railMcp.discord.* (embedded-chatbot-shared-foundation-and-option-c plan,
-Task 8: "superseded, not stacked"). */}}
-{{- define "distant-signal.railMcpInternalCompleteTokenSecretKey" -}}
-{{- if .Values.railMcp.existingSecret }}
-{{- .Values.railMcp.existingSecretInternalCompleteTokenKey }}
-{{- else }}
-{{- print "internal-complete-token" }}
-{{- end }}
-{{- end }}
-
-
-{{/*
 Cold-archive env for the aggregator (crates/aggregator/src/archive.rs).
 Renders NOTHING when archive.enabled is false, so a default install carries
 no ARCHIVE_* env and needs no S3 settings. When enabled, fails rendering on

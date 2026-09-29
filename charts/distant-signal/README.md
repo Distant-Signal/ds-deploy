@@ -27,7 +27,8 @@ already establish, so the two deployment paths do not drift.
 
 This chart does **not** deploy the derived MCP service ("distant-signal-mcp",
 a fork of train-mcp) — see the `railMcp` section under "Values reference"
-below for how to link the frontend to a separately-deployed instance of it.
+below for how to point the frontend's in-app chat at a separately-deployed
+instance of it.
 
 ## Prerequisites
 
@@ -1603,25 +1604,30 @@ The frontend is the one workload with `readOnlyRootFilesystem: false`:
 
 ### railMcp
 
-**This chart no longer deploys or configures the derived MCP service
+**This chart does not deploy or configure the derived MCP service
 ("distant-signal-mcp", a fork of train-mcp) itself.** That project has its
 own repository, its own CI/tests, and its own Helm chart
-(`Distant-Signal-MCP`, or its own fork) with a more complete config surface
-and better security posture than this chart used to bundle. Deploy it as
-its **own, separate Helm release** — pointing at that project's own chart,
-or the fork directly — then come back here and set the values below so
-this chart's own **frontend** can link to it. Everything below is optional
-and off by default: leaving `railMcp.enabled` at `false` renders none of
-these env vars at all.
+(`Distant-Signal-MCP`). Deploy it as its **own, separate Helm release**, then
+set the values below. `railMcp` now only configures the frontend's **in-app
+chat** (`/chat`) link to that service, plus the connector URL shown on the
+`/connect-claude` instructions page. Only the browser talks to the MCP
+service (the `/chat` MCP client, its `/chat/callback` OAuth exchange, and the
+CSP `connect-src` entry that allows both); the frontend pod makes no
+server-to-server call to it.
+
+The MCP service handles its own login as an Authentik OIDC client, so the
+old DS consent bridge (`/connect-claude/authorize`) and its values
+(`railMcp.baseUrl`, `railMcp.internalCompleteToken`,
+`railMcp.existingSecret`, `railMcp.existingSecretInternalCompleteTokenKey`)
+were removed on 2026-09-29. The chart has no values schema, so leftover
+copies of those keys in an existing values file are ignored; delete them at
+your convenience. Everything below is optional and off by default: leaving
+`railMcp.enabled` at `false` renders no railMcp env vars at all.
 
 | Key | Default | Description |
 |---|---|---|
-| `railMcp.enabled` | `false` | Link frontend to a separately, externally-deployed instance of the derived MCP service. |
-| `railMcp.baseUrl` | `""` | External HTTP base URL frontend calls server-to-server. Point this at wherever you deployed that separate release (its Service DNS name if co-located, its Ingress host otherwise). Required when enabled; empty aborts the render. |
-| `railMcp.publicUrl` | `""` | The other release's own `PUBLIC_URL`, surfaced to the browser as `NEXT_PUBLIC_RAILMCP_PUBLIC_URL`. Must match what that release was configured with. |
-| `railMcp.internalCompleteToken` | `""` | Shared secret between frontend's consent bridge and the other release's `OAUTH_INTERNAL_COMPLETE_TOKEN`. Must match what that release was configured with — **never auto-generated**: required (together with, or in place of, `existingSecret` below) when enabled, or the render aborts. |
-| `railMcp.existingSecretInternalCompleteTokenKey` | `internal-complete-token` | Key within `railMcp.existingSecret`. |
-| `railMcp.existingSecret` | `""` | Read `internalCompleteToken` from this pre-existing Secret instead. |
+| `railMcp.enabled` | `false` | Point the frontend's in-app chat (and the `/connect-claude` instructions page) at a separately, externally-deployed instance of the derived MCP service. |
+| `railMcp.publicUrl` | `""` | The other release's own `PUBLIC_URL`, surfaced to the browser as `NEXT_PUBLIC_RAILMCP_PUBLIC_URL` (read at request time). `/chat` connects to `<publicUrl>/mcp` and the CSP `connect-src` allows its origin. Must match what that release was configured with. Blank: `/chat` reports that chat is not configured. |
 
 ### pollers
 

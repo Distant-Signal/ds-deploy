@@ -2793,54 +2793,37 @@ scheduleFeed:
     fsGroup: 1000
 
 # ---------------------------------------------------------------------------
-# railMcp: OPTIONAL linking config for the derived MCP service
-# ("distant-signal-mcp", a fork of train-mcp -- see
+# railMcp: OPTIONAL link from the in-app chat (/chat) to the derived MCP
+# service ("distant-signal-mcp", a fork of train-mcp -- see
 # docs/superpowers/specs/2026-09-01-train-mcp-integration-design.md
 # Decision 1). This chart does NOT deploy or configure that service's own
-# process any more -- it has its own repository, its own CI/tests, and its
-# own Helm chart (Distant-Signal-MCP) with a more complete config surface
-# and better security posture than this chart used to bundle. Deploy it as
-# its OWN separate Helm release (that project's own chart, or the fork
-# directly), then set the values below to point THIS chart's frontend at
-# wherever you deployed it. Everything here stays optional, gated on
-# `enabled` staying false by default -- frontend renders no railMcp env vars
-# at all until you opt in.
+# process -- it has its own repository, its own CI/tests, and its own Helm
+# chart (Distant-Signal-MCP). Deploy it as its OWN separate Helm release,
+# then set the values below so this chart's frontend can point the browser
+# at it. That is all railMcp does now: the frontend makes no
+# server-to-server call to the MCP service. The browser talks to it
+# directly (the /chat MCP client and its /chat/callback OAuth exchange, plus
+# the CSP connect-src entry that allows it), and the /connect-claude
+# instructions page shows the same URL as Claude's connector URL. Login is
+# the MCP service's own business: it is its own Authentik OIDC client, so
+# the old DS consent bridge (/connect-claude/authorize, railMcp.baseUrl and
+# the shared internal-complete-token) is retired. Everything here stays
+# optional, gated on `enabled` staying false by default -- frontend renders
+# no railMcp env vars at all until you opt in.
 # ---------------------------------------------------------------------------
 railMcp:
   # -- Opt-in; false by default. Set true once you have deployed the derived
-  # MCP service as its own separate release and want frontend to link to it
-  # (server-to-server calls plus a public link surfaced to the browser).
+  # MCP service as its own separate release and want the frontend's chat
+  # (and the /connect-claude instructions page) to link to it.
   enabled: false
-  # -- The external HTTP base URL frontend calls server-to-server (its
-  # OAuth consent bridge, frontend/app/connect-claude/authorize/route.ts).
-  # This must point at wherever the operator deployed that SEPARATE release
-  # -- e.g. that chart's own Service DNS name if both releases share a
-  # cluster and namespace, or its Ingress host otherwise. No default:
-  # required when railMcp.enabled is true.
-  baseUrl: ""
   # -- The MCP service's own PUBLIC_URL as configured on that separate
   # release (its OAuth discovery metadata needs a real, reachable origin --
   # see the fork's own src/config.ts). Surfaced to frontend as
-  # NEXT_PUBLIC_RAILMCP_PUBLIC_URL. Left blank by default; an operator
-  # enabling railMcp must set this to match whatever PUBLIC_URL that other
-  # release was configured with.
+  # NEXT_PUBLIC_RAILMCP_PUBLIC_URL, read at request time: /chat connects the
+  # browser to `<publicUrl>/mcp`, and proxy.ts adds its origin to the CSP
+  # connect-src. Left blank by default; with it blank /chat reports "not
+  # configured" and /connect-claude shows a placeholder.
   publicUrl: ""
-  # -- Shared secret between frontend/'s consent bridge and the derived MCP
-  # service's OAUTH_INTERNAL_COMPLETE_TOKEN, AS CONFIGURED ON THAT SEPARATE
-  # RELEASE. Unlike this chart's own chart-internal secrets (e.g.
-  # secrets.internalToken), this value is NOT auto-generated: it must match
-  # a value the operator ALSO configured on the other, separately-deployed
-  # release, so there is no safe default to fall back to -- the render
-  # fails when railMcp.enabled is true and neither this nor existingSecret
-  # below is set, rather than silently minting a token that cannot possibly
-  # match the other side.
-  internalCompleteToken: ""
-  existingSecretInternalCompleteTokenKey: internal-complete-token
-  # -- Read internalCompleteToken above from this pre-existing Secret
-  # instead (see existingSecretInternalCompleteTokenKey above for the key's
-  # name within it). Same existingSecret/existingSecretXKey shape as this
-  # chart's other per-component credentials.
-  existingSecret: ""
 
 # ---------------------------------------------------------------------------
 # frontend (frontend/lib/api.ts)
