@@ -2804,7 +2804,7 @@ scheduleFeed:
 # server-to-server call to the MCP service. The browser talks to it
 # directly (the /chat MCP client and its /chat/callback OAuth exchange, plus
 # the CSP connect-src entry that allows it), and the /connect-claude
-# instructions page shows the same URL as Claude's connector URL. Login is
+# instructions page shows `<publicUrl>/mcp` as Claude's connector URL. Login is
 # the MCP service's own business: it is its own Authentik OIDC client, so
 # the old DS consent bridge (/connect-claude/authorize, railMcp.baseUrl and
 # the shared internal-complete-token) is retired. Everything here stays

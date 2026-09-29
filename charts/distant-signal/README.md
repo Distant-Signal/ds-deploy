@@ -1609,8 +1609,9 @@ The frontend is the one workload with `readOnlyRootFilesystem: false`:
 own repository, its own CI/tests, and its own Helm chart
 (`Distant-Signal-MCP`). Deploy it as its **own, separate Helm release**, then
 set the values below. `railMcp` now only configures the frontend's **in-app
-chat** (`/chat`) link to that service, plus the connector URL shown on the
-`/connect-claude` instructions page. Only the browser talks to the MCP
+chat** (`/chat`) link to that service, plus the connector URL
+(`<publicUrl>/mcp`) shown on the `/connect-claude` instructions page and in
+`/chat`'s "use it in your own assistant" section. Only the browser talks to the MCP
 service (the `/chat` MCP client, its `/chat/callback` OAuth exchange, and the
 CSP `connect-src` entry that allows both); the frontend pod makes no
 server-to-server call to it.
