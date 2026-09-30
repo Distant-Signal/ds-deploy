@@ -2041,7 +2041,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; the repo-relative doc path is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
 
 #### Alerts
 

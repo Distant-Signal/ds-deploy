@@ -30,7 +30,7 @@ so that clause fired on every rollout.
 {{- $fullname := include "distant-signal.fullname" . }}
 {{- $runbookBase := trimSuffix "/" $rule.runbookBaseUrl }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
-{{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled) }}
+{{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled) }}
 {{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
 {{- $pipelineOn := and ($rule.schedulePipeline).enabled .Values.scheduleFeed.enabled }}
 {{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn }}
@@ -67,16 +67,29 @@ spec:
         movementRelay.streamMaxLen stands in for it. Once lag reaches the
         cap, unread entries start being trimmed before that group reads
         them (a stream gap).
+
+        "Behind" is lag + pending: a consumer whose downstream is failing
+        keeps reading new entries and leaves each failed batch pending, so
+        its lag stays near 0 while the entries it must retry pile up in its
+        pending list, where MAXLEN trims them just the same. Until a relay
+        exporting stream_pending is running, pending counts as 0.
         */}}
         {{- $ratio := printf `(
-  max by (namespace, group) (distant_signal_movement_relay_stream_lag{namespace="%s"})
+  (
+    max by (namespace, group) (distant_signal_movement_relay_stream_lag{namespace="%s"})
+    + on (namespace, group)
+    (
+      max by (namespace, group) (distant_signal_movement_relay_stream_pending{namespace="%s"})
+      or 0 * max by (namespace, group) (distant_signal_movement_relay_stream_lag{namespace="%s"})
+    )
+  )
   / on (namespace) group_left ()
   (
     max by (namespace) (distant_signal_movement_relay_stream_maxlen{namespace="%s"})
     or on (namespace)
     label_replace(vector(%d), "namespace", "%s", "", "")
   )
-)` $ns $ns (int64 $.Values.movementRelay.streamMaxLen) $ns }}
+)` $ns $ns $ns $ns (int64 $.Values.movementRelay.streamMaxLen) $ns }}
         - alert: DistantSignalMovementLagHigh
           expr: |
             {{- printf "%s > %v" $ratio .warningRatio | nindent 12 }}
@@ -90,7 +103,7 @@ spec:
             summary: "movement-events group {{ "{{ $labels.group }}" }} is {{ "{{ $value | humanizePercentage }}" }} of the stream cap behind"
             description: >-
               Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
-              has unread movement-events entries amounting to
+              has unread or un-ACKed movement-events entries amounting to
               {{ "{{ $value | humanizePercentage }}" }} of the stream's MAXLEN cap
               (warning above {{ .warningRatio }}). If lag reaches the cap, entries
               are trimmed before this group reads them. Check the consumer's
@@ -109,7 +122,7 @@ spec:
             summary: "movement-events group {{ "{{ $labels.group }}" }} is {{ "{{ $value | humanizePercentage }}" }} of the stream cap behind"
             description: >-
               Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
-              has unread movement-events entries amounting to
+              has unread or un-ACKed movement-events entries amounting to
               {{ "{{ $value | humanizePercentage }}" }} of the stream's MAXLEN cap
               (critical above {{ .criticalRatio }}). Data loss (a stream gap) is
               close: fix the consumer, or raise movementRelay.streamMaxLen together
@@ -196,9 +209,19 @@ spec:
               (reason {{ "{{ $labels.reason }}" }}). This should normally stay at 0:
               inspect the records and re-inject or delete them.
             runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+        {{- /*
+        The length comes from movement-relay's own XLEN, read every lag
+        tick. The consumers' movement_feed_deadletter_length is only set
+        when one dead-letters something (absent after a restart, stale after
+        a drain), so it only stands in until a relay exporting the fresh
+        gauge is running.
+        */}}
         - alert: DistantSignalDeadLetterNearFull
           expr: |
-            max by (namespace, stream) (distant_signal_movement_feed_deadletter_length{namespace="{{ $ns }}"}) / 10000 > {{ .nearFullRatio }}
+            (
+              max by (namespace, stream) (distant_signal_movement_relay_deadletter_length{namespace="{{ $ns }}"})
+              or max by (namespace, stream) (distant_signal_movement_feed_deadletter_length{namespace="{{ $ns }}"})
+            ) / 10000 > {{ .nearFullRatio }}
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -236,6 +259,105 @@ spec:
               dead-letter stream is at its 10,000-record cap. Those records stay
               pending and are retried forever until the stream is drained.
             runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.relayPublishFailing }}
+        {{- if .enabled }}
+        {{- /*
+        Redis refusing movement-relay's XADDs (OOM at maxmemory, a failed
+        AOF write, NOAUTH, Redis down) stops all TRUST ingestion without
+        tripping any lag alert: the consumers stay caught up with a stream
+        that no longer grows. The relay's /livez stays 200 (a failed cycle
+        is progress), so nothing restarts it either; Kafka holds the
+        backlog only for as long as the topic retains it.
+
+        "Nothing published" is `(published or 0 * failures) == 0`: a relay
+        that restarted while Redis was refusing writes has no published
+        series at all, and a bare `published == 0` would then be empty.
+        */}}
+        {{- $failed := printf `sum by (namespace) (increase(distant_signal_movement_relay_errors_total{namespace="%s", operation=~"publish_event|redis_oom"}[%s]))` $ns .window }}
+        - alert: DistantSignalMovementRelayPublishFailing
+          expr: |
+            {{ $failed }} > 0
+            and on (namespace)
+            (
+              sum by (namespace) (increase(distant_signal_movement_relay_events_published_total{namespace="{{ $ns }}"}[{{ .window }}]))
+              or on (namespace) 0 * {{ $failed }}
+            ) == 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-relay cannot publish to movement-events"
+            description: >-
+              movement-relay in {{ "{{ $labels.namespace }}" }} has failed every
+              XADD for the last {{ .window }} and published nothing. TRUST
+              ingestion is stopped; Kafka holds the backlog only as long as the
+              topic retains it. Check the relay's logs (OOM: Redis is at
+              maxmemory; MISCONF or an AOF error: see
+              DistantSignalRedisPersistenceFailing) and Redis itself.
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.redisPersistence }}
+        {{- if .enabled }}
+        {{- /*
+        From movement-relay's INFO persistence gauges (the chart ships no
+        redis_exporter). A failed AOF write makes Redis refuse every write
+        until one succeeds; a failed rewrite leaves the AOF growing until
+        the disk fills. aof_enabled == 0 is only an error for the bundled
+        Redis with persistence on (an external one may run without AOF).
+        */}}
+        - alert: DistantSignalRedisPersistenceFailing
+          expr: |
+            min by (namespace) (distant_signal_redis_aof_last_write_ok{namespace="{{ $ns }}"}) == 0
+            or min by (namespace) (distant_signal_redis_aof_last_bgrewrite_ok{namespace="{{ $ns }}"}) == 0
+            {{- if and $.Values.redis.enabled $.Values.redis.persistence.enabled }}
+            or max by (namespace) (distant_signal_redis_aof_enabled{namespace="{{ $ns }}"}) == 0
+            {{- end }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Redis AOF persistence is failing"
+            description: >-
+              Redis in {{ "{{ $labels.namespace }}" }} reports a failed AOF write
+              or rewrite, or AOF switched off. A failed write makes it refuse
+              every write (movement-relay stops publishing); a failed rewrite
+              lets the AOF grow until the disk fills; with AOF off a restart
+              loses movement-events and every consumer group. Check `INFO
+              persistence`, the Redis logs and the disk behind /data.
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.groupRecreated }}
+        {{- if .enabled }}
+        {{- $m := printf `distant_signal_movement_feed_group_recreated_total{namespace="%s"}` $ns }}
+        - alert: DistantSignalMovementGroupRecreated
+          expr: |
+            sum by (namespace, group) (increase({{ $m }}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-events consumer group {{ "{{ $labels.group }}" }} was recreated"
+            description: >-
+              {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }} found its
+              consumer group missing (NOGROUP) within the last {{ .window }} and
+              recreated it. Redis lost its data (AOF lost or unreadable, volume
+              replaced) or the group was deleted. Its pending entries, and after
+              an empty restart every entry it had not read, are gone; the stream
+              gap check cannot see this. Treat that rail day as partial.
+            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md" $runbookBase | quote }}
         {{- end }}
         {{- end }}
     {{- end }}
