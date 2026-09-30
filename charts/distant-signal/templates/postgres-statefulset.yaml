@@ -48,9 +48,15 @@ spec:
         {{- toYaml (mergeOverwrite $pgSecurityDefaults (default (dict) .Values.postgresql.podSecurityContext | deepCopy)) | nindent 8 }}
       containers:
         - name: postgres
-          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.postgresql.image) | quote }}
-          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
-          {{- with .Values.postgresql.config }}
+          {{- /*
+          postgresql.image, or with postgresql.pgbackrest.enabled the same
+          Postgres plus pgBackRest (docker/postgres-pgbackrest.Dockerfile);
+          and the `-c` args below then also carry archive_mode,
+          archive_command and archive_timeout (templates/_pgbackrest.tpl).
+          */}}
+          image: {{ include "distant-signal.postgresImage" . | quote }}
+          imagePullPolicy: {{ include "distant-signal.postgresImagePullPolicy" . }}
+          {{- with (include "distant-signal.postgresConfig" . | fromYaml) }}
           # postgresql.config, one `-c name=value` pair per key (sorted).
           # The image's entrypoint forwards a leading `-c` to `postgres`,
           # including for the temporary initdb-time server. Command-line
@@ -90,6 +96,9 @@ spec:
             # volume, and initdb refuses to initialise a non-empty directory.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+            {{- if include "distant-signal.pgbackrestEnabled" . }}
+            {{- include "distant-signal.pgbackrestEnv" . | nindent 12 }}
+            {{- end }}
             {{- with .Values.postgresql.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -92,6 +92,7 @@ that issuer and subject on the chart's OCIRepository/HelmRepository.
 | `docker/movement-relay.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/movement-relay` |
 | `docker/schedule-ingest.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-ingest` |
 | `docker/schedule-reference.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-reference` |
+| `docker/postgres-pgbackrest.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest` (only with `postgresql.pgbackrest.enabled`; tagged `pg<postgres>-pgbackrest<version>`, and never digest-pinned into the chart by CI) |
 | `frontend/Dockerfile` (target `runtime-prod`) | `ghcr.io/fasterspeeding/distant-signal/frontend` |
 
 ```bash
@@ -726,6 +727,53 @@ startup sequence, partial days, and the metrics to alert on
 (`distant_signal_full_coverage_consumer_startup_complete`,
 `..._day_partial`, `..._stream_gap_detected_total` and more).
 
+## Scheduled jobs and time zones
+
+Every CronJob this chart renders sets `spec.timeZone` explicitly, and CI
+(`.github/workflows/ci.yml`, helm-lint job, "every CronJob sets timeZone")
+fails any render that has a CronJob without one, or with a zone name that
+tzdata doesn't know. Without the field, a schedule is read in the node's
+local zone, which belongs to the host rather than the cluster. On
+mine-bringer the node runs at UTC+2, so a job commented "02:00 UTC" really
+ran at 00:00 UTC.
+
+- Backups and maintenance use `Etc/UTC`, so they have no DST jumps.
+- Jobs tied to the GB rail day use `Europe/London`, and keep their schedules
+  out of 01:00–02:59 local, where DST transitions skip or repeat a run.
+
+Keep backup schedules between 03:00 and 04:15 UTC. The nightly schedule
+ingest takes deliveries between 22:00 and 01:30 and runs whole-day
+publishes, the heaviest WAL and CPU bursts of the day, and 03:00 UTC is
+clear of that window in both GMT and BST. See
+[the backup design](../../docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md),
+item 2.
+
+## Point-in-time recovery (optional)
+
+Off by default (`postgresql.pgbackrest.enabled: false`), and while off the
+Postgres pod renders exactly as without it. When enabled, the bundled
+Postgres runs `docker/postgres-pgbackrest.Dockerfile` (the same
+`postgres:16.15-trixie` plus pgBackRest), archives its WAL to an S3
+repository with client-side AES-256 encryption, and three CronJobs take a
+weekly full backup, a daily differential and a daily check (`check`,
+`verify` and a WAL gap check). The CronJobs `kubectl exec` into the Postgres
+pod; their Role allows only `get` and `pods/exec` on that one pod.
+`archive.queueMax` (archive-push-queue-max) drops WAL rather than let
+`pg_wal` fill the disk when the repository is unreachable, and the daily
+check reports the gap that leaves.
+
+Required when enabled: `postgresql.pgbackrest.image.tag` (the image's
+stable tag with its digest), `repo.path`, `repo.s3.endpoint`,
+`repo.s3.bucket` and `repo.s3.existingSecret`, a Secret holding
+`access-key-id`, `secret-access-key` and `cipher-pass`. No secret is ever
+taken from values. Keep an offline copy of the cipher passphrase: the
+repository can't be read without it.
+
+It doesn't replace a logical dump. See
+[docs/postgres-pitr.md](../../docs/postgres-pitr.md) for enabling it
+(including `stanza-create`), the alerts, a point-in-time restore, and the
+restore drill.
+
 ## Ingress
 
 Off by default (`ingress.enabled: false`). The production deployment does not
@@ -1118,6 +1166,54 @@ budget). Before it migrates, it drops any INVALID index that a failed
 | `api.database.maxConnections` | `50` | api pool size per replica. Pools total api 50 per replica + aggregator 10 + notifier 5 + enricher 5 = 70 at one api replica, against Postgres's default `max_connections` of 100 (the chart does not raise it). Each extra api replica adds 50: before scaling to 2 replicas, raise `postgresql.config.max_connections` (restart; check memory) or lower this. |
 | `api.migrations.lockTimeoutSecs` | `10` | `lock_timeout` for startup migrations. |
 | `api.migrations.statementTimeoutSecs` | `240` | `statement_timeout` for each startup migration statement. Keep it below the startup probe budget. |
+
+#### pgBackRest (point-in-time recovery)
+
+Off by default. See [Point-in-time recovery (optional)](#point-in-time-recovery-optional)
+and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
+
+| Key | Default | Description |
+|---|---|---|
+| `postgresql.pgbackrest.enabled` | `false` | Turn on WAL archiving, backups and checks with pgBackRest. Needs `postgresql.enabled`. Turning it on or off restarts Postgres once. |
+| `postgresql.pgbackrest.image.repository` | `ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest` | The Postgres-plus-pgBackRest image (`docker/postgres-pgbackrest.Dockerfile`), as `containers.yml` publishes it. |
+| `postgresql.pgbackrest.image.tag` | `""` | **Required when enabled**: the stable tag with its digest, e.g. `pg16.15-pgbackrest2.59.1@sha256:…`. Never falls back to `appVersion`: a per-release image would restart Postgres on every deploy. |
+| `postgresql.pgbackrest.image.digest` | `""` | Content digest, used instead of `tag` when set. |
+| `postgresql.pgbackrest.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `postgresql.pgbackrest.stanza` | `ds` | pgBackRest stanza name. |
+| `postgresql.pgbackrest.processMax` | `2` | Parallel processes for async archive-push, backup and restore. |
+| `postgresql.pgbackrest.repo.path` | `""` | **Required when enabled**: absolute repository path in the bucket, e.g. `/mine-bringer/pgbackrest/distant-signal`. `expire` deletes under it only. |
+| `postgresql.pgbackrest.repo.retentionFullType` | `time` | `time`: keep what's needed to restore to any point in the last `retentionFull` days. `count`: keep that many full backups. |
+| `postgresql.pgbackrest.repo.retentionFull` | `7` | Days (or full backups). Backups hold personal data until they expire, so keep it short. |
+| `postgresql.pgbackrest.repo.bundle` | `true` | Bundle small files into fewer repository objects. |
+| `postgresql.pgbackrest.repo.s3.endpoint` | `""` | **Required when enabled**: S3 endpoint host name, no scheme. Also the TLS name that is verified. |
+| `postgresql.pgbackrest.repo.s3.port` | `443` | Endpoint port. |
+| `postgresql.pgbackrest.repo.s3.storageHost` | `""` | Connect to this host instead of `endpoint`, which is still used for TLS and signing. |
+| `postgresql.pgbackrest.repo.s3.bucket` | `""` | **Required when enabled**: bucket name. |
+| `postgresql.pgbackrest.repo.s3.region` | `us-east-1` | Region requests are signed for. |
+| `postgresql.pgbackrest.repo.s3.uriStyle` | `path` | `path` or `host` (virtual-hosted) addressing. |
+| `postgresql.pgbackrest.repo.s3.verifyTls` | `true` | Verify the endpoint's certificate. |
+| `postgresql.pgbackrest.repo.s3.existingSecret` | `""` | **Required when enabled**: existing Secret with the S3 key pair (and, by default, the cipher passphrase). |
+| `postgresql.pgbackrest.repo.s3.accessKeyIdKey` / `.secretAccessKeyKey` | `access-key-id` / `secret-access-key` | Keys within `repo.s3.existingSecret`. |
+| `postgresql.pgbackrest.repo.cipher.type` | `aes-256-cbc` | Client-side repository encryption. Can't be empty. |
+| `postgresql.pgbackrest.repo.cipher.existingSecret` | `""` | Existing Secret with the cipher passphrase. Empty means `repo.s3.existingSecret`. Keep an offline copy of the passphrase. |
+| `postgresql.pgbackrest.repo.cipher.passphraseKey` | `cipher-pass` | Key within that Secret. |
+| `postgresql.pgbackrest.archive.async` | `true` | Asynchronous, parallel archive-push through a spool on the data volume. |
+| `postgresql.pgbackrest.archive.queueMax` | `8GB` | Disk-full guard (`archive-push-queue-max`): past this much queued WAL, pgBackRest drops WAL (a PITR gap the daily check reports) instead of filling the disk. Base-1024 units. Needs `async`; `""` turns it off. |
+| `postgresql.pgbackrest.archive.timeoutSecs` | `60` | Postgres `archive_timeout`: bounds the recovery point objective while anything writes. |
+| `postgresql.pgbackrest.compress.type` / `.level` | `zst` / `3` | Repository compression. |
+| `postgresql.pgbackrest.backup.timeZone` | `Etc/UTC` | `spec.timeZone` of the three CronJobs. |
+| `postgresql.pgbackrest.backup.fullSchedule` | `30 3 * * 0` | Weekly full backup (Sunday 03:30 UTC). |
+| `postgresql.pgbackrest.backup.diffSchedule` | `30 3 * * 1-6` | Differential backup the other days (03:30 UTC). |
+| `postgresql.pgbackrest.backup.checkSchedule` | `0 5 * * *` | Daily `check`, `verify` and WAL gap check (05:00 UTC). |
+| `postgresql.pgbackrest.backup.verify` | `true` | Run `pgbackrest verify` in the daily check. It reads the whole repository back each day. |
+| `postgresql.pgbackrest.backup.suspend` | `false` | Suspend the three CronJobs (archiving continues). |
+| `postgresql.pgbackrest.backup.activeDeadlineSeconds` | `21600` | Kill a backup or check Job that runs longer. |
+| `postgresql.pgbackrest.backup.backoffLimit` | `1` | Retries of a failed Job. A retried backup resumes. |
+| `postgresql.pgbackrest.backup.startingDeadlineSeconds` | `3600` | Skip a run that can't start within this long of its time. |
+| `postgresql.pgbackrest.backup.image.repository` / `.tag` / `.pullPolicy` | `registry.k8s.io/kubectl`, `v1.36.5@sha256:…`, `IfNotPresent` | The image the CronJobs run `kubectl exec` from. Keep it within one minor version of the cluster. |
+| `postgresql.pgbackrest.backup.resources` | requests `20m`/`32Mi`, limit `128Mi` | CronJob pod resources. The work happens in the Postgres container. |
+| `postgresql.pgbackrest.backup.podSecurityContext` | `{}` | Merged over the CronJob pods' securityContext (non-root uid 65532 by default). |
+| `metrics.prometheusRule.pgbackrest` | see `values.yaml` | The pgBackRest alerts' windows, ages, `archiverSelector` and severity (see [Alerts](#alerts)). |
 
 ### externalDatabase
 
@@ -1997,6 +2093,12 @@ alert only when `archive.enabled`, the archive-expiry group only when
 | `DistantSignalPollerFailing` | warning | A poller completed no successful cycle and at least one failed one (`poller_cycle_total{result}`) over the last 2h, or more than half its cycles over the last 1h failed (`pollerFailures.failureRatio`, `ratioWindow`) (SVC-08). Rendered only when a poller (including an island-of-Ireland one) is enabled, in a separate `<fullname>-pollers` PrometheusRule. |
 | `DistantSignalLdbwsStationStale` | warning | The least recently sampled LDBWS station (`ldbws_stalest_station_age_seconds`) is over 7200s old for 30m: the rotation stopped reaching part of the list (SVC-04). Stations LDBWS rejects as an invalid CRS are excluded. Only when `pollers.ldbws.enabled`. |
 | `DistantSignalLdbwsInvalidCrs` | warning | LDBWS has answered "Invalid crs code supplied" for a sample station (`ldbws_invalid_crs_station{crs}` is 1) for 15m: a `lines/*.toml` typo. The poller re-probes it hourly instead of every cycle. Only when `pollers.ldbws.enabled`. |
+| `DistantSignalPgBackRestCheckFailed` | critical | The daily pgBackRest check Job failed within 26h: archiving is broken, `verify` found a bad file, or WAL is missing (a PITR gap). This group renders only with `postgresql.pgbackrest.enabled`, in a separate `<fullname>-pgbackrest` PrometheusRule (`metrics.prometheusRule.pgbackrest`), and reads kube-state-metrics and postgres_exporter series rather than this chart's own. Runbook: `docs/postgres-pitr.md`. |
+| `DistantSignalPgBackRestBackupFailed` | warning | A full or diff backup Job failed within 26h. |
+| `DistantSignalPgBackRestBackupStale` | warning | No full or diff backup CronJob success (`kube_cronjob_status_last_successful_time`) for 30h, for 10m. |
+| `DistantSignalPgBackRestFullBackupStale` | warning | No full backup success for 8d, for 10m. |
+| `DistantSignalPgBackRestArchiveFailing` | warning | postgres_exporter's `pg_stat_archiver_failed_count` rose over 15m, for 10m. |
+| `DistantSignalPgBackRestArchiveStalled` | warning | `pg_stat_archiver_archived_count` didn't rise over 15m, for 10m (`archive_timeout` switches segments every minute while anything writes). |
 
 Metric names above omit the `distant_signal_` prefix every app metric
 carries. The dead-letter and stream-gap counters are registered at 0 when

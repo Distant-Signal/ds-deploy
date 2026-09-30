@@ -332,6 +332,173 @@ postgresql:
   tolerations: []
   affinity: {}
   podAnnotations: {}
+  # Point-in-time recovery (PITR) with pgBackRest, on this StatefulSet.
+  # OFF by default: while `enabled` is false nothing below renders, and the
+  # Postgres pod is exactly as without this block. Design:
+  # docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md,
+  # item 1. Runbook (enable, restore, drill): docs/postgres-pitr.md.
+  #
+  # When enabled, the chart:
+  #   - swaps the Postgres image for docker/postgres-pgbackrest.Dockerfile
+  #     (the same postgres base plus pgBackRest);
+  #   - adds `archive_mode=on`, `archive_command` (pgBackRest archive-push)
+  #     and `archive_timeout` to the `-c` args, over `config`. Turning this
+  #     on or off restarts Postgres once;
+  #   - adds PGBACKREST_* env: an S3 repository with client-side AES-256
+  #     encryption, zstd compression, and async archiving whose spool sits
+  #     on the data volume beside PGDATA (not inside it);
+  #   - renders three CronJobs (full, diff, check), which `kubectl exec`
+  #     pgBackRest in the Postgres pod. Their ServiceAccount's Role allows
+  #     `get` on that one pod and `pods/exec` on it, and nothing else;
+  #   - renders the pgBackRest alerts when metrics.prometheusRule is on
+  #     (metrics.prometheusRule.pgbackrest).
+  #
+  # Secrets never go in values: the S3 key pair and the cipher passphrase
+  # come from existing Secrets. KEEP AN OFFLINE COPY OF THE PASSPHRASE: the
+  # repository can't be read without it, so a copy that lives only in the
+  # cluster is lost with the cluster.
+  #
+  # The stanza must exist before archiving works: run `stanza-create` right
+  # after the first restart with this on (docs/postgres-pitr.md). Until
+  # then archive-push fails and WAL stays in pg_wal.
+  pgbackrest:
+    # -- Turn on pgBackRest WAL archiving, backups and checks. Needs
+    # `postgresql.enabled`.
+    enabled: false
+    image:
+      # -- The postgres-pgbackrest image (containers.yml builds it, with a
+      # stable `pg<postgres>-pgbackrest<version>` tag), as published.
+      repository: ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest
+      # -- REQUIRED when enabled: the stable tag WITH its digest, e.g.
+      # "pg16.15-pgbackrest2.59.1@sha256:...". Unlike the other first-party
+      # images this never falls back to the chart's appVersion: CI rebuilds
+      # the image on every push, and a new digest in the pod template would
+      # restart Postgres on every deploy. Keep it on the same Postgres
+      # version as `postgresql.image.tag`.
+      tag: ""
+      # -- Content digest, used instead of `tag` when set.
+      digest: ""
+      pullPolicy: IfNotPresent
+    # -- pgBackRest stanza name. Changing it after `stanza-create` needs a
+    # new stanza (and a new full backup).
+    stanza: ds
+    # -- Parallel processes for archive-push (async), backup and restore.
+    processMax: 2
+    repo:
+      # -- REQUIRED when enabled: the repository's absolute path in the
+      # bucket, e.g. /mine-bringer/pgbackrest/distant-signal. pgBackRest's
+      # `expire` deletes under this path only. Keep it outside every other
+      # job's prefix, so neither side's pruning can touch the other.
+      path: ""
+      # -- `time`: keep the full backups (and their WAL) needed to restore
+      # to any point in the last `retentionFull` days. `count`: keep that
+      # many full backups.
+      retentionFullType: time
+      # -- Days (or full backups, see retentionFullType) to keep. Backups
+      # hold personal data until they expire, so keep this short
+      # (docs/personal-data-retention.md).
+      retentionFull: 7
+      # -- Bundle small files into fewer repository objects (repo1-bundle),
+      # which cuts the PUT count on S3.
+      bundle: true
+      s3:
+        # -- REQUIRED when enabled: the S3 endpoint host (no scheme), e.g.
+        # ra.tail3e0c1e.ts.net. It is also the TLS name that is verified.
+        endpoint: ""
+        # -- Port of the endpoint.
+        port: 443
+        # -- Connect to this host instead of `endpoint`, keeping `endpoint`
+        # for TLS verification and request signing. Empty uses `endpoint`.
+        storageHost: ""
+        # -- REQUIRED when enabled: bucket name.
+        bucket: ""
+        # -- S3 region pgBackRest signs requests for.
+        region: us-east-1
+        # -- `path` (bucket in the path) or `host` (virtual-hosted style).
+        uriStyle: path
+        # -- Verify the endpoint's TLS certificate. Turn off only for a
+        # throwaway test endpoint.
+        verifyTls: true
+        # -- REQUIRED when enabled: existing Secret holding the S3 key pair
+        # (and, by default, the cipher passphrase).
+        existingSecret: ""
+        # -- Key within `existingSecret` holding the access key id.
+        accessKeyIdKey: access-key-id
+        # -- Key within `existingSecret` holding the secret access key.
+        secretAccessKeyKey: secret-access-key
+      cipher:
+        # -- Client-side repository encryption (repo1-cipher-type). Every
+        # file is encrypted before it leaves the pod.
+        type: aes-256-cbc
+        # -- Existing Secret holding the cipher passphrase. Empty means
+        # `repo.s3.existingSecret`.
+        existingSecret: ""
+        # -- Key within the Secret holding the passphrase.
+        passphraseKey: cipher-pass
+    archive:
+      # -- Archive asynchronously (archive-async): WAL is pushed in parallel
+      # batches through a spool on the data volume. `queueMax` needs it.
+      async: true
+      # -- Disk-full guard (archive-push-queue-max): once this much WAL is
+      # waiting (Thoth down), pgBackRest DROPS WAL, keeping Postgres up at
+      # the cost of a PITR gap, which the daily check job reports. pgBackRest
+      # units are base 1024 (GB = GiB). Size it below the free space on the
+      # data volume's filesystem.
+      queueMax: 8GB
+      # -- Postgres `archive_timeout` in seconds: switch to a new WAL
+      # segment at least this often while there are writes, which bounds
+      # the recovery point objective.
+      timeoutSecs: 60
+    compress:
+      # -- Repository compression (compress-type).
+      type: zst
+      # -- Compression level (compress-level).
+      level: 3
+    backup:
+      # -- Time zone of the three schedules below (CronJob spec.timeZone).
+      # Etc/UTC: backups must not move with DST.
+      timeZone: Etc/UTC
+      # -- Weekly full backup (Sunday 03:30 UTC). Backups stay between 03:00
+      # and 04:15 UTC, clear of the nightly schedule ingest (chart README,
+      # "Scheduled jobs and time zones").
+      fullSchedule: "30 3 * * 0"
+      # -- Differential backup on the other days (03:30 UTC).
+      diffSchedule: "30 3 * * 1-6"
+      # -- Daily `pgbackrest check`, `verify` (see `verify`) and the WAL gap
+      # check (05:00 UTC, after the backup).
+      checkSchedule: "0 5 * * *"
+      # -- Run `pgbackrest verify` in the daily check. It reads the whole
+      # repository back (decrypt and checksum), roughly the repository's
+      # size in traffic from S3 each day. false keeps `check` and the WAL
+      # gap check only.
+      verify: true
+      # -- Suspend all three CronJobs (WAL archiving continues).
+      suspend: false
+      # -- Kill a backup or check Job that runs longer than this.
+      activeDeadlineSeconds: 21600
+      # -- Retries of a failed Job (a retried backup resumes).
+      backoffLimit: 1
+      # -- A run that can't start within this many seconds of its time is
+      # skipped.
+      startingDeadlineSeconds: 3600
+      # -- The image the CronJobs run `kubectl exec` from. Digest-pinned in
+      # the tag; Renovate bumps it. Keep it within one minor version of the
+      # cluster.
+      image:
+        repository: registry.k8s.io/kubectl
+        tag: "v1.36.5@sha256:0667e3f3e6ef435d7cd4c16684244703ebd67314c17511c2a9f87ea44f6cdf6b"
+        pullPolicy: IfNotPresent
+      # -- CronJob pod resources. kubectl only streams pgBackRest's output;
+      # the work happens in the Postgres container.
+      resources:
+        requests:
+          cpu: 20m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+      # -- Merged over the CronJob pods' securityContext (non-root uid 65532
+      # by default: the kubectl image's own user is root).
+      podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
 # External database (used only when postgresql.enabled is false)
@@ -3102,6 +3269,35 @@ metrics:
     # Prefix for each alert's runbook_url; the repo-relative doc path is
     # appended.
     runbookBaseUrl: https://github.com/FasterSpeeding/Distant-Signal/blob/main
+    # pgBackRest alerts, rendered as a separate `<fullname>-pgbackrest`
+    # PrometheusRule and only while postgresql.pgbackrest.enabled is also
+    # true. Runbook: docs/postgres-pitr.md.
+    #
+    # DistantSignalPgBackRestCheckFailed (critical): the daily check Job
+    # failed within `recentJobWindow`: archiving is broken, `verify` found a
+    # bad file, or WAL is missing (a PITR gap, e.g. dropped at queueMax).
+    # DistantSignalPgBackRestBackupFailed: a full or diff backup Job failed
+    # within `recentJobWindow`.
+    # DistantSignalPgBackRestBackupStale: no full or diff backup succeeded
+    # for `backupMaxAge`; DistantSignalPgBackRestFullBackupStale: no full
+    # backup for `fullBackupMaxAge`. Both read kube-state-metrics' CronJob
+    # series.
+    # DistantSignalPgBackRestArchiveFailing: pg_stat_archiver's failed count
+    # rose within `archiveWindow`. DistantSignalPgBackRestArchiveStalled: no
+    # WAL segment archived within `archiveStallWindow` (archive_timeout
+    # forces one a minute while anything writes). Both read
+    # postgres_exporter's stat_archiver collector (on by default), which
+    # this chart doesn't deploy: `archiverSelector` adds label matchers for
+    # its series, next to namespace="<release namespace>".
+    pgbackrest:
+      enabled: true
+      recentJobWindow: 26h
+      backupMaxAge: 30h
+      fullBackupMaxAge: 8d
+      archiveWindow: 15m
+      archiveStallWindow: 15m
+      archiverSelector: ""
+      severity: warning
     # Needs movementRelay.enabled (all rules in this group read
     # movement-events state).
     #

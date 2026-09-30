@@ -1,0 +1,154 @@
+{{- /*
+pgBackRest alerts (metrics.prometheusRule.pgbackrest), a separate
+PrometheusRule so the main one's groups stay as they are. Renders only with
+metrics.enabled, metrics.prometheusRule.enabled and
+postgresql.pgbackrest.enabled. Runbook: docs/postgres-pitr.md.
+
+Two sources, neither of them this chart's own exporters:
+  - kube-state-metrics for the three CronJobs (kube_job_failed with
+    condition="true" is the Job's Failed condition, so a Job that failed
+    once and succeeded on retry doesn't count; kube_job_status_start_time
+    limits it to recent Jobs, because failed Jobs stay in the history);
+  - postgres_exporter's stat_archiver collector (on by default) for
+    pg_stat_archiver. pgBackRest's archive-push-queue-max drop still counts
+    as "archived" there, so a dropped segment shows up only as the check
+    Job failing (its WAL gap check), which is why that alert is critical.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled (include "distant-signal.pgbackrestEnabled" .) }}
+{{- with .Values.metrics.prometheusRule.pgbackrest }}
+{{- if .enabled }}
+{{- $rule := $.Values.metrics.prometheusRule }}
+{{- $ns := $.Release.Namespace }}
+{{- $fullname := include "distant-signal.fullname" $ }}
+{{- $cronjob := printf "%s-pgbackrest" $fullname | trunc 46 | trimSuffix "-" }}
+{{- $runbook := printf "%s/docs/postgres-pitr.md" (trimSuffix "/" $rule.runbookBaseUrl) }}
+{{- $extraLabels := $rule.ruleLabels | default dict }}
+{{- $archiver := printf "namespace=%q" $ns }}
+{{- with .archiverSelector }}
+{{- $archiver = printf "%s, %s" $archiver . }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ printf "%s-pgbackrest" $fullname | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" $ "component" "metrics") | nindent 4 }}
+    {{- with $rule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $rule.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+    - name: distant-signal.pgbackrest
+      rules:
+        - alert: DistantSignalPgBackRestCheckFailed
+          expr: |
+            max by (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-check-[0-9]+", condition="true"} == 1)
+            and on (namespace, job_name)
+            (time() - kube_job_status_start_time{namespace="{{ $ns }}"} < {{ include "distant-signal.durationSeconds" .recentJobWindow }})
+          for: 0m
+          labels:
+            severity: critical
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "pgBackRest daily check failed ({{ "{{ $labels.job_name }}" }})"
+            description: >-
+              The pgBackRest check Job {{ "{{ $labels.namespace }}/{{ $labels.job_name }}" }}
+              failed. Either WAL archiving is broken (the repository is
+              unreachable, or its credentials or stanza are wrong),
+              `pgbackrest verify` found a bad file, or WAL is missing from
+              the repository, so point-in-time recovery can't cross that
+              gap. Read the Job's log to see which.
+            runbook_url: {{ $runbook | quote }}
+        - alert: DistantSignalPgBackRestBackupFailed
+          expr: |
+            max by (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(full|diff)-[0-9]+", condition="true"} == 1)
+            and on (namespace, job_name)
+            (time() - kube_job_status_start_time{namespace="{{ $ns }}"} < {{ include "distant-signal.durationSeconds" .recentJobWindow }})
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "pgBackRest backup failed ({{ "{{ $labels.job_name }}" }})"
+            description: >-
+              The pgBackRest backup Job {{ "{{ $labels.namespace }}/{{ $labels.job_name }}" }}
+              failed. WAL archiving is separate and may still be working;
+              the restore window keeps growing from the last good backup.
+            runbook_url: {{ $runbook | quote }}
+        - alert: DistantSignalPgBackRestBackupStale
+          expr: |
+            time() - max by (namespace) (kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob=~"{{ $cronjob }}-(full|diff)"}) > {{ include "distant-signal.durationSeconds" .backupMaxAge }}
+          for: 10m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no pgBackRest backup for {{ "{{ $value | humanizeDuration }}" }}"
+            description: >-
+              Neither the full nor the diff CronJob in {{ "{{ $labels.namespace }}" }}
+              has succeeded for over {{ .backupMaxAge }}.
+            runbook_url: {{ $runbook | quote }}
+        - alert: DistantSignalPgBackRestFullBackupStale
+          expr: |
+            time() - max by (namespace) (kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="{{ $cronjob }}-full"}) > {{ include "distant-signal.durationSeconds" .fullBackupMaxAge }}
+          for: 10m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no full pgBackRest backup for {{ "{{ $value | humanizeDuration }}" }}"
+            description: >-
+              The weekly full backup CronJob in {{ "{{ $labels.namespace }}" }}
+              hasn't succeeded for over {{ .fullBackupMaxAge }}. Diffs grow
+              until the next full, and time-based retention keeps the old
+              full (and its WAL) until a newer one exists.
+            runbook_url: {{ $runbook | quote }}
+        - alert: DistantSignalPgBackRestArchiveFailing
+          expr: |
+            sum by (namespace) (increase(pg_stat_archiver_failed_count{ {{- $archiver -}} }[{{ .archiveWindow }}])) > 0
+          for: 10m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Postgres WAL archiving is failing"
+            description: >-
+              archive_command (pgBackRest archive-push) in {{ "{{ $labels.namespace }}" }}
+              has kept failing over {{ .archiveWindow }}. WAL piles up in the spool
+              or pg_wal; past archive.queueMax pgBackRest drops it, leaving
+              a PITR gap. Check the Postgres log for pgBackRest errors.
+            runbook_url: {{ $runbook | quote }}
+        - alert: DistantSignalPgBackRestArchiveStalled
+          expr: |
+            sum by (namespace) (increase(pg_stat_archiver_archived_count{ {{- $archiver -}} }[{{ .archiveStallWindow }}])) == 0
+          for: 10m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Postgres archived no WAL for {{ .archiveStallWindow }}"
+            description: >-
+              No WAL segment was archived in {{ "{{ $labels.namespace }}" }}
+              over {{ .archiveStallWindow }}, although archive_timeout
+              switches segments every minute while anything writes. Check
+              the Postgres log, and pg_stat_archiver's last_failed_wal.
+            runbook_url: {{ $runbook | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

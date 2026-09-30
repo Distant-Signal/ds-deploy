@@ -1,0 +1,147 @@
+{{- /*
+pgBackRest backup and check CronJobs (postgresql.pgbackrest). Each runs
+`kubectl exec` into the Postgres pod, so pgBackRest runs where the data
+directory is, with the container's PGBACKREST_* env. Design:
+docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md,
+item 1 (why exec, rather than a pgBackRest TLS server sidecar or an in-pod
+scheduler); runbook: docs/postgres-pitr.md.
+
+The ServiceAccount's Role allows `get` on the one Postgres pod (kubectl exec
+reads it first) and `pods/exec` on that pod only: `create` for SPDY, and
+`get` for the WebSocket upgrade newer kubectl clients use. Nothing else.
+These pods, unlike every other pod in the chart, mount a ServiceAccount
+token: a documented exception (the design above) to "no pod talks to the
+Kubernetes API".
+*/}}
+{{- if include "distant-signal.pgbackrestEnabled" . }}
+{{- $root := . }}
+{{- $pb := .Values.postgresql.pgbackrest }}
+{{- $fullname := include "distant-signal.fullname" . }}
+{{- /* 46 + "-check" stays within a CronJob name's 52 characters. */}}
+{{- $name := printf "%s-pgbackrest" $fullname | trunc 46 | trimSuffix "-" }}
+{{- $pod := printf "%s-0" (include "distant-signal.postgresFullname" .) }}
+{{- $checkCmd := list "pgbackrest-daily-check" }}
+{{- if eq (toString $pb.backup.verify) "false" }}
+{{- $checkCmd = append $checkCmd "--no-verify" }}
+{{- end }}
+{{- $jobs := list
+  (dict "suffix" "full" "schedule" $pb.backup.fullSchedule "command" (list "pgbackrest" "--log-level-console=info" "--type=full" "backup"))
+  (dict "suffix" "diff" "schedule" $pb.backup.diffSchedule "command" (list "pgbackrest" "--log-level-console=info" "--type=diff" "backup"))
+  (dict "suffix" "check" "schedule" $pb.backup.checkSchedule "command" $checkCmd)
+}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "pgbackrest") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "pgbackrest") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: [{{ $pod | quote }}]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    resourceNames: [{{ $pod | quote }}]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "pgbackrest") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- range $jobs }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-%s" $name .suffix }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" $root "component" "pgbackrest") | nindent 4 }}
+spec:
+  schedule: {{ .schedule | quote }}
+  # Explicit, never the node's local zone (chart README, "Scheduled jobs and
+  # time zones"; CI checks every CronJob has one).
+  timeZone: {{ required "postgresql.pgbackrest.backup.timeZone is required" $pb.backup.timeZone | quote }}
+  # pgBackRest's own lock refuses a second backup anyway; Forbid keeps the
+  # skipped run visible as "not started" instead of a failed Job.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ int64 $pb.backup.startingDeadlineSeconds }}
+  suspend: {{ eq (toString $pb.backup.suspend) "true" }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "distant-signal.selectorLabels" (dict "root" $root "component" "pgbackrest") | nindent 8 }}
+        app.kubernetes.io/part-of: distant-signal
+    spec:
+      backoffLimit: {{ int64 $pb.backup.backoffLimit }}
+      activeDeadlineSeconds: {{ int64 $pb.backup.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "distant-signal.selectorLabels" (dict "root" $root "component" "pgbackrest") | nindent 12 }}
+            app.kubernetes.io/part-of: distant-signal
+        spec:
+          serviceAccountName: {{ $name }}
+          # The one exception to automountServiceAccountToken: false in this
+          # chart: kubectl exec needs the token (see the top of this file).
+          automountServiceAccountToken: true
+          restartPolicy: Never
+          {{- with $root.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- $defaults := dict "runAsNonRoot" true "runAsUser" 65532 "runAsGroup" 65532 "seccompProfile" (dict "type" "RuntimeDefault") }}
+            {{- toYaml (mergeOverwrite $defaults (default (dict) $pb.backup.podSecurityContext | deepCopy)) | nindent 12 }}
+          containers:
+            - name: pgbackrest
+              image: {{ include "distant-signal.image" (dict "root" $root "image" $pb.backup.image) | quote }}
+              imagePullPolicy: {{ $pb.backup.image.pullPolicy }}
+              args:
+                - exec
+                - --namespace={{ $root.Release.Namespace }}
+                - {{ $pod }}
+                - --container=postgres
+                - --
+                {{- range .command }}
+                - {{ . | quote }}
+                {{- end }}
+              env:
+                # kubectl's cache directory; the root filesystem is read-only.
+                - name: HOME
+                  value: /tmp
+              securityContext:
+                {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 16 }}
+              {{- with $pb.backup.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 16Mi
+{{- end }}
+{{- end }}

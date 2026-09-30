@@ -1,8 +1,9 @@
 name: Containers
 
-# Build (and, on push to main/master, publish) all 14 container images this
-# repo defines: the 13 Rust service Dockerfiles under docker/, and
-# frontend/Dockerfile's `runtime-prod` target. This is the "main aim"
+# Build (and, on push to main/master, publish) every container image this
+# repo defines: the Rust service Dockerfiles under docker/,
+# docker/postgres-pgbackrest.Dockerfile (the bundled Postgres plus
+# pgBackRest), and frontend/Dockerfile's `runtime-prod` target. This is the "main aim"
 # CI/CD job per the repo owner's request.
 #
 # Why this is a hand-rolled matrix job rather than a call into
@@ -185,6 +186,15 @@ jobs:
           - service: schedule-reference
             dockerfile: docker/schedule-reference.Dockerfile
             target: ""
+          # The bundled Postgres plus pgBackRest (postgresql.pgbackrest).
+          # Built and pushed like the rest, but its digest is NOT pinned into
+          # the packaged chart (see "Record image digest" below): a new digest
+          # on every push would restart Postgres on every deploy. It gets a
+          # `pg<postgres>-pgbackrest<version>` tag as well, and the chart's
+          # values pin a digest of that tag by hand.
+          - service: postgres-pgbackrest
+            dockerfile: docker/postgres-pgbackrest.Dockerfile
+            target: ""
           # The only image needing an explicit target: frontend/Dockerfile's
           # last stage is `runtime-dev`; the image this repo wants published
           # is the earlier `runtime-prod` stage (optimized `next build` +
@@ -212,6 +222,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # postgres-pgbackrest only: a tag naming the two versions inside, read
+      # from the Dockerfile (`FROM postgres:<version>-...` and
+      # `ARG PGBACKREST_VERSION=<upstream>-<debian revision>`), e.g.
+      # `pg16.15-pgbackrest2.59.1`. It says which versions an image holds;
+      # every push to main re-points it at that push's rebuild, so the
+      # chart's values pin a digest next to it (see the matrix entry's
+      # comment), and the operator picks up a rebuild on purpose.
+      - name: Compute the postgres-pgbackrest version tag
+        id: pgtag
+        if: matrix.service == 'postgres-pgbackrest'
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          set -euo pipefail
+          pg=$(sed -n 's/^FROM postgres:\([0-9][0-9.]*\)-.*/\1/p' "${DOCKERFILE}")
+          pgbr=$(sed -n 's/^ARG PGBACKREST_VERSION=\([0-9][0-9.]*\)-.*/\1/p' "${DOCKERFILE}")
+          if [[ -z "${pg}" || -z "${pgbr}" ]]; then
+            echo "::error::could not read the Postgres or pgBackRest version from ${DOCKERFILE}" >&2
+            exit 1
+          fi
+          echo "tag=pg${pg}-pgbackrest${pgbr}" >> "${GITHUB_OUTPUT}"
+
       # Explicit `tags:` here reproduces the action's own bare defaults
       # (schedule/branch/tag/pr -- see this file's top-of-file "Tagging"
       # comment) and adds `type=sha` on top, so every image also gets an
@@ -228,6 +260,7 @@ jobs:
             type=ref,event=tag
             type=ref,event=pr
             type=sha
+            type=raw,value=${{ steps.pgtag.outputs.tag }},enable=${{ matrix.service == 'postgres-pgbackrest' }}
 
       # Build on every trigger (including PRs, as a build-sanity check);
       # push+cache only outside pull_request. Mirrors Piped's own
@@ -281,15 +314,20 @@ jobs:
       # built locally, but there is nothing for a chart to pin to from an
       # unpublished PR build, and PRs don't get a `packages:write` token
       # anyway) -- same gate as the push/sign steps above.
+      #
+      # postgres-pgbackrest is left out on purpose: pinning its per-push
+      # digest into the chart would roll the Postgres StatefulSet (a
+      # database restart) on every deploy. Its digest is pinned by hand in
+      # values (`postgresql.pgbackrest.image.tag`), next to its stable tag.
       - name: Record image digest
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && matrix.service != 'postgres-pgbackrest'
         env:
           SERVICE: ${{ matrix.service }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: echo "${SERVICE}=${DIGEST}" > "digest-${SERVICE}.txt"
 
       - name: Upload image digest artifact
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && matrix.service != 'postgres-pgbackrest'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-digest-${{ matrix.service }}

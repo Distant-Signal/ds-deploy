@@ -1312,3 +1312,164 @@ jobs:
             --set api.sso.redirectUrl=https://app.example.com/callback \
             --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
             > /dev/null
+
+      # Every CronJob the chart renders must set an explicit spec.timeZone
+      # (docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md,
+      # item 2). Without one the schedule is read in the node's local zone,
+      # which the cluster doesn't control: mine-bringer runs at UTC+2, so a
+      # "02:00 UTC" backup really ran at 00:00 UTC. Backups and maintenance
+      # use Etc/UTC; jobs tied to the GB rail day use Europe/London. The
+      # zone must also exist in the runner's tzdata, because the API server
+      # rejects an unknown name. Rendered with every optional feature that
+      # adds a CronJob turned on.
+      - name: helm template (every CronJob sets timeZone)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          # One "<name> <timeZone>" line per CronJob; "-" when timeZone is unset.
+          cronjobs() {
+            awk 'BEGIN { RS = "\n---\n" }
+              /(^|\n)kind: CronJob\n/ {
+                name = "?"; tz = "-"
+                if (match($0, /\n  name: [^\n]+/)) name = substr($0, RSTART + 9, RLENGTH - 9)
+                if (match($0, /\n  timeZone: [^\n]+/)) tz = substr($0, RSTART + 13, RLENGTH - 13)
+                gsub(/"/, "", tz)
+                print name, tz
+              }'
+          }
+          # Reads a render on stdin; $1 labels the output, $2 is the number
+          # of CronJobs that render must contain.
+          check() {
+            local label="$1" want="$2" found n=0 name tz
+            found=$(cronjobs)
+            while read -r name tz; do
+              [[ -n "${name}" ]] || continue
+              n=$((n + 1))
+              [[ "${tz}" != "-" ]] || fail "${label}: CronJob ${name} has no spec.timeZone"
+              [[ -f "/usr/share/zoneinfo/${tz}" ]] || fail "${label}: CronJob ${name} timeZone ${tz} is not a known zone"
+              echo "${label}: ${name} ${tz}"
+            done <<<"${found}"
+            [[ "${n}" -eq "${want}" ]] || fail "${label}: expected ${want} CronJob(s), found ${n}"
+          }
+          render | check "default values" 0
+          render -f charts/distant-signal/values-example.yaml | check "values-example.yaml" 0
+          pgbackrest=(
+            --set postgresql.pgbackrest.enabled=true
+            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1
+            --set postgresql.pgbackrest.repo.path=/test/pgbackrest
+            --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
+            --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
+            --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds
+          )
+          render "${pgbackrest[@]}" | check "pgBackRest enabled" 3
+
+      # postgresql.pgbackrest (docs/postgres-pitr.md). Off (the default)
+      # must render nothing of it: the Postgres pod stays exactly as before.
+      # On, it must swap the image, add the archiving settings, take every
+      # secret from an existing Secret (never a plaintext value), scope the
+      # CronJobs' Role to exec on the one Postgres pod, and refuse to render
+      # without its required values.
+      - name: helm template (pgBackRest)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set metrics.prometheusRule.enabled=true
+          )
+          on=(
+            --set postgresql.pgbackrest.enabled=true
+            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1
+            --set postgresql.pgbackrest.repo.path=/test/pgbackrest
+            --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
+            --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
+            --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+
+          off=$(render)
+          if grep -n -i -E 'pgbackrest|archive_mode|archive_command' <<<"${off}"; then
+            fail "pgBackRest is off by default but rendered"
+          fi
+          grep -q 'image: "postgres:16' <<<"${off}" || fail "the default Postgres image must stay postgres:16"
+
+          pg=$(render "${on[@]}" --show-only templates/postgres-statefulset.yaml)
+          grep -q 'image: "ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest:pg16.15-pgbackrest2.59.1"' <<<"${pg}" \
+            || fail "pgBackRest must swap in the postgres-pgbackrest image"
+          grep -q -- '- "archive_mode=on"' <<<"${pg}" || fail "archive_mode=on missing"
+          grep -q -- '- "archive_command=pgbackrest --stanza=ds archive-push %p"' <<<"${pg}" \
+            || fail "archive_command missing"
+          grep -q -- '- "archive_timeout=60"' <<<"${pg}" || fail "archive_timeout missing"
+          grep -q -- '- "wal_compression=lz4"' <<<"${pg}" || fail "postgresql.config must still render"
+          grep -A1 'name: PGBACKREST_ARCHIVE_PUSH_QUEUE_MAX$' <<<"${pg}" | grep -q 'value: "8GB"' \
+            || fail "the archive-push-queue-max disk-full guard must default on"
+          grep -A1 'name: PGBACKREST_REPO1_CIPHER_TYPE$' <<<"${pg}" | grep -q 'value: "aes-256-cbc"' \
+            || fail "the repository must be encrypted client-side"
+          for v in PGBACKREST_REPO1_S3_KEY PGBACKREST_REPO1_S3_KEY_SECRET PGBACKREST_REPO1_CIPHER_PASS; do
+            grep -A3 "name: ${v}\$" <<<"${pg}" | grep -q 'name: "pgbackrest-creds"' \
+              || fail "${v} must come from the existing Secret"
+            if grep -A1 "name: ${v}\$" <<<"${pg}" | grep -q 'value:'; then fail "${v} rendered as a plain value"; fi
+          done
+          grep -A1 'name: PGBACKREST_SPOOL_PATH$' <<<"${pg}" | grep -q 'value: "/var/lib/postgresql/data/pgbackrest-spool"' \
+            || fail "the spool must sit on the data volume, outside PGDATA"
+
+          jobs=$(render "${on[@]}" --show-only templates/postgres-pgbackrest.yaml)
+          role=$(awk 'BEGIN{RS="\n---\n"} /\nkind: Role\n/ {print}' <<<"${jobs}")
+          n_scoped=$(grep -c 'resourceNames: \["distant-signal-postgres-0"\]' <<<"${role}" || true)
+          [[ "${n_scoped}" -eq 2 ]] || fail "every Role rule must be scoped to the Postgres pod"
+          n_rules=$(grep -c -- '- apiGroups:' <<<"${role}" || true)
+          [[ "${n_rules}" -eq 2 ]] || fail "the Role must have exactly two rules"
+          grep -q 'resources: \["pods/exec"\]' <<<"${role}" || fail "the Role must allow pods/exec"
+          if grep -E -q 'secrets|delete|update|patch|list|watch|"\*"' <<<"${role}"; then
+            fail "the Role must allow nothing beyond get/exec on the Postgres pod"
+          fi
+          for s in 'full:30 3 \* \* 0' 'diff:30 3 \* \* 1-6' 'check:0 5 \* \* \*'; do
+            cj=$(awk -v n="distant-signal-pgbackrest-${s%%:*}" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}' <<<"${jobs}")
+            grep -q "schedule: \"${s#*:}\"" <<<"${cj}" || fail "${s%%:*} CronJob schedule"
+            grep -q 'timeZone: "Etc/UTC"' <<<"${cj}" || fail "${s%%:*} CronJob must run in Etc/UTC"
+            grep -q 'automountServiceAccountToken: true' <<<"${cj}" || fail "${s%%:*} CronJob needs its token"
+          done
+          grep -q -- '- "pgbackrest-daily-check"' <<<"${jobs}" || fail "the check CronJob must run pgbackrest-daily-check"
+
+          rule=$(render "${on[@]}" --namespace distant-signal \
+            --show-only templates/pgbackrest-prometheusrule.yaml)
+          names=$(sed -n 's/^ *- alert: *//p' <<<"${rule}")
+          n_alerts=$(grep -c . <<<"${names}" || true)
+          [[ "${n_alerts}" -eq 6 ]] || fail "expected 6 pgBackRest alerts, got: ${names}"
+          if bad=$(grep -v '^DistantSignal' <<<"${names}"); then fail "alert names must start with DistantSignal: ${bad}"; fi
+          grep -q 'kube_job_failed{namespace="distant-signal", job_name=~"distant-signal-pgbackrest-check-\[0-9\]+", condition="true"}' <<<"${rule}" \
+            || fail "the check alert must match the check CronJob's Jobs"
+
+          for unset in image.tag repo.path repo.s3.endpoint repo.s3.bucket repo.s3.existingSecret; do
+            if helm template distant-signal charts/distant-signal "${base[@]}" "${on[@]}" \
+                --set "postgresql.pgbackrest.${unset}=" >/dev/null 2>&1; then
+              fail "pgBackRest rendered without postgresql.pgbackrest.${unset}"
+            fi
+          done
+          if helm template distant-signal charts/distant-signal "${base[@]}" "${on[@]}" \
+              --set postgresql.enabled=false \
+              --set externalDatabase.url=postgres://u:p@db.example.com/d >/dev/null 2>&1; then
+            fail "pgBackRest rendered without the bundled Postgres"
+          fi
