@@ -1447,7 +1447,7 @@ jobs:
           if grep -E -q 'secrets|delete|update|patch|list|watch|"\*"' <<<"${role}"; then
             fail "the Role must allow nothing beyond get/exec on the Postgres pod"
           fi
-          for s in 'full:0 4 \* \* 0' 'diff:0 4 \* \* 1-6' 'check:0 6 \* \* \*' 'verify:0 7 \* \* 0'; do
+          for s in 'full:0 5 \* \* 0' 'diff:0 5 \* \* 1-6' 'check:0 7 \* \* \*' 'verify:0 8 \* \* 0'; do
             cj=$(awk -v n="distant-signal-pgbackrest-${s%%:*}" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}' <<<"${jobs}")
             grep -q "schedule: \"${s#*:}\"" <<<"${cj}" || fail "${s%%:*} CronJob schedule"
             grep -q 'timeZone: "Etc/UTC"' <<<"${cj}" || fail "${s%%:*} CronJob must run in Etc/UTC"

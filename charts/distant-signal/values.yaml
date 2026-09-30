@@ -458,21 +458,21 @@ postgresql:
       # -- Time zone of the schedules below (CronJob spec.timeZone).
       # Etc/UTC: backups must not move with DST.
       timeZone: Etc/UTC
-      # -- Weekly full backup (Sunday 04:00 UTC): clear of the nightly
+      # -- Weekly full backup (Sunday 05:00 UTC): clear of the nightly
       # schedule ingest (chart README, "Scheduled jobs and time zones") and
-      # of mine-bringer's other backups, the last of which starts at 03:30.
-      fullSchedule: "0 4 * * 0"
-      # -- Differential backup on the other days (04:00 UTC).
-      diffSchedule: "0 4 * * 1-6"
-      # -- Daily `pgbackrest check` and WAL gap check (06:00 UTC), two hours
+      # of mine-bringer's other backups, the last of which starts at 04:15.
+      fullSchedule: "0 5 * * 0"
+      # -- Differential backup on the other days (05:00 UTC).
+      diffSchedule: "0 5 * * 1-6"
+      # -- Daily `pgbackrest check` and WAL gap check (07:00 UTC), two hours
       # after the backup starts so a Sunday full has finished.
-      checkSchedule: "0 6 * * *"
-      # -- Weekly `pgbackrest verify` (Sunday 07:00 UTC, after the full
+      checkSchedule: "0 7 * * *"
+      # -- Weekly `pgbackrest verify` (Sunday 08:00 UTC, after the full
       # backup and the check): reads the whole repository back, decrypting
       # and checksumming every file, so roughly the repository's size in
       # traffic from S3. A separate CronJob, so its failures and history
       # are its own. Empty renders no verify CronJob.
-      verifySchedule: "0 7 * * 0"
+      verifySchedule: "0 8 * * 0"
       # -- Suspend all the CronJobs (WAL archiving continues).
       suspend: false
       # -- Kill a backup or check Job that runs longer than this.

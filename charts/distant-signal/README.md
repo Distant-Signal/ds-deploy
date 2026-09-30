@@ -741,7 +741,8 @@ ran at 00:00 UTC.
 - Jobs tied to the GB rail day use `Europe/London`, and keep their schedules
   out of 01:00–02:59 local, where DST transitions skip or repeat a run.
 
-Keep backup schedules between 03:00 and 04:15 UTC. The nightly schedule
+Start backup schedules at or after 03:00 UTC (mine-bringer's own backups
+occupy 03:00–04:15, so the pgBackRest jobs start at 05:00). The nightly schedule
 ingest takes deliveries between 22:00 and 01:30 and runs whole-day
 publishes, the heaviest WAL and CPU bursts of the day, and 03:00 UTC is
 clear of that window in both GMT and BST. See
@@ -1202,10 +1203,10 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.archive.timeoutSecs` | `60` | Postgres `archive_timeout`: bounds the recovery point objective while anything writes. |
 | `postgresql.pgbackrest.compress.type` / `.level` | `zst` / `3` | Repository compression. |
 | `postgresql.pgbackrest.backup.timeZone` | `Etc/UTC` | `spec.timeZone` of the CronJobs. |
-| `postgresql.pgbackrest.backup.fullSchedule` | `0 4 * * 0` | Weekly full backup (Sunday 04:00 UTC). |
-| `postgresql.pgbackrest.backup.diffSchedule` | `0 4 * * 1-6` | Differential backup the other days (04:00 UTC). |
-| `postgresql.pgbackrest.backup.checkSchedule` | `0 6 * * *` | Daily `check` and WAL gap check (06:00 UTC, after the backup). |
-| `postgresql.pgbackrest.backup.verifySchedule` | `0 7 * * 0` | Weekly `pgbackrest verify` CronJob (Sunday 07:00 UTC, after the full backup). It reads the whole repository back. Empty renders no verify CronJob. |
+| `postgresql.pgbackrest.backup.fullSchedule` | `0 5 * * 0` | Weekly full backup (Sunday 05:00 UTC). |
+| `postgresql.pgbackrest.backup.diffSchedule` | `0 5 * * 1-6` | Differential backup the other days (05:00 UTC). |
+| `postgresql.pgbackrest.backup.checkSchedule` | `0 7 * * *` | Daily `check` and WAL gap check (07:00 UTC, after the backup). |
+| `postgresql.pgbackrest.backup.verifySchedule` | `0 8 * * 0` | Weekly `pgbackrest verify` CronJob (Sunday 08:00 UTC, after the full backup). It reads the whole repository back. Empty renders no verify CronJob. |
 | `postgresql.pgbackrest.backup.suspend` | `false` | Suspend the CronJobs (archiving continues). |
 | `postgresql.pgbackrest.backup.activeDeadlineSeconds` | `21600` | Kill a backup or check Job that runs longer. |
 | `postgresql.pgbackrest.backup.backoffLimit` | `1` | Retries of a failed Job. A retried backup resumes. |
