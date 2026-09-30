@@ -1059,6 +1059,16 @@ jobs:
             echo "PrometheusRule must not use an 'x unless x offset' new-series clause" >&2; exit 1
           fi
           echo "${names}"
+          # Open sign-up: a burst of new accounts alerts, and the metric and
+          # threshold come from values.
+          grep -q 'alert: DistantSignalUserSignupSpike' <<<"${rule}"
+          grep -q 'increase(ds_api_users_created_total{namespace="[^"]*"}\[1h\])) > 20$' <<<"${rule}"
+          spike=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set metrics.prometheusRule.enabled=true \
+            --set metrics.prometheusRule.userSignupSpike.metric=users_total \
+            --set metrics.prometheusRule.userSignupSpike.threshold=5 \
+            --show-only templates/prometheusrule.yaml)
+          grep -q 'increase(users_total{namespace="[^"]*"}\[1h\])) > 5$' <<<"${spike}"
           # SVC-04/SVC-08: the poller rules render (as <fullname>-pollers)
           # once a poller is enabled.
           pollers=$(helm template distant-signal charts/distant-signal "${base[@]}" \
@@ -1067,6 +1077,8 @@ jobs:
             --set pollers.ldbws.baseUrl=https://ldbws.example.com \
             --show-only templates/prometheusrule.yaml)
           grep -q 'alert: DistantSignalPollerFailing' <<<"${pollers}"
+          # ...including the mostly-failing clause (failure ratio over 1h).
+          grep -q '^ *> 0.5$' <<<"${pollers}"
           grep -q 'alert: DistantSignalLdbwsStationStale' <<<"${pollers}"
           grep -q 'alert: DistantSignalLdbwsInvalidCrs' <<<"${pollers}"
           grep -q 'max by (namespace, crs) (distant_signal_ldbws_invalid_crs_station{' <<<"${pollers}"
@@ -1234,6 +1246,34 @@ jobs:
           notifier=$(policy distant-signal-notifier <<<"${eg}")
           grep -q -- '- Egress' <<<"${notifier}" || fail "notifier must get an egress policy"
           grep -q -- '- 10.0.0.0/8' <<<"${notifier}" || fail "notifier egress must exclude private ranges"
+
+          # The api trusts X-Real-IP, so only its real callers may reach
+          # api.service.port. An extra namespace is narrowed to the MCP pod by
+          # default, and null clears the narrowing.
+          api=$(render --set 'networkPolicy.apiExtraIngressNamespaces={ds-mcp}' \
+            --show-only templates/networkpolicy.yaml | policy distant-signal-api)
+          grep -A5 '"ds-mcp"' <<<"${api}" | grep -q 'app.kubernetes.io/name: distant-signal-mcp' \
+            || fail "ds-mcp must be narrowed to the MCP pod by default"
+          api=$(render --set 'networkPolicy.apiExtraIngressNamespaces={ds-mcp}' \
+            --set networkPolicy.apiExtraIngressPodLabels.ds-mcp=null \
+            --show-only templates/networkpolicy.yaml | policy distant-signal-api)
+          if grep -q 'distant-signal-mcp' <<<"${api}"; then fail "a null apiExtraIngressPodLabels entry must admit the whole namespace"; fi
+          # The tunnel (cloudflared) reaches the frontend, never the api unless
+          # asked, and the api only with X-Real-IP trust off.
+          tun=$(render --set networkPolicy.tunnel.enabled=true --show-only templates/networkpolicy.yaml)
+          grep -q 'metadata.name: "cloudflared"' <<<"$(policy distant-signal-frontend <<<"${tun}")" \
+            || fail "tunnel must be admitted to the frontend"
+          if grep -q cloudflared <<<"$(policy distant-signal-api <<<"${tun}")"; then
+            fail "tunnel must not reach the api by default"
+          fi
+          if render --set networkPolicy.tunnel.enabled=true --set networkPolicy.tunnel.api=true \
+              --show-only templates/networkpolicy.yaml >/dev/null 2>&1; then
+            fail "tunnel.api must fail while api.rateLimit.trustXRealIp is on"
+          fi
+          tun=$(render --set networkPolicy.tunnel.enabled=true --set networkPolicy.tunnel.api=true \
+            --set api.rateLimit.trustXRealIp=false --show-only templates/networkpolicy.yaml)
+          grep -q cloudflared <<<"$(policy distant-signal-api <<<"${tun}")" \
+            || fail "tunnel.api must admit the tunnel to the api"
 
       - name: helm template (values-example.yaml)
         run: |

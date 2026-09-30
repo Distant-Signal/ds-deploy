@@ -36,7 +36,8 @@ so that clause fired on every rollout.
 {{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn }}
 {{- $notifierDroppedOn := ($rule.notifierPushDropped).enabled }}
 {{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn }}
+{{- $signupSpikeOn := ($rule.userSignupSpike).enabled }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -399,6 +400,40 @@ spec:
             runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-02-line-status-notifications-design.md#delivery-guarantee-at-most-once" $runbookBase | quote }}
     {{- end }}
     {{- end }}
+    {{- if $signupSpikeOn }}
+    {{- with $rule.userSignupSpike }}
+    - name: distant-signal.users
+      rules:
+        {{- /*
+        Sign-up is open: any account the IdP lets in (in production, any
+        Discord account through Authentik's Discord source) gets a users
+        row on its first login. A burst of new accounts is either real
+        growth or scripted sign-ups (spam, abuse of /chat or the MCP). The
+        counter is api's, incremented once per users row created.
+        */}}
+        - alert: DistantSignalUserSignupSpike
+          expr: |
+            sum by (namespace) (increase({{ .metric }}{namespace="{{ $ns }}"}[{{ .window }}])) > {{ .threshold }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $value | humanize }}" }} new user accounts in {{ .window }}"
+            description: >-
+              api in {{ "{{ $labels.namespace }}" }} created about
+              {{ "{{ $value | humanize }}" }} user accounts over the last
+              {{ .window }} (threshold {{ .threshold }}). Sign-up is open to
+              any account the IdP admits, so check whether this is real
+              growth or scripted sign-ups: look at the newest rows in
+              `users` and the IdP's enrolment log. To stop it, restrict
+              the IdP's enrolment (e.g. bind the application to a group),
+              then revoke the unwanted sessions.
+            runbook_url: {{ printf "%s/docs/session-revocation.md" $runbookBase | quote }}
+    {{- end }}
+    {{- end }}
     {{- if $archiveAlertOn }}
     {{- with $rule.archiveUploadFailures }}
     - name: distant-signal.archive
@@ -677,17 +712,36 @@ spec:
         hence the `or ... 0 *` fallback. Daily pollers (stations, tocs) run
         one cycle a day, so one failed daily cycle is enough to fire.
         */}}
+        {{- /*
+        Second clause (failureRatio, when set): more than failureRatio of the
+        cycles over ratioWindow failed, so a poller that still succeeds now
+        and then but mostly fails also fires. This is the condition the
+        cluster's own copy of this alert used (failure rate > 0.5 over 30m,
+        for 30m); a 1h window with no `for` needs a similar hour of mostly
+        failed cycles.
+        */}}
         {{- $failures := printf `sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="%s", result="failure"}[%s]))` $ns .window }}
         {{- $successes := printf `sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="%s", result="success"}[%s]))` $ns .window }}
         - alert: DistantSignalPollerFailing
           expr: |
-            {{ $failures }} > 0
-            and on (namespace, poller)
             (
-              {{ $successes }}
-              or on (namespace, poller)
-              0 * {{ $failures }}
-            ) == 0
+              {{ $failures }} > 0
+              and on (namespace, poller)
+              (
+                {{ $successes }}
+                or on (namespace, poller)
+                0 * {{ $failures }}
+              ) == 0
+            )
+            {{- if .failureRatio }}
+            or on (namespace, poller)
+            (
+              sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="{{ $ns }}", result="failure"}[{{ .ratioWindow }}]))
+              /
+              sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="{{ $ns }}"}[{{ .ratioWindow }}]))
+              > {{ .failureRatio }}
+            )
+            {{- end }}
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -695,13 +749,15 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "poller {{ "{{ $labels.poller }}" }} has had no successful cycle in {{ .window }}"
+            summary: "poller {{ "{{ $labels.poller }}" }} is failing its poll cycles"
             description: >-
               Poller {{ "{{ $labels.poller }}" }} in {{ "{{ $labels.namespace }}" }}
               completed no successful poll cycle and at least one failed one over
-              the last {{ .window }}, so its product is going stale. Check the
-              poller's logs: its upstream feed, its credentials, and api's
-              /private ingest route.
+              the last {{ .window }}{{ if .failureRatio }}, or failed more than
+              {{ .failureRatio }} of its cycles over the last {{ .ratioWindow }}{{ end }},
+              so its product is going stale. Check the poller's logs: its
+              upstream feed (National Rail, TfL, Irish Rail), its credentials
+              or an expired key, and api's /private ingest route.
         {{- end }}
         {{- end }}
         {{- with $rule.ldbwsStalestStation }}

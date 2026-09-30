@@ -1007,6 +1007,23 @@ livenessProbe:
 {{- end }}
 
 {{/*
+One NetworkPolicyPeer selecting the tunnel connector pods
+(networkPolicy.tunnel: namespace, plus podLabels when non-empty). Takes
+root; renders a single `- namespaceSelector: ...` list item.
+*/}}
+{{- define "distant-signal.tunnelPeer" -}}
+{{- $t := .Values.networkPolicy.tunnel -}}
+- namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: {{ $t.namespace | quote }}
+  {{- with $t.podLabels }}
+  podSelector:
+    matchLabels:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+{{- end }}
+
+{{/*
 NetworkPolicy for one background worker (INF-10). Ingress: the worker's
 /metrics port from networkPolicy.monitoringNamespace (when metrics.enabled),
 and its health port(s) from anywhere, because kubelet probes come from the

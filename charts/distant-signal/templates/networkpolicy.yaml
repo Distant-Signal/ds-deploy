@@ -185,12 +185,33 @@ spec:
                   # turned on.
                   - test
                   {{- end }}
+      {{- $extraPodLabels := .Values.networkPolicy.apiExtraIngressPodLabels | default dict }}
       {{- range .Values.networkPolicy.apiExtraIngressNamespaces }}
         # networkPolicy.apiExtraIngressNamespaces: a separately-released
-        # in-cluster caller (e.g. the Distant-Signal-MCP in ds-mcp).
+        # in-cluster caller (e.g. the Distant-Signal-MCP in ds-mcp), narrowed
+        # to its own pods by networkPolicy.apiExtraIngressPodLabels when that
+        # has an entry for the namespace. The api trusts X-Real-IP, so any
+        # pod admitted here can pick its own rate-limit key; until
+        # 2026-09-30 the whole namespace was admitted (ds-mcp-redis included).
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ . | quote }}
+          {{- with (get $extraPodLabels .) }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      {{- end }}
+      {{- if .Values.networkPolicy.tunnel.enabled }}
+      {{- if .Values.networkPolicy.tunnel.api }}
+      {{- if .Values.api.rateLimit.trustXRealIp }}
+      {{- fail "networkPolicy.tunnel.api is true while api.rateLimit.trustXRealIp is true. A request arriving straight from the tunnel carries whatever X-Real-IP its client sent, so it could choose its own rate-limit key. Set api.rateLimit.trustXRealIp=false (every request the frontend proxies then shares the frontend pod's bucket), or leave networkPolicy.tunnel.api false and route the public hostname to the frontend." }}
+      {{- end }}
+        # networkPolicy.tunnel.api: a public hostname routed by the tunnel
+        # straight to the api (api.rateLimit.trustXRealIp is off, checked
+        # above).
+        {{- include "distant-signal.tunnelPeer" . | nindent 8 }}
+      {{- end }}
       {{- end }}
       {{- if and .Values.ingress.enabled .Values.ingress.api.enabled }}
         # The api is published externally, so the ingress controller must
@@ -246,18 +267,27 @@ spec:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "frontend") | nindent 6 }}
   policyTypes:
     - Ingress
-  {{- if and .Values.ingress.enabled .Values.ingress.frontend.enabled }}
+  {{- $viaIngress := and .Values.ingress.enabled .Values.ingress.frontend.enabled }}
+  {{- if or $viaIngress .Values.networkPolicy.tunnel.enabled }}
   ingress:
     - from:
+        {{- if $viaIngress }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace | quote }}
+        {{- end }}
+        {{- if .Values.networkPolicy.tunnel.enabled }}
+        # networkPolicy.tunnel: the connector pods that publish the site
+        # (e.g. cloudflared). They reach the api only through the frontend,
+        # whose proxy overwrites X-Real-IP from CF-Connecting-IP.
+        {{- include "distant-signal.tunnelPeer" . | nindent 8 }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.frontend.service.port }}
   {{- else }}
-  # No Ingress in front of the frontend, so nothing outside the pod needs to
-  # reach it. Omitting `ingress` entirely is a default-deny.
+  # No Ingress or tunnel in front of the frontend, so nothing outside the pod
+  # needs to reach it. Omitting `ingress` entirely is a default-deny.
   {{- end }}
 {{- /*
 INF-10: every background worker gets a policy from
