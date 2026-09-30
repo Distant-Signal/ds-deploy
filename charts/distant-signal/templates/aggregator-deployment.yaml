@@ -130,6 +130,8 @@ spec:
             all is rendered here when archive.enabled is false. */}}
             {{- if .Values.archive.enabled }}
             {{- include "distant-signal.archiveEnv" . | nindent 12 }}
+            {{- else if (.Values.archive.expiry).enabled }}
+            {{- fail "archive.expiry.enabled is true but archive.enabled is not: expiry runs in the aggregator with the archive's S3 settings." }}
             {{- end }}
             # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
             - name: HEALTH_BIND_URL

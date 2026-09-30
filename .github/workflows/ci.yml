@@ -692,6 +692,26 @@ jobs:
               --set archive.s3.existingSecret=archive-creds >/dev/null 2>&1; then
             echo "archive enabled without lifecycleConfirmed but the render succeeded" >&2; exit 1
           fi
+          # Client-side expiry stands in for the lifecycle rule and is
+          # dry-run unless dryRun is set false.
+          expiry=(
+            --set archive.enabled=true
+            --set archive.s3.bucket=archive-bucket
+            --set archive.s3.existingSecret=archive-creds
+            --set archive.s3.prefix=cluster/distant-signal-archive
+            --set archive.expiry.enabled=true
+          )
+          out=$(helm template distant-signal charts/distant-signal "${base[@]}" "${expiry[@]}")
+          grep -A1 'name: ARCHIVE_EXPIRY_DRY_RUN' <<<"${out}" | grep -q 'value: "true"'
+          grep -A1 'name: ARCHIVE_EXPIRY_RETENTION_DAYS' <<<"${out}" | grep -q 'value: "730"'
+          # The 90-day floor, the two-segment prefix, and "expiry needs the
+          # archive" must each fail the render.
+          for bad in archive.expiry.retentionDays=89 archive.s3.prefix=archive archive.enabled=false; do
+            if helm template distant-signal charts/distant-signal "${base[@]}" "${expiry[@]}" \
+                --set "${bad}" >/dev/null 2>&1; then
+              echo "archive expiry with ${bad} but the render succeeded" >&2; exit 1
+            fi
+          done
 
       # postgresql.config must render as sorted `-c name=value` args, with
       # whole YAML numbers as integers (not 1e+08) and bools as on/off,

@@ -913,7 +913,12 @@ added. */}}
 Cold-archive env for the aggregator (crates/aggregator/src/archive.rs).
 Renders NOTHING when archive.enabled is false, so a default install carries
 no ARCHIVE_* env and needs no S3 settings. When enabled, fails rendering on
-a missing bucket/secret or a table the binary would refuse anyway.
+a missing bucket/secret or a table the binary would refuse anyway, and when
+nothing would expire archived objects (neither lifecycleConfirmed nor
+archive.expiry.enabled). The ARCHIVE_EXPIRY_* env (archive_expiry.rs) is
+rendered only with archive.expiry.enabled; the checks here mirror the
+binary's (90-day floor, two-segment prefix), which also checks
+protectedPrefixes.
 */}}
 {{- define "distant-signal.archiveEnv" -}}
 {{- if .Values.archive.enabled -}}
@@ -924,8 +929,23 @@ a missing bucket/secret or a table the binary would refuse anyway.
 {{- if not $a.s3.existingSecret -}}
 {{- fail "archive.enabled is true but archive.s3.existingSecret is empty. Create a Secret holding the S3 access key pair (keys archive.s3.accessKeyIdKey / archive.s3.secretAccessKeyKey) and name it here." -}}
 {{- end -}}
-{{- if not $a.s3.lifecycleConfirmed -}}
-{{- fail "archive.enabled is true but archive.s3.lifecycleConfirmed is not. Archived objects are never deleted by the app: configure an S3 lifecycle (expiration) rule on the archive bucket/prefix first, then set archive.s3.lifecycleConfirmed=true. See docs/cold-archive.md, \"Object expiry\"." -}}
+{{- $e := $a.expiry | default dict -}}
+{{- if not (or $a.s3.lifecycleConfirmed $e.enabled) -}}
+{{- fail "archive.enabled is true but neither archive.s3.lifecycleConfirmed nor archive.expiry.enabled is. The archiver never deletes an object: either configure an S3 lifecycle (expiration) rule on the archive bucket/prefix and set archive.s3.lifecycleConfirmed=true, or enable client-side expiry (archive.expiry.enabled). See docs/cold-archive.md, \"Object expiry\"." -}}
+{{- end -}}
+{{- if $e.enabled -}}
+{{- if lt (int $e.retentionDays) 90 -}}
+{{- fail (printf "archive.expiry.retentionDays is %v, below the hard 90-day floor." $e.retentionDays) -}}
+{{- end -}}
+{{- if lt (int $e.maxDeletesPerRun) 1 -}}
+{{- fail "archive.expiry.maxDeletesPerRun must be at least 1 (set archive.expiry.enabled=false instead)." -}}
+{{- end -}}
+{{- if lt (int $e.intervalSecs) 60 -}}
+{{- fail "archive.expiry.intervalSecs must be at least 60." -}}
+{{- end -}}
+{{- if lt (len (compact (splitList "/" $a.s3.prefix))) 2 -}}
+{{- fail (printf "archive.expiry needs archive.s3.prefix to have at least two path segments (e.g. <cluster>/distant-signal-archive), got %q." $a.s3.prefix) -}}
+{{- end -}}
 {{- end -}}
 {{- range $a.tables -}}
 {{- if not (has . (list "trains")) -}}
@@ -956,7 +976,23 @@ a missing bucket/secret or a table the binary would refuse anyway.
 - name: ARCHIVE_S3_ALLOW_HTTP
   value: {{ $a.s3.allowHttp | quote }}
 - name: ARCHIVE_S3_LIFECYCLE_CONFIRMED
+  value: {{ $a.s3.lifecycleConfirmed | toString | quote }}
+{{- if $e.enabled }}
+- name: ARCHIVE_EXPIRY_ENABLED
   value: "true"
+- name: ARCHIVE_EXPIRY_DRY_RUN
+  value: {{ $e.dryRun | toString | quote }}
+- name: ARCHIVE_EXPIRY_RETENTION_DAYS
+  value: {{ int $e.retentionDays | toString | quote }}
+- name: ARCHIVE_EXPIRY_INTERVAL_SECS
+  value: {{ int $e.intervalSecs | toString | quote }}
+- name: ARCHIVE_EXPIRY_MAX_DELETES_PER_RUN
+  value: {{ int $e.maxDeletesPerRun | toString | quote }}
+{{- with $e.protectedPrefixes }}
+- name: ARCHIVE_PROTECTED_PREFIXES
+  value: {{ join "," . | quote }}
+{{- end }}
+{{- end }}
 - name: ARCHIVE_S3_ACCESS_KEY_ID
   valueFrom:
     secretKeyRef:

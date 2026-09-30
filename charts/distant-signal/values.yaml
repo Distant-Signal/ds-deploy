@@ -1486,11 +1486,13 @@ archive:
     pathStyle: true
     # -- Permit a plain http:// endpoint.
     allowHttp: false
-    # -- REQUIRED to be true when enabled; the chart refuses to render
-    # otherwise. Nothing in the app ever deletes an archived object, so the
-    # bucket (or the archive prefix) must carry an S3 lifecycle expiration
-    # rule, and the app cannot check that it does. Configure the rule on the
-    # bucket first, then set this to true to confirm it. See
+    # -- When enabled, either this must be true or archive.expiry.enabled
+    # must be; the chart refuses to render otherwise. The archiver never
+    # deletes an object, so something must expire them: an S3 lifecycle
+    # expiration rule on the bucket (or the archive prefix), which the app
+    # cannot check -- configure it first, then set this to true to confirm
+    # it -- or the aggregator's own client-side expiry (archive.expiry), for
+    # stores such as Thoth that have no lifecycle API. See
     # docs/cold-archive.md, "Object expiry".
     lifecycleConfirmed: false
     # -- Required when enabled: a pre-existing Secret holding the access key
@@ -1498,6 +1500,39 @@ archive:
     existingSecret: ""
     accessKeyIdKey: access-key-id
     secretAccessKeyKey: secret-access-key
+  # Client-side expiry (crates/aggregator/src/archive_expiry.rs), for stores
+  # with no lifecycle API. OFF BY DEFAULT, and DRY-RUN by default once
+  # enabled. Needs archive.enabled. A task in the aggregator lists
+  # <prefix>/<table>/ for trains, train_movement_events and
+  # train_current_state and deletes an object only if its key matches
+  # <prefix>/<table>/service_date=YYYY-MM-DD/part-<19 digits>.jsonl.zst
+  # exactly and the service_date IN THE KEY (never LastModified) is older
+  # than the current rail day (02:00 Europe/London) minus retentionDays.
+  # Anything else is counted and logged, never deleted. The chart and the
+  # binary also refuse an archive.s3.prefix with fewer than two path
+  # segments (e.g. mine-bringer/distant-signal-archive).
+  expiry:
+    enabled: false
+    # -- Log and count what would be deleted
+    # (distant_signal_aggregator_archive_expiry_would_delete), but delete
+    # nothing. Switch off only after checking the dry-run metrics.
+    dryRun: true
+    # -- Keep objects whose key service_date is at most this many rail days
+    # old (730 decided 2026-09-30). The binary and the chart refuse anything
+    # under 90: that floor is fixed in code and has no setting.
+    retentionDays: 730
+    # -- Seconds between runs. The first run starts when the aggregator
+    # starts.
+    intervalSecs: 86400
+    # -- Circuit breaker: the most objects one run deletes (or would
+    # delete), oldest service date first. Hitting it bumps
+    # distant_signal_aggregator_archive_expiry_cap_reached_total.
+    maxDeletesPerRun: 20000
+    # -- Key prefixes the archive prefix must never equal, contain or sit
+    # inside (ARCHIVE_PROTECTED_PREFIXES), e.g. the backups sharing the
+    # same S3 key: [mine-bringer/backups/, mine-bringer/pgbackrest/]. The
+    # aggregator refuses to start on an overlap. No commas inside an entry.
+    protectedPrefixes: []
 
 # ---------------------------------------------------------------------------
 # notifier (crates/notifier -- Web Push for pinned-line/tracked-train
@@ -3214,6 +3249,25 @@ metrics:
       window: 1h
       minFailures: 3
       for: 0m
+      severity: warning
+    # Cold-archive expiry (archive.expiry). Renders only when archive.enabled
+    # and archive.expiry.enabled are also true. Expiry runs once a day, so
+    # keep `window` at least 1d.
+    # DistantSignalArchiveExpiryErrors: any expiry error (failed LIST or
+    # DELETE, or a key refused by the pre-delete check) within `window`.
+    # DistantSignalArchiveExpiryUnmatchedKeys: keys under an archive table
+    # prefix that do not match the archive layout (never deleted).
+    # DistantSignalArchiveExpiryCapReached: a run hit
+    # archive.expiry.maxDeletesPerRun.
+    # DistantSignalArchiveExpiryOverdue: the oldest archived service_date is
+    # older than archive.expiry.retentionDays + overdueGraceDays, for
+    # `overdueFor` -- expiry is not running, failing, or still in dry-run.
+    archiveExpiry:
+      enabled: true
+      window: 1d
+      for: 0m
+      overdueGraceDays: 7
+      overdueFor: 1h
       severity: warning
     # The schedule (CIF) pipeline: schedule-ingest and schedule-reference.
     # Renders only when scheduleFeed.enabled.

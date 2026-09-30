@@ -679,10 +679,13 @@ rows that `trains` retention is about to prune (together with their
 `train_movement_events`/`train_current_state` children) are written first to
 S3-compatible storage as zstd JSON Lines, and deleted only once the upload
 is confirmed (size plus ETag = body MD5). `archive.s3.bucket` and
-`archive.s3.existingSecret` are required when enabled, and so is
-`archive.s3.lifecycleConfirmed: true`: the app never deletes an archived
-object, so the chart refuses to render until you confirm the bucket has an
-S3 lifecycle expiration rule. `trust_event_backlog` and the LDBWS-derived
+`archive.s3.existingSecret` are required when enabled. Something must also
+expire archived objects, so the chart refuses to render until either
+`archive.s3.lifecycleConfirmed: true` (you confirm the bucket has an S3
+lifecycle expiration rule) or `archive.expiry.enabled: true` (the
+aggregator expires them itself, for stores such as Thoth with no lifecycle
+API; dry-run by default, with a hard 90-day retention floor, protected
+prefixes and a per-run cap). `trust_event_backlog` and the LDBWS-derived
 tables cannot be archived, and movement events are archived without their
 TRUST `raw_body` (licensing). See [docs/cold-archive.md](../../docs/cold-archive.md)
 for the key layout, the failure policy, and how to read an archive with
@@ -1294,10 +1297,16 @@ default; nothing here is rendered unless `archive.enabled` is `true`.
 | `archive.s3.region` | `us-east-1` | Region used for request signing; most non-AWS servers accept any value. |
 | `archive.s3.pathStyle` | `true` | Path-style addressing (`https://endpoint/bucket/key`), which most non-AWS servers need. `false` is virtual-hosted style. |
 | `archive.s3.allowHttp` | `false` | Permit a plain `http://` endpoint. |
-| `archive.s3.lifecycleConfirmed` | `false` | **Must be `true`** when enabled, or the render fails. Confirms the bucket has an S3 lifecycle expiration rule: nothing in the app ever deletes an archived object. |
+| `archive.s3.lifecycleConfirmed` | `false` | When enabled, this or `archive.expiry.enabled` **must be `true`**, or the render fails. Confirms the bucket has an S3 lifecycle expiration rule: the archiver itself never deletes an object. |
 | `archive.s3.existingSecret` | `""` | **Required** when enabled: pre-existing Secret holding the access key pair. The chart never renders these credentials. |
 | `archive.s3.accessKeyIdKey` | `access-key-id` | Key within `archive.s3.existingSecret` for the access key id. |
 | `archive.s3.secretAccessKeyKey` | `secret-access-key` | Key within `archive.s3.existingSecret` for the secret access key. |
+| `archive.expiry.enabled` | `false` | Client-side expiry of archived objects by the aggregator, for stores with no lifecycle API (Thoth). Needs `archive.enabled` and an `archive.s3.prefix` of at least two path segments. Satisfies the `lifecycleConfirmed` gate. Deletes only keys matching `<prefix>/<table>/service_date=YYYY-MM-DD/part-<19 digits>.jsonl.zst`, dated by the key, never by `LastModified`. |
+| `archive.expiry.dryRun` | `true` | Log and count what would be deleted (`aggregator_archive_expiry_would_delete`), delete nothing. Set `false` only after checking the dry-run metrics. |
+| `archive.expiry.retentionDays` | `730` | Keep objects whose key `service_date` is at most this many rail days old. Anything under 90 fails the render and the aggregator's startup; that floor is fixed in code. |
+| `archive.expiry.intervalSecs` | `86400` | Seconds between expiry runs; the first runs at aggregator startup. |
+| `archive.expiry.maxDeletesPerRun` | `20000` | Most objects one run deletes (or would delete), oldest date first. Hitting it bumps `aggregator_archive_expiry_cap_reached_total`. |
+| `archive.expiry.protectedPrefixes` | `[]` | `ARCHIVE_PROTECTED_PREFIXES`: key prefixes the archive prefix must never equal, contain or sit inside (e.g. `mine-bringer/backups/`). The aggregator refuses to start on an overlap. |
 
 ### notifier
 
@@ -1936,7 +1945,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; the repo-relative doc path is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
 
 #### Alerts
 
@@ -1952,7 +1961,8 @@ expression is scoped to `namespace="<release namespace>"`, the label the
 an equivalent scrape that sets `namespace`). The `movement-events` group is
 rendered only when `movementRelay.enabled` is true, the full-coverage-window
 group only when `fullCoverageConsumer.windowedStats.enabled`, the archive
-alert only when `archive.enabled`, and the schedule-pipeline group only when
+alert only when `archive.enabled`, the archive-expiry group only when
+`archive.expiry.enabled` too, and the schedule-pipeline group only when
 `scheduleFeed.enabled`.
 
 | Alert | Severity | Fires when (defaults) |
@@ -1972,6 +1982,10 @@ alert only when `archive.enabled`, and the schedule-pipeline group only when
 | `DistantSignalNotifierPushDropped` | warning | The notifier dropped at least 5 decided pushes (`notifier_push_dropped_total{reason}`) within the last 1h. Delivery is at-most-once. |
 | `DistantSignalUserSignupSpike` | warning | api created more than 20 user accounts (`userSignupSpike.metric`, default `distant_signal_api_users_created_total`) within the last 1h. Sign-up is open to any account the IdP admits (in production, any Discord account), so a burst is real growth or scripted sign-ups. Check the newest `users` rows and the IdP's enrolment log; to stop it, restrict enrolment in the IdP, then revoke the unwanted sessions ([session revocation](../../docs/session-revocation.md)). Needs an api build that exports the counter; silent until then. |
 | `DistantSignalArchiveUploadFailures` | warning | At least 3 cold-archive batch uploads or verifications failed (`aggregator_archive_upload_failures_total`) within the last 1h. |
+| `DistantSignalArchiveExpiryErrors` | warning | Any cold-archive expiry error (`aggregator_archive_expiry_errors_total{stage}`: a failed LIST or DELETE, or a key refused by the pre-delete check) within the last 1d. |
+| `DistantSignalArchiveExpiryUnmatchedKeys` | warning | Expiry listed keys under an archive table prefix that do not match the archive layout (`aggregator_archive_expiry_skipped_unmatched_total{table}`) within the last 1d. They are never deleted. |
+| `DistantSignalArchiveExpiryCapReached` | warning | An expiry run hit `archive.expiry.maxDeletesPerRun` (`aggregator_archive_expiry_cap_reached_total`) within the last 1d. |
+| `DistantSignalArchiveExpiryOverdue` | warning | The oldest archived `service_date` (`aggregator_archive_oldest_service_date_seconds{table}`) is older than `archive.expiry.retentionDays` + 7 days, for 1h: expiry is not running, is failing, or is still in dry-run. |
 | `DistantSignalScheduleReferenceNotSeeded` | warning | schedule-reference has not read its last completed publish from api (`schedule_reference_seeded` is 0) for 30m. |
 | `DistantSignalScheduleFeedZipRejected` | warning | schedule-ingest quarantined a delivery zip (`schedule_feed_zip_rejected_total`) within the last 6h. |
 | `DistantSignalCorpusRejected` | warning | schedule-ingest refused a CORPUS extract (`schedule_feed_corpus_rejected_total`) within the last 6h. The series exists only while `scheduleFeed.corpus.enabled`. |
