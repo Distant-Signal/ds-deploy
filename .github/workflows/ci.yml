@@ -1284,18 +1284,22 @@ jobs:
           # The tunnel (cloudflared) reaches the frontend, never the api unless
           # asked, and the api only with X-Real-IP trust off.
           tun=$(render --set networkPolicy.tunnel.enabled=true --show-only templates/networkpolicy.yaml)
-          grep -q 'metadata.name: "cloudflared"' <<<"$(policy distant-signal-frontend <<<"${tun}")" \
+          tun_frontend=$(policy distant-signal-frontend <<<"${tun}")
+          tun_api=$(policy distant-signal-api <<<"${tun}")
+          grep -q 'metadata.name: "cloudflared"' <<<"${tun_frontend}" \
             || fail "tunnel must be admitted to the frontend"
-          if grep -q cloudflared <<<"$(policy distant-signal-api <<<"${tun}")"; then
+          if grep -q cloudflared <<<"${tun_api}"; then
             fail "tunnel must not reach the api by default"
           fi
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if render --set networkPolicy.tunnel.enabled=true --set networkPolicy.tunnel.api=true \
               --show-only templates/networkpolicy.yaml >/dev/null 2>&1; then
             fail "tunnel.api must fail while api.rateLimit.trustXRealIp is on"
           fi
           tun=$(render --set networkPolicy.tunnel.enabled=true --set networkPolicy.tunnel.api=true \
             --set api.rateLimit.trustXRealIp=false --show-only templates/networkpolicy.yaml)
-          grep -q cloudflared <<<"$(policy distant-signal-api <<<"${tun}")" \
+          tun_api=$(policy distant-signal-api <<<"${tun}")
+          grep -q cloudflared <<<"${tun_api}" \
             || fail "tunnel.api must admit the tunnel to the api"
 
       - name: helm template (values-example.yaml)
