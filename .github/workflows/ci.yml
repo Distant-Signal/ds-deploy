@@ -1420,6 +1420,15 @@ jobs:
             fail "pgBackRest is off by default but rendered"
           fi
           grep -q 'image: "postgres:16' <<<"${off}" || fail "the default Postgres image must stay postgres:16"
+          # Off, the Postgres pod keeps Kubernetes' default grace period
+          # (no terminationGracePeriodSeconds) unless it is set explicitly.
+          pg_off=$(render --show-only templates/postgres-statefulset.yaml)
+          if grep -n 'terminationGracePeriodSeconds' <<<"${pg_off}"; then
+            fail "with pgBackRest off the Postgres pod must not set terminationGracePeriodSeconds"
+          fi
+          pg_off=$(render --show-only templates/postgres-statefulset.yaml --set postgresql.terminationGracePeriodSeconds=45)
+          grep -q '^      terminationGracePeriodSeconds: 45$' <<<"${pg_off}" \
+            || fail "postgresql.terminationGracePeriodSeconds must render when set"
 
           pg=$(render "${on[@]}" --show-only templates/postgres-statefulset.yaml)
           grep -q 'image: "ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest:pg16.15-pgbackrest2.59.1-tini0.19.0"' <<<"${pg}" \
@@ -1434,8 +1443,23 @@ jobs:
             fail "the Postgres container must not set command: it would bypass the image's tini ENTRYPOINT"
           fi
           grep -q -- '- "archive_mode=on"' <<<"${pg}" || fail "archive_mode=on missing"
-          grep -q -- '- "archive_command=pgbackrest --stanza=ds archive-push %p"' <<<"${pg}" \
-            || fail "archive_command missing"
+          grep -q -- '- "archive_command=pgbackrest --stanza=ds --archive-timeout=30 archive-push %p"' <<<"${pg}" \
+            || fail "archive_command missing, or without its --archive-timeout (archive.pushTimeoutSecs)"
+          # A stop while S3 is unreachable waits for the archiver's last
+          # attempts (up to 6 x pushTimeoutSecs); Kubernetes' default 30s
+          # grace would SIGKILL it, and pg_ctl's default 60s fails a
+          # first-start initdb. Both default to 6 x 30 + 60.
+          grep -q '^      terminationGracePeriodSeconds: 240$' <<<"${pg}" \
+            || fail "pgBackRest must default the Postgres pod's terminationGracePeriodSeconds to 240"
+          grep -A1 'name: PGCTLTIMEOUT$' <<<"${pg}" | grep -q 'value: "240"' \
+            || fail "pgBackRest must set PGCTLTIMEOUT for the entrypoint's initdb server"
+          pg_tuned=$(render "${on[@]}" --show-only templates/postgres-statefulset.yaml \
+            --set postgresql.pgbackrest.archive.pushTimeoutSecs=10 --set postgresql.terminationGracePeriodSeconds=90)
+          grep -q -- '--archive-timeout=10 archive-push' <<<"${pg_tuned}" || fail "archive.pushTimeoutSecs must reach archive_command"
+          grep -q '^      terminationGracePeriodSeconds: 90$' <<<"${pg_tuned}" \
+            || fail "postgresql.terminationGracePeriodSeconds must override the pgBackRest default"
+          grep -A1 'name: PGCTLTIMEOUT$' <<<"${pg_tuned}" | grep -q 'value: "120"' \
+            || fail "PGCTLTIMEOUT must follow archive.pushTimeoutSecs"
           grep -q -- '- "archive_timeout=60"' <<<"${pg}" || fail "archive_timeout missing"
           grep -q -- '- "wal_compression=lz4"' <<<"${pg}" || fail "postgresql.config must still render"
           grep -A1 'name: PGBACKREST_ARCHIVE_PUSH_QUEUE_MAX$' <<<"${pg}" | grep -q 'value: "8GB"' \
@@ -1487,6 +1511,10 @@ jobs:
               fail "pgBackRest rendered without postgresql.pgbackrest.${unset}"
             fi
           done
+          if helm template distant-signal charts/distant-signal "${base[@]}" "${on[@]}" \
+              --set postgresql.pgbackrest.archive.pushTimeoutSecs=0 >/dev/null 2>&1; then
+            fail "pgBackRest rendered with archive.pushTimeoutSecs=0"
+          fi
           if helm template distant-signal charts/distant-signal "${base[@]}" "${on[@]}" \
               --set postgresql.enabled=false \
               --set externalDatabase.url=postgres://u:p@db.example.com/d >/dev/null 2>&1; then

@@ -24,7 +24,8 @@ never touches the cluster.
 | Piece | What it does |
 | --- | --- |
 | Image | `postgres-pgbackrest`: the exact `postgres:16.15-trixie` image the chart pins, plus pgBackRest from the PGDG repository, the `pgbackrest-daily-check` script, and `tini` as PID 1 in front of the stock entrypoint (see "Why tini" below). The chart swaps it in for the stock image. |
-| WAL archiving | `archive_mode=on`, `archive_command='pgbackrest --stanza=ds archive-push %p'` and `archive_timeout=60` are added to the Postgres `-c` args. Archiving is asynchronous, through a spool at `/var/lib/postgresql/data/pgbackrest-spool` on the data volume, beside `PGDATA`. |
+| WAL archiving | `archive_mode=on`, `archive_command='pgbackrest --stanza=ds --archive-timeout=30 archive-push %p'` and `archive_timeout=60` are added to the Postgres `-c` args. Archiving is asynchronous, through a spool at `/var/lib/postgresql/data/pgbackrest-spool` on the data volume, beside `PGDATA`. Each archive-push waits up to `--archive-timeout` (`archive.pushTimeoutSecs`) for the async worker; see "Stopping while S3 is unreachable". |
+| Grace period | The Postgres pod's `terminationGracePeriodSeconds` and `PGCTLTIMEOUT` default to 6 x `archive.pushTimeoutSecs` + 60 (240 s). Without pgBackRest the pod sets no grace period (Kubernetes' 30 s), unless `postgresql.terminationGracePeriodSeconds` is set. |
 | Repository | S3 (Thoth on mine-bringer), under `repo.path` in `repo.s3.bucket`. Every file is encrypted client-side with AES-256-CBC before it leaves the pod, and compressed with zstd. |
 | Disk-full guard | `archive-push-queue-max` (`archive.queueMax`, 8 GB). If the repository is unreachable for long enough that 8 GB of WAL waits in the queue, pgBackRest **drops** WAL instead of letting `pg_wal` fill the node's disk. Postgres stays up; the dropped WAL is a gap that point-in-time recovery can't cross. |
 | Backups | CronJobs `<release>-pgbackrest-full` (Sunday 05:00 UTC) and `-diff` (Monday–Saturday 05:00 UTC). Each backup then runs `expire`, which keeps the full backups and WAL needed to restore to any point in the last `repo.retentionFull` days. |
@@ -55,6 +56,49 @@ tini forwards the stop signal (the image's `STOPSIGNAL SIGINT`, Postgres'
 fast shutdown) to the postmaster and exits with its exit code. The chart
 sets only `args` for the Postgres container, never `command`, so the
 image's ENTRYPOINT applies; a CI helm-lint step checks that.
+
+### Stopping while S3 is unreachable
+
+On a stop, Kubernetes sends the image's stop signal (SIGINT, a fast
+shutdown). Postgres writes its shutdown checkpoint, then waits for the
+archiver: it finishes the round of attempts it is in (up to 3, a second
+apart) and makes one last round of up to 3. With async archiving each
+attempt waits up to pgBackRest's `archive-timeout` for the async worker to
+push the segment (pgBackRest 2.59: `unable to push WAL file ... to the
+archive asynchronously after 30 second(s)`). With S3 unreachable, that is
+up to 6 timed-out attempts.
+
+- `archive.pushTimeoutSecs` (30) sets `--archive-timeout` on
+  `archive_command` only. `backup` and `check` keep pgBackRest's 60 s wait
+  for the WAL a backup needs. The pgBackRest default of 60 s per attempt
+  made a stop take 4-5 minutes (measured 259 s; 171 s at 30 s).
+- The pod's `terminationGracePeriodSeconds` defaults to 6 x
+  `pushTimeoutSecs` + 60 = 240 s, so the kubelet doesn't SIGKILL Postgres
+  after the default 30 s. A SIGKILL is safe (the next start runs crash
+  recovery) but slower, and loses the clean shutdown. Set
+  `postgresql.terminationGracePeriodSeconds` to override it.
+- With S3 reachable, a stop takes seconds, as before.
+
+WAL that wasn't archived stays in `pg_wal` (the `.ready` files) and is
+pushed after the next start.
+
+### A brand-new database with S3 unreachable
+
+On an empty data volume the image's entrypoint runs initdb, then a
+temporary server for its setup, stopped with `pg_ctl`. With pgBackRest on
+that server archives too, so with S3 unreachable its stop waits for the
+archiver like any stop. `pg_ctl` gives up after `PGCTLTIMEOUT` (default
+60 s) and the container exits 1, over and over. The chart sets
+`PGCTLTIMEOUT` to the same 6 x `pushTimeoutSecs` + 60 (240 s), so the first
+start waits instead (measured: 184 s with S3 unreachable, then the server
+came up). This only affects a new data directory.
+
+Still, prefer one of these, which don't need that wait:
+
+- enable pgBackRest on an initialised database (the normal case: step 6 of
+  "Enabling it" restarts an existing Postgres), with S3 reachable; or
+- for a new install, run the first start with pgBackRest off, so initdb
+  finishes without archiving, then enable it.
 
 ### The cipher passphrase
 
@@ -114,6 +158,9 @@ backups have aged past the retention window.
 6. **Turn it on:** `postgresql.pgbackrest.enabled: true`, plus `repo.path`,
    `repo.s3.endpoint`, `repo.s3.port`, `repo.s3.bucket` and
    `repo.s3.existingSecret`. Postgres restarts once, for `archive_mode`.
+   Do it on an initialised database with S3 reachable. On a new install,
+   start once with pgBackRest off first (see "A brand-new database with
+   S3 unreachable").
 
 7. **Create the stanza immediately**, as soon as the restarted pod is
    ready. Until it exists every `archive-push` fails (exit code 103). That

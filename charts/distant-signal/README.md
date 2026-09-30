@@ -777,6 +777,14 @@ in `pg_wal` and the spool and the archive alerts fire, but Postgres keeps
 running. Only pin image tags with `-tini`: in older images the postmaster
 is PID 1, and a failing async archive-push crash-restarts it every ~10 s.
 
+A stop while S3 is unreachable waits for the archiver's last archive-push
+attempts, each up to `archive.pushTimeoutSecs` (30s). With pgBackRest on,
+the Postgres pod's `terminationGracePeriodSeconds` and `PGCTLTIMEOUT`
+therefore default to 6 x that + 60 (240s): a stop then ends cleanly
+instead of in a SIGKILL and crash recovery, and a first-start initdb
+waits instead of failing. Still, enable pgBackRest on an initialised
+database with S3 reachable (docs/postgres-pitr.md, "Enabling it").
+
 It doesn't replace a logical dump. See
 [docs/postgres-pitr.md](../../docs/postgres-pitr.md) for enabling it
 (including `stanza-create`), the alerts, a point-in-time restore, and the
@@ -1075,6 +1083,7 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.tolerations` | `[]` | Pod tolerations. |
 | `postgresql.affinity` | `{}` | Pod affinity rules. |
 | `postgresql.podAnnotations` | `{}` | Pod annotations. |
+| `postgresql.terminationGracePeriodSeconds` | `""` | Seconds Kubernetes waits after the stop signal (a fast shutdown) before SIGKILL. Empty: unset (Kubernetes' 30s) with pgBackRest off; with it on, 6 x `pgbackrest.archive.pushTimeoutSecs` + 60 (240), since a stop while S3 is unreachable waits for the archiver. |
 
 #### Postgres memory and checkpoint tuning
 
@@ -1208,6 +1217,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.archive.async` | `true` | Asynchronous, parallel archive-push through a spool on the data volume. |
 | `postgresql.pgbackrest.archive.queueMax` | `8GB` | Disk-full guard (`archive-push-queue-max`): past this much queued WAL, pgBackRest drops WAL (a PITR gap the daily check reports) instead of filling the disk. Base-1024 units. Needs `async`; `""` turns it off. |
 | `postgresql.pgbackrest.archive.timeoutSecs` | `60` | Postgres `archive_timeout`: bounds the recovery point objective while anything writes. |
+| `postgresql.pgbackrest.archive.pushTimeoutSecs` | `30` | pgBackRest `archive-timeout` for `archive_command` only (backup and check keep 60s): how long each archive-push waits for the async worker. Sets the default grace period and `PGCTLTIMEOUT` (6 x this + 60). Changing it restarts Postgres. |
 | `postgresql.pgbackrest.compress.type` / `.level` | `zst` / `3` | Repository compression. |
 | `postgresql.pgbackrest.backup.timeZone` | `Etc/UTC` | `spec.timeZone` of the CronJobs. |
 | `postgresql.pgbackrest.backup.fullSchedule` | `0 5 * * 0` | Weekly full backup (Sunday 05:00 UTC). |

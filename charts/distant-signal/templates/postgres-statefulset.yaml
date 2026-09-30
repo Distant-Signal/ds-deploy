@@ -29,6 +29,15 @@ spec:
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
       automountServiceAccountToken: false
+      {{- /*
+      Unset (Kubernetes' 30s) unless postgresql.terminationGracePeriodSeconds
+      is set or pgBackRest is on. With pgBackRest a stop waits for the
+      archiver's last attempts (distant-signal.pgbackrestStopBudgetSecs), and
+      a SIGKILL at 30s would leave crash recovery to the next start.
+      */}}
+      {{- with include "distant-signal.postgresTerminationGracePeriodSeconds" . }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

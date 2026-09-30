@@ -332,6 +332,13 @@ postgresql:
   tolerations: []
   affinity: {}
   podAnnotations: {}
+  # -- Pod terminationGracePeriodSeconds: how long Kubernetes waits after
+  # the stop signal (the image's SIGINT, a fast shutdown) before SIGKILL,
+  # which leaves crash recovery to the next start. Empty: unset
+  # (Kubernetes' 30s) with pgBackRest off; with it on, 6 x
+  # `pgbackrest.archive.pushTimeoutSecs` + 60 (240 by default), because a
+  # stop while S3 is unreachable waits for the archiver's last attempts.
+  terminationGracePeriodSeconds: ""
   # Point-in-time recovery (PITR) with pgBackRest, on this StatefulSet.
   # OFF by default: while `enabled` is false nothing below renders, and the
   # Postgres pod is exactly as without this block. Design:
@@ -347,6 +354,10 @@ postgresql:
   #   - adds PGBACKREST_* env: an S3 repository with client-side AES-256
   #     encryption, zstd compression, and async archiving whose spool sits
   #     on the data volume beside PGDATA (not inside it);
+  #   - sets the pod's terminationGracePeriodSeconds (unless
+  #     `terminationGracePeriodSeconds` above is set) and PGCTLTIMEOUT to
+  #     6 x `archive.pushTimeoutSecs` + 60, so a stop, or a first-start
+  #     initdb, can wait out the archiver while S3 is unreachable;
   #   - renders CronJobs (full, diff, check, weekly verify), which `kubectl exec`
   #     pgBackRest in the Postgres pod. Their ServiceAccount's Role allows
   #     `get` on that one pod and `pods/exec` on it, and nothing else;
@@ -454,6 +465,14 @@ postgresql:
       # segment at least this often while there are writes, which bounds
       # the recovery point objective.
       timeoutSecs: 60
+      # -- pgBackRest's archive-timeout for archive_command only (a
+      # `--archive-timeout` option on it; backup and check keep pgBackRest's
+      # 60s): how long each archive-push waits for the async worker to push
+      # its segment before failing, so Postgres retries. It bounds how long
+      # a stop waits while S3 is unreachable, and with it the default
+      # `postgresql.terminationGracePeriodSeconds`. Changing it restarts
+      # Postgres.
+      pushTimeoutSecs: 30
     compress:
       # -- Repository compression (compress-type).
       type: zst

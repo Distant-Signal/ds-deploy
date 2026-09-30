@@ -47,6 +47,9 @@ naming the value, the first time any template asks.
 {{- if and $pb.archive.queueMax (not $pb.archive.async) -}}
 {{- fail "postgresql.pgbackrest.archive.queueMax needs archive.async: true (archive-push-queue-max only applies to async archiving). Set queueMax to \"\" to run without the disk-full guard." -}}
 {{- end -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString $pb.archive.pushTimeoutSecs)) -}}
+{{- fail "postgresql.pgbackrest.archive.pushTimeoutSecs must be a whole number of seconds, at least 1." -}}
+{{- end -}}
 true
 {{- end -}}
 {{- end }}
@@ -96,10 +99,43 @@ win over the same keys in config). Returned as YAML; fromYaml it.
 {{- if include "distant-signal.pgbackrestEnabled" . -}}
 {{- $pb := .Values.postgresql.pgbackrest -}}
 {{- $_ := set $config "archive_mode" "on" -}}
-{{- $_ := set $config "archive_command" (printf "pgbackrest --stanza=%s archive-push %%p" $pb.stanza) -}}
+{{- $_ := set $config "archive_command" (printf "pgbackrest --stanza=%s --archive-timeout=%d archive-push %%p" $pb.stanza (int64 $pb.archive.pushTimeoutSecs)) -}}
 {{- $_ := set $config "archive_timeout" (int64 $pb.archive.timeoutSecs) -}}
 {{- end -}}
 {{- toYaml $config -}}
+{{- end }}
+
+{{/*
+Seconds a Postgres stop can take while the repository is unreachable, with
+pgBackRest on. A fast shutdown writes its checkpoint, then waits for the
+archiver, which finishes the archive_command attempts it is in (up to 3,
+a second apart) and then makes one last round of up to 3 before it exits.
+With async archiving each attempt waits at most archive.pushTimeoutSecs
+(archive_command's --archive-timeout) for the async worker: 6 attempts,
+plus 60s for the checkpoint and the retry sleeps. 240s at the 30s default
+(measured: 171s). The default terminationGracePeriodSeconds, and
+PGCTLTIMEOUT.
+*/}}
+{{- define "distant-signal.pgbackrestStopBudgetSecs" -}}
+{{- add (mul 6 (int64 .Values.postgresql.pgbackrest.archive.pushTimeoutSecs)) 60 -}}
+{{- end }}
+
+{{/*
+The Postgres pod's terminationGracePeriodSeconds:
+postgresql.terminationGracePeriodSeconds when set; else, with pgBackRest
+on, distant-signal.pgbackrestStopBudgetSecs; else empty (unset, i.e.
+Kubernetes' 30s, and the pod renders exactly as before).
+*/}}
+{{- define "distant-signal.postgresTerminationGracePeriodSeconds" -}}
+{{- $grace := .Values.postgresql.terminationGracePeriodSeconds -}}
+{{- if and (not (kindIs "invalid" $grace)) (ne (toString $grace) "") -}}
+{{- if not (regexMatch "^[0-9]+$" (toString $grace)) -}}
+{{- fail "postgresql.terminationGracePeriodSeconds must be a whole number of seconds, or empty." -}}
+{{- end -}}
+{{- int64 $grace -}}
+{{- else if include "distant-signal.pgbackrestEnabled" . -}}
+{{- include "distant-signal.pgbackrestStopBudgetSecs" . -}}
+{{- end -}}
 {{- end }}
 
 {{/*
@@ -181,6 +217,12 @@ with the same env, so archive_command, the CronJobs' commands and a manual
   value: {{ int64 $pb.processMax | quote }}
 - name: PGBACKREST_ARCHIVE_ASYNC
   value: {{ ternary "y" "n" (ne (toString $pb.archive.async) "false") | quote }}
+# How long pg_ctl waits (default 60s). Only the image's entrypoint runs
+# pg_ctl, around the temporary server of a first-start initdb. With the
+# repository unreachable, stopping that server waits for the archiver like
+# any stop, so at 60s pg_ctl gave up and the container exited 1.
+- name: PGCTLTIMEOUT
+  value: {{ include "distant-signal.pgbackrestStopBudgetSecs" . | quote }}
 - name: PGBACKREST_SPOOL_PATH
   value: {{ include "distant-signal.pgbackrestSpoolPath" . | quote }}
 {{- with $pb.archive.queueMax }}
