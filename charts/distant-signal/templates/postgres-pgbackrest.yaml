@@ -17,18 +17,21 @@ Kubernetes API".
 {{- $root := . }}
 {{- $pb := .Values.postgresql.pgbackrest }}
 {{- $fullname := include "distant-signal.fullname" . }}
-{{- /* 46 + "-check" stays within a CronJob name's 52 characters. */}}
-{{- $name := printf "%s-pgbackrest" $fullname | trunc 46 | trimSuffix "-" }}
+{{- /* 45 + "-verify" stays within a CronJob name's 52 characters. */}}
+{{- $name := printf "%s-pgbackrest" $fullname | trunc 45 | trimSuffix "-" }}
 {{- $pod := printf "%s-0" (include "distant-signal.postgresFullname" .) }}
-{{- $checkCmd := list "pgbackrest-daily-check" }}
-{{- if eq (toString $pb.backup.verify) "false" }}
-{{- $checkCmd = append $checkCmd "--no-verify" }}
-{{- end }}
+{{- /*
+The daily check skips `verify` (it reads the whole repository back); the
+weekly verify CronJob runs it instead.
+*/}}
 {{- $jobs := list
   (dict "suffix" "full" "schedule" $pb.backup.fullSchedule "command" (list "pgbackrest" "--log-level-console=info" "--type=full" "backup"))
   (dict "suffix" "diff" "schedule" $pb.backup.diffSchedule "command" (list "pgbackrest" "--log-level-console=info" "--type=diff" "backup"))
-  (dict "suffix" "check" "schedule" $pb.backup.checkSchedule "command" $checkCmd)
+  (dict "suffix" "check" "schedule" $pb.backup.checkSchedule "command" (list "pgbackrest-daily-check" "--no-verify"))
 }}
+{{- with $pb.backup.verifySchedule }}
+{{- $jobs = append $jobs (dict "suffix" "verify" "schedule" . "command" (list "pgbackrest" "--log-level-console=info" "verify")) }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

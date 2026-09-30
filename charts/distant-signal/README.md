@@ -754,9 +754,9 @@ Off by default (`postgresql.pgbackrest.enabled: false`), and while off the
 Postgres pod renders exactly as without it. When enabled, the bundled
 Postgres runs `docker/postgres-pgbackrest.Dockerfile` (the same
 `postgres:16.15-trixie` plus pgBackRest), archives its WAL to an S3
-repository with client-side AES-256 encryption, and three CronJobs take a
-weekly full backup, a daily differential and a daily check (`check`,
-`verify` and a WAL gap check). The CronJobs `kubectl exec` into the Postgres
+repository with client-side AES-256 encryption, and CronJobs take a weekly
+full backup, a daily differential, a daily check (`check` and a WAL gap
+check) and a weekly `verify`. The CronJobs `kubectl exec` into the Postgres
 pod; their Role allows only `get` and `pods/exec` on that one pod.
 `archive.queueMax` (archive-push-queue-max) drops WAL rather than let
 `pg_wal` fill the disk when the repository is unreachable, and the daily
@@ -1201,12 +1201,12 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.archive.queueMax` | `8GB` | Disk-full guard (`archive-push-queue-max`): past this much queued WAL, pgBackRest drops WAL (a PITR gap the daily check reports) instead of filling the disk. Base-1024 units. Needs `async`; `""` turns it off. |
 | `postgresql.pgbackrest.archive.timeoutSecs` | `60` | Postgres `archive_timeout`: bounds the recovery point objective while anything writes. |
 | `postgresql.pgbackrest.compress.type` / `.level` | `zst` / `3` | Repository compression. |
-| `postgresql.pgbackrest.backup.timeZone` | `Etc/UTC` | `spec.timeZone` of the three CronJobs. |
-| `postgresql.pgbackrest.backup.fullSchedule` | `30 3 * * 0` | Weekly full backup (Sunday 03:30 UTC). |
-| `postgresql.pgbackrest.backup.diffSchedule` | `30 3 * * 1-6` | Differential backup the other days (03:30 UTC). |
-| `postgresql.pgbackrest.backup.checkSchedule` | `0 5 * * *` | Daily `check`, `verify` and WAL gap check (05:00 UTC). |
-| `postgresql.pgbackrest.backup.verify` | `true` | Run `pgbackrest verify` in the daily check. It reads the whole repository back each day. |
-| `postgresql.pgbackrest.backup.suspend` | `false` | Suspend the three CronJobs (archiving continues). |
+| `postgresql.pgbackrest.backup.timeZone` | `Etc/UTC` | `spec.timeZone` of the CronJobs. |
+| `postgresql.pgbackrest.backup.fullSchedule` | `0 4 * * 0` | Weekly full backup (Sunday 04:00 UTC). |
+| `postgresql.pgbackrest.backup.diffSchedule` | `0 4 * * 1-6` | Differential backup the other days (04:00 UTC). |
+| `postgresql.pgbackrest.backup.checkSchedule` | `0 6 * * *` | Daily `check` and WAL gap check (06:00 UTC, after the backup). |
+| `postgresql.pgbackrest.backup.verifySchedule` | `0 7 * * 0` | Weekly `pgbackrest verify` CronJob (Sunday 07:00 UTC, after the full backup). It reads the whole repository back. Empty renders no verify CronJob. |
+| `postgresql.pgbackrest.backup.suspend` | `false` | Suspend the CronJobs (archiving continues). |
 | `postgresql.pgbackrest.backup.activeDeadlineSeconds` | `21600` | Kill a backup or check Job that runs longer. |
 | `postgresql.pgbackrest.backup.backoffLimit` | `1` | Retries of a failed Job. A retried backup resumes. |
 | `postgresql.pgbackrest.backup.startingDeadlineSeconds` | `3600` | Skip a run that can't start within this long of its time. |
@@ -2093,7 +2093,7 @@ alert only when `archive.enabled`, the archive-expiry group only when
 | `DistantSignalPollerFailing` | warning | A poller completed no successful cycle and at least one failed one (`poller_cycle_total{result}`) over the last 2h, or more than half its cycles over the last 1h failed (`pollerFailures.failureRatio`, `ratioWindow`) (SVC-08). Rendered only when a poller (including an island-of-Ireland one) is enabled, in a separate `<fullname>-pollers` PrometheusRule. |
 | `DistantSignalLdbwsStationStale` | warning | The least recently sampled LDBWS station (`ldbws_stalest_station_age_seconds`) is over 7200s old for 30m: the rotation stopped reaching part of the list (SVC-04). Stations LDBWS rejects as an invalid CRS are excluded. Only when `pollers.ldbws.enabled`. |
 | `DistantSignalLdbwsInvalidCrs` | warning | LDBWS has answered "Invalid crs code supplied" for a sample station (`ldbws_invalid_crs_station{crs}` is 1) for 15m: a `lines/*.toml` typo. The poller re-probes it hourly instead of every cycle. Only when `pollers.ldbws.enabled`. |
-| `DistantSignalPgBackRestCheckFailed` | critical | The daily pgBackRest check Job failed within 26h: archiving is broken, `verify` found a bad file, or WAL is missing (a PITR gap). This group renders only with `postgresql.pgbackrest.enabled`, in a separate `<fullname>-pgbackrest` PrometheusRule (`metrics.prometheusRule.pgbackrest`), and reads kube-state-metrics and postgres_exporter series rather than this chart's own. Runbook: `docs/postgres-pitr.md`. |
+| `DistantSignalPgBackRestCheckFailed` | critical | The daily pgBackRest check Job or the weekly verify Job failed within 26h: archiving is broken, `verify` found a bad file, or WAL is missing (a PITR gap). This group renders only with `postgresql.pgbackrest.enabled`, in a separate `<fullname>-pgbackrest` PrometheusRule (`metrics.prometheusRule.pgbackrest`), and reads kube-state-metrics and postgres_exporter series rather than this chart's own. Runbook: `docs/postgres-pitr.md`. |
 | `DistantSignalPgBackRestBackupFailed` | warning | A full or diff backup Job failed within 26h. |
 | `DistantSignalPgBackRestBackupStale` | warning | No full or diff backup CronJob success (`kube_cronjob_status_last_successful_time`) for 30h, for 10m. |
 | `DistantSignalPgBackRestFullBackupStale` | warning | No full backup success for 8d, for 10m. |

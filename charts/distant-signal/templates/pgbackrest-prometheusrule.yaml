@@ -5,7 +5,7 @@ metrics.enabled, metrics.prometheusRule.enabled and
 postgresql.pgbackrest.enabled. Runbook: docs/postgres-pitr.md.
 
 Two sources, neither of them this chart's own exporters:
-  - kube-state-metrics for the three CronJobs (kube_job_failed with
+  - kube-state-metrics for the CronJobs (kube_job_failed with
     condition="true" is the Job's Failed condition, so a Job that failed
     once and succeeded on retry doesn't count; kube_job_status_start_time
     limits it to recent Jobs, because failed Jobs stay in the history);
@@ -20,7 +20,7 @@ Two sources, neither of them this chart's own exporters:
 {{- $rule := $.Values.metrics.prometheusRule }}
 {{- $ns := $.Release.Namespace }}
 {{- $fullname := include "distant-signal.fullname" $ }}
-{{- $cronjob := printf "%s-pgbackrest" $fullname | trunc 46 | trimSuffix "-" }}
+{{- $cronjob := printf "%s-pgbackrest" $fullname | trunc 45 | trimSuffix "-" }}
 {{- $runbook := printf "%s/docs/postgres-pitr.md" (trimSuffix "/" $rule.runbookBaseUrl) }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
 {{- $archiver := printf "namespace=%q" $ns }}
@@ -46,7 +46,7 @@ spec:
       rules:
         - alert: DistantSignalPgBackRestCheckFailed
           expr: |
-            max by (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-check-[0-9]+", condition="true"} == 1)
+            max by (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(check|verify)-[0-9]+", condition="true"} == 1)
             and on (namespace, job_name)
             (time() - kube_job_status_start_time{namespace="{{ $ns }}"} < {{ include "distant-signal.durationSeconds" .recentJobWindow }})
           for: 0m
@@ -56,9 +56,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "pgBackRest daily check failed ({{ "{{ $labels.job_name }}" }})"
+            summary: "pgBackRest check or verify failed ({{ "{{ $labels.job_name }}" }})"
             description: >-
-              The pgBackRest check Job {{ "{{ $labels.namespace }}/{{ $labels.job_name }}" }}
+              The pgBackRest check or verify Job {{ "{{ $labels.namespace }}/{{ $labels.job_name }}" }}
               failed. Either WAL archiving is broken (the repository is
               unreachable, or its credentials or stanza are wrong),
               `pgbackrest verify` found a bad file, or WAL is missing from

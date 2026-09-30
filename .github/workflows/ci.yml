@@ -1374,7 +1374,9 @@ jobs:
             --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
             --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds
           )
-          render "${pgbackrest[@]}" | check "pgBackRest enabled" 3
+          render "${pgbackrest[@]}" | check "pgBackRest enabled" 4
+          render "${pgbackrest[@]}" --set postgresql.pgbackrest.backup.verifySchedule= \
+            | check "pgBackRest enabled, no weekly verify" 3
 
       # postgresql.pgbackrest (docs/postgres-pitr.md). Off (the default)
       # must render nothing of it: the Postgres pod stays exactly as before.
@@ -1445,13 +1447,17 @@ jobs:
           if grep -E -q 'secrets|delete|update|patch|list|watch|"\*"' <<<"${role}"; then
             fail "the Role must allow nothing beyond get/exec on the Postgres pod"
           fi
-          for s in 'full:30 3 \* \* 0' 'diff:30 3 \* \* 1-6' 'check:0 5 \* \* \*'; do
+          for s in 'full:0 4 \* \* 0' 'diff:0 4 \* \* 1-6' 'check:0 6 \* \* \*' 'verify:0 7 \* \* 0'; do
             cj=$(awk -v n="distant-signal-pgbackrest-${s%%:*}" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}' <<<"${jobs}")
             grep -q "schedule: \"${s#*:}\"" <<<"${cj}" || fail "${s%%:*} CronJob schedule"
             grep -q 'timeZone: "Etc/UTC"' <<<"${cj}" || fail "${s%%:*} CronJob must run in Etc/UTC"
             grep -q 'automountServiceAccountToken: true' <<<"${cj}" || fail "${s%%:*} CronJob needs its token"
           done
-          grep -q -- '- "pgbackrest-daily-check"' <<<"${jobs}" || fail "the check CronJob must run pgbackrest-daily-check"
+          check_job=$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: distant-signal-pgbackrest-check\n" {print}' <<<"${jobs}")
+          grep -A1 -- '- "pgbackrest-daily-check"' <<<"${check_job}" | grep -q -- '- "--no-verify"' \
+            || fail "the daily check must skip verify (the weekly verify CronJob runs it)"
+          verify_job=$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: distant-signal-pgbackrest-verify\n" {print}' <<<"${jobs}")
+          grep -q -- '- "verify"' <<<"${verify_job}" || fail "the weekly verify CronJob must run pgbackrest verify"
 
           rule=$(render "${on[@]}" --namespace distant-signal \
             --show-only templates/pgbackrest-prometheusrule.yaml)
@@ -1459,8 +1465,8 @@ jobs:
           n_alerts=$(grep -c . <<<"${names}" || true)
           [[ "${n_alerts}" -eq 6 ]] || fail "expected 6 pgBackRest alerts, got: ${names}"
           if bad=$(grep -v '^DistantSignal' <<<"${names}"); then fail "alert names must start with DistantSignal: ${bad}"; fi
-          grep -q 'kube_job_failed{namespace="distant-signal", job_name=~"distant-signal-pgbackrest-check-\[0-9\]+", condition="true"}' <<<"${rule}" \
-            || fail "the check alert must match the check CronJob's Jobs"
+          grep -q 'kube_job_failed{namespace="distant-signal", job_name=~"distant-signal-pgbackrest-(check|verify)-\[0-9\]+", condition="true"}' <<<"${rule}" \
+            || fail "the check alert must match the check and verify CronJobs' Jobs"
 
           for unset in image.tag repo.path repo.s3.endpoint repo.s3.bucket repo.s3.existingSecret; do
             if helm template distant-signal charts/distant-signal "${base[@]}" "${on[@]}" \

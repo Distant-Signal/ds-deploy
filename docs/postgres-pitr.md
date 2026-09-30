@@ -27,8 +27,9 @@ never touches the cluster.
 | WAL archiving | `archive_mode=on`, `archive_command='pgbackrest --stanza=ds archive-push %p'` and `archive_timeout=60` are added to the Postgres `-c` args. Archiving is asynchronous, through a spool at `/var/lib/postgresql/data/pgbackrest-spool` on the data volume, beside `PGDATA`. |
 | Repository | S3 (Thoth on mine-bringer), under `repo.path` in `repo.s3.bucket`. Every file is encrypted client-side with AES-256-CBC before it leaves the pod, and compressed with zstd. |
 | Disk-full guard | `archive-push-queue-max` (`archive.queueMax`, 8 GB). If the repository is unreachable for long enough that 8 GB of WAL waits in the queue, pgBackRest **drops** WAL instead of letting `pg_wal` fill the node's disk. Postgres stays up; the dropped WAL is a gap that point-in-time recovery can't cross. |
-| Backups | CronJobs `<release>-pgbackrest-full` (Sunday 03:30 UTC) and `-diff` (Monday–Saturday 03:30 UTC). Each backup then runs `expire`, which keeps the full backups and WAL needed to restore to any point in the last `repo.retentionFull` days. |
-| Daily check | CronJob `<release>-pgbackrest-check` (05:00 UTC) runs `pgbackrest-daily-check`: `pgbackrest check` (archiving works end to end), `pgbackrest verify` (every file in the repository decrypts and matches its checksum), and a WAL gap check (every segment since the oldest backup on the current timeline is in the repository). |
+| Backups | CronJobs `<release>-pgbackrest-full` (Sunday 04:00 UTC) and `-diff` (Monday–Saturday 04:00 UTC). Each backup then runs `expire`, which keeps the full backups and WAL needed to restore to any point in the last `repo.retentionFull` days. |
+| Daily check | CronJob `<release>-pgbackrest-check` (06:00 UTC) runs `pgbackrest-daily-check --no-verify`: `pgbackrest check` (archiving works end to end) and a WAL gap check (every segment since the oldest backup on the current timeline is in the repository). |
+| Weekly verify | CronJob `<release>-pgbackrest-verify` (Sunday 07:00 UTC, after the full backup) runs `pgbackrest verify`: every file in the repository decrypts and matches its checksum. It reads the whole repository back, so it runs weekly (`backup.verifySchedule`). |
 | How the CronJobs run | `kubectl exec` into `<release>-postgres-0`, container `postgres`, so pgBackRest runs next to the data directory with the container's own `PGBACKREST_*` env. Their ServiceAccount's Role allows `get` on that one pod and `pods/exec` on it, and nothing else. They are the only pods in the chart that mount a ServiceAccount token. |
 | Secrets | From existing Secrets only: the S3 key pair (`repo.s3.existingSecret`) and the cipher passphrase (`repo.cipher.existingSecret`, defaulting to the same Secret). |
 
@@ -134,14 +135,14 @@ the archiver alerts read postgres_exporter's `pg_stat_archiver_*` series
 
 | Alert | Severity | Meaning | What to do |
 | --- | --- | --- | --- |
-| `DistantSignalPgBackRestCheckFailed` | critical | The daily check Job failed. | Read the Job's log (`kubectl logs job/<name>`). A failed `check` means archiving is broken: see "Archiving is failing". A failed `verify` names the bad file: take a full backup, and find out what damaged it. "WAL gap": see below. |
+| `DistantSignalPgBackRestCheckFailed` | critical | The daily check Job or the weekly verify Job failed. | Read the Job's log (`kubectl logs job/<name>`). A failed `check` means archiving is broken: see "Archiving is failing". A failed `verify` names the bad file: take a full backup, and find out what damaged it. "WAL gap": see below. |
 | `DistantSignalPgBackRestBackupFailed` | warning | A full or diff backup Job failed. | Read the Job's log. Re-run it with `kubectl create job --from=cronjob/...`. A rerun resumes a partial backup. |
 | `DistantSignalPgBackRestBackupStale` | warning | No full or diff backup has succeeded for 30 h. | As above; also check the CronJob isn't suspended. |
 | `DistantSignalPgBackRestFullBackupStale` | warning | No full backup for 8 days. | Run the full CronJob by hand. |
 | `DistantSignalPgBackRestArchiveFailing` | warning | `archive_command` keeps failing. | See "Archiving is failing". |
 | `DistantSignalPgBackRestArchiveStalled` | warning | No WAL segment archived for 15 minutes, although `archive_timeout` switches segments every minute while anything writes. | As for failing. |
 
-Ranma-Config's `CronJobNotSucceeding` also covers the three CronJobs (their
+Ranma-Config's `CronJobNotSucceeding` also covers these CronJobs (their
 names don't end in `-backup`).
 
 ### Archiving is failing
@@ -345,3 +346,12 @@ stock image with archiving off, and the CronJobs, Role and alerts are
 removed. The repository is left as it is: delete `repo.path` from the
 bucket by hand once its backups are no longer wanted. They hold personal
 data until they're deleted (see [personal-data-retention.md](personal-data-retention.md)).
+
+## Personal data
+
+Backups hold personal data. With weekly full backups and 7-day time
+retention, a deleted row can stay in the repository for up to about 14
+days: the 7-day window, plus up to 7 days until the full backup before it
+expires. The account and privacy pages say "up to 14 days"; keep
+`repo.retentionFull` and the backup schedules within that (see
+[personal-data-retention.md](personal-data-retention.md)).
