@@ -1233,6 +1233,9 @@ jobs:
           all=$(render --set pollerIrishRailGtfs.enabled=true \
             --set pollerIrishRailLive.enabled=true \
             --set pollerNirStations.enabled=true \
+            --set api.internalOauth.groups.irishRailGtfs=svc-poller-irish-rail-gtfs \
+            --set api.internalOauth.groups.irishRailLive=svc-poller-irish-rail-live \
+            --set api.internalOauth.groups.nirStations=svc-poller-nir-stations \
             --show-only templates/networkpolicy.yaml)
           for c in aggregator:8090 enricher:8090 notifier:8090 trust-consumer:8081 \
               trust-backlog-consumer:8083 full-coverage-consumer:8082 movement-relay:8083 \

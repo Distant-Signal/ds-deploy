@@ -806,8 +806,8 @@ api:
   # the subscription has not been renewed) for this many days.
   stalePushSubscriptionDays: 365
   # Whole accounts with no login and no live session for this many days are
-  # deleted. OFF (0) by default: users without an email address cannot be
-  # warned first, so enabling it is an operator decision the privacy notice
+  # deleted. OFF (0) by default: the app holds no email addresses, so users
+  # cannot be warned first, and enabling it is an operator decision the privacy notice
   # must state. The audit suggests 730 (24 months).
   inactiveAccountRetentionDays: 0
   # Internal-service OAuth2 verification -- see
@@ -857,9 +857,15 @@ api:
       # crates/api/src/data/config.rs's `chart_env_wiring_tests` module now
       # makes impossible to reintroduce.)
       trustBacklog: svc-trust-backlog-consumer
-      irishRailGtfs: svc-poller-irish-rail-gtfs
-      irishRailLive: svc-poller-irish-rail-live
-      nirStations: svc-poller-nir-stations
+      # The three island-of-Ireland pollers' groups. Empty by default: those
+      # pollers ship disabled and no such group exists in Authentik, and an
+      # empty group closes the /private/island-of-ireland-* routes it gates
+      # (every caller gets 403). Create the group in Authentik and set it here
+      # when enabling the matching poller; the chart refuses to render an
+      # enabled poller whose group is empty.
+      irishRailGtfs: ""
+      irishRailLive: ""
+      nirStations: ""
       # Gates POST /private/corpus-locations (Network Rail CORPUS loads,
       # scheduleFeed.corpus below). The caller is schedule-ingest's OWN
       # service account (scheduleFeed.ingest.internalOauthUsername), which

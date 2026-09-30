@@ -934,7 +934,10 @@ subscription key from `TFL_APP_KEY` rather than `RDM_API_KEY`.
 The three island-of-Ireland pollers (`pollerIrishRailGtfs`,
 `pollerIrishRailLive`, `pollerNirStations`) are separate top-level values,
 also off by default, with working public default URLs; see their comments
-in `values.yaml`.
+in `values.yaml`. Each also needs its api-side group,
+`api.internalOauth.groups.irishRailGtfs` / `irishRailLive` / `nirStations`,
+which is empty by default (no such Authentik group exists until you create
+one); enabling one of these pollers with its group empty aborts the render.
 
 Enabling a poller without setting its `baseUrl` **aborts the render** with an
 explicit message, rather than deploying a pod that cannot work.
@@ -1155,9 +1158,9 @@ Used only when `postgresql.enabled` is `false`.
 | `api.internalOauth.groups.scheduleReference` | `svc-schedule-reference` | Required Authentik group for schedule-reference (also accepted on `POST /private/stanox-crs`). Not secret. |
 | `api.internalOauth.groups.fullCoverage` | `svc-full-coverage-consumer` | Required Authentik group for full-coverage-consumer. Not secret. |
 | `api.internalOauth.groups.trustBacklog` | `svc-trust-backlog-consumer` | Required Authentik group for trust-backlog-consumer. Not secret. |
-| `api.internalOauth.groups.irishRailGtfs` | `svc-poller-irish-rail-gtfs` | Required Authentik group for the Irish Rail GTFS poller. Not secret. |
-| `api.internalOauth.groups.irishRailLive` | `svc-poller-irish-rail-live` | Required Authentik group for the Irish Rail realtime poller. Not secret. |
-| `api.internalOauth.groups.nirStations` | `svc-poller-nir-stations` | Required Authentik group for the NIR stations poller. Not secret. |
+| `api.internalOauth.groups.irishRailGtfs` | `""` | Authentik group for the Irish Rail GTFS poller. Empty (the default) closes its api routes; required when `pollerIrishRailGtfs.enabled`. Not secret. |
+| `api.internalOauth.groups.irishRailLive` | `""` | Authentik group for the Irish Rail realtime poller. Empty (the default) closes its api route; required when `pollerIrishRailLive.enabled`. Not secret. |
+| `api.internalOauth.groups.nirStations` | `""` | Authentik group for the NIR stations poller. Empty (the default) closes its api routes; required when `pollerNirStations.enabled`. Not secret. |
 | `api.internalOauth.groups.corpus` | `svc-corpus-ingest` | Required Authentik group on `POST /private/corpus-locations` (Network Rail CORPUS loads). Add the schedule-ingest service account to it before setting `scheduleFeed.corpus.enabled`. Not secret. |
 | `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account. Opens no `/private/*` route: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. Must differ from every other group (api refuses to start otherwise). See "Distant-Signal-MCP as a service caller" below. |
 | `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). `/private/*` is never limited. |
@@ -1185,7 +1188,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.sessionCleanupIntervalSecs` | `3600` | How often expired sessions are deleted; the personal-data retention limits below run on the same sweep. |
 | `api.pastTravelRetentionDays` | `548` | Days after the travel date that tracked trains, tickets, journeys and template skip markers are kept (18 months). `0` disables. See `docs/personal-data-retention.md`. |
 | `api.stalePushSubscriptionDays` | `365` | Drop push subscriptions whose user has not logged in (and that were not renewed) for this many days. `0` disables. |
-| `api.inactiveAccountRetentionDays` | `0` | Delete accounts with no login and no live session for this many days. Off by default: users without an email address cannot be warned, so enabling it is an operator decision the privacy notice must state. |
+| `api.inactiveAccountRetentionDays` | `0` | Delete accounts with no login and no live session for this many days. Off by default: the app holds no email addresses, so users cannot be warned first, and enabling it is an operator decision the privacy notice must state. |
 | `api.chatbotAccessGroup` | `distant-signal-chatbot-users` | SSO group (from the `groups` OIDC claim) that grants a logged-in user the embedded chatbot. Only read when `api.chatbotAccess` is `group`; there, `""` means nobody gets it. |
 | `api.chatbotAccess` | `group` | Who gets the embedded chatbot: `group` (members of `api.chatbotAccessGroup` only) or `authenticated` (every logged-in user; logged-out visitors still get the sign-in prompt, and `chatbotAccessGroup` is ignored and no longer stored). Flip it together with distant-signal-mcp's own ungating. |
 | `api.adminGroup` | `""` | SSO group whose members may end any user's sessions (`POST /api/admin/users/revoke-sessions`). Empty: nobody is an admin. Read at login. See `docs/session-revocation.md`. |

@@ -1,4 +1,7 @@
 {{- if .Values.pollerIrishRailLive.enabled }}
+{{- if not (trim (.Values.api.internalOauth.groups.irishRailLive | default "")) }}
+{{- fail "pollerIrishRailLive.enabled needs api.internalOauth.groups.irishRailLive: the Authentik group this poller's service account is in (empty closes its api routes)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

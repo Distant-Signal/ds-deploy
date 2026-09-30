@@ -1,4 +1,7 @@
 {{- if .Values.pollerIrishRailGtfs.enabled }}
+{{- if not (trim (.Values.api.internalOauth.groups.irishRailGtfs | default "")) }}
+{{- fail "pollerIrishRailGtfs.enabled needs api.internalOauth.groups.irishRailGtfs: the Authentik group this poller's service account is in (empty closes its api routes)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

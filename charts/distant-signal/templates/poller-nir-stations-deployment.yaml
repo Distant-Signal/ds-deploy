@@ -1,4 +1,7 @@
 {{- if .Values.pollerNirStations.enabled }}
+{{- if not (trim (.Values.api.internalOauth.groups.nirStations | default "")) }}
+{{- fail "pollerNirStations.enabled needs api.internalOauth.groups.nirStations: the Authentik group this poller's service account is in (empty closes its api routes)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
