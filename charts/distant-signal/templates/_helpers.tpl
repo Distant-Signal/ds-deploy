@@ -1206,3 +1206,37 @@ existingClaim) there, as values.yaml's upgrade note says.
 {{- end -}}
 {{- $size -}}
 {{- end }}
+
+{{/*
+The movement-events consumer groups movement-relay creates at the start of a
+fresh stream (MOVEMENT_CONSUMER_GROUPS): trust-consumer and
+full-coverage-consumer only while their movementFeed is redis-stream (the
+legacy kafka path never reads the stream), trust-event-backlog always.
+Takes root.
+*/}}
+{{- define "distant-signal.movementConsumerGroups" -}}
+{{- $groups := list -}}
+{{- if eq .Values.trustConsumer.movementFeed "redis-stream" -}}
+{{- $groups = append $groups "trust-consumer" -}}
+{{- end -}}
+{{- if eq .Values.fullCoverageConsumer.movementFeed "redis-stream" -}}
+{{- $groups = append $groups "full-coverage-consumer" -}}
+{{- end -}}
+{{- $groups = append $groups "trust-event-backlog" -}}
+{{- join "," $groups -}}
+{{- end }}
+
+{{/*
+movementRelay.deadLetterMaxAgeSecs, refused outside 3600..86400: the TRUST
+1-day retention safeguard caps it at 24 hours. Takes root.
+*/}}
+{{- define "distant-signal.deadLetterMaxAgeSecs" -}}
+{{- $age := int64 .Values.movementRelay.deadLetterMaxAgeSecs -}}
+{{- if gt $age 86400 -}}
+{{- fail "movementRelay.deadLetterMaxAgeSecs must be at most 86400 (24h, the TRUST 1-day retention safeguard)" -}}
+{{- end -}}
+{{- if lt $age 3600 -}}
+{{- fail "movementRelay.deadLetterMaxAgeSecs must be at least 3600" -}}
+{{- end -}}
+{{- $age -}}
+{{- end }}

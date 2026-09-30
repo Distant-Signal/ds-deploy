@@ -2465,6 +2465,17 @@ movementRelay:
   # 100,000 entries needs ~100 MiB more `maxmemory` and ~130 MiB more
   # memory limit. Minimum 1000.
   streamMaxLen: 1048576
+  # -- Dead letters older than this many seconds are deleted
+  # (DEADLETTER_MAX_AGE_SECS): movement-relay runs `XTRIM
+  # movement-events-deadletter MINID <now - this>` every streamLagPollSecs,
+  # because the records are raw TRUST and the TRUST 1-day retention
+  # safeguard applies to them. At most 86400 (24h) -- the render fails
+  # above that, and so would the binary -- and at least 3600.
+  # DistantSignalDeadLetterExpiring warns
+  # metrics.prometheusRule.deadLetterExpiring.warnBeforeTrimSecs before a
+  # record is trimmed, so it can be re-injected first
+  # (docs/movement-events-deadletter.md).
+  deadLetterMaxAgeSecs: 86400
   healthPort: 8083
   # -- Liveness watchdog (PROGRESS_STALL_SECS): /livez answers 503 "stalled"
   # once no relay-loop iteration has completed for this many seconds (waiting
@@ -3362,13 +3373,22 @@ metrics:
       enabled: true
       for: 5m
       severity: critical
-    # DistantSignalMovementGroupRecreated: a consumer found its
-    # movement-events group missing (NOGROUP) within `window` and recreated
-    # it: Redis lost its data, or the group was deleted.
+    # DistantSignalMovementGroupRecreated: within `window`, a consumer
+    # found its movement-events group missing (NOGROUP) and recreated it,
+    # or movement-relay found the stream itself missing and recreated it
+    # with every group: Redis lost its data, or the group was deleted.
     groupRecreated:
       enabled: true
       window: 1h
       for: 0m
+      severity: warning
+    # DistantSignalDeadLetterExpiring: the oldest dead letter is within
+    # warnBeforeTrimSecs of movementRelay.deadLetterMaxAgeSecs, after which
+    # movement-relay deletes it. Re-inject or export it before then.
+    deadLetterExpiring:
+      enabled: true
+      warnBeforeTrimSecs: 14400
+      for: 5m
       severity: warning
     # DistantSignalEnricherErrors: over `window`, more than errorRatio of an
     # LLM call site's calls failed, with at least minErrors failures.

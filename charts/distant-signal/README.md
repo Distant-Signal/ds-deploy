@@ -1695,6 +1695,7 @@ credential of its own it uses trust-consumer's; see "Install" above.
 | `movementRelay.kafka.existingSecretUsernameKey` | `movement-relay-kafka-sasl-username` | Key for movement-relay's own SASL username. |
 | `movementRelay.kafka.existingSecretPasswordKey` | `movement-relay-kafka-sasl-password` | Key for movement-relay's own SASL password. |
 | `movementRelay.streamLagPollSecs` | `30` | How often consumer-group lag on the stream is polled for the lag gauge. |
+| `movementRelay.deadLetterMaxAgeSecs` | `86400` | Dead letters older than this are deleted by movement-relay (`XTRIM MINID`), under the TRUST 1-day retention safeguard. 3600 to 86400; the render fails outside that range. |
 | `movementRelay.streamMaxLen` | `1048576` | `MAXLEN ~` cap on the `movement-events` stream, in entries: about 24 hours of traffic and the consumers' only replay window. Move `redis.maxmemory`/`redis.resources` with it (about 100 MiB per 100,000 entries). Minimum 1000. |
 | `movementRelay.healthPort` | `8083` | Port for `/healthz` (readiness: partition assignment confirmed) and `/livez` (liveness). |
 | `movementRelay.progressStallSecs` | `900` | `/livez` answers 503 once no relay-loop iteration has completed for this many seconds (waiting for Kafka never counts). |
@@ -2042,7 +2043,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; the repo-relative doc path is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
 
 #### Alerts
 
@@ -2064,13 +2065,17 @@ alert only when `archive.enabled`, the archive-expiry group only when
 
 | Alert | Severity | Fires when (defaults) |
 |---|---|---|
-| `DistantSignalMovementLagHigh` | warning | A consumer group's `movement_relay_stream_lag` is above 25% of the stream cap (`movement_relay_stream_maxlen`, falling back to `movementRelay.streamMaxLen`) for 10m. |
+| `DistantSignalMovementLagHigh` | warning | A consumer group's `movement_relay_stream_lag` plus `movement_relay_stream_pending` (delivered but un-ACKed: a consumer whose downstream fails keeps reading, so its backlog sits in pending) is above 25% of the stream cap (`movement_relay_stream_maxlen`, falling back to `movementRelay.streamMaxLen`) for 10m. |
 | `DistantSignalMovementLagCritical` | critical | The same, above 50%. |
 | `DistantSignalMovementLagGrowing` | warning | A group's lag has a positive `deriv` and grew by more than 5000 entries over 30m, for 10m. Lag never reads 0, so neither alert is on `> 0`. |
 | `DistantSignalStreamGap` | warning | trust-consumer, full-coverage-consumer or trust-backlog-consumer counted a stream gap (`*_stream_gap_detected_total`) within the last 1h. |
 | `DistantSignalDeadLetterGrowing` | warning | Any record dead-lettered (`movement_feed_deadlettered_total`) within the last 1h. |
-| `DistantSignalDeadLetterNearFull` | warning | `movement_feed_deadletter_length` above 80% of the 10,000-record cap. |
+| `DistantSignalDeadLetterNearFull` | warning | The dead-letter stream's length (`movement_relay_deadletter_length`, read by movement-relay every tick; falls back to the consumers' `movement_feed_deadletter_length`) above 80% of the 10,000-record cap. |
 | `DistantSignalDeadLetterFull` | critical | A dead-letter write was refused because the stream is full (`movement_feed_deadletter_full_total`) within the last 1h. |
+| `DistantSignalDeadLetterExpiring` | warning | The oldest dead letter (`movement_relay_deadletter_oldest_age_seconds`) is within 4h (`deadLetterExpiring.warnBeforeTrimSecs`) of `movementRelay.deadLetterMaxAgeSecs` (24h), after which movement-relay deletes it, for 5m. Re-inject it first. |
+| `DistantSignalMovementRelayPublishFailing` | critical | movement-relay failed every `XADD` (`movement_relay_errors_total{operation=~"publish_event\|redis_oom"}`) and published nothing over 10m, for 5m: Redis is refusing writes and TRUST ingestion has stopped. |
+| `DistantSignalRedisPersistenceFailing` | critical | Redis's last AOF write or rewrite failed (`redis_aof_last_write_ok` / `redis_aof_last_bgrewrite_ok` is 0, from movement-relay's `INFO persistence`), or, for the bundled Redis with persistence, AOF is off, for 5m. |
+| `DistantSignalMovementGroupRecreated` | warning | Within 1h a consumer recreated its group after `NOGROUP` (`movement_feed_group_recreated_total`), or movement-relay recreated a missing stream with every group (`movement_relay_stream_created_total`): Redis lost its data. |
 | `DistantSignalEnricherErrors` | warning | Over 30m, more than 50% of an LLM call site's calls (`enricher_llm_call_total{outcome!="success"}`: `error`, `timeout`, `rate_limited`, `gateway_error`, `http_error` or `empty_content`) failed, with at least 3 failures, for 15m. |
 | `DistantSignalFullCoverageWindowFeedStale` | warning | full-coverage-consumer has marked its windows `feed_stale` (`full_coverage_consumer_window_feed_stale` is 1) for 15m. |
 | `DistantSignalFullCoverageWindowPostErrors` | warning | A POST to `/private/full-coverage-window-stats` failed (`full_coverage_consumer_errors_total{operation="post_window_stats"}`) within the last 30m. |

@@ -30,7 +30,7 @@ so that clause fired on every rollout.
 {{- $fullname := include "distant-signal.fullname" . }}
 {{- $runbookBase := trimSuffix "/" $rule.runbookBaseUrl }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
-{{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled) }}
+{{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled ($rule.deadLetterExpiring).enabled) }}
 {{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
 {{- $pipelineOn := and ($rule.schedulePipeline).enabled .Values.scheduleFeed.enabled }}
 {{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn }}
@@ -339,9 +339,17 @@ spec:
         {{- with $rule.groupRecreated }}
         {{- if .enabled }}
         {{- $m := printf `distant_signal_movement_feed_group_recreated_total{namespace="%s"}` $ns }}
+        {{- $s := printf `distant_signal_movement_relay_stream_created_total{namespace="%s"}` $ns }}
+        {{- /*
+        Two sources: a running consumer recovering from NOGROUP, and
+        movement-relay finding the stream missing on publish and recreating
+        it with every group (D2) -- after which a consumer never sees
+        NOGROUP. The second is labelled group="(all)".
+        */}}
         - alert: DistantSignalMovementGroupRecreated
           expr: |
             sum by (namespace, group) (increase({{ $m }}[{{ .window }}])) > 0
+            or label_replace(sum by (namespace) (increase({{ $s }}[{{ .window }}])) > 0, "group", "(all)", "", "")
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -358,6 +366,33 @@ spec:
               an empty restart every entry it had not read, are gone; the stream
               gap check cannot see this. Treat that rail day as partial.
             runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.deadLetterExpiring }}
+        {{- if .enabled }}
+        {{- $maxAge := int64 (include "distant-signal.deadLetterMaxAgeSecs" $) }}
+        {{- $threshold := sub $maxAge (int64 .warnBeforeTrimSecs) }}
+        {{- if le $threshold 0 }}
+        {{- fail "metrics.prometheusRule.deadLetterExpiring.warnBeforeTrimSecs must be below movementRelay.deadLetterMaxAgeSecs" }}
+        {{- end }}
+        - alert: DistantSignalDeadLetterExpiring
+          expr: |
+            max by (namespace) (distant_signal_movement_relay_deadletter_oldest_age_seconds{namespace="{{ $ns }}"}) > {{ $threshold }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "the oldest movement-events dead letter is {{ "{{ $value | humanizeDuration }}" }} old"
+            description: >-
+              movement-events-deadletter in {{ "{{ $labels.namespace }}" }} holds a
+              record {{ "{{ $value | humanizeDuration }}" }} old. movement-relay
+              deletes dead letters at {{ $maxAge }}s (the TRUST 1-day retention
+              safeguard), so it goes in under {{ .warnBeforeTrimSecs }}s. Re-inject
+              or deliberately discard it before then.
+            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
         {{- end }}
         {{- end }}
     {{- end }}

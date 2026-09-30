@@ -145,6 +145,13 @@ spec:
               value: {{ .Values.movementRelay.streamLagPollSecs | quote }}
             - name: MOVEMENT_STREAM_MAXLEN
               value: {{ int64 .Values.movementRelay.streamMaxLen | quote }}
+            # D2: the groups created at the start of a fresh stream -- only
+            # those whose consumer reads the stream (a group nobody reads
+            # would show the whole stream as lag).
+            - name: MOVEMENT_CONSUMER_GROUPS
+              value: {{ include "distant-signal.movementConsumerGroups" . | quote }}
+            - name: DEADLETTER_MAX_AGE_SECS
+              value: {{ include "distant-signal.deadLetterMaxAgeSecs" . | quote }}
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.movementRelay.healthPort) | quote }}
             - name: PROGRESS_STALL_SECS
