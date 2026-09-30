@@ -23,7 +23,7 @@ never touches the cluster.
 
 | Piece | What it does |
 | --- | --- |
-| Image | `postgres-pgbackrest`: the exact `postgres:16.15-trixie` image the chart pins, plus pgBackRest from the PGDG repository and the `pgbackrest-daily-check` script. The chart swaps it in for the stock image. |
+| Image | `postgres-pgbackrest`: the exact `postgres:16.15-trixie` image the chart pins, plus pgBackRest from the PGDG repository, the `pgbackrest-daily-check` script, and `tini` as PID 1 in front of the stock entrypoint (see "Why tini" below). The chart swaps it in for the stock image. |
 | WAL archiving | `archive_mode=on`, `archive_command='pgbackrest --stanza=ds archive-push %p'` and `archive_timeout=60` are added to the Postgres `-c` args. Archiving is asynchronous, through a spool at `/var/lib/postgresql/data/pgbackrest-spool` on the data volume, beside `PGDATA`. |
 | Repository | S3 (Thoth on mine-bringer), under `repo.path` in `repo.s3.bucket`. Every file is encrypted client-side with AES-256-CBC before it leaves the pod, and compressed with zstd. |
 | Disk-full guard | `archive-push-queue-max` (`archive.queueMax`, 8 GB). If the repository is unreachable for long enough that 8 GB of WAL waits in the queue, pgBackRest **drops** WAL instead of letting `pg_wal` fill the node's disk. Postgres stays up; the dropped WAL is a gap that point-in-time recovery can't cross. |
@@ -35,6 +35,26 @@ never touches the cluster.
 
 All CronJobs run in `Etc/UTC`, clear of the nightly schedule ingest
 (22:00–01:30). See the chart README, "Scheduled jobs and time zones".
+
+### Why tini
+
+The image runs `tini -- docker-entrypoint.sh`, so the postmaster is not
+PID 1. Async `archive-push` forks a detached worker, which the kernel
+reparents to PID 1. When the postmaster was PID 1 it took that worker's
+exit for one of its own server processes: a failing push (exit code 103
+for a missing stanza; any S3, credentials, TLS or NetworkPolicy failure)
+logged `server process (PID n) exited with exit code 103`, killed every
+connection and ran crash recovery, again with every failed push (every
+~10 s for a missing stanza; every ~2 minutes for an unreachable S3
+endpoint, whose push first retries for a minute).
+This happened in production on the first enable (tags without `-tini` are
+those images; don't run them). With tini, a failing push only fails and
+retries: WAL waits in the spool and `pg_wal`, and the archive alerts fire.
+
+tini forwards the stop signal (the image's `STOPSIGNAL SIGINT`, Postgres'
+fast shutdown) to the postmaster and exits with its exit code. The chart
+sets only `args` for the Postgres container, never `command`, so the
+image's ENTRYPOINT applies; a CI helm-lint step checks that.
 
 ### The cipher passphrase
 
@@ -79,23 +99,32 @@ backups have aged past the retention window.
    give the Postgres pod no egress policy).
 
 5. **Build and pin the image.** `containers.yml` publishes
-   `postgres-pgbackrest` tagged `pg<postgres>-pgbackrest<version>` (e.g.
-   `pg16.15-pgbackrest2.59.1`); every push to main re-points that tag at a
-   fresh build. Set `postgresql.pgbackrest.image.tag` to the tag **with a
-   digest**, read from
-   `docker buildx imagetools inspect ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest:pg16.15-pgbackrest2.59.1`.
+   `postgres-pgbackrest` tagged `pg<postgres>-pgbackrest<version>-tini<version>`
+   (e.g. `pg16.15-pgbackrest2.59.1-tini0.19.0`); every push to main
+   re-points that tag at a fresh build. Set `postgresql.pgbackrest.image.tag`
+   to the tag **with a digest**, read from
+   `docker buildx imagetools inspect ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest:pg16.15-pgbackrest2.59.1-tini0.19.0`.
    The chart refuses to render without it, because a per-release default
    would restart Postgres on every deploy. Moving to a newer digest (a
    Postgres patch release, or a pgBackRest bump) restarts Postgres once, so
    do it on purpose. Keep it on the same Postgres version as
-   `postgresql.image.tag`.
+   `postgresql.image.tag`. Never use a tag without `-tini`: its postmaster
+   is PID 1 and crash-restarts whenever archiving fails (see "Why tini").
 
 6. **Turn it on:** `postgresql.pgbackrest.enabled: true`, plus `repo.path`,
    `repo.s3.endpoint`, `repo.s3.port`, `repo.s3.bucket` and
    `repo.s3.existingSecret`. Postgres restarts once, for `archive_mode`.
 
-7. **Create the stanza straight away.** Until it exists every
-   `archive-push` fails and WAL stays in `pg_wal`:
+7. **Create the stanza immediately**, as soon as the restarted pod is
+   ready. Until it exists every `archive-push` fails (exit code 103). That
+   is harmless with the tini image: Postgres stays up, WAL builds up in
+   `pg_wal` and the spool, and `DistantSignalPgBackRestArchiveFailing` /
+   `ArchiveStalled` fire after their windows. It is not harmless with an
+   image whose tag lacks `-tini` (crash recovery every ~10 s). The chart
+   doesn't run `stanza-create` for you: as a Helm hook, a failure (S3 down
+   during a deploy, or a stanza that no longer matches the database after a
+   restore) would fail the release and let Flux roll it back, and a
+   `postStart` hook that fails kills the Postgres container.
 
    ```sh
    kubectl -n distant-signal exec distant-signal-postgres-0 -c postgres -- \
@@ -150,7 +179,12 @@ names don't end in `-backup`).
 1. Look for pgBackRest's error in the Postgres log:
    `kubectl logs distant-signal-postgres-0 -c postgres | grep -i -E 'pgbackrest|archive'`.
 2. Common causes: the S3 endpoint is down or unreachable (the NetworkPolicy,
-   DNS, TLS), the credentials changed, or the stanza doesn't exist.
+   DNS, TLS), the credentials changed, or the stanza doesn't exist
+   (`[103]` / `archive.info cannot be opened`: run `stanza-create`, step 7
+   of "Enabling it").
+   If the log also shows `server process (PID n) exited with exit code`
+   followed by `terminating any other active server processes`, the pod is
+   running an image without tini: pin a `-tini` tag (see "Why tini").
 3. While it fails, WAL waits in the spool and `pg_wal`. Watch the data
    volume. At `archive.queueMax` pgBackRest starts dropping WAL (a WAL gap).
 4. Once it's fixed, archiving catches up by itself. Run the check job by

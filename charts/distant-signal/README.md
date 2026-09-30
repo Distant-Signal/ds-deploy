@@ -92,7 +92,7 @@ that issuer and subject on the chart's OCIRepository/HelmRepository.
 | `docker/movement-relay.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/movement-relay` |
 | `docker/schedule-ingest.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-ingest` |
 | `docker/schedule-reference.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-reference` |
-| `docker/postgres-pgbackrest.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest` (only with `postgresql.pgbackrest.enabled`; tagged `pg<postgres>-pgbackrest<version>`, and never digest-pinned into the chart by CI) |
+| `docker/postgres-pgbackrest.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest` (only with `postgresql.pgbackrest.enabled`; tagged `pg<postgres>-pgbackrest<version>-tini<version>`, and never digest-pinned into the chart by CI) |
 | `frontend/Dockerfile` (target `runtime-prod`) | `ghcr.io/fasterspeeding/distant-signal/frontend` |
 
 ```bash
@@ -754,7 +754,7 @@ item 2.
 Off by default (`postgresql.pgbackrest.enabled: false`), and while off the
 Postgres pod renders exactly as without it. When enabled, the bundled
 Postgres runs `docker/postgres-pgbackrest.Dockerfile` (the same
-`postgres:16.15-trixie` plus pgBackRest), archives its WAL to an S3
+`postgres:16.15-trixie` plus pgBackRest, with tini as PID 1), archives its WAL to an S3
 repository with client-side AES-256 encryption, and CronJobs take a weekly
 full backup, a daily differential, a daily check (`check` and a WAL gap
 check) and a weekly `verify`. The CronJobs `kubectl exec` into the Postgres
@@ -769,6 +769,13 @@ stable tag with its digest), `repo.path`, `repo.s3.endpoint`,
 `access-key-id`, `secret-access-key` and `cipher-pass`. No secret is ever
 taken from values. Keep an offline copy of the cipher passphrase: the
 repository can't be read without it.
+
+Run `pgbackrest stanza-create` in the Postgres pod as soon as it is ready
+after enabling (docs/postgres-pitr.md, "Enabling it", step 7); the chart
+doesn't do it for you. Until then every archive-push fails: WAL builds up
+in `pg_wal` and the spool and the archive alerts fire, but Postgres keeps
+running. Only pin image tags with `-tini`: in older images the postmaster
+is PID 1, and a failing async archive-push crash-restarts it every ~10 s.
 
 It doesn't replace a logical dump. See
 [docs/postgres-pitr.md](../../docs/postgres-pitr.md) for enabling it
@@ -1177,7 +1184,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 |---|---|---|
 | `postgresql.pgbackrest.enabled` | `false` | Turn on WAL archiving, backups and checks with pgBackRest. Needs `postgresql.enabled`. Turning it on or off restarts Postgres once. |
 | `postgresql.pgbackrest.image.repository` | `ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest` | The Postgres-plus-pgBackRest image (`docker/postgres-pgbackrest.Dockerfile`), as `containers.yml` publishes it. |
-| `postgresql.pgbackrest.image.tag` | `""` | **Required when enabled**: the stable tag with its digest, e.g. `pg16.15-pgbackrest2.59.1@sha256:…`. Never falls back to `appVersion`: a per-release image would restart Postgres on every deploy. |
+| `postgresql.pgbackrest.image.tag` | `""` | **Required when enabled**: the stable tag with its digest, e.g. `pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:…` (only `-tini` tags: see docs/postgres-pitr.md, "Why tini"). Never falls back to `appVersion`: a per-release image would restart Postgres on every deploy. |
 | `postgresql.pgbackrest.image.digest` | `""` | Content digest, used instead of `tag` when set. |
 | `postgresql.pgbackrest.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `postgresql.pgbackrest.stanza` | `ds` | pgBackRest stanza name. |

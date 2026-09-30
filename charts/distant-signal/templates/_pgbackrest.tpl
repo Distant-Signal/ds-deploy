@@ -16,7 +16,7 @@ naming the value, the first time any template asks.
 {{- fail "postgresql.pgbackrest.enabled needs the bundled Postgres (postgresql.enabled: true). For an external database, set up its own backups." -}}
 {{- end -}}
 {{- if not (or $pb.image.tag $pb.image.digest) -}}
-{{- fail "postgresql.pgbackrest.image.tag (or .digest) is required when postgresql.pgbackrest.enabled is true: the stable postgres-pgbackrest tag with its digest, e.g. \"pg16.15-pgbackrest2.59.1@sha256:...\". It never defaults to the chart appVersion, because a per-release image would restart Postgres on every deploy." -}}
+{{- fail "postgresql.pgbackrest.image.tag (or .digest) is required when postgresql.pgbackrest.enabled is true: the stable postgres-pgbackrest tag with its digest, e.g. \"pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:...\". It never defaults to the chart appVersion, because a per-release image would restart Postgres on every deploy." -}}
 {{- end -}}
 {{- if not $pb.stanza -}}
 {{- fail "postgresql.pgbackrest.stanza must not be empty." -}}

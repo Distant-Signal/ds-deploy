@@ -1372,7 +1372,7 @@ jobs:
           render -f charts/distant-signal/values-example.yaml | check "values-example.yaml" 0
           pgbackrest=(
             --set postgresql.pgbackrest.enabled=true
-            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1
+            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
             --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
@@ -1406,7 +1406,7 @@ jobs:
           )
           on=(
             --set postgresql.pgbackrest.enabled=true
-            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1
+            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
             --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
@@ -1422,8 +1422,17 @@ jobs:
           grep -q 'image: "postgres:16' <<<"${off}" || fail "the default Postgres image must stay postgres:16"
 
           pg=$(render "${on[@]}" --show-only templates/postgres-statefulset.yaml)
-          grep -q 'image: "ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest:pg16.15-pgbackrest2.59.1"' <<<"${pg}" \
+          grep -q 'image: "ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest:pg16.15-pgbackrest2.59.1-tini0.19.0"' <<<"${pg}" \
             || fail "pgBackRest must swap in the postgres-pgbackrest image"
+          # The image's ENTRYPOINT (tini, then docker-entrypoint.sh) keeps
+          # the postmaster off PID 1, where an async archive-push worker's
+          # exit crash-restarts it (docs/postgres-pitr.md, "Why tini"). A
+          # container `command:` would replace that ENTRYPOINT. The probes'
+          # exec `command:` keys sit deeper, so only a container-level one
+          # (10 spaces) matches.
+          if grep -n -E '^ {10}command:' <<<"${pg}"; then
+            fail "the Postgres container must not set command: it would bypass the image's tini ENTRYPOINT"
+          fi
           grep -q -- '- "archive_mode=on"' <<<"${pg}" || fail "archive_mode=on missing"
           grep -q -- '- "archive_command=pgbackrest --stanza=ds archive-push %p"' <<<"${pg}" \
             || fail "archive_command missing"

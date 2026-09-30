@@ -358,19 +358,24 @@ postgresql:
   # repository can't be read without it, so a copy that lives only in the
   # cluster is lost with the cluster.
   #
-  # The stanza must exist before archiving works: run `stanza-create` right
-  # after the first restart with this on (docs/postgres-pitr.md). Until
-  # then archive-push fails and WAL stays in pg_wal.
+  # The stanza must exist before archiving works: run `stanza-create` as
+  # soon as the pod is ready after the first restart with this on
+  # (docs/postgres-pitr.md). Until then archive-push fails, WAL builds up
+  # in pg_wal and the spool, and the archive alerts fire; Postgres keeps
+  # running (the image's tini, not the postmaster, is PID 1).
   pgbackrest:
     # -- Turn on pgBackRest WAL archiving, backups and checks. Needs
     # `postgresql.enabled`.
     enabled: false
     image:
       # -- The postgres-pgbackrest image (containers.yml builds it, with a
-      # stable `pg<postgres>-pgbackrest<version>` tag), as published.
+      # stable `pg<postgres>-pgbackrest<version>-tini<version>` tag), as
+      # published.
       repository: ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest
       # -- REQUIRED when enabled: the stable tag WITH its digest, e.g.
-      # "pg16.15-pgbackrest2.59.1@sha256:...". Unlike the other first-party
+      # "pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:...". Only `-tini`
+      # tags: older images run the postmaster as PID 1, which crash-restarts
+      # on every failing async archive-push. Unlike the other first-party
       # images this never falls back to the chart's appVersion: CI rebuilds
       # the image on every push, and a new digest in the pod template would
       # restart Postgres on every deploy. Keep it on the same Postgres

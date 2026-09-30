@@ -190,8 +190,8 @@ jobs:
           # Built and pushed like the rest, but its digest is NOT pinned into
           # the packaged chart (see "Record image digest" below): a new digest
           # on every push would restart Postgres on every deploy. It gets a
-          # `pg<postgres>-pgbackrest<version>` tag as well, and the chart's
-          # values pin a digest of that tag by hand.
+          # `pg<postgres>-pgbackrest<version>-tini<version>` tag as well, and
+          # the chart's values pin a digest of that tag by hand.
           - service: postgres-pgbackrest
             dockerfile: docker/postgres-pgbackrest.Dockerfile
             target: ""
@@ -222,10 +222,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # postgres-pgbackrest only: a tag naming the two versions inside, read
-      # from the Dockerfile (`FROM postgres:<version>-...` and
-      # `ARG PGBACKREST_VERSION=<upstream>-<debian revision>`), e.g.
-      # `pg16.15-pgbackrest2.59.1`. It says which versions an image holds;
+      # postgres-pgbackrest only: a tag naming the versions inside, read
+      # from the Dockerfile (`FROM postgres:<version>-...`,
+      # `ARG PGBACKREST_VERSION=<upstream>-<debian revision>` and
+      # `ARG TINI_VERSION=<upstream>-<debian revision>`), e.g.
+      # `pg16.15-pgbackrest2.59.1-tini0.19.0`. tini joined the tag when it
+      # became PID 1 (the image's ENTRYPOINT): tags without it are the
+      # older images, whose postmaster is PID 1 and crash-restarts on a
+      # failing async archive-push. It says which versions an image holds;
       # every push to main re-points it at that push's rebuild, so the
       # chart's values pin a digest next to it (see the matrix entry's
       # comment), and the operator picks up a rebuild on purpose.
@@ -238,11 +242,12 @@ jobs:
           set -euo pipefail
           pg=$(sed -n 's/^FROM postgres:\([0-9][0-9.]*\)-.*/\1/p' "${DOCKERFILE}")
           pgbr=$(sed -n 's/^ARG PGBACKREST_VERSION=\([0-9][0-9.]*\)-.*/\1/p' "${DOCKERFILE}")
-          if [[ -z "${pg}" || -z "${pgbr}" ]]; then
-            echo "::error::could not read the Postgres or pgBackRest version from ${DOCKERFILE}" >&2
+          tini=$(sed -n 's/^ARG TINI_VERSION=\([0-9][0-9.]*\)-.*/\1/p' "${DOCKERFILE}")
+          if [[ -z "${pg}" || -z "${pgbr}" || -z "${tini}" ]]; then
+            echo "::error::could not read the Postgres, pgBackRest or tini version from ${DOCKERFILE}" >&2
             exit 1
           fi
-          echo "tag=pg${pg}-pgbackrest${pgbr}" >> "${GITHUB_OUTPUT}"
+          echo "tag=pg${pg}-pgbackrest${pgbr}-tini${tini}" >> "${GITHUB_OUTPUT}"
 
       # Explicit `tags:` here reproduces the action's own bare defaults
       # (schedule/branch/tag/pr -- see this file's top-of-file "Tagging"
