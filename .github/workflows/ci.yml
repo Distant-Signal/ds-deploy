@@ -1062,7 +1062,7 @@ jobs:
           # Open sign-up: a burst of new accounts alerts, and the metric and
           # threshold come from values.
           grep -q 'alert: DistantSignalUserSignupSpike' <<<"${rule}"
-          grep -q 'increase(ds_api_users_created_total{namespace="[^"]*"}\[1h\])) > 20$' <<<"${rule}"
+          grep -q 'increase(distant_signal_api_users_created_total{namespace="[^"]*"}\[1h\])) > 20$' <<<"${rule}"
           spike=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set metrics.prometheusRule.enabled=true \
             --set metrics.prometheusRule.userSignupSpike.metric=users_total \
