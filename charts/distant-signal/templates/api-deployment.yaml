@@ -39,14 +39,19 @@ outcome and a less obvious cause.
 {{- fail "api.sso.postLoginRedirectUrl is empty and devAuthentik.enabled is false. Set api.sso.postLoginRedirectUrl, or set devAuthentik.enabled=true." }}
 {{- end }}
 {{/*
-INF-7: with the bundled Postgres, refuse to render a pool layout that can
-exhaust max_connections. Pools: api maxConnections x replicaCount, plus
-aggregator 10, notifier 5, enricher 5, the api's migration connection 1 and
-the archive pool 2 when archive.enabled. Postgres keeps 3 connections for
-superusers (superuser_reserved_connections), so the rest must fit in
-max_connections - 3. max_connections is postgresql.config.max_connections
-when set, else Postgres's own default of 100. An external database is not
-checked: its limit is unknown here.
+INF-7 / R-048: with the bundled Postgres, refuse to render a pool layout
+that can exhaust max_connections. Counted: api maxConnections x
+replicaCount, plus aggregator 10, notifier 5, enricher 5, the api's
+migration connection 1 and the archive pool 2 when archive.enabled; plus
+postgresql.connectionBudget (clients outside this chart, such as the
+postgres-exporter and pg_dump, and admin psql sessions) and 2 for pgBackRest
+when postgresql.pgbackrest.enabled. The total must fit in max_connections
+minus Postgres's 3 superuser_reserved_connections. The app role is itself a
+superuser, so those 3 are only extra headroom, not a protected admin
+reserve: the admin sessions are counted explicitly instead.
+max_connections is postgresql.config.max_connections when set, else
+Postgres's own default of 100. An external database is not checked: its
+limit is unknown here.
 */}}
 {{- if .Values.postgresql.enabled }}
 {{- $maxConn := 100 }}
@@ -56,10 +61,13 @@ checked: its limit is unknown here.
 {{- end }}
 {{- end }}
 {{- $apiPool := mul (int .Values.api.replicaCount) (int .Values.api.database.maxConnections) }}
-{{- $others := add 10 5 5 1 (ternary 2 0 (.Values.archive.enabled | default false)) }}
+{{- $pools := add 10 5 5 1 (ternary 2 0 (.Values.archive.enabled | default false)) }}
+{{- $budget := .Values.postgresql.connectionBudget | default dict }}
+{{- $pgbackrest := ternary 2 0 (dig "pgbackrest" "enabled" false .Values.postgresql) }}
+{{- $reserved := add (int (dig "externalClients" 2 $budget)) (int (dig "adminSessions" 3 $budget)) $pgbackrest }}
 {{- $available := sub $maxConn 3 }}
-{{- if gt (add $apiPool $others) $available }}
-{{- fail (printf "Postgres connection budget exceeded: api.replicaCount (%d) x api.database.maxConnections (%d) = %d, plus %d for the other pools, is more than max_connections (%d) minus 3 superuser-reserved = %d. Lower api.database.maxConnections, or raise postgresql.config.max_connections (check the memory budget first; see values.yaml). INF-7." (int .Values.api.replicaCount) (int .Values.api.database.maxConnections) $apiPool $others $maxConn $available) }}
+{{- if gt (add $apiPool $pools $reserved) $available }}
+{{- fail (printf "Postgres connection budget exceeded: api.replicaCount (%d) x api.database.maxConnections (%d) = %d, plus %d for the other pools and %d reserved (postgresql.connectionBudget, plus 2 for pgBackRest when enabled), is more than max_connections (%d) minus 3 superuser-reserved = %d. Lower api.database.maxConnections, or raise postgresql.config.max_connections (check the memory budget first; see values.yaml). INF-7." (int .Values.api.replicaCount) (int .Values.api.database.maxConnections) $apiPool $pools $reserved $maxConn $available) }}
 {{- end }}
 {{- end }}
 apiVersion: apps/v1

@@ -1171,6 +1171,8 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.image.tag` | `16.15-trixie@sha256:…` | Postgres 16, the major the compose stack uses, digest-pinned in the tag. |
 | `postgresql.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `postgresql.service.port` | `5432` | Port the headless Service and the container listen on. |
+| `postgresql.connectionBudget.externalClients` | `2` | Connections the render-time budget check reserves for clients deployed outside this chart that connect as the app role: Ranma-Config's postgres-exporter (1) and its nightly `pg_dump` (1). The app role is a superuser, so `superuser_reserved_connections` protects none of these. pgBackRest adds 2 more on its own when enabled. |
+| `postgresql.connectionBudget.adminSessions` | `3` | Interactive `kubectl exec ... psql` sessions the budget check keeps room for. |
 | `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
 | `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |

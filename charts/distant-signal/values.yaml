@@ -128,6 +128,22 @@ postgresql:
   service:
     # -- Port the headless Service and the container listen on.
     port: 5432
+  # Connections the render-time budget check (templates/api-deployment.yaml,
+  # INF-7 / R-048) keeps free for clients that are not one of this chart's
+  # service pools. The app role (`auth.username`) is a superuser, so
+  # Postgres's own superuser_reserved_connections protects nothing here:
+  # every one of these must fit under max_connections alongside the pools
+  # (docs/postgres-app-role.md recommends a non-superuser app role).
+  # pgBackRest adds 2 more on its own when `pgbackrest.enabled` (a backup
+  # holds one connection for its whole run, and the daily check or a
+  # restore-time `stanza-create` can overlap it).
+  connectionBudget:
+    # -- Clients deployed outside this chart that connect as the app role:
+    # Ranma-Config's postgres-exporter (1) and its nightly `pg_dump` CronJob
+    # (1, a single-job dump).
+    externalClients: 2
+    # -- Interactive `kubectl exec ... psql` sessions to keep room for.
+    adminSessions: 3
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
     # succeeds, so crash recovery (WAL redo after a node reboot) is never

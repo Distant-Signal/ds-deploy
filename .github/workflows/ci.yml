@@ -1238,6 +1238,34 @@ jobs:
             --set api.replicaCount=2 --set api.database.maxConnections=30 > /dev/null
           helm template distant-signal charts/distant-signal "${base[@]}" \
             --set api.replicaCount=2 --set postgresql.config.max_connections=200 > /dev/null
+          # R-048: the budget also reserves postgresql.connectionBudget
+          # (exporter + pg_dump 2, admin psql 3) and 2 for pgBackRest. Pools
+          # other than api are 21, so api may have 97 - 21 - 5 = 71.
+          helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set api.database.maxConnections=71 > /dev/null
+          if helm template distant-signal charts/distant-signal "${base[@]}" \
+              --set api.database.maxConnections=72 > /dev/null 2>&1; then
+            echo "72 + 21 + 5 reserved must exceed 97" >&2; exit 1
+          fi
+          if helm template distant-signal charts/distant-signal "${base[@]}" \
+              --set api.database.maxConnections=60 \
+              --set postgresql.connectionBudget.adminSessions=20 > /dev/null 2>&1; then
+            echo "postgresql.connectionBudget.adminSessions must count" >&2; exit 1
+          fi
+          pgbackrest=(
+            --set postgresql.pgbackrest.enabled=true
+            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
+            --set postgresql.pgbackrest.repo.path=/test/pgbackrest
+            --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
+            --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
+            --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds
+          )
+          helm template distant-signal charts/distant-signal "${base[@]}" "${pgbackrest[@]}" \
+            --set api.database.maxConnections=69 > /dev/null
+          if helm template distant-signal charts/distant-signal "${base[@]}" "${pgbackrest[@]}" \
+              --set api.database.maxConnections=70 > /dev/null 2>&1; then
+            echo "pgBackRest must reserve 2 connections" >&2; exit 1
+          fi
 
       # networkPolicy.enabled: every policy must keep the traffic its
       # workload needs. INF-2: the schedulefeed policy must admit SFTP.
