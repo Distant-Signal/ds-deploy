@@ -362,8 +362,14 @@ logged as one line with `target` `schedule_ingest::audit`:
 | `corpus_rejected` | a CORPUS file that failed its checks, or an older one superseded unloaded (`DistantSignalCorpusRejected`) | the failed check |
 
 A file whose api POST fails transiently gets its line when the retry
-succeeds. After a restart schedule-ingest re-posts the current zip, which
-logs `accepted` again for the same `sha256`. Query:
+succeeds. Once api accepts a CIF delivery, schedule-ingest writes the zip's
+name, size, mtime and `sha256` into the delivery directory's
+`.delivery-ingested` file. After a restart it recognises that zip on the
+first cycle and does not post it again, so there is no second `accepted`
+line. A delivery that was extracted but not yet posted when the pod
+stopped is posted then, with no stability wait. So is a directory from
+before 2026-10-01 that has no `.delivery-ingested` file. Either one logs
+`accepted` once more. Query:
 
 ```logql
 {namespace="distant-signal", container="ingest"} | json | target = "schedule_ingest::audit"
