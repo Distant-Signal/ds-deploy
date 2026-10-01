@@ -853,6 +853,19 @@ argument since the key name itself never varies.
 {{- end }}
 
 {{/*
+SFTPGo host-key file paths (comma-separated, for SFTPGO_SFTPD__HOST_KEYS),
+one per scheduleFeed.sftp.hostKeys entry under the host-key mount. Takes
+root.
+*/}}
+{{- define "distant-signal.scheduleFeedHostKeyPaths" -}}
+{{- $paths := list -}}
+{{- range .Values.scheduleFeed.sftp.hostKeys -}}
+{{- $paths = append $paths (printf "/srv/sftpgo/host_keys/%s" .) -}}
+{{- end -}}
+{{- join "," $paths -}}
+{{- end }}
+
+{{/*
 Resolved Secret name/keys for the DTD account credential (password and/or
 public key). Takes root. Same shape as distant-signal.pollerSecretName/
 pollerSecretKey above: an operator-supplied scheduleFeed.sftp.existingSecret

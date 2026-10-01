@@ -2815,6 +2815,27 @@ scheduleFeed:
     # the (superseded) pull design's dtd_sftp_host_key_fingerprint. Leave
     # empty to have the chart generate and preserve one (Task 6).
     existingSecretHostKey: ""
+    # -- Keys in the host-key Secret that SFTPGo serves as its SSH host
+    # keys (SFTPGO_SFTPD__HOST_KEYS). Each must hold a PEM private key.
+    # ecdsa (P-256) is included because DTD's push client (JSch 0.1.54)
+    # has no ed25519 support; ed25519 serves modern clients. The chart
+    # generates and preserves both when it owns the Secret; with
+    # existingSecretHostKey, that Secret must hold every listed key. An
+    # empty list leaves SFTPGo generating fresh, unpinnable keys on every
+    # start (the pre-2026-10-01 behaviour).
+    hostKeys:
+      - ssh_host_ecdsa_key
+      - ssh_host_ed25519_key
+    # -- SFTPGo's web admin/REST (httpd) listener. Off: an enabled httpd
+    # with no admin account lets whoever reaches /web/admin/setup first
+    # create one and take over the server. Only enable with an admin
+    # provisioned via extraEnv and a NetworkPolicy that limits access.
+    webAdmin:
+      enabled: false
+    # -- Extra env vars for the SFTPGo container (e.g. SFTPGO_* settings
+    # for telemetry, the defender or logging), appended after the chart's
+    # own. Same shape as a container `env` list.
+    extraEnv: []
     # -- The folder DTD's account lands files in. CORRECTED 2026-09-01
     # (this task): this account's SFTP home/chroot directory is set to
     # EXACTLY /data/schedule-feed/<this value+folderPath> (see

@@ -66,10 +66,15 @@ spec:
         - name: host-key
           secret:
             secretName: {{ default (include "distant-signal.scheduleFeedSecretName" .) .Values.scheduleFeed.sftp.existingSecretHostKey }}
+            # 0440 plus the pod's fsGroup: kubelet mounts these root-owned,
+            # so SFTPGo (uid 1000) can only read them through the group
+            # bit. 0600 left them unreadable.
             items:
-              - key: {{ include "distant-signal.scheduleFeedHostKeySecretKey" . }}
-                path: {{ include "distant-signal.scheduleFeedHostKeySecretKey" . }}
-                mode: 0600
+              {{- range .Values.scheduleFeed.sftp.hostKeys }}
+              - key: {{ . }}
+                path: {{ . }}
+                mode: 0440
+              {{- end }}
         - name: sftp-entrypoint
           configMap:
             name: {{ include "distant-signal.scheduleFeedFullname" . }}-sftp-entrypoint
@@ -155,6 +160,20 @@ spec:
           env:
             - name: SFTPGO_SFTPD__BINDINGS__0__PORT
               value: {{ .Values.scheduleFeed.sftp.port | quote }}
+            {{- with .Values.scheduleFeed.sftp.hostKeys }}
+            # Serve the mounted, preserved host keys. Without this SFTPGo
+            # generates fresh keys under /var/lib/sftpgo on every start, so
+            # the fingerprint changed on every restart and could never be
+            # pinned by the client.
+            - name: SFTPGO_SFTPD__HOST_KEYS
+              value: {{ include "distant-signal.scheduleFeedHostKeyPaths" $ | quote }}
+            {{- end }}
+            {{- if not .Values.scheduleFeed.sftp.webAdmin.enabled }}
+            # No httpd (web admin/REST) listener: see
+            # scheduleFeed.sftp.webAdmin in values.yaml.
+            - name: SFTPGO_HTTPD__BINDINGS__0__PORT
+              value: "0"
+            {{- end }}
             # DTD's push account username/password/home-dir, consumed by
             # the sftp-entrypoint ConfigMap's script (mounted below) via
             # SFTPGo's real --loaddata-from mechanism -- CORRECTED
@@ -188,6 +207,9 @@ spec:
                 secretKeyRef:
                   name: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretName" . }}
                   key: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretKey" . }}
+            {{- end }}
+            {{- with .Values.scheduleFeed.sftp.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           volumeMounts:
             - name: data

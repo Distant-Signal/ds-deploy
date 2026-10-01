@@ -828,6 +828,46 @@ jobs:
           script=$(sed -n '/^  entrypoint.sh: |$/,$p' <<<"${cm}" | tail -n +2 | sed 's/^    //')
           diff -u charts/distant-signal/files/schedule-sftp-entrypoint.sh <(printf '%s\n' "${script}")
 
+      # SFTPGo must serve the chart's preserved host keys (not regenerate
+      # fresh ones each start), must not run its web admin, and must pass
+      # extraEnv through; the key files must be group-readable for uid 1000.
+      - name: helm template (sftp host keys, no web admin, extraEnv)
+        run: |
+          set -euo pipefail
+          render() {
+            helm template distant-signal charts/distant-signal \
+              --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
+              --set trustConsumer.kafka.topic=test-topic \
+              --set trustConsumer.kafka.saslMechanism=PLAIN \
+              --set enricher.llm.baseUrl=http://llm.example.com/v1 \
+              --set enricher.llm.model=test-model \
+              --set api.sso.issuerUrl=https://sso.example.com \
+              --set api.sso.clientId=test-client \
+              --set api.sso.clientSecret=test-secret \
+              --set api.sso.redirectUrl=https://app.example.com/callback \
+              --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
+              --set scheduleFeed.enabled=true \
+              --set scheduleFeed.sftp.authMethod=password "$@"
+          }
+          fail() { echo "::error::$1"; exit 1; }
+          dep=$(render --show-only templates/schedulefeed-deployment.yaml)
+          grep -q 'value: "/srv/sftpgo/host_keys/ssh_host_ecdsa_key,/srv/sftpgo/host_keys/ssh_host_ed25519_key"' <<<"${dep}" \
+            || fail "SFTPGO_SFTPD__HOST_KEYS must list the mounted keys"
+          grep -A1 'SFTPGO_HTTPD__BINDINGS__0__PORT' <<<"${dep}" | grep -q 'value: "0"' \
+            || fail "the SFTPGo web admin must be off by default"
+          modes=$(grep -c 'mode: 0440' <<<"${dep}" || true)
+          [[ "${modes}" -eq 2 ]] || fail "both host keys must be mounted 0440"
+          sec=$(render --show-only templates/schedulefeed-secret.yaml)
+          grep -q 'ssh_host_ecdsa_key:' <<<"${sec}" || fail "the chart must generate an ECDSA host key"
+          dep=$(render --set scheduleFeed.sftp.webAdmin.enabled=true \
+            --set 'scheduleFeed.sftp.extraEnv[0].name=SFTPGO_TELEMETRY__BIND_PORT' \
+            --set-string 'scheduleFeed.sftp.extraEnv[0].value=9097' \
+            --show-only templates/schedulefeed-deployment.yaml)
+          if grep -q 'SFTPGO_HTTPD__BINDINGS__0__PORT' <<<"${dep}"; then fail "webAdmin.enabled must drop the port override"; fi
+          grep -q 'SFTPGO_TELEMETRY__BIND_PORT' <<<"${dep}" || fail "extraEnv must reach the SFTPGo container"
+          dep=$(render --set 'scheduleFeed.sftp.hostKeys=null' --show-only templates/schedulefeed-deployment.yaml)
+          if grep -q 'SFTPGO_SFTPD__HOST_KEYS' <<<"${dep}"; then fail "an empty hostKeys list must not set HOST_KEYS"; fi
+
       # movement-relay is on by default (the three movement consumers read
       # only its stream). Empty movementRelay.kafka.* fields fall back to
       # trustConsumer.kafka.*, including trust-consumer's SASL credential;

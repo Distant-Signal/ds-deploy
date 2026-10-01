@@ -2062,7 +2062,10 @@ Off by default.
 | `scheduleFeed.sftp.existingSecret` | `""` | Read the SFTP credentials from this pre-existing Secret instead. |
 | `scheduleFeed.sftp.existingSecretPasswordKey` | `schedule-sftp-password` | Key for the push account password. |
 | `scheduleFeed.sftp.existingSecretPublicKeyKey` | `schedule-sftp-dtd-public-key` | Key for the provider's public key. |
-| `scheduleFeed.sftp.existingSecretHostKey` | `""` | Pre-existing Secret holding this server's own SSH host key (not the provider's). Empty: the chart generates and preserves one. |
+| `scheduleFeed.sftp.existingSecretHostKey` | `""` | Pre-existing Secret holding this server's own SSH host key (not the provider's). Empty: the chart generates and preserves them. |
+| `scheduleFeed.sftp.hostKeys` | `[ssh_host_ecdsa_key, ssh_host_ed25519_key]` | Keys in the host-key Secret that SFTPGo serves (`SFTPGO_SFTPD__HOST_KEYS`), mounted 0440 for the pod's fsGroup. ECDSA covers clients without ed25519 (DTD's JSch 0.1.54). With `existingSecretHostKey`, that Secret must hold every listed key. Empty: SFTPGo generates fresh keys on every start. |
+| `scheduleFeed.sftp.webAdmin.enabled` | `false` | Run SFTPGo's web admin/REST listener. Off, because with no admin account anyone who reaches it can create one. |
+| `scheduleFeed.sftp.extraEnv` | `[]` | Extra env entries for the SFTPGo container (e.g. `SFTPGO_*` telemetry, defender or log settings). |
 | `scheduleFeed.sftp.destinationFolder` | `incoming` | Folder on the PVC the push account is chrooted to; also schedule-ingest's `WATCH_DIR`. |
 | `scheduleFeed.sftp.folderPath` | `""` | Optional subfolder within `destinationFolder`. |
 | `scheduleFeed.sftp.resources` | requests `25m`/`64Mi`, limit `128Mi` | SFTP container resource requests/limits. |
