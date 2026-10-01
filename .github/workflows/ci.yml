@@ -13,9 +13,9 @@ name: CI
 # workflow directly (see the comment on that job). `clippy` originally did
 # too, but Piped's clippy.yml passes a broken `args: --all-features` to
 # auguwu/clippy-action (lands after cargo's `--` separator, so it reaches
-# clippy-driver/rustc, not cargo -- see the comment on the `clippy` job for
-# the full trace) so it's now a custom job calling the same clippy-action
-# commit directly with the fix. Piped's remaining workflows (rustfmt.yml,
+# clippy-driver/rustc, not cargo), so it's now a custom job running plain
+# `cargo clippy ... -- -D warnings` (see that job's comment). Piped's
+# remaining workflows (rustfmt.yml,
 # lint.yml, type-check.yml, py-test.yml, verify-types.yml,
 # freeze-for-pr.yml, ...) are not used here: they are either Python/nox-
 # oriented (this repo's only Python is a standalone script under scripts/,
@@ -41,52 +41,35 @@ permissions:
   contents: read
 
 jobs:
-  # Custom: NOT using FasterSpeeding/Piped's clippy.yml reusable workflow
-  # here, because it is broken -- confirmed by tracing the exact pinned
-  # commit's `auguwu/clippy-action@9817d076b82df0194935be9db6154c56ac07b317`
-  # (v1.5.0) source (src/clippy.ts): the argv it builds is
-  # `['clippy', '--message-format', 'json', ...check-args, (--all-features
-  # if the deprecated boolean input is set), '--', ...args, ...forbid/deny/
-  # warn/allow]` -- i.e. `check-args` land BEFORE the `cargo clippy --`
-  # separator (so cargo sees them), but `args` land AFTER it, meaning they
-  # get passed straight to `clippy-driver`/`rustc`, not to `cargo clippy`.
-  # Piped's clippy.yml (both the pinned commit and current master, verified
-  # via raw.githubusercontent.com) passes `args: --all-features` --
-  # `--all-features` is a cargo-level flag, not a valid rustc/clippy-driver
-  # flag, so it lands on the wrong side of `--` and clippy-driver rejects
-  # it with exactly "error: Unrecognized option: 'all-features'" on the
-  # first crate compiled. This is an upstream Piped bug (should be
-  # `check-args: --all-features`), not something fixable from this repo's
-  # workflow_call site since that reusable workflow takes no inputs.
+  # Custom: NOT using FasterSpeeding/Piped's clippy.yml reusable workflow.
+  # It calls auguwu/clippy-action with `args: --all-features`, which the
+  # action puts AFTER cargo's `--` separator, so `--all-features` reaches
+  # clippy-driver and fails with "Unrecognized option: 'all-features'"
+  # (an upstream Piped bug; the reusable workflow takes no inputs). This job
+  # used to call the action directly with `check-args`, but the action had
+  # no deny level set, so warnings never failed it.
   #
-  # This job calls the same pinned clippy-action commit directly with the
-  # corrected input name, preserving the original behaviour (workspace-wide
-  # since the root Cargo.toml is a virtual manifest, all-features, inline
-  # PR annotations) without the upstream bug. Revert to the Piped reusable
-  # workflow once this is fixed upstream.
-  #
-  # `--all-targets` is in `check-args` alongside `--all-features` for the
-  # same reason: both are cargo-level flags, so both must land BEFORE the
-  # `--` separator (see the argv trace above) to reach `cargo clippy`
-  # rather than `clippy-driver`/`rustc`. Without it, warnings in test/
-  # bench/example code (anything `cargo test`/`cargo bench` would build
-  # but a plain `cargo clippy` skips) are invisible here even though this
-  # job is a hard gate for whatever it does check.
+  # Now plain cargo, per the "Strict Config Starting Points" guide: cargo
+  # flags before `--`, clippy-driver flags after it. `-D warnings` makes the
+  # [workspace.lints] in Cargo.toml (all + pedantic + a few restriction
+  # lints, kept at "warn" there so a newer local toolchain doesn't break
+  # builds) a hard gate. `--all-targets` lints tests, benches and examples
+  # too. Both feature sets run so code behind a feature flag
+  # (`line-catalogue-validator`'s `db`, `common`'s `postgres`/`redis`, and
+  # the code compiled only without them) is linted. Findings show in the
+  # job log rather than as PR annotations.
   #
   # Also installs the same system packages docker/trust-consumer.Dockerfile
   # documents needing for rdkafka's `cmake-build`/`ssl`/`sasl` features
-  # (trust-consumer is part of this workspace, so `--all-features
-  # --workspace` compiles it too): cmake + libssl-dev + pkg-config to build
-  # vendored librdkafka, libsasl2-dev for the `sasl2-sys` crate's build
-  # script (dynamic linking against a real libsasl2, matching production --
-  # see the `rust-test` job below for the fuller rationale), and
-  # libcurl4-openssl-dev because librdkafka's vendored C source
-  # unconditionally `#include`s <curl/curl.h>.
+  # (trust-consumer is part of this workspace, so `--workspace` compiles it
+  # too): cmake + libssl-dev + pkg-config to build vendored librdkafka,
+  # libsasl2-dev for the `sasl2-sys` crate's build script (dynamic linking
+  # against a real libsasl2, matching production -- see the `rust-test` job
+  # below for the fuller rationale), and libcurl4-openssl-dev because
+  # librdkafka's vendored C source unconditionally `#include`s
+  # <curl/curl.h>.
   clippy:
-    permissions:
-      contents: read
-      checks: write
-      pull-requests: write
+    name: cargo clippy -D warnings
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -105,11 +88,61 @@ jobs:
       - name: Cache cargo registry/target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: cargo clippy --workspace --all-features --all-targets
-        uses: auguwu/clippy-action@9817d076b82df0194935be9db6154c56ac07b317 # v1.5.0
+      - name: cargo clippy (all features)
+        run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+
+      - name: cargo clippy (no default features)
+        run: cargo clippy --workspace --locked --all-targets --no-default-features -- -D warnings
+
+  # MSRV: `rust-version = "1.88"` in Cargo.toml's [workspace.package] is a
+  # promise, so check it explicitly with exactly that toolchain, separately
+  # from whichever toolchain the other jobs pin. Today every job (and every
+  # Dockerfile) uses 1.88.0 too, so this mostly guards the day those move
+  # forward: it then keeps the workspace building on the MSRV until
+  # rust-version is bumped on purpose.
+  msrv:
+    name: cargo +1.88.0 check (MSRV)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@688313b0823df1393bcebb1b4add0438a6d36884 # 1.88.0
+
+      - name: Install rdkafka build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
+
+      - name: Cache cargo registry/target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: cargo +1.88.0 check
+        run: cargo +1.88.0 check --workspace --locked --all-features --all-targets
+
+  # cargo-deny with deny.toml: licences, bans (wildcards; duplicate versions
+  # are warnings), sources (crates.io only) and advisories (RustSec, plus
+  # yanked crates). Advisories overlap dependency-scan.yml's OSV scan on
+  # purpose -- see deny.toml. The binary comes from taiki-e/install-action,
+  # which verifies the release checksum; the version is pinned exactly.
+  cargo-deny:
+    name: cargo deny check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@688313b0823df1393bcebb1b4add0438a6d36884 # 1.88.0
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          check-args: --all-features --all-targets
+          tool: cargo-deny@0.20.2
+
+      - name: cargo deny check
+        run: cargo deny --locked check
 
   # Reusable workflow_call from FasterSpeeding/Piped: runs actionlint over
   # this repo's own .github/workflows/*.yml via reviewdog. Self-contained
@@ -677,7 +710,8 @@ jobs:
   # `helm lint` + `helm template` against both the chart's own defaults and
   # values-example.yaml (which turns on the optional pollers/devAuthentik
   # sections) gives real template-rendering coverage without needing a
-  # cluster.
+  # cluster. `--strict` turns lint warnings into failures too; the only
+  # finding left is the [INFO] "icon is recommended", which doesn't fail.
   helm-lint:
     runs-on: ubuntu-24.04
     steps:
@@ -689,11 +723,11 @@ jobs:
         with:
           version: v4.2.3
 
-      - name: helm lint (default values)
-        run: helm lint charts/distant-signal
+      - name: helm lint --strict (default values)
+        run: helm lint --strict charts/distant-signal
 
-      - name: helm lint (values-example.yaml)
-        run: helm lint charts/distant-signal -f charts/distant-signal/values-example.yaml
+      - name: helm lint --strict (values-example.yaml)
+        run: helm lint --strict charts/distant-signal -f charts/distant-signal/values-example.yaml
 
       # `enricher` (no `enabled` toggle) and movement-relay (on by default)
       # `fail()` at render time if their required connection settings are
@@ -1237,6 +1271,7 @@ jobs:
           )
           pgbackrest=(
             --set postgresql.pgbackrest.enabled=true
+            --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest
             --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
@@ -1622,6 +1657,7 @@ jobs:
           fi
           pgbackrest=(
             --set postgresql.pgbackrest.enabled=true
+            --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest
             --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
@@ -1759,6 +1795,7 @@ jobs:
             --set archive.enabled=true --set archive.s3.bucket=b --set archive.s3.existingSecret=s \
             --set archive.s3.lifecycleConfirmed=true \
             --set postgresql.pgbackrest.enabled=true \
+            --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest \
             --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0 \
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest \
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com \
@@ -1966,6 +2003,7 @@ jobs:
           render -f charts/distant-signal/values-example.yaml | check "values-example.yaml" 0
           pgbackrest=(
             --set postgresql.pgbackrest.enabled=true
+            --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest
             --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
@@ -2000,6 +2038,7 @@ jobs:
           )
           on=(
             --set postgresql.pgbackrest.enabled=true
+            --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest
             --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
@@ -2025,7 +2064,7 @@ jobs:
             || fail "postgresql.terminationGracePeriodSeconds must render when set"
 
           pg=$(render "${on[@]}" --show-only templates/postgres-statefulset.yaml)
-          grep -q 'image: "ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest:pg16.15-pgbackrest2.59.1-tini0.19.0"' <<<"${pg}" \
+          grep -q 'image: "registry.example.com/postgres-pgbackrest:pg16.15-pgbackrest2.59.1-tini0.19.0"' <<<"${pg}" \
             || fail "pgBackRest must swap in the postgres-pgbackrest image"
           # The image's ENTRYPOINT (tini, then docker-entrypoint.sh) keeps
           # the postmaster off PID 1, where an async archive-push worker's
@@ -2101,12 +2140,17 @@ jobs:
           grep -q 'distant_signal:pgbackrest_job_failed:recent{namespace="distant-signal", job_name=~"distant-signal-pgbackrest-(check|verify)-\[0-9\]+"}' <<<"${rule}" \
             || fail "the check alert must match the check and verify CronJobs' Jobs"
 
-          for unset in image.tag repo.path repo.s3.endpoint repo.s3.bucket repo.s3.existingSecret; do
+          for unset in image.repository image.tag repo.path repo.s3.endpoint repo.s3.bucket repo.s3.existingSecret; do
             if helm template distant-signal charts/distant-signal "${base[@]}" "${on[@]}" \
                 --set "postgresql.pgbackrest.${unset}=" >/dev/null 2>&1; then
               fail "pgBackRest rendered without postgresql.pgbackrest.${unset}"
             fi
           done
+          # The chart has no default pgBackRest image: the error must say so.
+          err=$(helm template distant-signal charts/distant-signal "${base[@]}" "${on[@]}" \
+            --set postgresql.pgbackrest.image.repository= 2>&1 >/dev/null || true)
+          grep -q 'postgresql.pgbackrest.image.repository is required' <<<"${err}" \
+            || fail "a missing pgBackRest image repository must fail with a message naming it"
           if helm template distant-signal charts/distant-signal "${base[@]}" "${on[@]}" \
               --set postgresql.pgbackrest.archive.pushTimeoutSecs=0 >/dev/null 2>&1; then
             fail "pgBackRest rendered with archive.pushTimeoutSecs=0"

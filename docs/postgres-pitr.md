@@ -16,14 +16,20 @@ never touches the cluster.
   in `charts/distant-signal/values.yaml`; `templates/_pgbackrest.tpl`,
   `templates/postgres-pgbackrest.yaml`,
   `templates/pgbackrest-prometheusrule.yaml`.
-- Image: `docker/postgres-pgbackrest.Dockerfile`, with the daily check
-  script `docker/pgbackrest/pgbackrest-daily-check.sh`.
+- Image: not built here. `postgresql.pgbackrest.image` has no default and
+  the chart refuses to render without it. mine-bringer runs the shared
+  `lucy/postgres-pgbackrest` image (built and tested in its own repo),
+  pinned in Ranma-Config's `clusters/base/apps/distant-signal.yaml`. Until
+  2026-10-01 this repo built an equivalent image
+  (`docker/postgres-pgbackrest.Dockerfile`, published to
+  `ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest`); that build
+  is retired and the ghcr image no longer gets updates.
 
 ## How it works
 
 | Piece | What it does |
 | --- | --- |
-| Image | `postgres-pgbackrest`: the exact `postgres:16.15-trixie` image the chart pins, plus pgBackRest from the PGDG repository, the `pgbackrest-daily-check` script, and `tini` as PID 1 in front of the stock entrypoint (see "Why tini" below). The chart swaps it in for the stock image. |
+| Image | `postgresql.pgbackrest.image`, which must be the exact `postgres:16.15-trixie` image the chart pins, plus pgBackRest, `/usr/local/bin/pgbackrest-daily-check` (the check CronJob execs it), and `tini` as PID 1 in front of the stock entrypoint (see "Why tini" below). `lucy/postgres-pgbackrest` is such an image. The chart swaps it in for the stock image. |
 | WAL archiving | `archive_mode=on`, `archive_command='pgbackrest --stanza=ds --archive-timeout=30 archive-push %p'` and `archive_timeout=60` are added to the Postgres `-c` args. Archiving is asynchronous, through a spool at `/var/lib/postgresql/data/pgbackrest-spool` on the data volume, beside `PGDATA`. Each archive-push waits up to `--archive-timeout` (`archive.pushTimeoutSecs`) for the async worker; see "Stopping while S3 is unreachable". |
 | Grace period | The Postgres pod's `terminationGracePeriodSeconds` and `PGCTLTIMEOUT` default to 6 x `archive.pushTimeoutSecs` + 60 (240 s). Without pgBackRest the pod sets no grace period (Kubernetes' 30 s), unless `postgresql.terminationGracePeriodSeconds` is set. |
 | Repository | S3 (Thoth on mine-bringer), under `repo.path` in `repo.s3.bucket`. Every file is encrypted client-side with AES-256-CBC before it leaves the pod, and compressed with zstd. |
@@ -142,14 +148,26 @@ backups have aged past the retention window.
    default-deny egress policy. The chart renders neither (its NetworkPolicies
    give the Postgres pod no egress policy).
 
-5. **Build and pin the image.** `containers.yml` publishes
-   `postgres-pgbackrest` tagged `pg<postgres>-pgbackrest<version>-tini<version>`
-   (e.g. `pg16.15-pgbackrest2.59.1-tini0.19.0`); every push to main
-   re-points that tag at a fresh build. Set `postgresql.pgbackrest.image.tag`
-   to the tag **with a digest**, read from
-   `docker buildx imagetools inspect ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest:pg16.15-pgbackrest2.59.1-tini0.19.0`.
-   The chart refuses to render without it, because a per-release default
-   would restart Postgres on every deploy. Moving to a newer digest (a
+5. **Pin the image.** Set `postgresql.pgbackrest.image.repository` to a
+   Postgres-plus-pgBackRest image (see "How it works") and
+   `postgresql.pgbackrest.image.tag` to its stable tag **with a digest**.
+   lucy/postgres-pgbackrest tags images
+   `pg<postgres>-pgbackrest<version>-tini<version>`; read the digest with
+   `docker buildx imagetools inspect <repository>:<tag>`. mine-bringer
+   runs (Ranma-Config `clusters/base/apps/distant-signal.yaml`, with the
+   registry's pull Secret in the same HelmRelease values):
+
+   ```yaml
+   postgresql:
+     pgbackrest:
+       image:
+         repository: git-bringer.fox-prometheus.ts.net/lucy/postgres-pgbackrest
+         tag: "pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:dafa2a90d251fecf1b29d875d0fba2e300c497b24b4e5b204ae450e6cdb62791"
+   ```
+
+   The chart refuses to render without a repository and a tag (or
+   digest). The tag never defaults to the chart's appVersion, because a
+   per-release image would restart Postgres on every deploy. Moving to a newer digest (a
    Postgres patch release, or a pgBackRest bump) restarts Postgres once, so
    do it on purpose. Keep it on the same Postgres version as
    `postgresql.image.tag`. Never use a tag without `-tini`: its postmaster

@@ -59,7 +59,7 @@ spec:
         - name: postgres
           {{- /*
           postgresql.image, or with postgresql.pgbackrest.enabled the same
-          Postgres plus pgBackRest (docker/postgres-pgbackrest.Dockerfile);
+          Postgres plus pgBackRest (postgresql.pgbackrest.image);
           and the `-c` args below then also carry archive_mode,
           archive_command and archive_timeout (templates/_pgbackrest.tpl).
           */}}

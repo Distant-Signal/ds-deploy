@@ -511,8 +511,9 @@ postgresql:
   # item 1. Runbook (enable, restore, drill): docs/postgres-pitr.md.
   #
   # When enabled, the chart:
-  #   - swaps the Postgres image for docker/postgres-pgbackrest.Dockerfile
-  #     (the same postgres base plus pgBackRest);
+  #   - swaps the Postgres image for `image` below: the same postgres base
+  #     plus pgBackRest, tini and `pgbackrest-daily-check` (this repo no
+  #     longer builds one; see docs/postgres-pitr.md);
   #   - adds `archive_mode=on`, `archive_command` (pgBackRest archive-push)
   #     and `archive_timeout` to the `-c` args, over `config`. Turning this
   #     on or off restarts Postgres once;
@@ -544,18 +545,19 @@ postgresql:
     # `postgresql.enabled`.
     enabled: false
     image:
-      # -- The postgres-pgbackrest image (containers.yml builds it, with a
-      # stable `pg<postgres>-pgbackrest<version>-tini<version>` tag), as
-      # published.
-      repository: ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest
+      # -- REQUIRED when enabled: a Postgres-plus-pgBackRest image. It must
+      # be the `postgresql.image` Postgres with pgBackRest, tini as PID 1
+      # and `/usr/local/bin/pgbackrest-daily-check` (the check CronJob execs
+      # it), e.g. lucy/postgres-pgbackrest. No default: this chart doesn't
+      # build or publish one (docs/postgres-pitr.md).
+      repository: ""
       # -- REQUIRED when enabled: the stable tag WITH its digest, e.g.
       # "pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:...". Only `-tini`
       # tags: older images run the postmaster as PID 1, which crash-restarts
-      # on every failing async archive-push. Unlike the other first-party
-      # images this never falls back to the chart's appVersion: CI rebuilds
-      # the image on every push, and a new digest in the pod template would
-      # restart Postgres on every deploy. Keep it on the same Postgres
-      # version as `postgresql.image.tag`.
+      # on every failing async archive-push. Unlike the first-party images
+      # this never falls back to the chart's appVersion: a new digest in the
+      # pod template restarts Postgres, so it changes only on purpose. Keep
+      # it on the same Postgres version as `postgresql.image.tag`.
       tag: ""
       # -- Content digest, used instead of `tag` when set.
       digest: ""

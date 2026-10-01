@@ -92,7 +92,6 @@ that issuer and subject on the chart's OCIRepository/HelmRepository.
 | `docker/movement-relay.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/movement-relay` |
 | `docker/schedule-ingest.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-ingest` |
 | `docker/schedule-reference.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-reference` |
-| `docker/postgres-pgbackrest.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest` (only with `postgresql.pgbackrest.enabled`; tagged `pg<postgres>-pgbackrest<version>-tini<version>`, and never digest-pinned into the chart by CI) |
 | `frontend/Dockerfile` (target `runtime-prod`) | `ghcr.io/fasterspeeding/distant-signal/frontend` |
 
 ```bash
@@ -761,8 +760,10 @@ item 2.
 
 Off by default (`postgresql.pgbackrest.enabled: false`), and while off the
 Postgres pod renders exactly as without it. When enabled, the bundled
-Postgres runs `docker/postgres-pgbackrest.Dockerfile` (the same
-`postgres:16.15-trixie` plus pgBackRest, with tini as PID 1), archives its WAL to an S3
+Postgres runs `postgresql.pgbackrest.image` (the same
+`postgres:16.15-trixie` plus pgBackRest and `pgbackrest-daily-check`, with
+tini as PID 1; this repo doesn't build one, see docs/postgres-pitr.md),
+archives its WAL to an S3
 repository with client-side AES-256 encryption, and CronJobs take a weekly
 full backup, a daily differential, a daily check (`check` and a WAL gap
 check) and a weekly `verify`. The CronJobs `kubectl exec` into the Postgres
@@ -771,8 +772,8 @@ pod; their Role allows only `get` and `pods/exec` on that one pod.
 `pg_wal` fill the disk when the repository is unreachable, and the daily
 check reports the gap that leaves.
 
-Required when enabled: `postgresql.pgbackrest.image.tag` (the image's
-stable tag with its digest), `repo.path`, `repo.s3.endpoint`,
+Required when enabled: `postgresql.pgbackrest.image.repository` and
+`.tag` (the image's stable tag with its digest), `repo.path`, `repo.s3.endpoint`,
 `repo.s3.bucket` and `repo.s3.existingSecret`, a Secret holding
 `access-key-id`, `secret-access-key` and `cipher-pass`. No secret is ever
 taken from values. Keep an offline copy of the cipher passphrase: the
@@ -1341,7 +1342,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | Key | Default | Description |
 |---|---|---|
 | `postgresql.pgbackrest.enabled` | `false` | Turn on WAL archiving, backups and checks with pgBackRest. Needs `postgresql.enabled`. Turning it on or off restarts Postgres once. |
-| `postgresql.pgbackrest.image.repository` | `ghcr.io/fasterspeeding/distant-signal/postgres-pgbackrest` | The Postgres-plus-pgBackRest image (`docker/postgres-pgbackrest.Dockerfile`), as `containers.yml` publishes it. |
+| `postgresql.pgbackrest.image.repository` | `""` | **Required when enabled**: a Postgres-plus-pgBackRest image: the `postgresql.image` Postgres with pgBackRest, tini as PID 1 and `/usr/local/bin/pgbackrest-daily-check` (e.g. lucy/postgres-pgbackrest). No default: this chart doesn't build one (docs/postgres-pitr.md). |
 | `postgresql.pgbackrest.image.tag` | `""` | **Required when enabled**: the stable tag with its digest, e.g. `pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:…` (only `-tini` tags: see docs/postgres-pitr.md, "Why tini"). Never falls back to `appVersion`: a per-release image would restart Postgres on every deploy. |
 | `postgresql.pgbackrest.image.digest` | `""` | Content digest, used instead of `tag` when set. |
 | `postgresql.pgbackrest.image.pullPolicy` | `IfNotPresent` | Image pull policy. |

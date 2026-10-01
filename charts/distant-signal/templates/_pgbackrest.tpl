@@ -15,6 +15,9 @@ naming the value, the first time any template asks.
 {{- if not .Values.postgresql.enabled -}}
 {{- fail "postgresql.pgbackrest.enabled needs the bundled Postgres (postgresql.enabled: true). For an external database, set up its own backups." -}}
 {{- end -}}
+{{- if not $pb.image.repository -}}
+{{- fail "postgresql.pgbackrest.image.repository is required when postgresql.pgbackrest.enabled is true: a Postgres-plus-pgBackRest image with tini and pgbackrest-daily-check (e.g. lucy/postgres-pgbackrest). This chart has no default image; see docs/postgres-pitr.md." -}}
+{{- end -}}
 {{- if not (or $pb.image.tag $pb.image.digest) -}}
 {{- fail "postgresql.pgbackrest.image.tag (or .digest) is required when postgresql.pgbackrest.enabled is true: the stable postgres-pgbackrest tag with its digest, e.g. \"pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:...\". It never defaults to the chart appVersion, because a per-release image would restart Postgres on every deploy." -}}
 {{- end -}}

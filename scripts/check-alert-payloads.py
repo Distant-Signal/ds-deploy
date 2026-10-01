@@ -104,6 +104,7 @@ RENDER_FLAGS = [
     "scheduleFeed.corpus.enabled=true",
     "fullCoverageConsumer.windowedStats.enabled=true",
     "postgresql.pgbackrest.enabled=true",
+    "postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest",
     "postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0",
     "postgresql.pgbackrest.repo.path=/test/pgbackrest",
     "postgresql.pgbackrest.repo.s3.endpoint=s3.example.com",
