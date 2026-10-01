@@ -3581,8 +3581,8 @@ metrics:
 #
 # Ingress: every workload gets a default-deny policy plus the allows it
 # needs (INF-10: the background workers get their metrics port from
-# monitoringNamespace and their health ports from anywhere, since kubelet
-# probes come from the node).
+# monitoringNamespace and their health ports per healthIngress below,
+# since kubelet probes come from the node).
 #
 # Egress is unrestricted unless networkPolicy.egress.enabled (below).
 networkPolicy:
@@ -3617,6 +3617,52 @@ networkPolicy:
     ds-mcp:
       app.kubernetes.io/name: distant-signal-mcp
       app.kubernetes.io/component: mcp
+  # Ingress to the background workers' and schedulefeed's health ports
+  # (kubelet liveness/readiness probes). By default any source may connect,
+  # because the probes come from the node, which no pod or namespace
+  # selector can name. Most CNIs never apply NetworkPolicy to traffic from
+  # a pod's own node: kube-router accepts it outright (k3s's default
+  # policy controller; its pod chains start with a `--src-type LOCAL`
+  # ACCEPT), and Calico and Cilium allow host-to-local-pod traffic by
+  # default. On such a CNI the rule only matters to other pods.
+  healthIngress:
+    # -- Render the health-port rule. false drops it, which closes the
+    # ports to every pod while probes keep working on a CNI that exempts
+    # node-local traffic (see above). Check that on yours first: a CNI
+    # that does filter it would fail every probe and restart the pods.
+    enabled: true
+    # -- NetworkPolicyPeers allowed to reach the health ports. Empty (the
+    # default) allows any source. To keep them reachable from the nodes
+    # only, list the nodes' addresses as ipBlocks: the node IPs and, on
+    # flannel/kube-router, each node's pod-CIDR gateway (e.g.
+    # 10.42.0.1/32), which is the source address of probe traffic.
+    #   - ipBlock: {cidr: 10.42.0.1/32}
+    from: []
+  # -- Extra NetworkPolicyPeers (podSelector and/or namespaceSelector)
+  # admitted to the bundled Postgres on postgresql.service.port, for
+  # clients this chart does not render: a postgres-exporter, a pg_dump
+  # backup CronJob. Empty (the default) adds nothing. The pgBackRest
+  # CronJobs need no entry: they `kubectl exec` into the Postgres pod
+  # through the API server, not over the pod network. A peer without a
+  # namespaceSelector means this release's namespace. e.g.
+  #   - podSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/name: postgres-exporter
+  #         app.kubernetes.io/instance: distant-signal-postgres
+  #   - podSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/name: distant-signal-postgres-backup
+  # The same can be written as components.postgres.extraIngress (a whole
+  # rule, so it can name other ports), or kept as a policy outside the
+  # chart: policies are additive.
+  postgresClients: []
+  # -- The same for the bundled Redis on redis.service.port, e.g. a
+  # redis-exporter:
+  #   - podSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/name: redis-exporter
+  #         app.kubernetes.io/instance: distant-signal-redis
+  redisClients: []
   # A tunnel connector running in the cluster (e.g. cloudflared) that
   # publishes the frontend without an Ingress. OFF by default. When
   # enabled, the pods matching `podLabels` in `namespace` may reach the
@@ -3639,21 +3685,28 @@ networkPolicy:
     # therefore fails unless api.rateLimit.trustXRealIp is false; with that
     # off, requests the frontend proxies share its pod's bucket.
     api: false
-  # Opt-in egress policies (INF-10, SVC-03 defence in depth) for the
-  # notifier, the Kafka/Redis consumers, movement-relay and every poller.
-  # OFF by default. Each of those may then reach only DNS (port 53, any
-  # destination), the in-cluster services it calls (api, the bundled
-  # Redis/Postgres, the bundled dev IdP) and the public internet minus
-  # `privateCidrs`/`privateCidrsV6` -- so a notifier tricked into pushing to
-  # a private address, or a compromised poller, cannot reach the rest of
-  # the cluster or the node's network. api, frontend, aggregator, enricher,
-  # schedulefeed, postgres and redis get no egress policy.
+  # Opt-in egress policies (INF-10, SVC-03 defence in depth) for every
+  # component: api, frontend, aggregator, enricher, notifier, the
+  # Kafka/Redis consumers, movement-relay, every poller, schedulefeed,
+  # postgres and redis. OFF by default. Each may then reach only DNS (port
+  # 53), the in-cluster services it calls (api, the bundled Redis/Postgres,
+  # the bundled dev IdP) and, where it needs it, the public internet minus
+  # `privateCidrs`/`privateCidrsV6`/`extraDeniedCidrs` -- so a notifier
+  # tricked into pushing to a private address, or a compromised poller,
+  # cannot reach the rest of the cluster or the node's network. Public
+  # internet: api (OIDC issuers), enricher (LLM API), schedulefeed and
+  # every ingest worker (OAuth token endpoint, upstream feeds, Kafka),
+  # notifier (Web Push), aggregator only with archive.enabled (S3),
+  # postgres only with postgresql.pgbackrest.enabled (S3). frontend and
+  # redis get none. Override per component with components.<name>.internet
+  # below, or opt one out entirely with components.<name>.egress: false.
   #
-  # BEFORE ENABLING, add an `extraRules` entry for anything these workers
-  # reach at a private address: an external Redis or Postgres
-  # (redis.enabled/postgresql.enabled false), an in-cluster or
-  # tailnet (100.64.0.0/10) OAuth token endpoint (internalOauth.tokenUrl),
-  # a private Kafka broker, or a proxy.
+  # BEFORE ENABLING, add a rule (components.<name>.extraEgress, or
+  # extraRules for all) for anything reached at a private address: an
+  # external Redis or Postgres (redis.enabled/postgresql.enabled false), an
+  # in-cluster or tailnet (100.64.0.0/10) OAuth/OIDC endpoint, a private
+  # Kafka broker, LLM endpoint (enricher.llm.baseUrl), archive or
+  # pgBackRest S3 endpoint, or a proxy.
   egress:
     enabled: false
     # -- Excluded from the public-internet allow: RFC 1918, CGNAT/tailnet,
@@ -3683,13 +3736,77 @@ networkPolicy:
       - fc00::/7
       - fe80::/10
       - ff00::/8
-    # -- Extra NetworkPolicyEgressRule entries appended to every worker's
-    # egress policy, e.g.
+    # -- More addresses excluded from the public-internet allow, on top of
+    # privateCidrs/privateCidrsV6 (so the defaults above need not be
+    # repeated). IPv4 and IPv6 may be mixed: an entry containing ":" goes to
+    # the IPv6 rule. SET THE NODES' OWN PUBLIC ADDRESSES HERE (as /32 and
+    # /128): privateCidrs only names reserved ranges, so a node with a
+    # public IP is otherwise reachable through it -- the API server (6443),
+    # the kubelet (10250) and every host-published port. Policies are
+    # additive, so no other policy can take that allowance away.
+    extraDeniedCidrs: []
+    # -- NetworkPolicyPeers every egress policy's DNS rule (UDP/TCP 53) is
+    # limited to. Empty (the default) allows port 53 to any destination,
+    # which works with any resolver, NodeLocal DNSCache included, but also
+    # reaches a DNS server on the node or a private address. To use only
+    # the cluster DNS (CoreDNS's usual labels):
+    #   - namespaceSelector:
+    #       matchLabels: {kubernetes.io/metadata.name: kube-system}
+    #     podSelector:
+    #       matchLabels: {k8s-app: kube-dns}
+    dnsPeers: []
+    # -- TCP ports the public-internet rule allows. Each component also
+    # gets the ports its own configured upstreams use, read from their
+    # URLs (an explicit port, else 443 for https and 80 for http: e.g.
+    # pollerIrishRailLive.irishRailBaseUrl is http), the Kafka brokers'
+    # ports (trust-consumer, full-coverage-consumer, movement-relay) and
+    # postgresql.pgbackrest.repo.s3.port. Web Push, OIDC and the OAuth
+    # token endpoint use 443. Override one component with
+    # components.<name>.internetPorts. Empty (`[]`) allows every port.
+    internetPorts:
+      - 443
+    # -- Extra NetworkPolicyEgressRule entries appended to every egress
+    # policy the chart renders. Prefer components.<name>.extraEgress for
+    # something only one component needs, e.g.
     #   - to:
     #       - ipBlock: {cidr: 10.0.5.20/32}
     #     ports:
     #       - {protocol: TCP, port: 5432}
     extraRules: []
+  # -- Per-component settings, keyed by the app.kubernetes.io/component
+  # label: api, frontend, aggregator, enricher, notifier, postgres, redis,
+  # schedulefeed, trust-consumer, trust-backlog-consumer,
+  # full-coverage-consumer, movement-relay, poller-<name> (each
+  # pollers.<name>), poller-irish-rail-gtfs, poller-irish-rail-live,
+  # poller-nir-stations. An unknown key fails the render. Each entry may
+  # set:
+  #   egress: false    # no egress policy for this component, even with
+  #                    # egress.enabled (its egress is then unrestricted
+  #                    # by the chart)
+  #   internet: true   # add or drop the public-internet rule
+  #   internetPorts: [443]  # replaces egress.internetPorts for this
+  #                    # component (its upstreams' ports are still added;
+  #                    # [] allows every port)
+  #   extraEgress: []  # NetworkPolicyEgressRule entries appended to this
+  #                    # component's egress policy (with egress.enabled)
+  #   extraIngress: [] # NetworkPolicyIngressRule entries appended to this
+  #                    # component's ingress policy
+  # e.g. a private archive and LLM endpoint:
+  #   components:
+  #     aggregator:
+  #       internet: false
+  #       extraEgress:
+  #         - to: [{ipBlock: {cidr: 100.90.247.108/32}}]
+  #           ports: [{protocol: TCP, port: 50140}]
+  #     enricher:
+  #       internet: false
+  #       extraEgress:
+  #         - to:
+  #             - namespaceSelector:
+  #                 matchLabels: {kubernetes.io/metadata.name: tailscale}
+  #               podSelector:
+  #                 matchLabels: {tailscale.com/parent-resource: ollama-web-proxies}
+  components: {}
 
 # ---------------------------------------------------------------------------
 # helm test

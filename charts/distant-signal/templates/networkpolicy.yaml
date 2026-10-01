@@ -18,6 +18,9 @@ spec:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if include "distant-signal.egressOn" (dict "root" . "component" "postgres") }}
+    - Egress
+    {{- end }}
   ingress:
     # EXACTLY the workloads whose container env includes DATABASE_URL, i.e.
     # every consumer of `distant-signal.databaseEnv` in this templates/
@@ -45,9 +48,20 @@ spec:
                   - aggregator
                   - enricher
                   - notifier
+        {{- with .Values.networkPolicy.postgresClients }}
+        # networkPolicy.postgresClients: workloads outside this chart, e.g.
+        # a postgres-exporter or a pg_dump backup CronJob.
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.postgresql.service.port }}
+{{- with include "distant-signal.extraIngress" (dict "root" . "component" "postgres") }}
+    {{- . | nindent 4 }}
+{{- end }}
+{{- with include "distant-signal.egressSection" (dict "root" . "component" "postgres" "deps" dict "internet" .Values.postgresql.pgbackrest.enabled "ports" (list .Values.postgresql.pgbackrest.repo.s3.port)) }}
+  {{- . | nindent 2 }}
+{{- end }}
 ---
 {{- end }}
 {{- if .Values.redis.enabled }}
@@ -63,6 +77,9 @@ spec:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "redis") | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if include "distant-signal.egressOn" (dict "root" . "component" "redis") }}
+    - Egress
+    {{- end }}
   ingress:
     # EXACTLY the workloads whose container env includes REDIS_URL, i.e. every
     # consumer of `distant-signal.redisUrl` in this templates/ directory. Keep
@@ -96,9 +113,20 @@ spec:
                   - trust-backlog-consumer
                   - full-coverage-consumer
                   - movement-relay
+        {{- with .Values.networkPolicy.redisClients }}
+        # networkPolicy.redisClients: workloads outside this chart, e.g. a
+        # redis-exporter.
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.redis.service.port }}
+{{- with include "distant-signal.extraIngress" (dict "root" . "component" "redis") }}
+    {{- . | nindent 4 }}
+{{- end }}
+{{- with include "distant-signal.egressSection" (dict "root" . "component" "redis" "deps" dict "internet" false) }}
+  {{- . | nindent 2 }}
+{{- end }}
 ---
 {{- end }}
 apiVersion: networking.k8s.io/v1
@@ -113,6 +141,9 @@ spec:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if include "distant-signal.egressOn" (dict "root" . "component" "api") }}
+    - Egress
+    {{- end }}
   ingress:
     # EXACTLY the workloads that make an in-cluster HTTP call to the api
     # Service, i.e. every consumer of `distant-signal.apiBaseUrl` in this
@@ -254,6 +285,12 @@ spec:
         - protocol: TCP
           port: {{ .Values.metrics.port }}
   {{- end }}
+{{- with include "distant-signal.extraIngress" (dict "root" . "component" "api") }}
+    {{- . | nindent 4 }}
+{{- end }}
+{{- with include "distant-signal.egressSection" (dict "root" . "component" "api" "deps" (dict "postgres" true "redis" true "idp" true) "internet" true "urls" (list .Values.api.sso.issuerUrl .Values.api.internalOauth.issuerUrl)) }}
+  {{- . | nindent 2 }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -267,9 +304,14 @@ spec:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "frontend") | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if include "distant-signal.egressOn" (dict "root" . "component" "frontend") }}
+    - Egress
+    {{- end }}
   {{- $viaIngress := and .Values.ingress.enabled .Values.ingress.frontend.enabled }}
-  {{- if or $viaIngress .Values.networkPolicy.tunnel.enabled }}
+  {{- $extraIngress := include "distant-signal.extraIngress" (dict "root" . "component" "frontend") }}
+  {{- if or $viaIngress .Values.networkPolicy.tunnel.enabled $extraIngress }}
   ingress:
+    {{- if or $viaIngress .Values.networkPolicy.tunnel.enabled }}
     - from:
         {{- if $viaIngress }}
         - namespaceSelector:
@@ -285,10 +327,17 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.frontend.service.port }}
+    {{- end }}
+    {{- with $extraIngress }}
+    {{- . | nindent 4 }}
+    {{- end }}
   {{- else }}
   # No Ingress or tunnel in front of the frontend, so nothing outside the pod
   # needs to reach it. Omitting `ingress` entirely is a default-deny.
   {{- end }}
+{{- with include "distant-signal.egressSection" (dict "root" . "component" "frontend" "deps" (dict "api" true) "internet" false) }}
+  {{- . | nindent 2 }}
+{{- end }}
 {{- /*
 INF-10: every background worker gets a policy from
 distant-signal.workerNetworkPolicy (_helpers.tpl): its /metrics port from the
@@ -299,9 +348,11 @@ island-of-Ireland pollers had no policy at all, so they accepted traffic from
 every pod in the cluster.
 
 `egress` lists the in-cluster services each worker calls; it only takes
-effect with networkPolicy.egress.enabled (see values.yaml). aggregator and
-enricher get none: their S3 archive and LLM endpoints may be private
-addresses this chart cannot know.
+effect with networkPolicy.egress.enabled (see values.yaml). `internet`
+(default true) adds the public-internet rule. aggregator gets it only with
+archive.enabled (a public S3 endpoint); enricher always (a public LLM API).
+A private archive or LLM endpoint, which this chart cannot know, needs
+networkPolicy.components.<component>.extraEgress.
 */}}
 {{- $enabledPollerNames := list }}
 {{- range $name, $poller := .Values.pollers }}
@@ -311,28 +362,30 @@ addresses this chart cannot know.
 {{- end }}
 {{- $callsApi := dict "api" true }}
 {{- $queueWorker := dict "api" true "redis" true }}
+{{- /* Upstreams whose ports the internet rule must allow (internetPorts). */}}
+{{- $token := list .Values.internalOauth.tokenUrl }}
 {{- $workers := list
-  (dict "component" "aggregator" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port))
-  (dict "component" "enricher" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port))
+  (dict "component" "aggregator" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true) "internet" .Values.archive.enabled "urls" (list (.Values.archive.s3.endpoint | default "https://s3.amazonaws.com")))
+  (dict "component" "enricher" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true "redis" true) "urls" (list .Values.enricher.llm.baseUrl))
   (dict "component" "notifier" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true))
-  (dict "component" "trust-consumer" "metricsPort" .Values.trustConsumer.metricsPort "healthPorts" (list .Values.trustConsumer.healthPort) "egress" $queueWorker)
-  (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $queueWorker)
-  (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $queueWorker)
+  (dict "component" "trust-consumer" "metricsPort" .Values.trustConsumer.metricsPort "healthPorts" (list .Values.trustConsumer.healthPort) "egress" $queueWorker "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
+  (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $queueWorker "urls" $token)
+  (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $queueWorker "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
 }}
 {{- if .Values.movementRelay.enabled }}
-{{- $workers = append $workers (dict "component" "movement-relay" "metricsPort" .Values.movementRelay.metricsPort "healthPorts" (list .Values.movementRelay.healthPort) "egress" (dict "redis" true)) }}
+{{- $workers = append $workers (dict "component" "movement-relay" "metricsPort" .Values.movementRelay.metricsPort "healthPorts" (list .Values.movementRelay.healthPort) "egress" (dict "redis" true) "brokers" (include "distant-signal.movementRelayKafkaBrokers" .)) }}
 {{- end }}
 {{- range $enabledPollerNames }}
-{{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $callsApi) }}
+{{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $callsApi "urls" (list (get $root.Values.pollers .).baseUrl $root.Values.internalOauth.tokenUrl)) }}
 {{- end }}
 {{- if .Values.pollerIrishRailGtfs.enabled }}
-{{- $workers = append $workers (dict "component" "poller-irish-rail-gtfs" "metricsPort" .Values.pollerIrishRailGtfs.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi) }}
+{{- $workers = append $workers (dict "component" "poller-irish-rail-gtfs" "metricsPort" .Values.pollerIrishRailGtfs.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi "urls" (list .Values.pollerIrishRailGtfs.gtfsUrl .Values.internalOauth.tokenUrl)) }}
 {{- end }}
 {{- if .Values.pollerIrishRailLive.enabled }}
-{{- $workers = append $workers (dict "component" "poller-irish-rail-live" "metricsPort" .Values.pollerIrishRailLive.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi) }}
+{{- $workers = append $workers (dict "component" "poller-irish-rail-live" "metricsPort" .Values.pollerIrishRailLive.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi "urls" (list .Values.pollerIrishRailLive.irishRailBaseUrl .Values.internalOauth.tokenUrl)) }}
 {{- end }}
 {{- if .Values.pollerNirStations.enabled }}
-{{- $workers = append $workers (dict "component" "poller-nir-stations" "metricsPort" .Values.pollerNirStations.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi) }}
+{{- $workers = append $workers (dict "component" "poller-nir-stations" "metricsPort" .Values.pollerNirStations.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi "urls" (list .Values.pollerNirStations.stationsCsvUrl .Values.pollerNirStations.haltsCsvUrl .Values.internalOauth.tokenUrl)) }}
 {{- end }}
 {{- range $workers }}
 ---
@@ -352,6 +405,9 @@ spec:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "schedulefeed") | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if include "distant-signal.egressOn" (dict "root" . "component" "schedulefeed") }}
+    - Egress
+    {{- end }}
   ingress:
     # INF-2: DTD pushes the timetable over SFTP to the `sftp` container.
     # Until 2026-09-27 this policy allowed only the metrics scrape, so
@@ -377,12 +433,9 @@ spec:
         {{- end }}
       {{- end }}
     # Kubelet probes (the ingest and reference /livez and /healthz ports)
-    # come from the node, which no selector can name.
-    - ports:
-        - protocol: TCP
-          port: {{ .Values.workerHealth.port }}
-        - protocol: TCP
-          port: {{ .Values.scheduleFeed.reference.healthPort }}
+    # come from the node, which no selector can name
+    # (networkPolicy.healthIngress).
+    {{- include "distant-signal.healthIngressRule" (dict "root" . "ports" (list .Values.workerHealth.port .Values.scheduleFeed.reference.healthPort)) | nindent 4 }}
   {{- if .Values.metrics.enabled }}
     # The ingest container's /metrics (metrics.port) and the reference
     # container's (scheduleFeed.reference.metricsPort), scoped to the
@@ -397,5 +450,11 @@ spec:
         - protocol: TCP
           port: {{ .Values.scheduleFeed.reference.metricsPort }}
   {{- end }}
+{{- with include "distant-signal.extraIngress" (dict "root" . "component" "schedulefeed") }}
+    {{- . | nindent 4 }}
+{{- end }}
+{{- with include "distant-signal.egressSection" (dict "root" . "component" "schedulefeed" "deps" (dict "api" true) "internet" true "urls" (list .Values.internalOauth.tokenUrl)) }}
+  {{- . | nindent 2 }}
+{{- end }}
 {{- end }}
 {{- end }}

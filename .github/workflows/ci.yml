@@ -1269,6 +1269,159 @@ jobs:
           notifier=$(policy distant-signal-notifier <<<"${eg}")
           grep -q -- '- Egress' <<<"${notifier}" || fail "notifier must get an egress policy"
           grep -q -- '- 10.0.0.0/8' <<<"${notifier}" || fail "notifier egress must exclude private ranges"
+          # extraDeniedCidrs (the node's own public IPs) joins the internet
+          # rule's except list, sorted by family, without dropping the
+          # privateCidrs defaults; a bare address is rejected.
+          eg=$(render --set networkPolicy.egress.enabled=true \
+            --set 'networkPolicy.egress.extraDeniedCidrs={203.0.113.7/32,2001:db8::7/128}' \
+            --show-only templates/networkpolicy.yaml)
+          notifier=$(policy distant-signal-notifier <<<"${eg}")
+          v4=$(awk '/cidr: 0.0.0.0\/0/{f=1;next} /cidr: "::\/0"/{f=0} f' <<<"${notifier}")
+          v6=$(awk '/cidr: "::\/0"/{f=1;next} f' <<<"${notifier}")
+          grep -q -- '- 203.0.113.7/32' <<<"${v4}" || fail "extraDeniedCidrs must join the IPv4 except list"
+          grep -q -- '- 10.0.0.0/8' <<<"${v4}" || fail "extraDeniedCidrs must not replace privateCidrs"
+          grep -q -- '- 2001:db8::7/128' <<<"${v6}" || fail "an IPv6 extraDeniedCidrs entry must join the IPv6 except list"
+          if grep -q '2001:db8::7' <<<"${v4}"; then fail "an IPv6 entry must not land in the IPv4 except list"; fi
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set networkPolicy.egress.enabled=true --set 'networkPolicy.egress.extraDeniedCidrs={203.0.113.7}' \
+              --show-only templates/networkpolicy.yaml >/dev/null 2>&1; then
+            fail "extraDeniedCidrs must reject an entry without a prefix length"
+          fi
+
+          # egress.enabled gives every component an egress policy: DNS, the
+          # in-cluster services it calls, and the internet only where needed.
+          # egress_of <component> <render>: that policy's egress rules.
+          egress_of() { awk -v n="distant-signal-$1" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}' <<<"$2" | awk '/^  egress:/{f=1} f'; }
+          eg=$(render --set networkPolicy.egress.enabled=true --show-only templates/networkpolicy.yaml)
+          for c in api frontend aggregator enricher schedulefeed postgres redis notifier; do
+            out=$(egress_of "${c}" "${eg}")
+            grep -q 'port: 53$' <<<"${out}" || fail "${c} must get an egress policy allowing DNS"
+          done
+          for d in api:postgres api:redis frontend:api aggregator:postgres enricher:postgres \
+              enricher:redis schedulefeed:api; do
+            out=$(egress_of "${d%%:*}" "${eg}")
+            grep -q "component: ${d##*:}\$" <<<"${out}" || fail "${d%%:*} egress must reach ${d##*:}"
+          done
+          for c in api enricher schedulefeed notifier; do
+            out=$(egress_of "${c}" "${eg}")
+            grep -q 'cidr: 0.0.0.0/0' <<<"${out}" || fail "${c} egress must reach the internet"
+          done
+          for c in frontend aggregator postgres redis; do
+            out=$(egress_of "${c}" "${eg}")
+            if grep -q 'cidr: 0.0.0.0/0' <<<"${out}"; then fail "${c} must not reach the internet by default"; fi
+          done
+          out=$(egress_of redis "${eg}")
+          if grep -q 'podSelector' <<<"${out}"; then fail "redis egress must reach no pod"; fi
+          out=$(egress_of api "${eg}")
+          if grep -q 'component: api$' <<<"${out}"; then fail "api must not reach itself"; fi
+          eg=$(render --set networkPolicy.egress.enabled=true \
+            --set archive.enabled=true --set archive.s3.bucket=b --set archive.s3.existingSecret=s \
+            --set archive.s3.lifecycleConfirmed=true \
+            --set postgresql.pgbackrest.enabled=true \
+            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0 \
+            --set postgresql.pgbackrest.repo.path=/test/pgbackrest \
+            --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com \
+            --set postgresql.pgbackrest.repo.s3.bucket=test-bucket \
+            --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds \
+            --show-only templates/networkpolicy.yaml)
+          out=$(egress_of aggregator "${eg}")
+          grep -q 'cidr: 0.0.0.0/0' <<<"${out}" || fail "archive.enabled must give the aggregator the internet"
+          out=$(egress_of postgres "${eg}")
+          grep -q 'cidr: 0.0.0.0/0' <<<"${out}" || fail "pgBackRest must give postgres the internet"
+          # networkPolicy.components.<component> overrides, and rejects typos.
+          eg=$(render --set networkPolicy.egress.enabled=true \
+            --set networkPolicy.components.api.egress=false \
+            --set networkPolicy.components.frontend.internet=true \
+            --set networkPolicy.components.enricher.internet=false \
+            --show-only templates/networkpolicy.yaml)
+          out=$(egress_of api "${eg}")
+          if [[ -n "${out}" ]]; then fail "components.api.egress=false must drop the api's egress policy"; fi
+          out=$(egress_of frontend "${eg}")
+          grep -q 'cidr: 0.0.0.0/0' <<<"${out}" || fail "components.frontend.internet=true must add the internet"
+          out=$(egress_of enricher "${eg}")
+          if grep -q 'cidr: 0.0.0.0/0' <<<"${out}"; then fail "components.enricher.internet=false must drop the internet"; fi
+          # egress.dnsPeers limits every DNS rule to the named resolvers.
+          eg=$(render --set networkPolicy.egress.enabled=true \
+            --set 'networkPolicy.egress.dnsPeers[0].podSelector.matchLabels.k8s-app=kube-dns' \
+            --show-only templates/networkpolicy.yaml)
+          for c in api redis notifier; do
+            out=$(egress_of "${c}" "${eg}")
+            grep -A4 'port: 53$' <<<"${out}" | grep -q 'k8s-app: kube-dns' || fail "${c} DNS egress must use dnsPeers"
+          done
+
+          # The internet rule allows egress.internetPorts (443) plus each
+          # component's own upstream ports: Kafka brokers, an http:// feed.
+          # internet_ports_of <component> <render>: the ports after ::/0.
+          internet_ports_of() { egress_of "$1" "$2" | awk '/cidr: "::\/0"/{f=1} f && /port:/{print $2}' | sort -n | tr '\n' ' '; }
+          eg=$(render --set networkPolicy.egress.enabled=true --set pollerIrishRailLive.enabled=true \
+            --set api.internalOauth.groups.irishRailLive=svc-poller-irish-rail-live \
+            --show-only templates/networkpolicy.yaml)
+          for c in 'notifier:443 ' 'api:443 ' 'trust-consumer:443 9094 ' 'full-coverage-consumer:443 9094 ' \
+              'movement-relay:443 9094 ' 'poller-irish-rail-live:80 443 '; do
+            got=$(internet_ports_of "${c%%:*}" "${eg}")
+            [[ "${got}" == "${c#*:}" ]] || fail "${c%%:*} internet ports: want '${c#*:}', got '${got}'"
+          done
+          eg=$(render --set networkPolicy.egress.enabled=true --set-json 'networkPolicy.egress.internetPorts=[]' \
+            --set 'networkPolicy.components.api.internetPorts={8443}' --show-only templates/networkpolicy.yaml)
+          got=$(internet_ports_of notifier "${eg}")
+          [[ -z "${got}" ]] || fail "internetPorts=[] must allow every port, got '${got}'"
+          got=$(internet_ports_of api "${eg}")
+          [[ "${got}" == "443 8443 " ]] || fail "components.api.internetPorts must replace the default (issuer ports still added), got '${got}'"
+
+          # networkPolicy.healthIngress scopes the probe ports (default: any
+          # source, checked above), or drops the rule.
+          np=$(render --set 'networkPolicy.healthIngress.from[0].ipBlock.cidr=10.42.0.1/32' \
+            --show-only templates/networkpolicy.yaml)
+          for c in notifier:8090 schedulefeed:8091; do
+            p=$(policy "distant-signal-${c%%:*}" <<<"${np}")
+            grep -A5 "port: ${c##*:}\$" <<<"${p}" | grep -q 'cidr: 10.42.0.1/32' \
+              || fail "healthIngress.from must scope ${c%%:*}'s health port"
+          done
+          np=$(render --set networkPolicy.healthIngress.enabled=false --show-only templates/networkpolicy.yaml)
+          for c in notifier:8090 schedulefeed:8091; do
+            p=$(policy "distant-signal-${c%%:*}" <<<"${np}")
+            if grep -q "port: ${c##*:}\$" <<<"${p}"; then fail "healthIngress.enabled=false must drop ${c%%:*}'s health port rule"; fi
+          done
+          p=$(policy distant-signal-schedulefeed <<<"${np}")
+          grep -q 'port: 2022' <<<"${p}" || fail "healthIngress.enabled=false must keep SFTP"
+
+          # postgresClients/redisClients admit outside workloads (exporters,
+          # the backup CronJob) on the service port only, and are off by default.
+          np=$(render --show-only templates/networkpolicy.yaml)
+          pg=$(policy distant-signal-postgres <<<"${np}")
+          if grep -q 'postgres-exporter' <<<"${pg}"; then fail "postgresClients must be empty by default"; fi
+          np=$(render --set 'networkPolicy.postgresClients[0].podSelector.matchLabels.app\.kubernetes\.io/name=postgres-exporter' \
+            --set 'networkPolicy.redisClients[0].podSelector.matchLabels.app\.kubernetes\.io/name=redis-exporter' \
+            --show-only templates/networkpolicy.yaml)
+          pg=$(policy distant-signal-postgres <<<"${np}")
+          rd=$(policy distant-signal-redis <<<"${np}")
+          grep -A3 'app.kubernetes.io/name: postgres-exporter' <<<"${pg}" | grep -q 'port: 5432' \
+            || fail "postgresClients must be admitted on the Postgres port"
+          grep -A3 'app.kubernetes.io/name: redis-exporter' <<<"${rd}" | grep -q 'port: 6379' \
+            || fail "redisClients must be admitted on the Redis port"
+
+          # components.<component>.extraEgress/extraIngress reach that
+          # component's policy only, including the frontend's otherwise
+          # empty ingress.
+          eg=$(render --set networkPolicy.egress.enabled=true \
+            --set 'networkPolicy.components.aggregator.extraEgress[0].to[0].ipBlock.cidr=192.0.2.10/32' \
+            --set 'networkPolicy.components.postgres.extraIngress[0].from[0].podSelector.matchLabels.probe=pg' \
+            --set 'networkPolicy.components.frontend.extraIngress[0].from[0].podSelector.matchLabels.probe=fe' \
+            --set 'networkPolicy.components.notifier.extraIngress[0].from[0].podSelector.matchLabels.probe=nt' \
+            --show-only templates/networkpolicy.yaml)
+          out=$(egress_of aggregator "${eg}")
+          grep -q 'cidr: 192.0.2.10/32' <<<"${out}" || fail "aggregator extraEgress must render"
+          out=$(egress_of enricher "${eg}")
+          if grep -q '192.0.2.10' <<<"${out}"; then fail "extraEgress must not leak to another component"; fi
+          for c in postgres:pg frontend:fe notifier:nt; do
+            out=$(policy "distant-signal-${c%%:*}" <<<"${eg}" | awk '/^  ingress:/{f=1} /^  egress:/{f=0} f')
+            grep -q "probe: ${c##*:}\$" <<<"${out}" || fail "${c%%:*} extraIngress must render under ingress"
+          done
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set networkPolicy.components.no-such-thing.egress=false \
+              --show-only templates/networkpolicy.yaml >/dev/null 2>&1; then
+            fail "an unknown networkPolicy.components key must fail the render"
+          fi
 
           # The api trusts X-Real-IP, so only its real callers may reach
           # api.service.port. An extra namespace is narrowed to the MCP pod by

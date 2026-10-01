@@ -850,6 +850,16 @@ explicit allows:
 - **redis** ← api, enricher, trust-consumer, trust-backlog-consumer,
   full-coverage-consumer and movement-relay. Rendered only when
   `redis.enabled`.
+- **postgres/redis ← workloads outside the chart** (off by default):
+  `networkPolicy.postgresClients` and `networkPolicy.redisClients` are lists
+  of NetworkPolicy peers (`podSelector`, `namespaceSelector`) admitted on the
+  service port, e.g. a postgres-exporter, a pg_dump backup CronJob or a
+  redis-exporter. There are two ways to admit them: these values (the chart
+  then owns every way into the database), or a NetworkPolicy kept beside
+  the release (NetworkPolicies are additive, so it keeps working).
+  `networkPolicy.components.postgres.extraIngress` takes whole rules when a
+  client needs another port. The pgBackRest CronJobs need neither: they
+  `kubectl exec` into the Postgres pod through the API server.
 - **api** ← frontend, every enabled poller, the consumers, schedulefeed, and — when `ingress.enabled` and
   `ingress.api.enabled` — the namespace named by
   `networkPolicy.ingressControllerNamespace`, plus every namespace in
@@ -870,7 +880,13 @@ explicit allows:
   poller including the three island-of-Ireland ones; INF-10): their own
   metrics port from the monitoring namespace (when `metrics.enabled`), and
   their health port(s) from any source, because kubelet probes come from the
-  node, which no selector can name. Nothing else.
+  node, which no selector can name. Nothing else. `networkPolicy.healthIngress`
+  scopes the health ports: `from` lists the allowed peers (e.g. the nodes'
+  addresses as ipBlocks), and `enabled: false` drops the rule. kube-router
+  (k3s's policy controller) accepts all traffic from a pod's own node before
+  any policy applies, and Calico and Cilium allow it by default, so probes
+  keep working there either way. Check your CNI before dropping it: one that
+  filters node traffic would fail every probe.
 - **schedulefeed** (INF-2): SFTP on `scheduleFeed.sftp.port` from any source,
   or only from `scheduleFeed.sftp.allowedCidrs` when set. The allow-list only
   works when the pod sees the client's real address (Service
@@ -898,17 +914,56 @@ tunnel reach the api on `api.service.port` still does after this.
 Narrowing the chart's policies cannot remove it.
 
 **Egress is unrestricted by default.** `networkPolicy.egress.enabled: true`
-(off by default) adds egress policies to the notifier, the consumers,
-movement-relay and every poller: DNS, the in-cluster services each one
-calls (api, the bundled Redis/Postgres, the bundled dev IdP), and the public
-internet minus `networkPolicy.egress.privateCidrs`/`privateCidrsV6`. That
-stops a notifier tricked into pushing to a private address, or a compromised
-poller, from reaching the rest of the cluster. Before enabling it, add a
-`networkPolicy.egress.extraRules` entry for anything these workers reach at
-a private address: an external Redis or Postgres, an OAuth token endpoint
-inside the cluster or on a tailnet (`100.64.0.0/10`), a private Kafka broker
-or a proxy. api, frontend, aggregator, enricher, schedulefeed, postgres and
-redis get no egress policy.
+(off by default) adds an egress policy to every component. Each may reach
+DNS (port 53), the in-cluster services it calls, and, where it needs it, the
+public internet minus `networkPolicy.egress.privateCidrs`/`privateCidrsV6`
+and `extraDeniedCidrs`. That stops a notifier tricked into pushing to a
+private address, or a compromised poller, from reaching the rest of the
+cluster.
+
+| Component | In-cluster | Public internet (why) |
+|---|---|---|
+| api | postgres, redis, dev IdP | yes (OIDC discovery and JWKS for `api.sso.issuerUrl` and `api.internalOauth.issuerUrl`) |
+| frontend | api | no (the `/chat` Anthropic calls run in the browser) |
+| aggregator | postgres | only with `archive.enabled` (S3) |
+| enricher | postgres, redis | yes (`enricher.llm.baseUrl`) |
+| notifier | postgres | yes (Web Push services) |
+| pollers, consumers, movement-relay | api and/or redis, dev IdP | yes (upstream feeds, Kafka, the OAuth token endpoint) |
+| schedulefeed | api, dev IdP | yes (the OAuth token endpoint) |
+| postgres | none | only with `postgresql.pgbackrest.enabled` (the repository's S3) |
+| redis | none | no |
+
+DNS goes to any destination on port 53 unless `networkPolicy.egress.dnsPeers`
+names the resolvers (e.g. CoreDNS: namespace `kube-system`, pods
+`k8s-app: kube-dns`; leave it empty with NodeLocal DNSCache).
+
+The internet rule allows only TCP `networkPolicy.egress.internetPorts`
+(default 443) plus the ports each component's own upstreams use, read from
+its configuration: an explicit port or the scheme's default in its URLs
+(the Irish Rail live feed is `http://`, so port 80), the Kafka brokers'
+ports, and `postgresql.pgbackrest.repo.s3.port`. Web Push services, OIDC and
+the OAuth token endpoint use 443. A self-hosted push service or other
+upstream on another port needs `networkPolicy.components.<component>.internetPorts`;
+`[]` (globally or per component) allows every port.
+
+`networkPolicy.components.<component>` (keyed by the
+`app.kubernetes.io/component` label) tunes one component: `internet`
+adds or drops its public-internet rule, `egress: false` leaves it
+without an egress policy, and `extraEgress`/`extraIngress` append raw
+NetworkPolicy egress/ingress rules to that component's policy alone (e.g.
+only the aggregator may reach a private archive endpoint). Before enabling, add a rule for anything reached
+at a private address: an external Redis or Postgres, an OIDC or OAuth
+endpoint inside the cluster or on a tailnet (`100.64.0.0/10`), a private
+Kafka broker, LLM endpoint, archive or pgBackRest S3 endpoint, or a proxy.
+
+**Exclude the nodes' own public addresses.** `privateCidrs` names only the
+reserved ranges. A node with a public IP is therefore reachable through the
+internet rule: the API server (6443), the kubelet (10250) and every port the
+host publishes. List those addresses in
+`networkPolicy.egress.extraDeniedCidrs` (`/32` or `/128`; IPv4 and IPv6 may
+be mixed). They are added to the defaults rather than replacing them, and
+because policies are additive, no policy outside the chart can take this
+allowance away.
 
 ## Distant-Signal-MCP as a service caller
 
@@ -2137,15 +2192,23 @@ creates new per-pod series, so that clause fired on every rollout.
 | `networkPolicy.ingressControllerNamespace` | `ingress-nginx` | Namespace the ingress controller runs in, matched by `kubernetes.io/metadata.name`. |
 | `networkPolicy.apiExtraIngressNamespaces` | `[]` | Extra namespaces allowed to reach `api.service.port` (e.g. `[ds-mcp]` for the Distant-Signal-MCP). |
 | `networkPolicy.apiExtraIngressPodLabels` | `ds-mcp`: `app.kubernetes.io/name: distant-signal-mcp`, `app.kubernetes.io/component: mcp` | Per-namespace pod labels that narrow an `apiExtraIngressNamespaces` entry to the calling pods. A namespace with no entry admits all its pods. Set an entry to `null` to clear it; `{}` merges with the default and does not clear it. |
+| `networkPolicy.healthIngress.enabled` | `true` | Render the rule admitting the workers' and schedulefeed's health (probe) ports. `false` closes them to every pod; probes still work on CNIs that exempt node-local traffic (kube-router, Calico and Cilium by default). |
+| `networkPolicy.healthIngress.from` | `[]` | NetworkPolicy peers allowed to reach the health ports, e.g. the nodes' addresses as ipBlocks. Empty allows any source. |
+| `networkPolicy.postgresClients` | `[]` | Extra NetworkPolicy peers (pod/namespace selectors) admitted to the bundled Postgres, e.g. a postgres-exporter or backup CronJob. See [NetworkPolicy](#networkpolicy). |
+| `networkPolicy.redisClients` | `[]` | Extra NetworkPolicy peers admitted to the bundled Redis, e.g. a redis-exporter. |
 | `networkPolicy.tunnel.enabled` | `false` | Admit an in-cluster tunnel connector (e.g. cloudflared) to the frontend. See [NetworkPolicy](#networkpolicy). |
 | `networkPolicy.tunnel.namespace` | `cloudflared` | Namespace the connector runs in, matched by `kubernetes.io/metadata.name`. |
 | `networkPolicy.tunnel.podLabels` | `app.kubernetes.io/name: cloudflared` | Labels selecting the connector pods. Empty admits the whole namespace. |
 | `networkPolicy.tunnel.api` | `false` | Also admit the connector to `api.service.port`, for a hostname routed straight to the api. Requires `api.rateLimit.trustXRealIp: false`. |
 | `networkPolicy.monitoringNamespace` | `monitoring` | Namespace Prometheus runs in, matched by `kubernetes.io/metadata.name`. Allowed to reach each workload's metrics port. Only used when `metrics.enabled` is true. |
-| `networkPolicy.egress.enabled` | `false` | Render egress policies for the notifier, consumers, movement-relay and pollers (see [NetworkPolicy](#networkpolicy)). |
+| `networkPolicy.egress.enabled` | `false` | Render an egress policy for every component (see [NetworkPolicy](#networkpolicy)). |
 | `networkPolicy.egress.privateCidrs` | RFC 1918, CGNAT, loopback, link-local, reserved | IPv4 ranges excluded from the public-internet egress allow. |
 | `networkPolicy.egress.privateCidrsV6` | loopback, ULA, link-local, multicast, NAT64/6to4/Teredo | IPv6 ranges excluded from the public-internet egress allow. |
-| `networkPolicy.egress.extraRules` | `[]` | Extra NetworkPolicyEgressRule entries appended to every worker's egress policy. |
+| `networkPolicy.egress.extraDeniedCidrs` | `[]` | More CIDRs (IPv4 and IPv6 mixed) excluded from the public-internet egress allow, on top of `privateCidrs`/`privateCidrsV6`. Set the nodes' own public addresses here. |
+| `networkPolicy.egress.dnsPeers` | `[]` | NetworkPolicy peers the DNS egress rule (port 53) is limited to, e.g. CoreDNS (`kube-system`, `k8s-app: kube-dns`). Empty allows port 53 to any destination. |
+| `networkPolicy.egress.internetPorts` | `[443]` | TCP ports the public-internet egress rule allows. Each component also gets its own upstreams' ports (from their URLs, the Kafka brokers, the pgBackRest S3 port). `[]` allows every port. |
+| `networkPolicy.egress.extraRules` | `[]` | Extra NetworkPolicyEgressRule entries appended to every egress policy the chart renders. |
+| `networkPolicy.components` | `{}` | Per-component settings keyed by the `app.kubernetes.io/component` label (`api`, `postgres`, `poller-ldbws`, ...); an unknown key fails the render. Each entry: `egress` (`false` renders no egress policy for it), `internet` (add or drop its public-internet rule), `internetPorts` (replaces `egress.internetPorts` for it), `extraEgress` / `extraIngress` (raw NetworkPolicy rules appended to its policy). See [NetworkPolicy](#networkpolicy). |
 | `scheduleFeed.sftp.allowedCidrs` | `[]` | Source CIDRs allowed to reach SFTP when `networkPolicy.enabled`. Empty allows any source. |
 
 ### scheduleFeed: CIF routing and CORPUS
