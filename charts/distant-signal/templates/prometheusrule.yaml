@@ -13,7 +13,18 @@ starts with `DistantSignal` so nothing collides with the cluster's rules;
 CI (`.github/workflows/ci.yml`, helm-lint job) asserts that prefix.
 
 Every selector is scoped to namespace="<release namespace>", the label the
-PodMonitor above attaches to every scraped series. The memory alert also
+PodMonitor above attaches to every scraped series.
+
+Payload size (2026-10-01 outage): ntfy refuses a notification over 4,096
+bytes, and Alertmanager's webhook carries each alert's annotations, labels
+and generatorURL (the URL-encoded expr). So every alert keeps a one-line
+`summary` (<= 80 chars), a `description` (<= 150 chars) and a runbook_url
+into docs/alerts.md, where the longer prose lives; and any expr longer than
+about 300 chars is a recording rule (`distant_signal:<what>:<how>`) earlier
+in the same group, which the alert compares against. Prometheus evaluates a
+group's rules in order, so the alert sees this evaluation's recorded value
+and fires exactly as the inline expr did. scripts/check-alert-payloads.py
+(CI's scripts-lint job) enforces the limits. The memory alert also
 matches pod=~"<fullname>-.*", since cadvisor/kube-state-metrics series carry
 no chart labels.
 
@@ -29,6 +40,7 @@ so that clause fired on every rollout.
 {{- $ns := .Release.Namespace }}
 {{- $fullname := include "distant-signal.fullname" . }}
 {{- $runbookBase := trimSuffix "/" $rule.runbookBaseUrl }}
+{{- $runbook := printf "%s/docs/alerts.md" $runbookBase }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
 {{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled ($rule.deadLetterExpiring).enabled ($rule.longPending).enabled ($rule.parseEnvelope).enabled) }}
 {{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
@@ -38,7 +50,12 @@ so that clause fired on every rollout.
 {{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
 {{- $signupSpikeOn := ($rule.userSignupSpike).enabled }}
 {{- $archiveExpiryOn := and ($rule.archiveExpiry).enabled .Values.archive.enabled (.Values.archive.expiry).enabled }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn }}
+{{- $postgresDownOn := ($rule.postgresDown).enabled }}
+{{- $apiDbDownOn := ($rule.apiDatabaseDown).enabled }}
+{{- $consumerApiOn := ($rule.consumerApiErrors).enabled }}
+{{- $cyclesOn := ($rule.cycleStalled).enabled }}
+{{- $healthOn := or $postgresDownOn $apiDbDownOn $consumerApiOn $cyclesOn }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -54,6 +71,142 @@ metadata:
   {{- end }}
 spec:
   groups:{{ if not $anyOn }} []{{ end }}
+    {{- if $healthOn }}
+    - name: distant-signal.health
+      rules:
+        {{- with $rule.postgresDown }}
+        {{- if .enabled }}
+        {{- /*
+        2026-10-01: Postgres was down for six hours and the only alert was
+        the cluster's PostgresExporterDown (a warning, blaming the
+        exporter). Two sources, either enough: postgres_exporter's pg_up
+        (the exporter is not part of this chart; pgUpSelector narrows its
+        series), and, for the bundled Postgres, the StatefulSet's ready
+        replicas from kube-state-metrics, which still answers while the
+        exporter is down too.
+        */}}
+        {{- $pgUp := printf "namespace=%q" $ns }}
+        {{- with .pgUpSelector }}
+        {{- $pgUp = printf "%s, %s" $pgUp . }}
+        {{- end }}
+        - alert: DistantSignalPostgresDown
+          expr: |
+            max by (namespace) (pg_up{ {{- $pgUp -}} }) == 0
+            {{- if $.Values.postgresql.enabled }}
+            or max by (namespace) (kube_statefulset_status_replicas_ready{namespace="{{ $ns }}", statefulset="{{ include "distant-signal.postgresFullname" $ }}"}) < 1
+            {{- end }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "the Distant Signal database is down"
+            description: "pg_up is 0, or the bundled Postgres has no ready replica. api, the consumers and the aggregator cannot read or write."
+            runbook_url: {{ printf "%s#distantsignalpostgresdown" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.apiDatabaseDown }}
+        {{- if .enabled }}
+        {{- /*
+        api's own probe (crates/api/src/data/db_health.rs): a `SELECT 1`
+        through its request pool every 15s. Catches what pg_up cannot: a
+        password rotated under api, an exhausted pool or max_connections,
+        a NetworkPolicy, an external database. `min`: any api replica that
+        cannot query counts.
+        */}}
+        - alert: DistantSignalApiDatabaseDown
+          expr: |
+            min by (namespace) (distant_signal_api_db_up{namespace="{{ $ns }}"}) == 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "api cannot query its database"
+            description: "api's SELECT 1 probe has failed for {{ .for }}: ingest and most pages fail. See DistantSignalPostgresDown and api's log."
+            runbook_url: {{ printf "%s#distantsignalapidatabasedown" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.consumerApiErrors }}
+        {{- if .enabled }}
+        {{- /*
+        2026-10-01: trust-consumer failed GET /private/tracked-trains about
+        23.6k times and trust-backlog-consumer about 2,200 POSTs, with no
+        alert (their *_ready gauges only follow Redis). Each consumer's
+        <consumer>_errors_total operations that are failed calls to api
+        (not data rejections), registered at 0 at startup; each crate's
+        API_CALL_OPERATIONS lists the same operations, and its tests check
+        this list. Summed per consumer (not per operation), so an api outage
+        is at most three alerts in one notification.
+        */}}
+        {{- $consumers := list
+          (list "trust_consumer" "trust-consumer" "reload_tracked_trains|post_train_events|reload_stanox_crs|startup_reference_load")
+          (list "trust_backlog_consumer" "trust-backlog-consumer" "post_batch|post_train_reasons|reload_stanox_crs")
+          (list "full_coverage_consumer" "full-coverage-consumer" "reload_line_population_fetch|post_line_stats|post_station_samples|reload_stanox_crs") }}
+        - record: distant_signal:consumer_api_errors:increase
+          expr: |
+            {{- range $i, $c := $consumers }}
+            {{ if $i }}or {{ end }}label_replace(sum by (namespace) (increase(distant_signal_{{ index $c 0 }}_errors_total{namespace="{{ $ns }}", operation=~"{{ index $c 2 }}"}[{{ $rule.consumerApiErrors.window }}])), "consumer", "{{ index $c 1 }}", "", "")
+            {{- end }}
+        - alert: DistantSignalConsumerApiCallsFailing
+          expr: |
+            distant_signal:consumer_api_errors:increase{namespace="{{ $ns }}"} >= {{ .minErrors }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.consumer }}" }} keeps failing its calls to api"
+            description: "{{ "{{ $value | humanize }}" }} failed api calls in {{ .window }}, for {{ .for }}: its data is not landing. Check api and the consumer's log."
+            runbook_url: {{ printf "%s#distantsignalconsumerapicallsfailing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.cycleStalled }}
+        {{- if .enabled }}
+        {{- /*
+        2026-10-01: every aggregator and notifier cycle failed for six
+        hours and nothing alerted (aggregator_cycle_duration_seconds_count
+        rises either way). <service>_last_success_timestamp_seconds{cycle}
+        is the last successful cycle, or the process start until one
+        succeeds (common::metrics::register_cycle), so a process that never
+        succeeds still ages. The notifier's hourly template_sweep is left
+        out.
+        */}}
+        - alert: DistantSignalAggregatorCycleFailing
+          expr: |
+            time() - max by (namespace, cycle) (distant_signal_aggregator_last_success_timestamp_seconds{namespace="{{ $ns }}"}) > {{ .maxAgeSeconds }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no successful aggregator cycle for {{ "{{ $value | humanizeDuration }}" }}"
+            description: "Line statuses and stats are going stale. Check the aggregator's log, Postgres and DistantSignalApiDatabaseDown."
+            runbook_url: {{ printf "%s#distantsignalaggregatorcyclefailing" $runbook | quote }}
+        - alert: DistantSignalNotifierCycleFailing
+          expr: |
+            time() - max by (namespace, cycle) (distant_signal_notifier_last_success_timestamp_seconds{namespace="{{ $ns }}", cycle!="template_sweep"}) > {{ .maxAgeSeconds }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no successful notifier {{ "{{ $labels.cycle }}" }} cycle for {{ "{{ $value | humanizeDuration }}" }}"
+            description: "Push notifications for this loop are not being decided or sent. Check the notifier's log and Postgres."
+            runbook_url: {{ printf "%s#distantsignalnotifiercyclefailing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+    {{- end }}
     {{- if $movementOn }}
     - name: distant-signal.movement-events
       rules:
@@ -74,7 +227,7 @@ spec:
         pending list, where MAXLEN trims them just the same. Until a relay
         exporting stream_pending is running, pending counts as 0.
         */}}
-        {{- $ratio := printf `(
+        {{- $ratio := printf `
   (
     max by (namespace, group) (distant_signal_movement_relay_stream_lag{namespace="%s"})
     + on (namespace, group)
@@ -88,11 +241,13 @@ spec:
     max by (namespace) (distant_signal_movement_relay_stream_maxlen{namespace="%s"})
     or on (namespace)
     label_replace(vector(%d), "namespace", "%s", "", "")
-  )
-)` $ns $ns $ns $ns (int64 $.Values.movementRelay.streamMaxLen) $ns }}
+  )` $ns $ns $ns $ns (int64 $.Values.movementRelay.streamMaxLen) $ns }}
+        - record: distant_signal:movement_events_behind:ratio
+          expr: |
+            {{- $ratio | nindent 12 }}
         - alert: DistantSignalMovementLagHigh
           expr: |
-            {{- printf "%s > %v" $ratio .warningRatio | nindent 12 }}
+            distant_signal:movement_events_behind:ratio{namespace="{{ $ns }}"} > {{ .warningRatio }}
           for: {{ .for }}
           labels:
             severity: warning
@@ -100,18 +255,12 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "movement-events group {{ "{{ $labels.group }}" }} is {{ "{{ $value | humanizePercentage }}" }} of the stream cap behind"
-            description: >-
-              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
-              has unread or un-ACKed movement-events entries amounting to
-              {{ "{{ $value | humanizePercentage }}" }} of the stream's MAXLEN cap
-              (warning above {{ .warningRatio }}). If lag reaches the cap, entries
-              are trimmed before this group reads them. Check the consumer's
-              logs and its downstream (api) health.
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-04-movement-relay-design.md" $runbookBase | quote }}
+            summary: "{{ "{{ $labels.group }}" }} is {{ "{{ $value | humanizePercentage }}" }} of the movement-events cap behind"
+            description: "Unread plus un-ACKed entries are over {{ .warningRatio }} of MAXLEN; at the cap they are trimmed unread. Check the consumer and api."
+            runbook_url: {{ printf "%s#distantsignalmovementlaghigh" $runbook | quote }}
         - alert: DistantSignalMovementLagCritical
           expr: |
-            {{- printf "%s > %v" $ratio .criticalRatio | nindent 12 }}
+            distant_signal:movement_events_behind:ratio{namespace="{{ $ns }}"} > {{ .criticalRatio }}
           for: {{ .for }}
           labels:
             severity: critical
@@ -119,15 +268,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "movement-events group {{ "{{ $labels.group }}" }} is {{ "{{ $value | humanizePercentage }}" }} of the stream cap behind"
-            description: >-
-              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
-              has unread or un-ACKed movement-events entries amounting to
-              {{ "{{ $value | humanizePercentage }}" }} of the stream's MAXLEN cap
-              (critical above {{ .criticalRatio }}). Data loss (a stream gap) is
-              close: fix the consumer, or raise movementRelay.streamMaxLen together
-              with Redis maxmemory.
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-04-movement-relay-design.md" $runbookBase | quote }}
+            summary: "{{ "{{ $labels.group }}" }} is {{ "{{ $value | humanizePercentage }}" }} of the movement-events cap behind"
+            description: "Over {{ .criticalRatio }} of MAXLEN: a stream gap (data loss) is close. Fix the consumer, or raise streamMaxLen and Redis maxmemory."
+            runbook_url: {{ printf "%s#distantsignalmovementlagcritical" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.movementLagGrowing }}
@@ -137,15 +280,17 @@ spec:
         so this requires both a rising trend (deriv > 0) and a real net
         increase over the window, not merely a non-zero value.
         */}}
+        - record: distant_signal:movement_events_lag:deriv
+          expr: |
+            max by (namespace, group) (deriv(distant_signal_movement_relay_stream_lag{namespace="{{ $ns }}"}[{{ .window }}]))
+        - record: distant_signal:movement_events_lag:delta
+          expr: |
+            max by (namespace, group) (delta(distant_signal_movement_relay_stream_lag{namespace="{{ $ns }}"}[{{ .window }}]))
         - alert: DistantSignalMovementLagGrowing
           expr: |
-            (
-              max by (namespace, group) (deriv(distant_signal_movement_relay_stream_lag{namespace="{{ $ns }}"}[{{ .window }}])) > 0
-            )
+            distant_signal:movement_events_lag:deriv{namespace="{{ $ns }}"} > 0
             and on (namespace, group)
-            (
-              max by (namespace, group) (delta(distant_signal_movement_relay_stream_lag{namespace="{{ $ns }}"}[{{ .window }}])) > {{ .minIncrease }}
-            )
+            distant_signal:movement_events_lag:delta{namespace="{{ $ns }}"} > {{ .minIncrease }}
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -153,25 +298,23 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "movement-events lag for group {{ "{{ $labels.group }}" }} keeps growing"
-            description: >-
-              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
-              has fallen further behind for the last {{ .window }} (more than
-              {{ .minIncrease }} entries net): it is consuming slower than
-              movement-relay publishes. Left alone, lag reaches the stream cap
-              and entries are trimmed unread.
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-04-movement-relay-design.md" $runbookBase | quote }}
+            summary: "{{ "{{ $labels.group }}" }} movement-events lag keeps growing"
+            description: "Lag rose over {{ .minIncrease }} entries net in {{ .window }}: the group consumes slower than movement-relay publishes."
+            runbook_url: {{ printf "%s#distantsignalmovementlaggrowing" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.streamGap }}
         {{- if .enabled }}
         {{- $w := .window }}
-        - alert: DistantSignalStreamGap
+        - record: distant_signal:movement_stream_gaps:increase
           expr: |
             {{- range $i, $c := list "trust_consumer" "full_coverage_consumer" "trust_backlog_consumer" }}
             {{- $m := printf `distant_signal_%s_stream_gap_detected_total{namespace="%s"}` $c $ns }}
-            {{ if $i }}or {{ end }}label_replace(sum by (namespace) (increase({{ $m }}[{{ $w }}])) > 0, "consumer", "{{ $c }}", "", "")
+            {{ if $i }}or {{ end }}label_replace(sum by (namespace) (increase({{ $m }}[{{ $w }}])), "consumer", "{{ $c }}", "", "")
             {{- end }}
+        - alert: DistantSignalStreamGap
+          expr: |
+            distant_signal:movement_stream_gaps:increase{namespace="{{ $ns }}"} > 0
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -179,14 +322,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "{{ "{{ $labels.consumer }}" }} detected a movement-events stream gap"
-            description: >-
-              {{ "{{ $labels.consumer }}" }} in {{ "{{ $labels.namespace }}" }} found that
-              movement-events entries were trimmed before it read them (within
-              the last {{ .window }}). Those TRUST events are lost to it; treat
-              that rail day's derived data as not clean. Usually preceded by
-              DistantSignalMovementLagCritical.
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-04-movement-relay-design.md" $runbookBase | quote }}
+            summary: "{{ "{{ $labels.consumer }}" }} lost movement-events entries (stream gap)"
+            description: "Entries were trimmed before it read them in the last {{ .window }}. Treat that rail day's derived data as partial."
+            runbook_url: {{ printf "%s#distantsignalstreamgap" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.deadLetter }}
@@ -202,13 +340,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "{{ "{{ $labels.group }}" }} dead-lettered movement-events records ({{ "{{ $labels.reason }}" }})"
-            description: >-
-              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
-              moved records to movement-events-deadletter in the last {{ .window }}
-              (reason {{ "{{ $labels.reason }}" }}). This should normally stay at 0:
-              inspect the records and re-inject or delete them.
-            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+            summary: "{{ "{{ $labels.group }}" }} dead-lettered records ({{ "{{ $labels.reason }}" }})"
+            description: "Records went to movement-events-deadletter in the last {{ .window }}. Inspect them, then re-inject or delete them."
+            runbook_url: {{ printf "%s#distantsignaldeadlettergrowing" $runbook | quote }}
         {{- /*
         The length comes from movement-relay's own XLEN, read every lag
         tick. The consumers' movement_feed_deadletter_length is only set
@@ -230,13 +364,8 @@ spec:
             {{- end }}
           annotations:
             summary: "{{ "{{ $labels.stream }}" }} is {{ "{{ $value | humanizePercentage }}" }} full"
-            description: >-
-              The dead-letter stream {{ "{{ $labels.stream }}" }} in
-              {{ "{{ $labels.namespace }}" }} holds {{ "{{ $value | humanizePercentage }}" }}
-              of its 10,000-record cap (warning above {{ .nearFullRatio }}). It is
-              never trimmed; once full, new poison records stay pending in their
-              group instead. Drain it.
-            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+            description: "Over {{ .nearFullRatio }} of its 10,000-record cap. Once full, new poison records stay pending in their group. Drain it."
+            runbook_url: {{ printf "%s#distantsignaldeadletternearfull" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.deadLetterFull }}
@@ -252,13 +381,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "movement-events-deadletter is full; {{ "{{ $labels.group }}" }} records are stuck pending"
-            description: >-
-              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
-              tried to dead-letter records in the last {{ .window }} but the
-              dead-letter stream is at its 10,000-record cap. Those records stay
-              pending and are retried forever until the stream is drained.
-            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+            summary: "dead-letter stream full; {{ "{{ $labels.group }}" }} records stuck pending"
+            description: "A dead-letter write hit the 10,000-record cap in the last {{ .window }}. Those records retry forever until it is drained."
+            runbook_url: {{ printf "%s#distantsignaldeadletterfull" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.relayPublishFailing }}
@@ -276,14 +401,19 @@ spec:
         series at all, and a bare `published == 0` would then be empty.
         */}}
         {{- $failed := printf `sum by (namespace) (increase(distant_signal_movement_relay_errors_total{namespace="%s", operation=~"publish_event|redis_oom"}[%s]))` $ns .window }}
+        - record: distant_signal:movement_relay_publish_failing:bool
+          expr: |
+            ({{ $failed }} > bool 0)
+            * on (namespace)
+            (
+              (
+                sum by (namespace) (increase(distant_signal_movement_relay_events_published_total{namespace="{{ $ns }}"}[{{ .window }}]))
+                or on (namespace) 0 * {{ $failed }}
+              ) == bool 0
+            )
         - alert: DistantSignalMovementRelayPublishFailing
           expr: |
-            {{ $failed }} > 0
-            and on (namespace)
-            (
-              sum by (namespace) (increase(distant_signal_movement_relay_events_published_total{namespace="{{ $ns }}"}[{{ .window }}]))
-              or on (namespace) 0 * {{ $failed }}
-            ) == 0
+            distant_signal:movement_relay_publish_failing:bool{namespace="{{ $ns }}"} == 1
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -292,14 +422,8 @@ spec:
             {{- end }}
           annotations:
             summary: "movement-relay cannot publish to movement-events"
-            description: >-
-              movement-relay in {{ "{{ $labels.namespace }}" }} has failed every
-              XADD for the last {{ .window }} and published nothing. TRUST
-              ingestion is stopped; Kafka holds the backlog only as long as the
-              topic retains it. Check the relay's logs (OOM: Redis is at
-              maxmemory; MISCONF or an AOF error: see
-              DistantSignalRedisPersistenceFailing) and Redis itself.
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md" $runbookBase | quote }}
+            description: "Every XADD failed for {{ .window }}: TRUST ingestion is stopped. Check Redis (OOM, AOF, auth) and the relay's logs."
+            runbook_url: {{ printf "%s#distantsignalmovementrelaypublishfailing" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.redisPersistence }}
@@ -311,13 +435,23 @@ spec:
         the disk fills. aof_enabled == 0 is only an error for the bundled
         Redis with persistence on (an external one may run without AOF).
         */}}
+        {{- /*
+        1 while every check passes, 0 once any fails: each check is
+        aggregated on its own (min for the *_ok gauges, max for
+        aof_enabled), labelled, and the lowest wins.
+        */}}
+        - record: distant_signal:redis_aof_health:min
+          expr: |
+            min by (namespace) (
+              label_replace(min by (namespace) (distant_signal_redis_aof_last_write_ok{namespace="{{ $ns }}"}), "check", "write", "", "")
+              or label_replace(min by (namespace) (distant_signal_redis_aof_last_bgrewrite_ok{namespace="{{ $ns }}"}), "check", "rewrite", "", "")
+              {{- if and $.Values.redis.enabled $.Values.redis.persistence.enabled }}
+              or label_replace(max by (namespace) (distant_signal_redis_aof_enabled{namespace="{{ $ns }}"}), "check", "enabled", "", "")
+              {{- end }}
+            )
         - alert: DistantSignalRedisPersistenceFailing
           expr: |
-            min by (namespace) (distant_signal_redis_aof_last_write_ok{namespace="{{ $ns }}"}) == 0
-            or min by (namespace) (distant_signal_redis_aof_last_bgrewrite_ok{namespace="{{ $ns }}"}) == 0
-            {{- if and $.Values.redis.enabled $.Values.redis.persistence.enabled }}
-            or max by (namespace) (distant_signal_redis_aof_enabled{namespace="{{ $ns }}"}) == 0
-            {{- end }}
+            distant_signal:redis_aof_health:min{namespace="{{ $ns }}"} == 0
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -326,14 +460,8 @@ spec:
             {{- end }}
           annotations:
             summary: "Redis AOF persistence is failing"
-            description: >-
-              Redis in {{ "{{ $labels.namespace }}" }} reports a failed AOF write
-              or rewrite, or AOF switched off. A failed write makes it refuse
-              every write (movement-relay stops publishing); a failed rewrite
-              lets the AOF grow until the disk fills; with AOF off a restart
-              loses movement-events and every consumer group. Check `INFO
-              persistence`, the Redis logs and the disk behind /data.
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md" $runbookBase | quote }}
+            description: "A failed AOF write makes Redis refuse writes, a failed rewrite fills the disk, and AOF off loses the streams on restart."
+            runbook_url: {{ printf "%s#distantsignalredispersistencefailing" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.groupRecreated }}
@@ -346,10 +474,13 @@ spec:
         it with every group (D2) -- after which a consumer never sees
         NOGROUP. The second is labelled group="(all)".
         */}}
+        - record: distant_signal:movement_group_recreations:increase
+          expr: |
+            sum by (namespace, group) (increase({{ $m }}[{{ .window }}]))
+            or label_replace(sum by (namespace) (increase({{ $s }}[{{ .window }}])), "group", "(all)", "", "")
         - alert: DistantSignalMovementGroupRecreated
           expr: |
-            sum by (namespace, group) (increase({{ $m }}[{{ .window }}])) > 0
-            or label_replace(sum by (namespace) (increase({{ $s }}[{{ .window }}])) > 0, "group", "(all)", "", "")
+            distant_signal:movement_group_recreations:increase{namespace="{{ $ns }}"} > 0
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -357,15 +488,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "movement-events consumer group {{ "{{ $labels.group }}" }} was recreated"
-            description: >-
-              {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }} found its
-              consumer group missing (NOGROUP) within the last {{ .window }} and
-              recreated it. Redis lost its data (AOF lost or unreadable, volume
-              replaced) or the group was deleted. Its pending entries, and after
-              an empty restart every entry it had not read, are gone; the stream
-              gap check cannot see this. Treat that rail day as partial.
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md" $runbookBase | quote }}
+            summary: "movement-events group {{ "{{ $labels.group }}" }} was recreated"
+            description: "Its group went missing (NOGROUP) in the last {{ .window }}: Redis lost data or it was deleted. Treat that rail day as partial."
+            runbook_url: {{ printf "%s#distantsignalmovementgrouprecreated" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.deadLetterExpiring }}
@@ -385,14 +510,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "the oldest movement-events dead letter is {{ "{{ $value | humanizeDuration }}" }} old"
-            description: >-
-              movement-events-deadletter in {{ "{{ $labels.namespace }}" }} holds a
-              record {{ "{{ $value | humanizeDuration }}" }} old. movement-relay
-              deletes dead letters at {{ $maxAge }}s (the TRUST 1-day retention
-              safeguard), so it goes in under {{ .warnBeforeTrimSecs }}s. Re-inject
-              or deliberately discard it before then.
-            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+            summary: "oldest movement-events dead letter is {{ "{{ $value | humanizeDuration }}" }} old"
+            description: "movement-relay deletes dead letters at {{ $maxAge }}s. Re-inject or discard it within {{ .warnBeforeTrimSecs }}s."
+            runbook_url: {{ printf "%s#distantsignaldeadletterexpiring" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.longPending }}
@@ -415,16 +535,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "{{ "{{ $labels.group }}" }} keeps retrying movement-events entries for over an hour"
-            description: >-
-              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
-              re-read pending entries already delivered more than 240 times
-              ({{ "{{ $value | humanize }}" }} times in the last {{ .window }}). They are
-              retried forever and never dead-lettered: a long downstream outage,
-              or a failure the consumer cannot classify as a data rejection.
-              Find the cause in that consumer's warn log before the stream cap
-              trims the entries.
-            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md#long-pending-entries" $runbookBase | quote }}
+            summary: "{{ "{{ $labels.group }}" }} keeps retrying movement-events entries"
+            description: "Entries delivered over 240 times were re-read {{ "{{ $value | humanize }}" }} times in {{ .window }}; never dead-lettered. See its warn log."
+            runbook_url: {{ printf "%s#distantsignalmovementfeedlongpending" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.parseEnvelope }}
@@ -435,12 +548,15 @@ spec:
         msg_type}; the log is warn-once per msg_type, so the counter is the
         only rate signal. Every known msg_type is registered at 0 on start.
         */}}
-        - alert: DistantSignalTrustEnvelopeParseDrops
+        - record: distant_signal:trust_envelope_parse_drops:increase
           expr: |
             {{- $consumers := list (list "trust_consumer" "trust-consumer") (list "full_coverage_consumer" "full-coverage-consumer") (list "trust_backlog_consumer" "trust-backlog-consumer") }}
             {{- range $i, $c := $consumers }}
-            {{ if $i }}or {{ end }}label_replace(sum by (namespace, msg_type) (increase(distant_signal_{{ index $c 0 }}_errors_total{namespace="{{ $ns }}", operation="parse_envelope"}[{{ $.Values.metrics.prometheusRule.parseEnvelope.window }}])) > {{ $.Values.metrics.prometheusRule.parseEnvelope.threshold }}, "consumer", "{{ index $c 1 }}", "", "")
+            {{ if $i }}or {{ end }}label_replace(sum by (namespace, msg_type) (increase(distant_signal_{{ index $c 0 }}_errors_total{namespace="{{ $ns }}", operation="parse_envelope"}[{{ $.Values.metrics.prometheusRule.parseEnvelope.window }}])), "consumer", "{{ index $c 1 }}", "", "")
             {{- end }}
+        - alert: DistantSignalTrustEnvelopeParseDrops
+          expr: |
+            distant_signal:trust_envelope_parse_drops:increase{namespace="{{ $ns }}"} > {{ .threshold }}
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -448,14 +564,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "{{ "{{ $labels.consumer }}" }} dropped TRUST {{ "{{ $labels.msg_type }}" }} envelopes it could not parse"
-            description: >-
-              {{ "{{ $labels.consumer }}" }} in {{ "{{ $labels.namespace }}" }} dropped
-              {{ "{{ $value | humanize }}" }} TRUST envelopes of msg_type
-              {{ "{{ $labels.msg_type }}" }} in the last {{ .window }} because their body
-              did not match the known shape. A steady rate means the feed's schema
-              changed, which otherwise looks like trains no longer moving.
-            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md#envelope-parse-drops" $runbookBase | quote }}
+            summary: "{{ "{{ $labels.consumer }}" }} dropped bad TRUST {{ "{{ $labels.msg_type }}" }} envelopes"
+            description: "{{ "{{ $value | humanize }}" }} in {{ .window }} did not match the known shape. A steady rate means the feed's schema changed."
+            runbook_url: {{ printf "%s#distantsignaltrustenvelopeparsedrops" $runbook | quote }}
         {{- end }}
         {{- end }}
     {{- end }}
@@ -463,14 +574,18 @@ spec:
     {{- if .enabled }}
     - name: distant-signal.enricher
       rules:
+        - record: distant_signal:enricher_llm_call_failures:ratio
+          expr: |
+            sum by (namespace, call) (rate(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome!="success"}[{{ .window }}]))
+            / sum by (namespace, call) (rate(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}"}[{{ .window }}]))
+        - record: distant_signal:enricher_llm_call_failures:increase
+          expr: |
+            sum by (namespace, call) (increase(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome!="success"}[{{ .window }}]))
         - alert: DistantSignalEnricherErrors
           expr: |
-            (
-              sum by (namespace, call) (rate(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome!="success"}[{{ .window }}]))
-              / sum by (namespace, call) (rate(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}"}[{{ .window }}]))
-            ) > {{ .errorRatio }}
+            distant_signal:enricher_llm_call_failures:ratio{namespace="{{ $ns }}"} > {{ .errorRatio }}
             and on (namespace, call)
-            sum by (namespace, call) (increase(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", outcome!="success"}[{{ .window }}])) >= {{ .minErrors }}
+            distant_signal:enricher_llm_call_failures:increase{namespace="{{ $ns }}"} >= {{ .minErrors }}
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -479,12 +594,8 @@ spec:
             {{- end }}
           annotations:
             summary: "enricher LLM {{ "{{ $labels.call }}" }} calls failing ({{ "{{ $value | humanizePercentage }}" }})"
-            description: >-
-              {{ "{{ $value | humanizePercentage }}" }} of enricher's
-              {{ "{{ $labels.call }}" }} LLM calls in {{ "{{ $labels.namespace }}" }}
-              failed over the last {{ .window }} (threshold {{ .errorRatio }}, at
-              least {{ .minErrors }} errors). Incidents are not being enriched;
-              check the LLM endpoint (enricher.llm.baseUrl) and enricher's logs.
+            description: "Over {{ .errorRatio }} of calls failed in {{ .window }} (at least {{ .minErrors }}). Check enricher.llm.baseUrl and enricher's logs."
+            runbook_url: {{ printf "%s#distantsignalenrichererrors" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $fcwOn }}
@@ -509,15 +620,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "full-coverage windows marked feed_stale for {{ .feedStaleFor }}"
-            description: >-
-              full-coverage-consumer in {{ "{{ $labels.namespace }}" }} has marked
-              its windows feed_stale for {{ .feedStaleFor }}: too few TRUST
-              Activations in the last hour, or no movement event recently. No
-              window influences severity and no train is presumed cancelled
-              meanwhile. Expected during a known TRUST outage; otherwise check
-              movement-relay and the consumer's lag.
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md" $runbookBase | quote }}
+            summary: "full-coverage windows feed_stale for {{ .feedStaleFor }}"
+            description: "Too few TRUST Activations or no recent movement event; no window affects severity. Expected during a TRUST outage."
+            runbook_url: {{ printf "%s#distantsignalfullcoveragewindowfeedstale" $runbook | quote }}
         - alert: DistantSignalFullCoverageWindowPostErrors
           expr: |
             sum by (namespace) (increase(distant_signal_full_coverage_consumer_errors_total{namespace="{{ $ns }}", operation="post_window_stats"}[{{ .postErrorsWindow }}])) > 0
@@ -529,13 +634,8 @@ spec:
             {{- end }}
           annotations:
             summary: "full-coverage window stats POSTs failing"
-            description: >-
-              full-coverage-consumer in {{ "{{ $labels.namespace }}" }} failed to
-              POST its windows to /private/full-coverage-window-stats within the
-              last {{ .postErrorsWindow }}. An api without that route (not yet
-              deployed, or its migrations not run) answers 404; check api's logs
-              and the consumer's warn log.
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md" $runbookBase | quote }}
+            description: "POSTs to /private/full-coverage-window-stats failed in the last {{ .postErrorsWindow }}. A 404 means api lacks the route."
+            runbook_url: {{ printf "%s#distantsignalfullcoveragewindowposterrors" $runbook | quote }}
         - alert: DistantSignalFullCoverageWindowStatsStalled
           expr: |
             sum by (namespace) (rate(distant_signal_full_coverage_consumer_window_rows_posted_total{namespace="{{ $ns }}"}[{{ .stalledWindow }}])) == 0
@@ -547,14 +647,8 @@ spec:
             {{- end }}
           annotations:
             summary: "no full-coverage window rows posted"
-            description: >-
-              full-coverage-consumer in {{ "{{ $labels.namespace }}" }} is running
-              with windowed stats on but has posted no window rows over
-              {{ .stalledWindow }} for {{ .stalledFor }}. It posts every stats
-              write (about every minute) once the startup replay is done;
-              check for a stuck replay, a population that never loaded, or
-              failing POSTs (DistantSignalFullCoverageWindowPostErrors).
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md" $runbookBase | quote }}
+            description: "None over {{ .stalledWindow }} for {{ .stalledFor }}: a stuck replay, a population that never loaded, or failing POSTs."
+            runbook_url: {{ printf "%s#distantsignalfullcoveragewindowstatsstalled" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- with $rule.componentMemory }}
@@ -566,13 +660,14 @@ spec:
         per container, for every pod this release deploys. Containers
         without a memory limit have no limit series and never match.
         */}}
+        - record: distant_signal:container_memory_working_set:limit_ratio
+          expr: |
+            max by (namespace, pod, container) (container_memory_working_set_bytes{namespace="{{ $ns }}", pod=~"{{ $fullname }}-.*", container!="", container!="POD"})
+            / on (namespace, pod, container)
+            max by (namespace, pod, container) (kube_pod_container_resource_limits{namespace="{{ $ns }}", pod=~"{{ $fullname }}-.*", resource="memory"})
         - alert: DistantSignalComponentMemoryHigh
           expr: |
-            (
-              max by (namespace, pod, container) (container_memory_working_set_bytes{namespace="{{ $ns }}", pod=~"{{ $fullname }}-.*", container!="", container!="POD"})
-              / on (namespace, pod, container)
-              max by (namespace, pod, container) (kube_pod_container_resource_limits{namespace="{{ $ns }}", pod=~"{{ $fullname }}-.*", resource="memory"})
-            ) > {{ .ratio }}
+            distant_signal:container_memory_working_set:limit_ratio{namespace="{{ $ns }}"} > {{ .ratio }}
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -580,12 +675,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "{{ "{{ $labels.pod }}" }}/{{ "{{ $labels.container }}" }} at {{ "{{ $value | humanizePercentage }}" }} of its memory limit"
-            description: >-
-              Container {{ "{{ $labels.container }}" }} in pod {{ "{{ $labels.pod }}" }}
-              ({{ "{{ $labels.namespace }}" }}) has used more than {{ .ratio }} of
-              its memory limit for {{ .for }}. It is at risk of being OOMKilled;
-              raise its resources.limits.memory or find the growth.
+            summary: "{{ "{{ $labels.pod }}" }}/{{ "{{ $labels.container }}" }} at {{ "{{ $value | humanizePercentage }}" }} of memory limit"
+            description: "Over {{ .ratio }} of its memory limit for {{ .for }}: at risk of an OOMKill. Raise resources.limits.memory or find the growth."
+            runbook_url: {{ printf "%s#distantsignalcomponentmemoryhigh" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- with $rule.notifierPushDropped }}
@@ -608,17 +700,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "notifier dropped {{ "{{ $value }}" }} pushes ({{ "{{ $labels.reason }}" }})"
-            description: >-
-              The notifier in {{ "{{ $labels.namespace }}" }} dropped
-              {{ "{{ $value }}" }} decided notifications with reason
-              {{ "{{ $labels.reason }}" }} over the last {{ .window }}. Delivery
-              is at-most-once, so these users may never get them.
-              queue_full/user_queue_full: raise notifier push queue capacity or
-              workers. send_failed: push endpoints are failing (check
-              distant_signal_notifier_push_send_total by outcome). error: the
-              notifier could not load subscriptions (check the database).
-            runbook_url: {{ printf "%s/docs/superpowers/specs/2026-09-02-line-status-notifications-design.md#delivery-guarantee-at-most-once" $runbookBase | quote }}
+            summary: "notifier dropped {{ "{{ $value | humanize }}" }} pushes ({{ "{{ $labels.reason }}" }})"
+            description: "Over the last {{ .window }}. Delivery is at-most-once, so these users may never get them. The runbook covers each reason."
+            runbook_url: {{ printf "%s#distantsignalnotifierpushdropped" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $signupSpikeOn }}
@@ -643,16 +727,8 @@ spec:
             {{- end }}
           annotations:
             summary: "{{ "{{ $value | humanize }}" }} new user accounts in {{ .window }}"
-            description: >-
-              api in {{ "{{ $labels.namespace }}" }} created about
-              {{ "{{ $value | humanize }}" }} user accounts over the last
-              {{ .window }} (threshold {{ .threshold }}). Sign-up is open to
-              any account the IdP admits, so check whether this is real
-              growth or scripted sign-ups: look at the newest rows in
-              `users` and the IdP's enrolment log. To stop it, restrict
-              the IdP's enrolment (e.g. bind the application to a group),
-              then revoke the unwanted sessions.
-            runbook_url: {{ printf "%s/docs/session-revocation.md" $runbookBase | quote }}
+            description: "Over {{ .threshold }}. Sign-up is open: check `users` and the IdP's enrolment log for scripted sign-ups."
+            runbook_url: {{ printf "%s#distantsignalusersignupspike" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $archiveAlertOn }}
@@ -675,15 +751,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "cold archive uploads failing ({{ "{{ $value }}" }} in {{ .window }})"
-            description: >-
-              The aggregator in {{ "{{ $labels.namespace }}" }} failed
-              {{ "{{ $value }}" }} cold-archive batch uploads or verifications over
-              the last {{ .window }}. With failurePolicy retain the trains
-              table is growing past its retention window; with delete, rows
-              are being pruned without an archive. Check the object store
-              and the aggregator's "archiving a trains batch failed" logs.
-            runbook_url: {{ printf "%s/docs/cold-archive.md" $runbookBase | quote }}
+            summary: "cold archive uploads failing ({{ "{{ $value | humanize }}" }} in {{ .window }})"
+            description: "retain: trains grows past retention; delete: rows are pruned unarchived. Check the object store and the aggregator's logs."
+            runbook_url: {{ printf "%s#distantsignalarchiveuploadfailures" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $archiveExpiryOn }}
@@ -706,16 +776,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "cold archive expiry failing ({{ "{{ $value }}" }} errors in {{ .window }})"
-            description: >-
-              The aggregator in {{ "{{ $labels.namespace }}" }} hit
-              {{ "{{ $value }}" }} cold-archive expiry errors over the last
-              {{ .window }} (a failed LIST or DELETE, or a key refused by the
-              pre-delete check; see the `stage` label on
-              distant_signal_aggregator_archive_expiry_errors_total). Expired
-              objects stay until a run succeeds. Check the object store and
-              the aggregator's "archive expiry" logs.
-            runbook_url: {{ printf "%s/docs/cold-archive.md#object-expiry" $runbookBase | quote }}
+            summary: "cold archive expiry failing ({{ "{{ $value | humanize }}" }} errors in {{ .window }})"
+            description: "A failed LIST or DELETE, or a key refused before delete. Expired objects stay until a run succeeds."
+            runbook_url: {{ printf "%s#distantsignalarchiveexpiryerrors" $runbook | quote }}
         - alert: DistantSignalArchiveExpiryUnmatchedKeys
           expr: |
             sum by (namespace, table) (increase(distant_signal_aggregator_archive_expiry_skipped_unmatched_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
@@ -727,13 +790,8 @@ spec:
             {{- end }}
           annotations:
             summary: "unexpected keys under the cold archive's {{ "{{ $labels.table }}" }} prefix"
-            description: >-
-              Archive expiry in {{ "{{ $labels.namespace }}" }} listed keys
-              under the {{ "{{ $labels.table }}" }} prefix that do not match
-              the archive layout. They are never deleted. Something other
-              than the aggregator writes there, or the prefix is shared: the
-              aggregator logs the first keys each run.
-            runbook_url: {{ printf "%s/docs/cold-archive.md#object-expiry" $runbookBase | quote }}
+            description: "Keys outside the archive layout are never deleted. Something else writes there; the aggregator logs the first keys."
+            runbook_url: {{ printf "%s#distantsignalarchiveexpiryunmatchedkeys" $runbook | quote }}
         - alert: DistantSignalArchiveExpiryCapReached
           expr: |
             sum by (namespace) (increase(distant_signal_aggregator_archive_expiry_cap_reached_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
@@ -745,14 +803,8 @@ spec:
             {{- end }}
           annotations:
             summary: "cold archive expiry hit its per-run delete cap"
-            description: >-
-              An archive expiry run in {{ "{{ $labels.namespace }}" }} found
-              more expired objects than archive.expiry.maxDeletesPerRun and
-              stopped at the cap (in dry-run: would have). Expected once
-              after a long outage or a retention cut; otherwise check
-              distant_signal_aggregator_archive_expiry_candidates before
-              raising the cap.
-            runbook_url: {{ printf "%s/docs/cold-archive.md#object-expiry" $runbookBase | quote }}
+            description: "More expired objects than archive.expiry.maxDeletesPerRun. Expected once after a long outage or a retention cut."
+            runbook_url: {{ printf "%s#distantsignalarchiveexpirycapreached" $runbook | quote }}
         {{- /*
         The oldest archived service_date is older than the retention plus a
         grace period: expiry is not running, is failing, or is still in
@@ -770,14 +822,8 @@ spec:
             {{- end }}
           annotations:
             summary: "cold archive holds {{ "{{ $labels.table }}" }} objects past retention"
-            description: >-
-              The oldest archived {{ "{{ $labels.table }}" }} service_date in
-              {{ "{{ $labels.namespace }}" }} is more than
-              {{ $retentionDays }} + {{ .overdueGraceDays }} days old. Expiry
-              is not running, is failing, or is still in dry-run
-              (distant_signal_aggregator_archive_expiry_dry_run is 1): switch
-              archive.expiry.dryRun off.
-            runbook_url: {{ printf "%s/docs/cold-archive.md#object-expiry" $runbookBase | quote }}
+            description: "The oldest is over {{ $retentionDays }}+{{ .overdueGraceDays }} days old: expiry is off, failing, or still in dry-run."
+            runbook_url: {{ printf "%s#distantsignalarchiveexpiryoverdue" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $pipelineOn }}
@@ -798,13 +844,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "schedule-reference has not seeded for {{ .notSeededFor }}"
-            description: >-
-              schedule-reference in {{ "{{ $labels.namespace }}" }} has been
-              waiting for {{ .notSeededFor }} to read its last completed publish
-              from api (GET /private/schedule-reference-publishes), so it
-              publishes nothing. Check api and the internal OAuth token
-              endpoint; the container's warn log names the error.
+            summary: "schedule-reference not seeded for {{ .notSeededFor }}"
+            description: "It cannot read its last publish from api, so it publishes nothing. Check api and the internal OAuth token endpoint."
+            runbook_url: {{ printf "%s#distantsignalschedulereferencenotseeded" $runbook | quote }}
         {{- /*
         PL-5: schedule-ingest quarantined an uploaded delivery zip that
         declares more than scheduleFeed's extraction caps, or whose entries
@@ -821,13 +863,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "schedule-ingest rejected a delivery zip"
-            description: >-
-              schedule-ingest in {{ "{{ $labels.namespace }}" }} refused to
-              extract the uploaded CIF delivery zip (over MAX_EXTRACTED_BYTES
-              or MAX_ZIP_ENTRIES, or an entry larger than it declares). The
-              timetable is not refreshed until a new upload replaces it. The
-              ingest container's error log names the reason.
+            summary: "schedule-ingest rejected a CIF delivery zip"
+            description: "Over the extraction caps, or an entry larger than declared. The timetable is not refreshed until a new upload."
+            runbook_url: {{ printf "%s#distantsignalschedulefeedziprejected" $runbook | quote }}
         {{- /*
         N-2: api refused schedule-ingest's delivery record (400/413/422).
         The delivery is quarantined until a new upload, not retried.
@@ -843,12 +881,8 @@ spec:
             {{- end }}
           annotations:
             summary: "api rejected a schedule feed delivery record"
-            description: >-
-              schedule-ingest in {{ "{{ $labels.namespace }}" }} extracted a
-              CIF delivery but api answered 400/413/422 to its ingest record,
-              so schedule-reference never sees it. The delivery is not retried
-              until a new upload replaces it. The ingest container's error log
-              and api's log name the reason.
+            description: "api answered 400/413/422 to schedule-ingest; not retried until a new upload. Both logs name the reason."
+            runbook_url: {{ printf "%s#distantsignalschedulefeedingestrejected" $runbook | quote }}
         {{- /*
         CORPUS (scheduleFeed.corpus): schedule-ingest refused a CORPUS
         extract (not gzip, not the TIPLOCDATA JSON, too few rows, a row
@@ -867,12 +901,8 @@ spec:
             {{- end }}
           annotations:
             summary: "schedule-ingest rejected a CORPUS extract"
-            description: >-
-              schedule-ingest in {{ "{{ $labels.namespace }}" }} refused to
-              load an uploaded CORPUS extract and moved it to
-              /data/schedule-feed/corpus/rejected/. corpus_locations keeps
-              the previous delivery. The ingest container's error log names
-              the reason.
+            description: "Moved to corpus/rejected/; the previous extract stays in use. The ingest container's error log names the reason."
+            runbook_url: {{ printf "%s#distantsignalcorpusrejected" $runbook | quote }}
         {{- /*
         CORPUS (scheduleFeed.corpus): the newest loaded CORPUS delivery is
         older than corpusStaleAfterDays. api sets the gauge from
@@ -895,14 +925,8 @@ spec:
             {{- end }}
           annotations:
             summary: "no CORPUS delivery loaded for {{ .corpusStaleAfterDays }} days"
-            description: >-
-              The newest Network Rail CORPUS extract loaded in
-              {{ "{{ $labels.namespace }}" }} was delivered over
-              {{ .corpusStaleAfterDays }} days ago (CORPUS is published
-              monthly). Either RDM stopped pushing it (check the SFTP
-              corpus folder) or schedule-ingest cannot load it (check
-              DistantSignalCorpusRejected and the ingest container's
-              error log). The previous extract stays in use.
+            description: "CORPUS is monthly: RDM stopped pushing it, or schedule-ingest cannot load it. The previous extract stays in use."
+            runbook_url: {{ printf "%s#distantsignalcorpusstale" $runbook | quote }}
         {{- end }}
         {{- /*
         SCHED-2: the delivery timestamp of the last delivery every product
@@ -921,13 +945,8 @@ spec:
             {{- end }}
           annotations:
             summary: "no CIF delivery fully published for {{ .staleAfterHours }}h"
-            description: >-
-              schedule-reference in {{ "{{ $labels.namespace }}" }} last fully
-              published a delivery timestamped over {{ .staleAfterHours }} hours
-              ago. Either no new delivery arrived (check schedule-ingest and the
-              SFTP upload) or one keeps failing to publish (check
-              distant_signal_schedule_reference_publishes_total by outcome, and
-              the reference container's error log).
+            description: "No new delivery arrived, or one keeps failing to publish. Check schedule-ingest, the SFTP upload and the reference log."
+            runbook_url: {{ printf "%s#distantsignalschedulereferencepublishstale" $runbook | quote }}
         {{- /*
         SCHED-2: api skipped a final chunk's delete because the staged key
         count did not match the publisher's total, so rows missing from that
@@ -944,12 +963,8 @@ spec:
             {{- end }}
           annotations:
             summary: "{{ "{{ $labels.product }}" }} publish kept stale rows"
-            description: >-
-              api in {{ "{{ $labels.namespace }}" }} finished a
-              {{ "{{ $labels.product }}" }} publish whose staged key count did not
-              match the publisher's total, so it did not delete the rows that
-              publish left out. They stay until the next complete publish;
-              api's warn log has the publish_id and both counts.
+            description: "Its staged key count did not match the publisher's total, so rows it left out stay until the next complete publish."
+            runbook_url: {{ printf "%s#distantsignalschedulepublishstagedmismatch" $runbook | quote }}
         {{- /*
         DQ6/SCHED-1: api answered 400/413/422 to one of schedule-reference's
         products. That is permanent for the delivery: it is not retried, and
@@ -967,13 +982,8 @@ spec:
             {{- end }}
           annotations:
             summary: "api rejected schedule-reference's {{ "{{ $labels.product }}" }} publish"
-            description: >-
-              api in {{ "{{ $labels.namespace }}" }} refused schedule-reference's
-              {{ "{{ $labels.product }}" }} data with 400, 413 or 422. It is not
-              retried for this delivery and the delivery is not recorded as
-              published, so that product keeps its previous rows. Usually a
-              schema skew between the two services or an oversized chunk; the
-              reference container's error log has api's response body.
+            description: "400/413/422: not retried for this delivery, and the product keeps its previous rows. Usually schema skew or a big chunk."
+            runbook_url: {{ printf "%s#distantsignalschedulereferencepublishrejected" $runbook | quote }}
         {{- /*
         DQ11/PL-9: schedule-reference publishes each line's population for
         today and tomorrow, so the rail day's population normally exists a
@@ -992,13 +1002,8 @@ spec:
             {{- end }}
           annotations:
             summary: "{{ "{{ $value }}" }} lines have no schedule population for today"
-            description: >-
-              After 06:00 London, full-coverage-consumer in
-              {{ "{{ $labels.namespace }}" }} still has no schedule line population
-              for today's rail day on {{ "{{ $value }}" }} line(s), so their
-              full-coverage stats stay Pending. Check that last night's and the
-              previous CIF delivery published (DistantSignalScheduleReferencePublishStale),
-              and the consumer's population reload errors.
+            description: "Past 06:00 London, so their full-coverage stats stay Pending. Check the CIF publishes and the consumer's reload errors."
+            runbook_url: {{ printf "%s#distantsignallinepopulationmissing" $runbook | quote }}
     {{- end }}
     {{- end }}
 {{- end }}
@@ -1012,6 +1017,7 @@ scoping as above.
 {{- $ns := .Release.Namespace }}
 {{- $fullname := include "distant-signal.fullname" . }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
+{{- $runbook := printf "%s/docs/alerts.md" (trimSuffix "/" $rule.runbookBaseUrl) }}
 {{- $anyPoller := or .Values.pollerIrishRailGtfs.enabled .Values.pollerIrishRailLive.enabled .Values.pollerNirStations.enabled }}
 {{- range $name, $poller := .Values.pollers }}
 {{- if $poller.enabled }}
@@ -1051,33 +1057,38 @@ spec:
         {{- /*
         Second clause (failureRatio, when set): more than failureRatio of the
         cycles over ratioWindow failed, so a poller that still succeeds now
-        and then but mostly fails also fires. This is the condition the
-        cluster's own copy of this alert used (failure rate > 0.5 over 30m,
-        for 30m); a 1h window with no `for` needs a similar hour of mostly
-        failed cycles.
+        and then but mostly fails also fires. Defaults: over 15m, with a
+        10m `for` (2026-10-01: the former 1h window with no `for` fired
+        40-55 minutes after the pollers started failing).
         */}}
         {{- $failures := printf `sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="%s", result="failure"}[%s]))` $ns .window }}
         {{- $successes := printf `sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="%s", result="success"}[%s]))` $ns .window }}
+        {{- /*
+        Recorded as 1 (failing) or 0 per poller: each clause is a 0/1
+        `bool` series under its own `clause` label, and `max` merges them.
+        */}}
+        - record: distant_signal:poller_failing:bool
+          expr: |
+            max by (namespace, poller) (
+              label_replace(
+                ({{ $failures }} > bool 0)
+                * on (namespace, poller)
+                (({{ $successes }} or on (namespace, poller) 0 * {{ $failures }}) == bool 0),
+                "clause", "no_success", "", ""
+              )
+              {{- if .failureRatio }}
+              or
+              label_replace(
+                sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="{{ $ns }}", result="failure"}[{{ .ratioWindow }}]))
+                / sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="{{ $ns }}"}[{{ .ratioWindow }}]))
+                > bool {{ .failureRatio }},
+                "clause", "failure_ratio", "", ""
+              )
+              {{- end }}
+            )
         - alert: DistantSignalPollerFailing
           expr: |
-            (
-              {{ $failures }} > 0
-              and on (namespace, poller)
-              (
-                {{ $successes }}
-                or on (namespace, poller)
-                0 * {{ $failures }}
-              ) == 0
-            )
-            {{- if .failureRatio }}
-            or on (namespace, poller)
-            (
-              sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="{{ $ns }}", result="failure"}[{{ .ratioWindow }}]))
-              /
-              sum by (namespace, poller) (increase(distant_signal_poller_cycle_total{namespace="{{ $ns }}"}[{{ .ratioWindow }}]))
-              > {{ .failureRatio }}
-            )
-            {{- end }}
+            distant_signal:poller_failing:bool{namespace="{{ $ns }}"} == 1
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -1086,14 +1097,8 @@ spec:
             {{- end }}
           annotations:
             summary: "poller {{ "{{ $labels.poller }}" }} is failing its poll cycles"
-            description: >-
-              Poller {{ "{{ $labels.poller }}" }} in {{ "{{ $labels.namespace }}" }}
-              completed no successful poll cycle and at least one failed one over
-              the last {{ .window }}{{ if .failureRatio }}, or failed more than
-              {{ .failureRatio }} of its cycles over the last {{ .ratioWindow }}{{ end }},
-              so its product is going stale. Check the poller's logs: its
-              upstream feed (National Rail, TfL, Irish Rail), its credentials
-              or an expired key, and api's /private ingest route.
+            description: "No success in {{ .window }}{{ if .failureRatio }}, or over {{ .failureRatio }} of cycles failed in {{ .ratioWindow }}{{ end }}. Check its upstream, its key, and api."
+            runbook_url: {{ printf "%s#distantsignalpollerfailing" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.ldbwsStalestStation }}
@@ -1108,15 +1113,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "an LDBWS station has not been sampled for {{ "{{ $value | humanizeDuration }}" }}"
-            description: >-
-              The least recently sampled LDBWS station in {{ "{{ $labels.namespace }}" }}
-              was last sampled {{ "{{ $value | humanizeDuration }}" }} ago (threshold
-              {{ .maxAgeSeconds }}s). The rotation (SVC-04) has stopped reaching part
-              of the station list, e.g. every cycle runs out of budget first; see
-              distant_signal_ldbws_stations_attempted_per_cycle against
-              distant_signal_ldbws_stations_total. Stations LDBWS rejects as an
-              invalid CRS are excluded here; see DistantSignalLdbwsInvalidCrs.
+            summary: "an LDBWS station not sampled for {{ "{{ $value | humanizeDuration }}" }}"
+            description: "Over {{ .maxAgeSeconds }}s: the rotation no longer reaches every station, e.g. each cycle runs out of budget first."
+            runbook_url: {{ printf "%s#distantsignalldbwsstationstale" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.ldbwsInvalidCrs }}
@@ -1131,18 +1130,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "LDBWS rejects sample station {{ "{{ $labels.crs }}" }} as an invalid CRS code"
-            description: >-
-              LDBWS answers "Invalid crs code supplied" for sample station
-              {{ "{{ $labels.crs }}" }} in {{ "{{ $labels.namespace }}" }}, so no line
-              gets LDBWS data from it. It is almost certainly a typo in a
-              lines/*.toml sample_stations entry (e.g. "ANV" for Andover's
-              "ADV"): find the file listing it, fix it, run
-              `cargo run -p line-catalogue-validator` and redeploy api.
-              poller-ldbws excludes the station from
-              distant_signal_ldbws_stalest_station_age_seconds and re-probes it
-              hourly; the alert clears once api stops listing it or LDBWS
-              accepts it.
+            summary: "LDBWS rejects sample station {{ "{{ $labels.crs }}" }} as an invalid CRS"
+            description: "Almost certainly a lines/*.toml sample_stations typo. Fix it, run line-catalogue-validator and redeploy api."
+            runbook_url: {{ printf "%s#distantsignalldbwsinvalidcrs" $runbook | quote }}
         {{- end }}
         {{- end }}
 {{- end }}

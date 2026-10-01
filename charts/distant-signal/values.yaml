@@ -3398,6 +3398,51 @@ metrics:
       archiveStallWindow: 15m
       archiverSelector: ""
       severity: warning
+    # DistantSignalPostgresDown (critical): the database is down, for
+    # `for`: postgres_exporter's pg_up is 0, or (with postgresql.enabled)
+    # the bundled Postgres StatefulSet has no ready replica
+    # (kube-state-metrics). The exporter is not part of this chart:
+    # `pgUpSelector` adds label matchers for its pg_up series, next to
+    # namespace="<release namespace>". Runbook: docs/alerts.md.
+    postgresDown:
+      enabled: true
+      for: 3m
+      severity: critical
+      pgUpSelector: ""
+    # DistantSignalApiDatabaseDown (critical): api's own `SELECT 1` probe
+    # through its request pool (distant_signal_api_db_up, every 15s) has
+    # failed on some replica for `for`. Covers what pg_up cannot see: a
+    # rotated password, an exhausted pool or max_connections, a
+    # NetworkPolicy, an external database. Critical because api is the only
+    # writer for every ingest path: while it cannot query, TRUST, poller
+    # and schedule data stop landing and the queues in front of it only
+    # hold so much.
+    apiDatabaseDown:
+      enabled: true
+      for: 2m
+      severity: critical
+    # DistantSignalConsumerApiCallsFailing: trust-consumer,
+    # trust-backlog-consumer or full-coverage-consumer failed at least
+    # minErrors calls to api (POSTs, the tracked-trains / population /
+    # stanox reloads; *_errors_total by operation) within `window`,
+    # continuously for `for`, so a short api blip (a rollout) does not fire.
+    consumerApiErrors:
+      enabled: true
+      window: 5m
+      minErrors: 3
+      for: 10m
+      severity: warning
+    # DistantSignalAggregatorCycleFailing / DistantSignalNotifierCycleFailing:
+    # no successful aggregation cycle, or no successful run of one of the
+    # notifier's line_status / forward_queue / skip_check loops, for
+    # maxAgeSeconds (<service>_last_success_timestamp_seconds{cycle}; the
+    # process start counts until a cycle succeeds). The notifier's hourly
+    # template_sweep is left out.
+    cycleStalled:
+      enabled: true
+      maxAgeSeconds: 900
+      for: 0m
+      severity: warning
     # Needs movementRelay.enabled (all rules in this group read
     # movement-events state).
     #
@@ -3542,13 +3587,16 @@ metrics:
     # `<fullname>-pollers` PrometheusRule. It also fires when more than
     # failureRatio of the poller's cycles over ratioWindow failed, so a
     # mostly-failing poller is caught too; set failureRatio to 0 to drop
-    # that clause.
+    # that clause. `for` applies to both clauses. 15m/10m (was 1h with no
+    # `for`): on 2026-10-01 the 1h ratio fired 40-55 minutes after the
+    # pollers started failing; now about 18 minutes for a poller that fails
+    # every cycle, with 10 minutes of `for` to ride out a short blip.
     pollerFailures:
       enabled: true
       window: 2h
       failureRatio: 0.5
-      ratioWindow: 1h
-      for: 0m
+      ratioWindow: 15m
+      for: 10m
       severity: warning
     # DistantSignalLdbwsStationStale (SVC-04): the least recently sampled
     # LDBWS station was last sampled more than `maxAgeSeconds` ago

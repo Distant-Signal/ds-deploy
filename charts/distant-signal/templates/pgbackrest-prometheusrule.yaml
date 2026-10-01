@@ -4,6 +4,9 @@ PrometheusRule so the main one's groups stay as they are. Renders only with
 metrics.enabled, metrics.prometheusRule.enabled and
 postgresql.pgbackrest.enabled. Runbook: docs/postgres-pitr.md.
 
+Payload limits as in prometheusrule.yaml: a one-line summary, a short
+description, and the prose in docs/alerts.md.
+
 Two sources, neither of them this chart's own exporters:
   - kube-state-metrics for the CronJobs (kube_job_failed with
     condition="true" is the Job's Failed condition, so a Job that failed
@@ -21,7 +24,7 @@ Two sources, neither of them this chart's own exporters:
 {{- $ns := $.Release.Namespace }}
 {{- $fullname := include "distant-signal.fullname" $ }}
 {{- $cronjob := printf "%s-pgbackrest" $fullname | trunc 45 | trimSuffix "-" }}
-{{- $runbook := printf "%s/docs/postgres-pitr.md" (trimSuffix "/" $rule.runbookBaseUrl) }}
+{{- $runbook := printf "%s/docs/alerts.md" (trimSuffix "/" $rule.runbookBaseUrl) }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
 {{- $archiver := printf "namespace=%q" $ns }}
 {{- with .archiverSelector }}
@@ -44,11 +47,18 @@ spec:
   groups:
     - name: distant-signal.pgbackrest
       rules:
-        - alert: DistantSignalPgBackRestCheckFailed
+        {{- /*
+        Every pgBackRest Job that failed and started within recentJobWindow
+        (1 per job_name); the two alerts below split it by Job kind.
+        */}}
+        - record: distant_signal:pgbackrest_job_failed:recent
           expr: |
-            max by (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(check|verify)-[0-9]+", condition="true"} == 1)
+            max by (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(check|verify|full|diff)-[0-9]+", condition="true"} == 1)
             and on (namespace, job_name)
             (time() - kube_job_status_start_time{namespace="{{ $ns }}"} < {{ include "distant-signal.durationSeconds" .recentJobWindow }})
+        - alert: DistantSignalPgBackRestCheckFailed
+          expr: |
+            distant_signal:pgbackrest_job_failed:recent{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(check|verify)-[0-9]+"}
           for: 0m
           labels:
             severity: critical
@@ -57,19 +67,11 @@ spec:
             {{- end }}
           annotations:
             summary: "pgBackRest check or verify failed ({{ "{{ $labels.job_name }}" }})"
-            description: >-
-              The pgBackRest check or verify Job {{ "{{ $labels.namespace }}/{{ $labels.job_name }}" }}
-              failed. Either WAL archiving is broken (the repository is
-              unreachable, or its credentials or stanza are wrong),
-              `pgbackrest verify` found a bad file, or WAL is missing from
-              the repository, so point-in-time recovery can't cross that
-              gap. Read the Job's log to see which.
-            runbook_url: {{ $runbook | quote }}
+            description: "WAL archiving is broken, verify found a bad file, or WAL is missing (a PITR gap). The Job's log says which."
+            runbook_url: {{ printf "%s#distantsignalpgbackrestcheckfailed" $runbook | quote }}
         - alert: DistantSignalPgBackRestBackupFailed
           expr: |
-            max by (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(full|diff)-[0-9]+", condition="true"} == 1)
-            and on (namespace, job_name)
-            (time() - kube_job_status_start_time{namespace="{{ $ns }}"} < {{ include "distant-signal.durationSeconds" .recentJobWindow }})
+            distant_signal:pgbackrest_job_failed:recent{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(full|diff)-[0-9]+"}
           for: 0m
           labels:
             severity: {{ .severity }}
@@ -78,11 +80,8 @@ spec:
             {{- end }}
           annotations:
             summary: "pgBackRest backup failed ({{ "{{ $labels.job_name }}" }})"
-            description: >-
-              The pgBackRest backup Job {{ "{{ $labels.namespace }}/{{ $labels.job_name }}" }}
-              failed. WAL archiving is separate and may still be working;
-              the restore window keeps growing from the last good backup.
-            runbook_url: {{ $runbook | quote }}
+            description: "The restore window keeps growing from the last good backup. WAL archiving is separate and may still work."
+            runbook_url: {{ printf "%s#distantsignalpgbackrestbackupfailed" $runbook | quote }}
         - alert: DistantSignalPgBackRestBackupStale
           expr: |
             time() - max by (namespace) (kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob=~"{{ $cronjob }}-(full|diff)"}) > {{ include "distant-signal.durationSeconds" .backupMaxAge }}
@@ -94,10 +93,8 @@ spec:
             {{- end }}
           annotations:
             summary: "no pgBackRest backup for {{ "{{ $value | humanizeDuration }}" }}"
-            description: >-
-              Neither the full nor the diff CronJob in {{ "{{ $labels.namespace }}" }}
-              has succeeded for over {{ .backupMaxAge }}.
-            runbook_url: {{ $runbook | quote }}
+            description: "Neither the full nor the diff CronJob has succeeded for over {{ .backupMaxAge }}."
+            runbook_url: {{ printf "%s#distantsignalpgbackrestbackupstale" $runbook | quote }}
         - alert: DistantSignalPgBackRestFullBackupStale
           expr: |
             time() - max by (namespace) (kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="{{ $cronjob }}-full"}) > {{ include "distant-signal.durationSeconds" .fullBackupMaxAge }}
@@ -109,12 +106,8 @@ spec:
             {{- end }}
           annotations:
             summary: "no full pgBackRest backup for {{ "{{ $value | humanizeDuration }}" }}"
-            description: >-
-              The weekly full backup CronJob in {{ "{{ $labels.namespace }}" }}
-              hasn't succeeded for over {{ .fullBackupMaxAge }}. Diffs grow
-              until the next full, and time-based retention keeps the old
-              full (and its WAL) until a newer one exists.
-            runbook_url: {{ $runbook | quote }}
+            description: "The weekly full has not succeeded for over {{ .fullBackupMaxAge }}. Diffs grow, and retention keeps the old full and its WAL."
+            runbook_url: {{ printf "%s#distantsignalpgbackrestfullbackupstale" $runbook | quote }}
         - alert: DistantSignalPgBackRestArchiveFailing
           expr: |
             sum by (namespace) (increase(pg_stat_archiver_failed_count{ {{- $archiver -}} }[{{ .archiveWindow }}])) > 0
@@ -126,12 +119,8 @@ spec:
             {{- end }}
           annotations:
             summary: "Postgres WAL archiving is failing"
-            description: >-
-              archive_command (pgBackRest archive-push) in {{ "{{ $labels.namespace }}" }}
-              has kept failing over {{ .archiveWindow }}. WAL piles up in the spool
-              or pg_wal; past archive.queueMax pgBackRest drops it, leaving
-              a PITR gap. Check the Postgres log for pgBackRest errors.
-            runbook_url: {{ $runbook | quote }}
+            description: "archive-push kept failing over {{ .archiveWindow }}. Past archive.queueMax pgBackRest drops WAL, leaving a PITR gap."
+            runbook_url: {{ printf "%s#distantsignalpgbackrestarchivefailing" $runbook | quote }}
         - alert: DistantSignalPgBackRestArchiveStalled
           expr: |
             sum by (namespace) (increase(pg_stat_archiver_archived_count{ {{- $archiver -}} }[{{ .archiveStallWindow }}])) == 0
@@ -143,12 +132,8 @@ spec:
             {{- end }}
           annotations:
             summary: "Postgres archived no WAL for {{ .archiveStallWindow }}"
-            description: >-
-              No WAL segment was archived in {{ "{{ $labels.namespace }}" }}
-              over {{ .archiveStallWindow }}, although archive_timeout
-              switches segments every minute while anything writes. Check
-              the Postgres log, and pg_stat_archiver's last_failed_wal.
-            runbook_url: {{ $runbook | quote }}
+            description: "archive_timeout switches segments every minute while anything writes. Check the Postgres log and pg_stat_archiver."
+            runbook_url: {{ printf "%s#distantsignalpgbackrestarchivestalled" $runbook | quote }}
 {{- end }}
 {{- end }}
 {{- end }}

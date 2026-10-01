@@ -1346,6 +1346,10 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.backup.image.repository` / `.tag` / `.pullPolicy` | `registry.k8s.io/kubectl`, `v1.36.5@sha256:…`, `IfNotPresent` | The image the CronJobs run `kubectl exec` from. Keep it within one minor version of the cluster. |
 | `postgresql.pgbackrest.backup.resources` | requests `20m`/`32Mi`, limit `128Mi` | CronJob pod resources. The work happens in the Postgres container. |
 | `postgresql.pgbackrest.backup.podSecurityContext` | `{}` | Merged over the CronJob pods' securityContext (non-root uid 65532 by default). |
+| `metrics.prometheusRule.postgresDown` | see `values.yaml` | `DistantSignalPostgresDown`: `enabled`, `for` (3m), `severity` (critical) and `pgUpSelector`, extra label matchers for postgres_exporter's `pg_up` (see [Alerts](#alerts)). |
+| `metrics.prometheusRule.apiDatabaseDown` | see `values.yaml` | `DistantSignalApiDatabaseDown`: `enabled`, `for` (2m) and `severity` (critical). |
+| `metrics.prometheusRule.consumerApiErrors` | see `values.yaml` | `DistantSignalConsumerApiCallsFailing`: `enabled`, `window` (5m), `minErrors` (3), `for` (10m) and `severity` (warning). |
+| `metrics.prometheusRule.cycleStalled` | see `values.yaml` | `DistantSignalAggregatorCycleFailing` / `DistantSignalNotifierCycleFailing`: `enabled`, `maxAgeSeconds` (900), `for` (0m) and `severity` (warning). |
 | `metrics.prometheusRule.pgbackrest` | see `values.yaml` | The pgBackRest alerts' windows, ages, `archiverSelector` and severity (see [Alerts](#alerts)). |
 
 ### externalDatabase
@@ -2176,7 +2180,7 @@ now matches every other workload.
 | `metrics.prometheusRule.labels` | `{}` | Extra labels on the `PrometheusRule` object — whatever your Prometheus's `ruleSelector` matches (e.g. `release: kube-prometheus-stack`). |
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
-| `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; the repo-relative doc path is appended. |
+| `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; `/docs/alerts.md#<alert name, lowercased>` is appended. |
 | `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
 
 #### Alerts
@@ -2197,8 +2201,20 @@ alert only when `archive.enabled`, the archive-expiry group only when
 `archive.expiry.enabled` too, and the schedule-pipeline group only when
 `scheduleFeed.enabled`.
 
+Each alert carries a one-line `summary`, a short `description` and a
+`runbook_url` into [docs/alerts.md](../../docs/alerts.md), which holds the
+explanation and what to do. Expressions longer than about 300 characters are
+recording rules (`distant_signal:*`) in the same group, so the alert's
+`generatorURL` stays short. Both keep a 3-alert notification under ntfy's
+4,096-byte limit; `scripts/check-alert-payloads.py` checks it in CI.
+
 | Alert | Severity | Fires when (defaults) |
 |---|---|---|
+| `DistantSignalPostgresDown` | critical | postgres_exporter's `pg_up` is 0 (`postgresDown.pgUpSelector` narrows its series), or, with `postgresql.enabled`, the bundled Postgres StatefulSet has no ready replica (kube-state-metrics' `kube_statefulset_status_replicas_ready`), for 3m. |
+| `DistantSignalApiDatabaseDown` | critical | api's own `SELECT 1` probe through its request pool (`api_db_up`, every 15s) is 0 on some replica for 2m: a rotated password, an exhausted pool, `max_connections`, a NetworkPolicy, or the database itself. |
+| `DistantSignalConsumerApiCallsFailing` | warning | trust-consumer, trust-backlog-consumer or full-coverage-consumer failed at least 3 calls to api within 5m, continuously for 10m (`*_errors_total` for the operations that call api: trust-consumer `reload_tracked_trains`, `post_train_events`, `reload_stanox_crs`, `startup_reference_load`; trust-backlog-consumer `post_batch`, `post_train_reasons`, `reload_stanox_crs`; full-coverage-consumer `reload_line_population_fetch`, `post_line_stats`, `post_station_samples`, `reload_stanox_crs`). One alert per consumer. |
+| `DistantSignalAggregatorCycleFailing` | warning | No successful aggregation cycle for 15m (`aggregator_last_success_timestamp_seconds{cycle}`, the process start until the first success; `aggregator_cycles_total{cycle,result}` counts both outcomes). |
+| `DistantSignalNotifierCycleFailing` | warning | No successful run of a notifier loop (`line_status`, `forward_queue`, `skip_check`; not the hourly `template_sweep`) for 15m (`notifier_last_success_timestamp_seconds{cycle}`). |
 | `DistantSignalMovementLagHigh` | warning | A consumer group's `movement_relay_stream_lag` plus `movement_relay_stream_pending` (delivered but un-ACKed: a consumer whose downstream fails keeps reading, so its backlog sits in pending) is above 25% of the stream cap (`movement_relay_stream_maxlen`, falling back to `movementRelay.streamMaxLen`) for 10m. |
 | `DistantSignalMovementLagCritical` | critical | The same, above 50%. |
 | `DistantSignalMovementLagGrowing` | warning | A group's lag has a positive `deriv` and grew by more than 5000 entries over 30m, for 10m. Lag never reads 0, so neither alert is on `> 0`. |
@@ -2233,7 +2249,7 @@ alert only when `archive.enabled`, the archive-expiry group only when
 | `DistantSignalSchedulePublishStagedMismatch` | warning | api skipped a final chunk's delete because the staged key count did not match (`api_schedule_publish_staged_mismatch_total{product}`) within the last 6h. |
 | `DistantSignalScheduleReferencePublishRejected` | warning | api answered 400/413/422 to a schedule-reference product (`schedule_reference_publishes_total{outcome="rejected"}`) within the last 6h. |
 | `DistantSignalLinePopulationMissing` | warning | After 06:00 London, some line still has no schedule population for today (`full_coverage_consumer_population_missing_past_deadline_lines` above 0) for 15m. |
-| `DistantSignalPollerFailing` | warning | A poller completed no successful cycle and at least one failed one (`poller_cycle_total{result}`) over the last 2h, or more than half its cycles over the last 1h failed (`pollerFailures.failureRatio`, `ratioWindow`) (SVC-08). Rendered only when a poller (including an island-of-Ireland one) is enabled, in a separate `<fullname>-pollers` PrometheusRule. |
+| `DistantSignalPollerFailing` | warning | A poller completed no successful cycle and at least one failed one (`poller_cycle_total{result}`) over the last 2h, or more than half its cycles over the last 15m failed (`pollerFailures.failureRatio`, `ratioWindow`), for 10m (SVC-08). Rendered only when a poller (including an island-of-Ireland one) is enabled, in a separate `<fullname>-pollers` PrometheusRule. |
 | `DistantSignalLdbwsStationStale` | warning | The least recently sampled LDBWS station (`ldbws_stalest_station_age_seconds`) is over 7200s old for 30m: the rotation stopped reaching part of the list (SVC-04). Stations LDBWS rejects as an invalid CRS are excluded. Only when `pollers.ldbws.enabled`. |
 | `DistantSignalLdbwsInvalidCrs` | warning | LDBWS has answered "Invalid crs code supplied" for a sample station (`ldbws_invalid_crs_station{crs}` is 1) for 15m: a `lines/*.toml` typo. The poller re-probes it hourly instead of every cycle. Only when `pollers.ldbws.enabled`. |
 | `DistantSignalPgBackRestCheckFailed` | critical | The daily pgBackRest check Job or the weekly verify Job failed within 26h: archiving is broken, `verify` found a bad file, or WAL is missing (a PITR gap). This group renders only with `postgresql.pgbackrest.enabled`, in a separate `<fullname>-pgbackrest` PrometheusRule (`metrics.prometheusRule.pgbackrest`), and reads kube-state-metrics and postgres_exporter series rather than this chart's own. Runbook: `docs/postgres-pitr.md`. |

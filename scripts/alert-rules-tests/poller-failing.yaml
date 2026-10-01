@@ -1,0 +1,80 @@
+# promtool unit tests for DistantSignalPollerFailing (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered). Defaults:
+# no success in 2h, or over half the cycles failed in 15m; for 10m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # a: only failures (the no-success clause). b: still succeeds now and
+  # then, but two thirds of its cycles fail (the failure-ratio clause).
+  # c: healthy. d: one failure among many successes.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="a", poller="a", result="failure"}'
+        values: '0+1x150'
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="a", poller="a", result="success"}'
+        values: '0x150'
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="b", poller="b", result="failure"}'
+        values: '0+2x150'
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="b", poller="b", result="success"}'
+        values: '0+1x150'
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="c", poller="c", result="failure"}'
+        values: '0x150'
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="c", poller="c", result="success"}'
+        values: '0+1x150'
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="d", poller="d", result="failure"}'
+        values: '0x10 1x140'
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="d", poller="d", result="success"}'
+        values: '0+1x150'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DistantSignalPollerFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, poller: a}
+            exp_annotations:
+              summary: poller a is failing its poll cycles
+              description: "No success in 2h, or over 0.5 of cycles failed in 15m. Check its upstream, its key, and api."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpollerfailing
+          - exp_labels: {severity: warning, namespace: distant-signal, poller: b}
+            exp_annotations:
+              summary: poller b is failing its poll cycles
+              description: "No success in 2h, or over 0.5 of cycles failed in 15m. Check its upstream, its key, and api."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpollerfailing
+
+  # 2026-10-01's shape: a poller healthy (one cycle a minute) for two hours
+  # starts failing every cycle at 120m. Its 15m failure ratio passes 0.5
+  # at about 128m, so it fires at about 138m; the former 1h window (no
+  # `for`) took until about 150m.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="e", poller="e", result="failure"}'
+        values: '0x120 1+1x60'
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="e", poller="e", result="success"}'
+        values: '0+1x120 120x60'
+    alert_rule_test:
+      - eval_time: 135m
+        alertname: DistantSignalPollerFailing
+        exp_alerts: []
+      - eval_time: 140m
+        alertname: DistantSignalPollerFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, poller: e}
+            exp_annotations:
+              summary: poller e is failing its poll cycles
+              description: "No success in 2h, or over 0.5 of cycles failed in 15m. Check its upstream, its key, and api."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpollerfailing
+
+  # A blip: 5 failed cycles out of a 15m window's 15 at 60m, then healthy
+  # again. The ratio never passes 0.5, and nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="f", poller="f", result="failure"}'
+        values: '0x60 1+1x4 5x60'
+      - series: 'distant_signal_poller_cycle_total{namespace="distant-signal", pod="f", poller="f", result="success"}'
+        values: '0+1x60 60x5 61+1x55'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: DistantSignalPollerFailing
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: DistantSignalPollerFailing
+        exp_alerts: []

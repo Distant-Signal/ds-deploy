@@ -1,0 +1,126 @@
+# promtool unit tests for the distant-signal.health group (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered).
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # pg_up drops to 0 at 5m: fires after `for: 3m`.
+  - interval: 1m
+    input_series:
+      - series: 'pg_up{namespace="distant-signal", pod="distant-signal-postgres-exporter-1"}'
+        values: '1x5 0x15'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="distant-signal", statefulset="distant-signal-postgres"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: DistantSignalPostgresDown
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: DistantSignalPostgresDown
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: the Distant Signal database is down
+              description: "pg_up is 0, or the bundled Postgres has no ready replica. api, the consumers and the aggregator cannot read or write."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpostgresdown
+  # The bundled StatefulSet loses its ready replica while the exporter is
+  # gone too (no pg_up at all); another namespace's pg_up is ignored.
+  - interval: 1m
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="distant-signal", statefulset="distant-signal-postgres"}'
+        values: '1x5 0x15'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="distant-signal", statefulset="other-postgres"}'
+        values: '0x20'
+      - series: 'pg_up{namespace="elsewhere", pod="exporter"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DistantSignalPostgresDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DistantSignalPostgresDown
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: the Distant Signal database is down
+              description: "pg_up is 0, or the bundled Postgres has no ready replica. api, the consumers and the aggregator cannot read or write."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpostgresdown
+  # api's probe: one replica failing for 2m fires; a single failed probe
+  # (back at 1 within the `for`) does not.
+  - interval: 15s
+    input_series:
+      - series: 'distant_signal_api_db_up{namespace="distant-signal", pod="api-a"}'
+        values: '1x8 0x20'
+      - series: 'distant_signal_api_db_up{namespace="distant-signal", pod="api-b"}'
+        values: '1x4 0 1x24'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DistantSignalApiDatabaseDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: DistantSignalApiDatabaseDown
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: api cannot query its database
+              description: "api's SELECT 1 probe has failed for 2m: ingest and most pages fail. See DistantSignalPostgresDown and api's log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalapidatabasedown
+  # trust-consumer's tracked-trains reload fails once a minute from 5m
+  # (fires after 10m of it); trust-backlog-consumer's POSTs fail for only
+  # 4 minutes (an api rollout); a data rejection (post_rejected) and a
+  # parse drop are not api failures.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_trust_consumer_errors_total{namespace="distant-signal", pod="tc", operation="reload_tracked_trains"}'
+        values: '0x5 1+1x40'
+      - series: 'distant_signal_trust_consumer_errors_total{namespace="distant-signal", pod="tc", operation="post_rejected"}'
+        values: '0+10x45'
+      - series: 'distant_signal_trust_backlog_consumer_errors_total{namespace="distant-signal", pod="tbc", operation="post_batch"}'
+        values: '0x5 0+30x4 120x36'
+      - series: 'distant_signal_full_coverage_consumer_errors_total{namespace="distant-signal", pod="fcc", operation="parse_envelope", msg_type="0003"}'
+        values: '0+10x45'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DistantSignalConsumerApiCallsFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalConsumerApiCallsFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, consumer: trust-consumer}
+            exp_annotations:
+              summary: trust-consumer keeps failing its calls to api
+              description: "5 failed api calls in 5m, for 10m: its data is not landing. Check api and the consumer's log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
+  # The aggregator's last success stops at 600s (10m); 15m later it fires.
+  # The notifier's line_status loop is healthy; its hourly template_sweep
+  # is old but left out; its skip_check loop never succeeded after a start
+  # at 0s.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_aggregator_last_success_timestamp_seconds{namespace="distant-signal", pod="agg", cycle="aggregate"}'
+        values: '0+60x10 600x30'
+      - series: 'distant_signal_notifier_last_success_timestamp_seconds{namespace="distant-signal", pod="ntf", cycle="line_status"}'
+        values: '0+60x40'
+      - series: 'distant_signal_notifier_last_success_timestamp_seconds{namespace="distant-signal", pod="ntf", cycle="template_sweep"}'
+        values: '0x40'
+      - series: 'distant_signal_notifier_last_success_timestamp_seconds{namespace="distant-signal", pod="ntf", cycle="skip_check"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DistantSignalAggregatorCycleFailing
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: DistantSignalAggregatorCycleFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cycle: aggregate}
+            exp_annotations:
+              summary: no successful aggregator cycle for 16m 0s
+              description: "Line statuses and stats are going stale. Check the aggregator's log, Postgres and DistantSignalApiDatabaseDown."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalaggregatorcyclefailing
+      - eval_time: 16m
+        alertname: DistantSignalNotifierCycleFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cycle: skip_check}
+            exp_annotations:
+              summary: no successful notifier skip_check cycle for 16m 0s
+              description: "Push notifications for this loop are not being decided or sent. Check the notifier's log and Postgres."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalnotifiercyclefailing
