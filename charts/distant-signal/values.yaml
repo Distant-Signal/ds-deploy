@@ -2158,10 +2158,14 @@ enricher:
 # trust-consumer (crates/trust-consumer/src/config.rs)
 #
 # Unlike every poller and unlike enricher, this is a persistent stream
-# consumer (the movement-events Redis stream by default, or Kafka directly
-# with movementFeed: kafka) with real connected/disconnected liveness
-# semantics -- see
+# consumer (movement-relay's movement-events Redis stream) with real
+# connected/disconnected liveness semantics -- see
 # templates/trust-consumer-deployment.yaml's probes.
+#
+# trustConsumer.kafka.* is the RDM Train Movements Kafka connection
+# movement-relay uses for each movementRelay.kafka.* value left empty.
+# trust-consumer itself no longer reads Kafka (Deploy C, PL-15a); the
+# values stay here so existing installs keep working unchanged.
 # ---------------------------------------------------------------------------
 trustConsumer:
   image:
@@ -2172,11 +2176,14 @@ trustConsumer:
     digest: ""
     pullPolicy: IfNotPresent
   kafka:
+    # -- RDM Train Movements broker address(es), for movement-relay.
     brokers: ""
     topic: ""
+    # -- The RDM-issued consumer group (SC-... in production). movement-relay
+    # is its only member.
     consumerGroup: distant-signal-trust-consumer
     saslMechanism: ""
-    # -- Consumer key/secret. Follows the chart's normal secrets rule: an
+    # -- Consumer key/secret, for movement-relay. Follows the chart's normal secrets rule: an
     # existingSecret takes priority; otherwise these values (possibly
     # empty pre-subscription) are rendered as-is -- never auto-generated,
     # a random Kafka credential is meaningless.
@@ -2208,24 +2215,20 @@ trustConsumer:
   # failureThreshold * periodSeconds = 90s on top). See the binary's
   # --progress-stall-secs doc for how the default is sized.
   progressStallSecs: 300
-  # -- Values-driven replica count, added specifically to support the
-  # Deploy B cutover runbook's B1 step (stop trust-consumer's Kafka
-  # connection cleanly, by scaling to 0 via `helm upgrade`, not an
-  # out-of-band `kubectl scale` a later `helm upgrade` could silently
-  # undo). See docs/superpowers/plans/2026-09-04-movement-relay-plan.md,
+  # -- Values-driven replica count, so scaling to 0 is done via
+  # `helm upgrade`, not an out-of-band `kubectl scale` a later
+  # `helm upgrade` could silently undo. See
+  # docs/superpowers/plans/2026-09-04-movement-relay-plan.md,
   # "Judgment calls," item 2.
   replicaCount: 1
-  # -- Which MovementFeed transport this deployment uses: "redis-stream"
-  # (the default: reads what movement-relay publishes, as production has
-  # since Deploy B) or "kafka" (the legacy direct connection: no dead-letter
-  # stream, no gap check, and a second RDM consumer group; PL-15a).
-  movementFeed: redis-stream
+  # (movementFeed was removed in Deploy C: trust-consumer only reads the
+  # movement-events stream. A leftover `redis-stream` is ignored; `kafka`
+  # fails the render.)
   redisAutoclaimMinIdleSecs: 30
   redisGapCheckSecs: 60
   # -- Prometheus metrics port. New as of the movement-relay work
   # (crates/trust-consumer previously had no metrics listener at all) --
-  # added so trust_consumer_stream_gap_detected_total (only meaningful
-  # under movementFeed=redis-stream) has somewhere real to be scraped
+  # added so trust_consumer_stream_gap_detected_total has somewhere real to be scraped
   # from. Gated on the same top-level metrics.enabled toggle every other
   # workload in this chart already uses.
   metricsPort: 9095
@@ -2244,7 +2247,7 @@ trustConsumer:
   trustTimestampCorrectionEnabled: true
   extraEnv: []
   # The highest sustained message rate in the stack (the live TRUST
-  # movement feed). Memory is librdkafka's own fetch buffers plus the
+  # movement feed). Memory is the stream batches in flight plus the
   # STANOX/CRS crosswalk it caches; CPU is per-message parsing, which
   # is why its request is one of the larger ones.
   #
@@ -2266,8 +2269,8 @@ trustConsumer:
 
 # ---------------------------------------------------------------------------
 # fullCoverageConsumer -- a second, independent consumer of the same RDM
-# Train Movements feed trustConsumer reads (the movement-events Redis stream
-# by default, or Kafka directly with movementFeed: kafka), correlating every
+# Train Movements feed trustConsumer reads (movement-relay's movement-events
+# Redis stream), correlating every
 # event against the FULL scheduled population of every shadow-computed
 # line (docs/superpowers/specs/2026-09-04-option-b-live-consumer-design.md).
 # Originally shadow mode only. That design doc's binding condition (nothing
@@ -2275,12 +2278,6 @@ trustConsumer:
 # full_coverage_enabled stays false) no longer holds by default:
 # api.fullCoverageEnabledDefault and aggregator.fullCoverageEnabledDefault
 # are both `true` (2026-09-12), which treats every line as enabled.
-#
-# Kafka connection settings (brokers/topic/saslMechanism/saslUsername/
-# saslPassword/existingSecret*) are DELIBERATELY NOT repeated here --
-# reused from trustConsumer.kafka.* above (same RDM connection, per
-# Decision 1's "connection vs. group membership" reasoning). Only this
-# component's own group id and everything else below is new.
 # ---------------------------------------------------------------------------
 fullCoverageConsumer:
   image:
@@ -2290,8 +2287,6 @@ fullCoverageConsumer:
     # for the full rationale; same shape here.
     digest: ""
     pullPolicy: IfNotPresent
-  kafka:
-    consumerGroup: distant-signal-full-coverage-consumer
   # -- Read this service's OAuth2 credential from a pre-existing Secret
   # instead of the chart-rendered one.
   existingSecret: ""
@@ -2316,13 +2311,9 @@ fullCoverageConsumer:
   progressStallSecs: 900
   metricsPort: 9093
   # -- Values-driven replica count -- symmetry with trustConsumer's own
-  # knob (see that block's comment). Not load-bearing for the Deploy B B1
-  # step itself (this component never held real Kafka group membership --
-  # design doc Decision 6), but a consistent mental model for an operator
-  # reading this file is worth the two extra lines.
+  # knob (see that block's comment).
   replicaCount: 1
-  # -- See trustConsumer.movementFeed.
-  movementFeed: redis-stream
+  # (movementFeed was removed in Deploy C; see trustConsumer.)
   redisAutoclaimMinIdleSecs: 30
   redisGapCheckSecs: 60
   # -- Windowed full-coverage stats
@@ -2442,13 +2433,11 @@ trustBacklogConsumer:
 # ---------------------------------------------------------------------------
 # movementRelay -- the sole real Kafka client against RDM's Train Movements
 # product from Deploy B onward (docs/superpowers/specs/2026-09-04-movement-relay-design.md).
-# On by default: trustConsumer.movementFeed and
-# fullCoverageConsumer.movementFeed default to `redis-stream`, and
-# trustBacklogConsumer only ever reads the stream, so all three read the
-# `movement-events` stream that only this Deployment writes. With it off
-# they run on an empty stream. Set `enabled: false` only for an install
-# that does not ingest TRUST data at all (or that moves both movementFeed
-# values back to the legacy `kafka` path).
+# On by default: trust-consumer, full-coverage-consumer and
+# trust-backlog-consumer all read the `movement-events` stream that only
+# this Deployment writes (since Deploy C none of them can read Kafka
+# directly). With it off they run on an empty stream. Set `enabled: false`
+# only for an install that does not ingest TRUST data at all.
 #
 # Kafka connection: every movementRelay.kafka.* field that is left empty
 # falls back to the matching trustConsumer.kafka.* field (brokers, topic,
@@ -2458,8 +2447,7 @@ trustBacklogConsumer:
 # trustConsumer.kafka.* is enough. Set values here to give the relay a
 # separate connection or credential. The render fails with a clear error if
 # the relay is enabled and neither place has brokers, topic, consumer group
-# and SASL mechanism, and also if a consumer still on movementFeed=kafka
-# would share the relay's consumer group (they would split its partitions).
+# and SASL mechanism.
 # ---------------------------------------------------------------------------
 movementRelay:
   # -- Deploy movement-relay, the Kafka -> Redis-stream relay the three
@@ -3452,6 +3440,26 @@ metrics:
       warnBeforeTrimSecs: 14400
       for: 5m
       severity: warning
+    # DistantSignalMovementFeedLongPending (R-040): a consumer group re-read
+    # entries already delivered more than 240 times
+    # (movement_feed_long_pending_total) more than `threshold` times within
+    # `window`. Such entries are retried forever, never dead-lettered.
+    longPending:
+      enabled: true
+      window: 1h
+      threshold: 0
+      for: 0m
+      severity: warning
+    # DistantSignalTrustEnvelopeParseDrops (R-097): trust-consumer,
+    # full-coverage-consumer or trust-backlog-consumer dropped more than
+    # `threshold` TRUST envelopes of one msg_type within `window` because
+    # their body did not parse (*_errors_total{operation="parse_envelope"}).
+    parseEnvelope:
+      enabled: true
+      window: 1h
+      threshold: 0
+      for: 0m
+      severity: warning
     # DistantSignalEnricherErrors: over `window`, more than errorRatio of an
     # LLM call site's calls failed, with at least minErrors failures.
     enricherErrors:
@@ -3596,6 +3604,8 @@ metrics:
     # delete (staged key count mismatch) within `mismatchWindow`.
     # DistantSignalScheduleReferencePublishRejected: api answered 400/413/422
     # to a product within `rejectedWindow` (permanent for that delivery).
+    # DistantSignalScheduleFeedIngestRejected: api answered 400/413/422 to
+    # schedule-ingest's delivery record within `rejectedWindow`.
     # DistantSignalLinePopulationMissing: past 06:00 London, some line still
     # has no schedule population for today's rail day (full-coverage-consumer
     # metric) for `populationMissingFor`.

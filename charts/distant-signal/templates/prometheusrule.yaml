@@ -30,7 +30,7 @@ so that clause fired on every rollout.
 {{- $fullname := include "distant-signal.fullname" . }}
 {{- $runbookBase := trimSuffix "/" $rule.runbookBaseUrl }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
-{{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled ($rule.deadLetterExpiring).enabled) }}
+{{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled ($rule.deadLetterExpiring).enabled ($rule.longPending).enabled ($rule.parseEnvelope).enabled) }}
 {{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
 {{- $pipelineOn := and ($rule.schedulePipeline).enabled .Values.scheduleFeed.enabled }}
 {{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn }}
@@ -393,6 +393,69 @@ spec:
               safeguard), so it goes in under {{ .warnBeforeTrimSecs }}s. Re-inject
               or deliberately discard it before then.
             runbook_url: {{ printf "%s/docs/movement-events-deadletter.md" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.longPending }}
+        {{- if .enabled }}
+        {{- /*
+        R-040: an entry redelivered more than LONG_PENDING_DELIVERIES (240)
+        times is never dead-lettered (only a data rejection is), so a
+        failure the consumer cannot classify retries forever. The counter
+        is registered at 0 per group and grows on every PEL replay pass
+        that still holds such an entry.
+        */}}
+        {{- $m := printf `distant_signal_movement_feed_long_pending_total{namespace="%s"}` $ns }}
+        - alert: DistantSignalMovementFeedLongPending
+          expr: |
+            sum by (namespace, group) (increase({{ $m }}[{{ .window }}])) > {{ .threshold }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.group }}" }} keeps retrying movement-events entries for over an hour"
+            description: >-
+              Consumer group {{ "{{ $labels.group }}" }} in {{ "{{ $labels.namespace }}" }}
+              re-read pending entries already delivered more than 240 times
+              ({{ "{{ $value | humanize }}" }} times in the last {{ .window }}). They are
+              retried forever and never dead-lettered: a long downstream outage,
+              or a failure the consumer cannot classify as a data rejection.
+              Find the cause in that consumer's warn log before the stream cap
+              trims the entries.
+            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md#long-pending-entries" $runbookBase | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.parseEnvelope }}
+        {{- if .enabled }}
+        {{- /*
+        R-097: a TRUST envelope whose body fails its typed shape is dropped
+        and counted as <consumer>_errors_total{operation="parse_envelope",
+        msg_type}; the log is warn-once per msg_type, so the counter is the
+        only rate signal. Every known msg_type is registered at 0 on start.
+        */}}
+        - alert: DistantSignalTrustEnvelopeParseDrops
+          expr: |
+            {{- $consumers := list (list "trust_consumer" "trust-consumer") (list "full_coverage_consumer" "full-coverage-consumer") (list "trust_backlog_consumer" "trust-backlog-consumer") }}
+            {{- range $i, $c := $consumers }}
+            {{ if $i }}or {{ end }}label_replace(sum by (namespace, msg_type) (increase(distant_signal_{{ index $c 0 }}_errors_total{namespace="{{ $ns }}", operation="parse_envelope"}[{{ $.Values.metrics.prometheusRule.parseEnvelope.window }}])) > {{ $.Values.metrics.prometheusRule.parseEnvelope.threshold }}, "consumer", "{{ index $c 1 }}", "", "")
+            {{- end }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.consumer }}" }} dropped TRUST {{ "{{ $labels.msg_type }}" }} envelopes it could not parse"
+            description: >-
+              {{ "{{ $labels.consumer }}" }} in {{ "{{ $labels.namespace }}" }} dropped
+              {{ "{{ $value | humanize }}" }} TRUST envelopes of msg_type
+              {{ "{{ $labels.msg_type }}" }} in the last {{ .window }} because their body
+              did not match the known shape. A steady rate means the feed's schema
+              changed, which otherwise looks like trains no longer moving.
+            runbook_url: {{ printf "%s/docs/movement-events-deadletter.md#envelope-parse-drops" $runbookBase | quote }}
         {{- end }}
         {{- end }}
     {{- end }}
@@ -765,6 +828,27 @@ spec:
               or MAX_ZIP_ENTRIES, or an entry larger than it declares). The
               timetable is not refreshed until a new upload replaces it. The
               ingest container's error log names the reason.
+        {{- /*
+        N-2: api refused schedule-ingest's delivery record (400/413/422).
+        The delivery is quarantined until a new upload, not retried.
+        */}}
+        - alert: DistantSignalScheduleFeedIngestRejected
+          expr: |
+            sum by (namespace) (increase(distant_signal_schedule_feed_ingest_rejected_total{namespace="{{ $ns }}"}[{{ .rejectedWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "api rejected a schedule feed delivery record"
+            description: >-
+              schedule-ingest in {{ "{{ $labels.namespace }}" }} extracted a
+              CIF delivery but api answered 400/413/422 to its ingest record,
+              so schedule-reference never sees it. The delivery is not retried
+              until a new upload replaces it. The ingest container's error log
+              and api's log name the reason.
         {{- /*
         CORPUS (scheduleFeed.corpus): schedule-ingest refused a CORPUS
         extract (not gzip, not the TIPLOCDATA JSON, too few rows, a row

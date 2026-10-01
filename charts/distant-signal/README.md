@@ -198,10 +198,10 @@ deploying a pod that cannot work:
   neither block has brokers, topic, consumer group and SASL mechanism. For
   an install that does not ingest TRUST train movements, set
   `movementRelay.enabled=false` instead; the three consumers then run on
-  an empty stream. The render also fails if `trustConsumer.movementFeed`
-  or `fullCoverageConsumer.movementFeed` is `kafka` and that consumer
-  shares movement-relay's consumer group, since two members of one group
-  split its partitions.
+  an empty stream. None of the consumers reads Kafka directly: their
+  legacy Kafka backend was removed (Deploy C), and a leftover
+  `trustConsumer.movementFeed` or `fullCoverageConsumer.movementFeed` of
+  `kafka` fails the render.
 
 The enricher is a strictly additive signal: its extractions only adjust
 the severity an incident already gives a line (a high-confidence
@@ -247,10 +247,18 @@ Read the next section before upgrading if you rely on generated secrets.
 > that left it at the old `false` default gains a movement-relay pod, and
 > its render fails unless `trustConsumer.kafka.*` (or
 > `movementRelay.kafka.*`) holds the Kafka connection; set
-> `movementRelay.enabled=false` to keep the old behaviour. If such an
-> install also runs `trustConsumer.movementFeed=kafka`, the render fails
-> until that is switched to `redis-stream` or the relay is turned off,
-> because the two would share one consumer group.
+> `movementRelay.enabled=false` to keep the old behaviour.
+
+> **Upgrade note: the consumers' Kafka backend is gone (Deploy C,
+> 2026-10-01).** `trustConsumer.movementFeed`,
+> `fullCoverageConsumer.movementFeed` and
+> `fullCoverageConsumer.kafka.consumerGroup` were removed: trust-consumer
+> and full-coverage-consumer only read movement-relay's `movement-events`
+> stream and no longer receive any `KAFKA_*` env var. A leftover
+> `movementFeed: redis-stream` is ignored, `movementFeed: kafka` fails the
+> render, and the binaries refuse `MOVEMENT_FEED_BACKEND=kafka` at
+> startup. `trustConsumer.kafka.*` is unchanged and is still the
+> connection movement-relay falls back to.
 
 `api` and `aggregator` roll concurrently with no ordering guarantee between
 them. When a release adds a database migration that `aggregator` depends on
@@ -705,7 +713,7 @@ stream is never trimmed. Alert on
 for how to inspect records and re-inject them with `redis-cli`.
 
 The same three consumers, and `movement-relay`, serve two health paths.
-`/healthz` is readiness: it needs the Kafka or Redis connection (for
+`/healthz` is readiness: it needs the Redis connection (for
 `movement-relay`, a confirmed Kafka partition assignment). `/livez` is
 liveness and does not depend on Redis, Kafka or Postgres. Both answer 503
 `stalled` when no loop iteration has completed for
@@ -718,7 +726,7 @@ pod but not one that is waiting for Redis to come back.
 On start, `full-coverage-consumer` waits for its first schedule population
 load, then replays the current rail day from `movement-events` before it
 consumes as its group, so a restart no longer corrupts that day's stats. A day
-it cannot replay in full (its start already trimmed, or the Kafka backend) is
+it cannot replay in full (its start already trimmed) is
 marked `partial`. The measured startup peak with a production-sized population
 and a full day's stream is about 373 MiB, well inside
 `fullCoverageConsumer.resources.limits.memory`. See
@@ -1670,9 +1678,10 @@ enricher:
 
 ### trustConsumer
 
-Resolves tracked trains from TRUST train movements. By default it reads
-movement-relay's `movement-events` stream; `trustConsumer.kafka.*` is also
-the Kafka connection movement-relay falls back to (see `movementRelay`).
+Resolves tracked trains from TRUST train movements. It reads
+movement-relay's `movement-events` stream and has no Kafka connection of
+its own. `trustConsumer.kafka.*` is the RDM Kafka connection movement-relay
+falls back to (see `movementRelay`).
 
 | Key | Default | Description |
 |---|---|---|
@@ -1680,10 +1689,10 @@ the Kafka connection movement-relay falls back to (see `movementRelay`).
 | `trustConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `trustConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `trustConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `trustConsumer.kafka.brokers` | `""` | RDM Train Movements broker address(es). Used by movement-relay when `movementRelay.kafka.brokers` is empty, and by trust-consumer itself only with `movementFeed: kafka` (then **required**). |
-| `trustConsumer.kafka.topic` | `""` | Train Movements topic (production: `TRAIN_MVT_ALL_TOC`). Same fallback and requirement as `brokers`. |
-| `trustConsumer.kafka.consumerGroup` | `distant-signal-trust-consumer` | Kafka consumer group. For RDM this must be the RDM-issued `SC-...` id; RDM issues one per account, and movement-relay holds it. |
-| `trustConsumer.kafka.saslMechanism` | `""` | SASL mechanism (production: `PLAIN`). Same fallback and requirement as `brokers`. |
+| `trustConsumer.kafka.brokers` | `""` | RDM Train Movements broker address(es). Used by movement-relay when `movementRelay.kafka.brokers` is empty. trust-consumer itself does not read Kafka. |
+| `trustConsumer.kafka.topic` | `""` | Train Movements topic (production: `TRAIN_MVT_ALL_TOC`). Same fallback as `brokers`. |
+| `trustConsumer.kafka.consumerGroup` | `distant-signal-trust-consumer` | Kafka consumer group. For RDM this must be the RDM-issued `SC-...` id; RDM issues one per account, and movement-relay is its only member. |
+| `trustConsumer.kafka.saslMechanism` | `""` | SASL mechanism (production: `PLAIN`). Same fallback as `brokers`. |
 | `trustConsumer.kafka.saslUsername` | `""` | SASL username, rendered into the chart Secret as `kafka-sasl-username`. Never auto-generated. |
 | `trustConsumer.kafka.saslPassword` | `""` | SASL password, rendered as `kafka-sasl-password`. Never auto-generated. |
 | `trustConsumer.kafka.existingSecret` | `""` | Read the SASL credential from this pre-existing Secret instead. |
@@ -1700,9 +1709,8 @@ the Kafka connection movement-relay falls back to (see `movementRelay`).
 | `trustConsumer.healthPort` | `8081` | Port for `/healthz` (readiness) and `/livez` (liveness). |
 | `trustConsumer.progressStallSecs` | `300` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
 | `trustConsumer.replicaCount` | `1` | Replicas. Exists so trust-consumer can be scaled to 0 through `helm upgrade`. |
-| `trustConsumer.movementFeed` | `redis-stream` | `redis-stream` reads movement-relay's stream. `kafka` is the legacy direct connection (no dead-letter stream, no gap check, and it needs its own consumer group). |
 | `trustConsumer.redisAutoclaimMinIdleSecs` | `30` | How long an entry may sit unacknowledged in this consumer's pending list before the periodic sweep reclaims it. |
-| `trustConsumer.redisGapCheckSecs` | `60` | How often the consumer group's position is compared with the stream's oldest entry to detect a gap (`redis-stream` only). |
+| `trustConsumer.redisGapCheckSecs` | `60` | How often the consumer group's position is compared with the stream's oldest entry to detect a gap. |
 | `trustConsumer.metricsPort` | `9095` | Prometheus `/metrics` port. |
 | `trustConsumer.logLevel` | `info` | `RUST_LOG` value. |
 | `trustConsumer.trustTimestampCorrectionEnabled` | `true` | Kill switch for the TRUST timestamp Europe/London-mislabelling correction (`crates/common/src/trust_timestamp.rs`). |
@@ -1717,9 +1725,9 @@ the Kafka connection movement-relay falls back to (see `movementRelay`).
 ### fullCoverageConsumer
 
 Computes whole-network delay and cancellation stats per line from the
-movement stream and the CIF schedule population. It reuses
-`trustConsumer.kafka.*` (except the consumer group) when `movementFeed` is
-`kafka`.
+movement stream and the CIF schedule population. It reads
+movement-relay's `movement-events` stream and has no Kafka connection of
+its own.
 
 | Key | Default | Description |
 |---|---|---|
@@ -1727,7 +1735,6 @@ movement stream and the CIF schedule population. It reuses
 | `fullCoverageConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `fullCoverageConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `fullCoverageConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `fullCoverageConsumer.kafka.consumerGroup` | `distant-signal-full-coverage-consumer` | Kafka consumer group, used only with `movementFeed: kafka`. |
 | `fullCoverageConsumer.existingSecret` | `""` | Read this service's internal OAuth2 credential from a pre-existing Secret instead of the chart-rendered one. |
 | `fullCoverageConsumer.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-full-coverage-consumer`). |
 | `fullCoverageConsumer.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
@@ -1741,7 +1748,6 @@ movement stream and the CIF schedule population. It reuses
 | `fullCoverageConsumer.progressStallSecs` | `900` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
 | `fullCoverageConsumer.metricsPort` | `9093` | Prometheus `/metrics` port. |
 | `fullCoverageConsumer.replicaCount` | `1` | Replicas. |
-| `fullCoverageConsumer.movementFeed` | `redis-stream` | See `trustConsumer.movementFeed`. |
 | `fullCoverageConsumer.redisAutoclaimMinIdleSecs` | `30` | See `trustConsumer.redisAutoclaimMinIdleSecs`. |
 | `fullCoverageConsumer.redisGapCheckSecs` | `60` | See `trustConsumer.redisGapCheckSecs`. |
 | `fullCoverageConsumer.windowedStats.enabled` | `false` | Windowed full-coverage stats (`docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md`). Off: only the whole-day rows are written. Turn on only after api and schedule-reference support it; `aggregator.fullCoverageWindow.mode` is a separate switch. |
@@ -1809,7 +1815,7 @@ credential of its own it uses trust-consumer's; see "Install" above.
 | `movementRelay.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `movementRelay.kafka.brokers` | `""` | Broker address(es). Empty: `trustConsumer.kafka.brokers`. |
 | `movementRelay.kafka.topic` | `""` | Train Movements topic. Empty: `trustConsumer.kafka.topic`. |
-| `movementRelay.kafka.consumerGroup` | `""` | RDM-issued consumer group id (`SC-...`). Empty: `trustConsumer.kafka.consumerGroup`. The render fails if a consumer on `movementFeed: kafka` would share it. |
+| `movementRelay.kafka.consumerGroup` | `""` | RDM-issued consumer group id (`SC-...`). Empty: `trustConsumer.kafka.consumerGroup`. |
 | `movementRelay.kafka.saslMechanism` | `""` | SASL mechanism. Empty: `trustConsumer.kafka.saslMechanism`. |
 | `movementRelay.kafka.saslUsername` | `""` | movement-relay's own SASL username, rendered into the chart Secret as `movement-relay-kafka-sasl-username`. With this, `saslPassword` and `existingSecret` all empty, trust-consumer's credential is used. |
 | `movementRelay.kafka.saslPassword` | `""` | movement-relay's own SASL password (`movement-relay-kafka-sasl-password`). |
@@ -2166,7 +2172,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; the repo-relative doc path is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
 
 #### Alerts
 
@@ -2196,6 +2202,8 @@ alert only when `archive.enabled`, the archive-expiry group only when
 | `DistantSignalDeadLetterNearFull` | warning | The dead-letter stream's length (`movement_relay_deadletter_length`, read by movement-relay every tick; falls back to the consumers' `movement_feed_deadletter_length`) above 80% of the 10,000-record cap. |
 | `DistantSignalDeadLetterFull` | critical | A dead-letter write was refused because the stream is full (`movement_feed_deadletter_full_total`) within the last 1h. |
 | `DistantSignalDeadLetterExpiring` | warning | The oldest dead letter (`movement_relay_deadletter_oldest_age_seconds`) is within 4h (`deadLetterExpiring.warnBeforeTrimSecs`) of `movementRelay.deadLetterMaxAgeSecs` (24h), after which movement-relay deletes it, for 5m. Re-inject it first. |
+| `DistantSignalMovementFeedLongPending` | warning | A consumer group re-read entries already delivered more than 240 times (`movement_feed_long_pending_total{group}`, above `longPending.threshold` 0) within the last 1h. They are retried forever and never dead-lettered (R-040). |
+| `DistantSignalTrustEnvelopeParseDrops` | warning | trust-consumer, full-coverage-consumer or trust-backlog-consumer dropped TRUST envelopes whose body did not parse (`*_errors_total{operation="parse_envelope",msg_type}`, above `parseEnvelope.threshold` 0) within the last 1h: a feed schema change (R-097). |
 | `DistantSignalMovementRelayPublishFailing` | critical | movement-relay failed every `XADD` (`movement_relay_errors_total{operation=~"publish_event\|redis_oom"}`) and published nothing over 10m, for 5m: Redis is refusing writes and TRUST ingestion has stopped. |
 | `DistantSignalRedisPersistenceFailing` | critical | Redis's last AOF write or rewrite failed (`redis_aof_last_write_ok` / `redis_aof_last_bgrewrite_ok` is 0, from movement-relay's `INFO persistence`), or, for the bundled Redis with persistence, AOF is off, for 5m. |
 | `DistantSignalMovementGroupRecreated` | warning | Within 1h a consumer recreated its group after `NOGROUP` (`movement_feed_group_recreated_total`), or movement-relay recreated a missing stream with every group (`movement_relay_stream_created_total`): Redis lost its data. |
@@ -2213,6 +2221,7 @@ alert only when `archive.enabled`, the archive-expiry group only when
 | `DistantSignalArchiveExpiryOverdue` | warning | The oldest archived `service_date` (`aggregator_archive_oldest_service_date_seconds{table}`) is older than `archive.expiry.retentionDays` + 7 days, for 1h: expiry is not running, is failing, or is still in dry-run. |
 | `DistantSignalScheduleReferenceNotSeeded` | warning | schedule-reference has not read its last completed publish from api (`schedule_reference_seeded` is 0) for 30m. |
 | `DistantSignalScheduleFeedZipRejected` | warning | schedule-ingest quarantined a delivery zip (`schedule_feed_zip_rejected_total`) within the last 6h. |
+| `DistantSignalScheduleFeedIngestRejected` | warning | api answered 400/413/422 to schedule-ingest's delivery record (`schedule_feed_ingest_rejected_total`) within the last 6h (`schedulePipeline.rejectedWindow`). The delivery is not retried until a new upload. |
 | `DistantSignalCorpusRejected` | warning | schedule-ingest refused a CORPUS extract (`schedule_feed_corpus_rejected_total`) within the last 6h. The series exists only while `scheduleFeed.corpus.enabled`. |
 | `DistantSignalCorpusStale` | warning | The newest loaded CORPUS delivery (`api_corpus_last_delivered_at_seconds`, set by api from `corpus_deliveries` at startup and after each load) is over 45 days old (`schedulePipeline.corpusStaleAfterDays`), for 1h. CORPUS is published monthly: 45 days is one cycle plus two weeks' grace. Rendered only when `scheduleFeed.corpus.enabled`, and silent before the first load. |
 | `DistantSignalScheduleReferencePublishStale` | warning | No CIF delivery fully published for over 30h (`schedule_reference_last_published_delivery_timestamp_seconds`), for 15m. |

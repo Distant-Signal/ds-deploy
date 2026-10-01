@@ -1,27 +1,4 @@
-{{/*
-Fail-fast on an unusable Kafka config, same pattern as enricher-deployment.yaml's
-llm.baseUrl/model guard and poller-deployments.yaml's empty-baseUrl guard.
-Unlike the pollers, trust-consumer has no `enabled` toggle and renders
-unconditionally, so the guard is unconditional too.
-
-All three values are plain `String` fields on crates/trust-consumer/src/config.rs's
-clap Config with no default -- an empty string parses fine, so the pod would
-boot and then fail to connect to Kafka forever with nothing but log noise to
-show for it. See that file's doc comment: the exact RDM Train Movements
-broker address, topic name, and SASL mechanism are all GAP-flagged as
-unconfirmed, so there is no sane default to fall back to.
-*/}}
-{{- if eq .Values.trustConsumer.movementFeed "kafka" }}
-{{- if not .Values.trustConsumer.kafka.brokers }}
-{{- fail "trustConsumer.kafka.brokers is empty. Set it to the RDM Train Movements Kafka broker address(es) (e.g. --set trustConsumer.kafka.brokers=kafka.raildata.org.uk:9094). An empty value would deploy a trust-consumer that never connects." }}
-{{- end }}
-{{- if not .Values.trustConsumer.kafka.topic }}
-{{- fail "trustConsumer.kafka.topic is empty. Set it to the confirmed RDM Train Movements Kafka topic name. An empty value would deploy a trust-consumer that never connects." }}
-{{- end }}
-{{- if not .Values.trustConsumer.kafka.saslMechanism }}
-{{- fail "trustConsumer.kafka.saslMechanism is empty. Set it to the confirmed RDM Kafka product's SASL mechanism (e.g. --set trustConsumer.kafka.saslMechanism=PLAIN or SCRAM-SHA-512). crates/trust-consumer/src/config.rs's doc comment flags this as GAP: unconfirmed whether RDM's Kafka product uses PLAIN or a SCRAM variant -- an empty value would deploy a trust-consumer that silently guesses wrong and never connects." }}
-{{- end }}
-{{- end }}
+{{- include "distant-signal.removedMovementFeedGuard" (dict "name" "trustConsumer" "value" .Values.trustConsumer.movementFeed) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,15 +7,9 @@ metadata:
     {{- include "distant-signal.labels" (dict "root" . "component" "trust-consumer") | nindent 4 }}
 spec:
   # Values-driven (Task 10 of docs/superpowers/plans/2026-09-04-movement-relay-plan.md,
-  # "Judgment calls" item 2) -- was a fixed `1` YAML literal: this plan's v1
-  # uses one fixed consumer-group id per deployment
-  # (crates/trust-consumer/src/config.rs's doc comment on
-  # kafka_consumer_group) -- horizontal scaling via multiple replicas
-  # sharing the group is a real future option, not implemented here. The
-  # values-driven knob exists so Deploy B's B1 step (scale to 0 to stop
-  # this crate's Kafka connection cleanly) is an explicit, visible,
-  # `helm get values`-inspectable part of every command run during the
-  # cutover, not a fact that lives only in `kubectl`'s live cluster state.
+  # "Judgment calls" item 2) -- was a fixed `1` YAML literal, so scaling to
+  # 0 is an explicit, `helm get values`-inspectable step rather than an
+  # out-of-band `kubectl scale`.
   replicas: {{ .Values.trustConsumer.replicaCount }}
   selector:
     matchLabels:
@@ -101,24 +72,6 @@ spec:
             # progressStallSecs, so a wedged loop is restarted too.
             failureThreshold: 6
           env:
-            - name: KAFKA_BROKERS
-              value: {{ .Values.trustConsumer.kafka.brokers | quote }}
-            - name: KAFKA_TOPIC
-              value: {{ .Values.trustConsumer.kafka.topic | quote }}
-            - name: KAFKA_CONSUMER_GROUP
-              value: {{ .Values.trustConsumer.kafka.consumerGroup | quote }}
-            - name: KAFKA_SASL_MECHANISM
-              value: {{ .Values.trustConsumer.kafka.saslMechanism | quote }}
-            - name: KAFKA_SASL_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ default (include "distant-signal.secretName" .) .Values.trustConsumer.kafka.existingSecret }}
-                  key: {{ .Values.trustConsumer.kafka.existingSecretUsernameKey }}
-            - name: KAFKA_SASL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ default (include "distant-signal.secretName" .) .Values.trustConsumer.kafka.existingSecret }}
-                  key: {{ .Values.trustConsumer.kafka.existingSecretPasswordKey }}
             - name: API_INGEST_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/train-events" | quote }}
             - name: FORWARD_SIGNALS_URL
@@ -153,8 +106,6 @@ spec:
               value: {{ printf "0.0.0.0:%d" (int .Values.trustConsumer.healthPort) | quote }}
             - name: PROGRESS_STALL_SECS
               value: {{ .Values.trustConsumer.progressStallSecs | quote }}
-            - name: MOVEMENT_FEED_BACKEND
-              value: {{ .Values.trustConsumer.movementFeed | quote }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisPasswordEnv" . }}

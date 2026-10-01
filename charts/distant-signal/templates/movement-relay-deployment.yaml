@@ -22,17 +22,6 @@ Deployment writes. Each Kafka setting falls back to trustConsumer.kafka.*
 {{- if not $mechanism }}
 {{- fail (printf "movement-relay is enabled (the default) but has no Kafka SASL mechanism. Set movementRelay.kafka.saslMechanism or trustConsumer.kafka.saslMechanism (e.g. PLAIN), %s." $optOut) }}
 {{- end }}
-{{- /*
-Two members of one consumer group split its partitions, so each would see
-only part of the feed. Refuse a consumer still on the legacy direct Kafka
-path sharing movement-relay's group.
-*/}}
-{{- if and (eq .Values.trustConsumer.movementFeed "kafka") (eq $group .Values.trustConsumer.kafka.consumerGroup) }}
-{{- fail (printf "trustConsumer.movementFeed=kafka and movement-relay would join the same Kafka consumer group (%s) and split its partitions. Use trustConsumer.movementFeed=redis-stream (the default), or set movementRelay.enabled=false to keep the legacy direct connection." $group) }}
-{{- end }}
-{{- if and (eq .Values.fullCoverageConsumer.movementFeed "kafka") (eq $group .Values.fullCoverageConsumer.kafka.consumerGroup) }}
-{{- fail (printf "fullCoverageConsumer.movementFeed=kafka and movement-relay would join the same Kafka consumer group (%s) and split its partitions. Use fullCoverageConsumer.movementFeed=redis-stream (the default), or set movementRelay.enabled=false." $group) }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -487,10 +487,10 @@ movement-relay's effective Kafka connection settings. Each
 movementRelay.kafka.* field falls back to the matching trustConsumer.kafka.*
 field when left empty, so an install configures its one RDM Train Movements
 connection once (in either place) and movement-relay, which is on by
-default, picks it up. RDM issues one consumer group per account, so the
-fallback group is the one trust-consumer would otherwise have used; the
-consumer-group collision guard in movement-relay-deployment.yaml stops a
-consumer that still reads Kafka directly from sharing it.
+default, picks it up. RDM issues one consumer group per account, and
+movement-relay is its only member: since Deploy C (PL-15a) no consumer
+reads Kafka directly. trustConsumer.kafka.* is kept as the place this
+connection is configured, so existing installs keep working unchanged.
 */}}
 {{- define "distant-signal.movementRelayKafkaBrokers" -}}
 {{- .Values.movementRelay.kafka.brokers | default .Values.trustConsumer.kafka.brokers }}
@@ -1416,21 +1416,27 @@ existingClaim) there, as values.yaml's upgrade note says.
 
 {{/*
 The movement-events consumer groups movement-relay creates at the start of a
-fresh stream (MOVEMENT_CONSUMER_GROUPS): trust-consumer and
-full-coverage-consumer only while their movementFeed is redis-stream (the
-legacy kafka path never reads the stream), trust-event-backlog always.
+fresh stream (MOVEMENT_CONSUMER_GROUPS): every consumer reads the stream
+since Deploy C removed the consumers' direct-Kafka backend (PL-15a).
 Takes root.
 */}}
 {{- define "distant-signal.movementConsumerGroups" -}}
-{{- $groups := list -}}
-{{- if eq .Values.trustConsumer.movementFeed "redis-stream" -}}
-{{- $groups = append $groups "trust-consumer" -}}
+{{- print "trust-consumer,full-coverage-consumer,trust-event-backlog" -}}
+{{- end }}
+
+{{/*
+trustConsumer.movementFeed / fullCoverageConsumer.movementFeed were removed
+in Deploy C (PL-15a, R-101): both consumers only read movement-relay's
+movement-events stream. A leftover `redis-stream` is harmless and ignored;
+anything else (in practice `kafka`) fails the render rather than being
+silently ignored, so an install that still expects a direct Kafka consumer
+finds out. Takes (dict "name" <values key> "value" <its value or nil>).
+*/}}
+{{- define "distant-signal.removedMovementFeedGuard" -}}
+{{- $value := toString (default "redis-stream" .value) -}}
+{{- if ne $value "redis-stream" -}}
+{{- fail (printf "%s.movementFeed=%s is no longer supported: the consumers' direct Kafka backend was removed (Deploy C, PL-15a). movement-relay is the only Kafka client and every consumer reads its movement-events stream. Remove %s.movementFeed from your values." .name $value .name) -}}
 {{- end -}}
-{{- if eq .Values.fullCoverageConsumer.movementFeed "redis-stream" -}}
-{{- $groups = append $groups "full-coverage-consumer" -}}
-{{- end -}}
-{{- $groups = append $groups "trust-event-backlog" -}}
-{{- join "," $groups -}}
 {{- end }}
 
 {{/*

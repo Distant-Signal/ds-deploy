@@ -1,23 +1,4 @@
-{{/*
-Fail-fast on an unusable Kafka config -- same guard as
-trust-consumer-deployment.yaml's own, checked AGAIN here independently
-(against the SAME trustConsumer.kafka.* values, reused per Decision 1's
-"connection vs. group membership" reasoning -- see values.yaml's own note)
-rather than relying on that Deployment's guard having already fired first.
-Two harmless duplicate `fail` messages if both are empty is safer than one
-Deployment silently depending on the other's template rendering order.
-*/}}
-{{- if eq .Values.fullCoverageConsumer.movementFeed "kafka" }}
-{{- if not .Values.trustConsumer.kafka.brokers }}
-{{- fail "trustConsumer.kafka.brokers is empty. Set it to the RDM Train Movements Kafka broker address(es) (e.g. --set trustConsumer.kafka.brokers=kafka.raildata.org.uk:9094). An empty value would deploy a full-coverage-consumer that never connects." }}
-{{- end }}
-{{- if not .Values.trustConsumer.kafka.topic }}
-{{- fail "trustConsumer.kafka.topic is empty. Set it to the confirmed RDM Train Movements Kafka topic name. An empty value would deploy a full-coverage-consumer that never connects." }}
-{{- end }}
-{{- if not .Values.trustConsumer.kafka.saslMechanism }}
-{{- fail "trustConsumer.kafka.saslMechanism is empty. Set it to the confirmed RDM Kafka product's SASL mechanism (e.g. --set trustConsumer.kafka.saslMechanism=PLAIN or SCRAM-SHA-512). An empty value would deploy a full-coverage-consumer that silently guesses wrong and never connects." }}
-{{- end }}
-{{- end }}
+{{- include "distant-signal.removedMovementFeedGuard" (dict "name" "fullCoverageConsumer" "value" .Values.fullCoverageConsumer.movementFeed) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -29,10 +10,7 @@ spec:
   # docs/superpowers/plans/2026-09-04-movement-relay-plan.md) -- was a
   # fixed `1` YAML literal: one fixed consumer-group id per deployment,
   # same single-consumer-group-per-deployment reasoning as trust-consumer's
-  # own replicaCount (see that Deployment's own comment). Not load-bearing
-  # for Deploy B's B1 step (this component never held real Kafka group
-  # membership -- design doc Decision 6), added for a consistent
-  # values.yaml mental model.
+  # own replicaCount (see that Deployment's own comment).
   replicas: {{ .Values.fullCoverageConsumer.replicaCount }}
   selector:
     matchLabels:
@@ -99,28 +77,6 @@ spec:
           # names crates/full-coverage-consumer/src/config.rs actually
           # declares.
           env:
-            # REUSED from trustConsumer.kafka.* -- same connection, same
-            # RDM credential, per Decision 1's "connection vs. group
-            # membership" reasoning. Only KAFKA_CONSUMER_GROUP is this
-            # component's own new value.
-            - name: KAFKA_BROKERS
-              value: {{ .Values.trustConsumer.kafka.brokers | quote }}
-            - name: KAFKA_TOPIC
-              value: {{ .Values.trustConsumer.kafka.topic | quote }}
-            - name: KAFKA_CONSUMER_GROUP
-              value: {{ .Values.fullCoverageConsumer.kafka.consumerGroup | quote }}
-            - name: KAFKA_SASL_MECHANISM
-              value: {{ .Values.trustConsumer.kafka.saslMechanism | quote }}
-            - name: KAFKA_SASL_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ default (include "distant-signal.secretName" .) .Values.trustConsumer.kafka.existingSecret }}
-                  key: {{ .Values.trustConsumer.kafka.existingSecretUsernameKey }}
-            - name: KAFKA_SASL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ default (include "distant-signal.secretName" .) .Values.trustConsumer.kafka.existingSecret }}
-                  key: {{ .Values.trustConsumer.kafka.existingSecretPasswordKey }}
             - name: SCHEDULE_LINE_POPULATION_URL
               value: {{ printf "%s/private/schedule-line-population" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: FULL_COVERAGE_STATS_URL
@@ -167,8 +123,6 @@ spec:
               value: {{ printf "0.0.0.0:%d" (int .Values.fullCoverageConsumer.healthPort) | quote }}
             - name: PROGRESS_STALL_SECS
               value: {{ .Values.fullCoverageConsumer.progressStallSecs | quote }}
-            - name: MOVEMENT_FEED_BACKEND
-              value: {{ .Values.fullCoverageConsumer.movementFeed | quote }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisPasswordEnv" . }}

@@ -833,8 +833,9 @@ jobs:
       # trustConsumer.kafka.*, including trust-consumer's SASL credential;
       # its own values win. With no Kafka config anywhere the render must
       # fail with a clear error, enabled=false must render nothing
-      # movement-relay-shaped, and a consumer still on movementFeed=kafka
-      # must not share the relay's consumer group.
+      # movement-relay-shaped, and the removed consumer Kafka backend
+      # (movementFeed=kafka, Deploy C) must fail the render while the
+      # consumers get no KAFKA_* env at all.
       - name: helm template (movement-relay default and fallback)
         run: |
           set -euo pipefail
@@ -884,12 +885,23 @@ jobs:
           off=$(render --set movementRelay.enabled=false)
           if grep -E -q 'component: movement-relay|name: distant-signal-movement-relay|movement-relay-kafka-sasl' <<<"${off}"; then fail "movementRelay.enabled=false still rendered movement-relay"; fi
 
-          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if render "${kafka[@]}" --set trustConsumer.movementFeed=kafka >/dev/null 2>&1; then
-            fail "trust-consumer on Kafka sharing the relay's group must fail the render"
-          fi
-          render "${kafka[@]}" --set trustConsumer.movementFeed=kafka \
-            --set movementRelay.kafka.consumerGroup=relay-group >/dev/null
+          for consumer in trustConsumer fullCoverageConsumer; do
+            # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+            if err=$(render "${kafka[@]}" --set "${consumer}.movementFeed=kafka" 2>&1 >/dev/null); then
+              fail "${consumer}.movementFeed=kafka must fail the render (Deploy C)"
+            fi
+            grep -q 'no longer supported' <<<"${err}" || fail "unexpected ${consumer}.movementFeed error: ${err}"
+            # A leftover explicit redis-stream (production's old value) still renders.
+            render "${kafka[@]}" --set "${consumer}.movementFeed=redis-stream" >/dev/null
+          done
+          for template in trust-consumer-deployment full-coverage-consumer-deployment; do
+            consumer=$(render "${kafka[@]}" --show-only "templates/${template}.yaml")
+            if grep -E -q 'name: (KAFKA_|MOVEMENT_FEED_BACKEND)' <<<"${consumer}"; then
+              fail "${template} must get no Kafka settings (Deploy C)"
+            fi
+          done
+          expect_env MOVEMENT_CONSUMER_GROUPS trust-consumer,full-coverage-consumer,trust-event-backlog \
+            "movement-relay must create every consumer group" <<<"${relay}"
 
       # INF-3 Redis AUTH. Off (the default) must render no REDIS_PASSWORD,
       # no --requirepass and no redis-password Secret key. On must give all
@@ -1087,6 +1099,11 @@ jobs:
             echo "PrometheusRule must not use an 'x unless x offset' new-series clause" >&2; exit 1
           fi
           echo "${names}"
+          # R-040/R-097: stuck entries and TRUST parse drops alert, one
+          # parse-drop clause per consumer.
+          grep -q 'increase(distant_signal_movement_feed_long_pending_total{namespace="[^"]*"}\[1h\])) > 0$' <<<"${rule}"
+          n_parse=$(grep -c '_errors_total{namespace="[^"]*", operation="parse_envelope"}\[1h\])) > 0, "consumer"' <<<"${rule}" || true)
+          [[ "${n_parse}" -eq 3 ]] || { echo "expected 3 parse_envelope clauses, got ${n_parse}" >&2; exit 1; }
           # Open sign-up: a burst of new accounts alerts, and the metric and
           # threshold come from values.
           grep -q 'alert: DistantSignalUserSignupSpike' <<<"${rule}"
