@@ -296,6 +296,31 @@ jobs:
       - name: cargo test -p movement-feed -- --ignored (Redis-backed tests)
         run: cargo test -p movement-feed -- --ignored --test-threads=1
 
+      # The Postgres role split (docs/postgres-app-role.md): proves no runtime
+      # path needs a superuser. scripts/test-postgres-roles.py makes a fresh
+      # database and roles with the chart's own setup script
+      # (charts/distant-signal/files/postgres-roles.sql), then runs the
+      # DB-backed suites with DATABASE_URL as the DML-only app role and
+      # MIGRATION_DATABASE_URL as the schema owner, as the chart wires them.
+      # `existing` converts a database migrated as the superuser (today's
+      # production); `new` creates the roles first and migrates as the owner
+      # (a new cluster). The #[sqlx::test] modules are skipped: they create a
+      # throwaway database per test, which needs CREATEDB, a test-harness
+      # right, not a runtime one; their DML runs in the step above.
+      - name: DB-backed tests as the non-superuser app role (existing cluster)
+        run: >-
+          scripts/test-postgres-roles.py --mode existing -- sh -c '
+          cargo test -p api -p aggregator -p notifier -- --ignored --test-threads=1
+          --skip corpus::db_tests --skip corpus_crosswalk::db_tests --skip freshness::db_tests
+          && cargo test -p common --features postgres pg::tests -- --ignored --test-threads=1
+          && cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1'
+
+      - name: DB-backed tests as the non-superuser app role (new cluster)
+        run: >-
+          scripts/test-postgres-roles.py --mode new --
+          cargo test -p api -- --ignored --test-threads=1
+          migrate::tests schedule_publish
+
   # Custom: no reusable Piped workflow covers Node/npm at all (its
   # ecosystem coverage is Python + Rust). frontend/package.json now has a
   # `lint` script (`eslint .`, flat config in frontend/eslint.config.mjs
@@ -1041,6 +1066,103 @@ jobs:
           render --set redis.enabled=false --set redis.externalUrl=redis://ext:6379 \
             --set redis.auth.enabled=true --set redis.auth.existingSecret=ext >/dev/null
           render --set redis.auth.enabled=true --set networkPolicy.enabled=true >/dev/null
+
+      # postgresql.roles (docs/postgres-app-role.md): off renders nothing new;
+      # on, every pool is the app role, api migrates as the owner, the
+      # pgBackRest CronJobs run as the backup role, and turning it on without
+      # initScript leaves the Postgres pod (and so Postgres) untouched.
+      - name: helm template (postgres roles)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          pgbackrest=(
+            --set postgresql.pgbackrest.enabled=true
+            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
+            --set postgresql.pgbackrest.repo.path=/test/pgbackrest
+            --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
+            --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
+            --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+
+          off=$(render "${pgbackrest[@]}" --set networkPolicy.enabled=true)
+          if grep -E -q 'postgres-roles|MIGRATION_DATABASE_URL|DS_PG_|_owner|_app:|PGBACKREST_PG1_USER=' <<<"${off}"; then
+            fail "postgresql.roles disabled but role settings rendered"
+          fi
+          # The DATABASE_URL / MIGRATION_DATABASE_URL values of every container.
+          off_urls=$(grep -A1 -E 'name: (MIGRATION_)?DATABASE_URL$' <<<"${off}")
+          n_super=$(grep -c 'value: "postgres://distant_signal:' <<<"${off_urls}" || true)
+          [[ "${n_super}" -eq 4 ]] || fail "roles off: the four DATABASE_URLs must stay the superuser's"
+
+          on=$(render "${pgbackrest[@]}" --set networkPolicy.enabled=true \
+            --set postgresql.roles.enabled=true --set postgresql.roles.setupJob.enabled=true \
+            --set postgresql.roles.app.existingSecret=pg-roles \
+            --set postgresql.roles.owner.existingSecret=pg-roles)
+          on_urls=$(grep -A1 -E 'name: (MIGRATION_)?DATABASE_URL$' <<<"${on}")
+          # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax matched literally, not a shell expansion
+          n_app=$(grep -c 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${on_urls}" || true)
+          [[ "${n_app}" -eq 4 ]] || fail "api, aggregator, enricher and notifier must connect as the app role"
+          # shellcheck disable=SC2016 # "$(PG_MIGRATION_PASSWORD)" is Kubernetes env-var syntax, matched literally
+          n_owner=$(grep -c 'postgres://distant_signal_owner:\$(PG_MIGRATION_PASSWORD)@' <<<"${on_urls}" || true)
+          [[ "${n_owner}" -eq 1 ]] || fail "only api's MIGRATION_DATABASE_URL may be the owner role"
+          grep -A4 'name: PGPASSWORD$' <<<"${on}" | grep -q 'key: postgres-app-password' \
+            || fail "PGPASSWORD must come from the app role's Secret key"
+          grep -A3 'name: PG_MIGRATION_PASSWORD$' <<<"${on}" | grep -q 'name: pg-roles' \
+            || fail "PG_MIGRATION_PASSWORD must come from roles.owner.existingSecret"
+          n_cron=$(grep -c -- '- "PGBACKREST_PG1_USER=distant_signal_backup"' <<<"${on}" || true)
+          [[ "${n_cron}" -eq 4 ]] || fail "all four pgBackRest CronJobs must run as the backup role"
+          grep -q 'helm.sh/hook: post-install,post-upgrade' <<<"${on}" || fail "the setup Job must be a hook"
+          grep -q "'--variable=app_connection_limit=75'" <<<"${on}" \
+            || fail "app CONNECTION LIMIT must default to the chart's pools (50 + 10 + 5 + 5) + 5"
+          grep -q "'--variable=owner_connection_limit=3'" <<<"${on}" \
+            || fail "owner CONNECTION LIMIT must default to api.replicaCount + 2"
+          grep -q 'mountPath: /docker-entrypoint-initdb.d' <<<"${on}" || fail "initScript must mount the initdb script"
+          np=$(render --set networkPolicy.enabled=true --set postgresql.roles.setupJob.enabled=true \
+            --show-only templates/networkpolicy.yaml)
+          grep -q -- '- postgres-roles$' <<<"${np}" || fail "the setup Job must be allowed into Postgres"
+          secret=$(render --set postgresql.roles.setupJob.enabled=true --show-only templates/secret.yaml)
+          for key in owner app exporter dump backup; do
+            grep -q "  postgres-${key}-password: " <<<"${secret}" || fail "chart-generated postgres-${key}-password missing"
+          done
+          job=$(render --set postgresql.roles.setupJob.enabled=true \
+            --set postgresql.roles.backup.existingSecret=pg-backup --show-only templates/postgres-roles.yaml)
+          grep -A4 'name: DS_PG_BACKUP_PASSWORD$' <<<"${job}" | grep -q 'name: pg-backup' \
+            || fail "the setup Job must read the backup password from roles.backup.existingSecret"
+          grep -A4 'name: DS_PG_BACKUP_PASSWORD$' <<<"${job}" | grep -q 'key: postgres-backup-password' \
+            || fail "the backup password key must default to postgres-backup-password"
+          if grep -q 'PASSWORD=' <<<"${on}"; then fail "no password may be passed on a command line"; fi
+
+          # Flipping roles.enabled on an existing cluster (initScript off) must
+          # not touch the Postgres pod, so Postgres does not restart.
+          sts_off=$(render "${pgbackrest[@]}" --show-only templates/postgres-statefulset.yaml)
+          sts_on=$(render "${pgbackrest[@]}" --set postgresql.roles.enabled=true \
+            --set postgresql.roles.initScript=false --show-only templates/postgres-statefulset.yaml)
+          [[ "${sts_off}" = "${sts_on}" ]] || fail "roles.enabled with initScript=false must leave the StatefulSet unchanged"
+
+          limit=$(render --set postgresql.roles.enabled=true --set postgresql.roles.app.connectionLimit=40)
+          grep -q "'--variable=app_connection_limit=40'" <<<"${limit}" || fail "an explicit connectionLimit must win"
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set postgresql.roles.enabled=true --set postgresql.roles.app.connectionLimit=lots \
+              >/dev/null 2>&1; then
+            fail "a non-numeric connectionLimit must fail the render"
+          fi
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set postgresql.enabled=false --set externalDatabase.url=postgres://x@db/ds \
+              --set postgresql.roles.enabled=true >/dev/null 2>&1; then
+            fail "postgresql.roles.enabled with an external database must fail the render"
+          fi
 
       # Reboot resilience: redis must roll with Recreate (single RWO AOF
       # volume, INF-1); postgres needs a startupProbe so WAL redo is never

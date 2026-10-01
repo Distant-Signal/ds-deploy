@@ -108,6 +108,12 @@ spec:
             {{- if include "distant-signal.pgbackrestEnabled" . }}
             {{- include "distant-signal.pgbackrestEnv" . | nindent 12 }}
             {{- end }}
+            {{- if include "distant-signal.postgresRolesInitScript" . }}
+            # postgresql.roles.initScript: the role passwords for
+            # /docker-entrypoint-initdb.d/10-distant-signal-roles.sh, which
+            # only runs on an empty data directory.
+            {{- include "distant-signal.postgresRolesPasswordEnv" . | trim | nindent 12 }}
+            {{- end }}
             {{- with .Values.postgresql.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -157,6 +163,14 @@ spec:
             - name: dshm
               mountPath: /dev/shm
             {{- end }}
+            {{- if include "distant-signal.postgresRolesInitScript" . }}
+            - name: roles-initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: roles-sql
+              mountPath: /etc/distant-signal/postgres-roles
+              readOnly: true
+            {{- end }}
           {{- with .Values.postgresql.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -174,7 +188,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- $podDataVolume := or (not .Values.postgresql.persistence.enabled) .Values.postgresql.persistence.existingClaim }}
-      {{- if or $podDataVolume .Values.postgresql.shm.enabled }}
+      {{- $rolesInit := include "distant-signal.postgresRolesInitScript" . }}
+      {{- if or $podDataVolume .Values.postgresql.shm.enabled $rolesInit }}
       volumes:
         {{- if $podDataVolume }}
         - name: data
@@ -201,6 +216,25 @@ spec:
             {{- with .Values.postgresql.shm.sizeLimit }}
             sizeLimit: {{ . }}
             {{- end }}
+        {{- end }}
+        {{- if $rolesInit }}
+        # postgresql.roles.initScript (templates/postgres-roles.yaml): only
+        # the shell script goes in /docker-entrypoint-initdb.d, executable;
+        # the SQL it runs is mounted elsewhere, or the entrypoint would also
+        # run it on its own, without the variables.
+        - name: roles-initdb
+          configMap:
+            name: {{ include "distant-signal.postgresRolesConfigMapName" . }}
+            defaultMode: 0555
+            items:
+              - key: 10-distant-signal-roles.sh
+                path: 10-distant-signal-roles.sh
+        - name: roles-sql
+          configMap:
+            name: {{ include "distant-signal.postgresRolesConfigMapName" . }}
+            items:
+              - key: postgres-roles.sql
+                path: postgres-roles.sql
         {{- end }}
       {{- end }}
   {{- if and .Values.postgresql.persistence.enabled (not .Values.postgresql.persistence.existingClaim) }}

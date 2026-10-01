@@ -1173,6 +1173,40 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.service.port` | `5432` | Port the headless Service and the container listen on. |
 | `postgresql.connectionBudget.externalClients` | `2` | Connections the render-time budget check reserves for clients deployed outside this chart that connect as the app role: Ranma-Config's postgres-exporter (1) and its nightly `pg_dump` (1). The app role is a superuser, so `superuser_reserved_connections` protects none of these. pgBackRest adds 2 more on its own when enabled. |
 | `postgresql.connectionBudget.adminSessions` | `3` | Interactive `kubectl exec ... psql` sessions the budget check keeps room for. |
+| `postgresql.roles.enabled` | `false` | Connect the api pools and every worker as `app`, api's migrations as `owner`, and the pgBackRest CronJobs as `backup` (docs/postgres-app-role.md). The roles must exist first (`setupJob`, or `initScript` on a new cluster). Does not restart Postgres on its own. |
+| `postgresql.roles.initScript` | `true` | With `enabled`: run files/postgres-roles.sql from /docker-entrypoint-initdb.d, which the image runs only on an EMPTY data directory (a new cluster), before any client connects. Turning it on restarts Postgres: set it false on an existing cluster. |
+| `postgresql.roles.setupJob.enabled` | `false` | Run files/postgres-roles.sql as a Helm post-install/post-upgrade hook Job, as the superuser over the Service, on every install and upgrade (idempotent: creates/updates the roles, moves ownership to `owner`, grants). Independent of `enabled`: on an existing cluster turn this on first. A failure fails the release. |
+| `postgresql.roles.setupJob.activeDeadlineSeconds` | `600` | Seconds before the Job gives up (it first waits for Postgres). |
+| `postgresql.roles.setupJob.backoffLimit` | `2` | Retries after a failed run. |
+| `postgresql.roles.setupJob.resources` | requests `10m`/`32Mi`, limit `128Mi` | Container resources. |
+| `postgresql.roles.setupJob.podSecurityContext` | `{}` | Overrides the pod securityContext (default: uid/gid 999, the image's postgres user, non-root, RuntimeDefault seccomp). |
+| `postgresql.roles.owner.username` | `distant_signal_owner` | Role name of the schema owner. |
+| `postgresql.roles.owner.password` | `""` | Password. Generated (32 alphanumeric chars, kept across upgrades) when empty and no `existingSecret`. |
+| `postgresql.roles.owner.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.owner.existingSecretPasswordKey` | `postgres-owner-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.owner.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `api.replicaCount` + 2. |
+| `postgresql.roles.app.username` | `distant_signal_app` | Role name the services connect as. |
+| `postgresql.roles.app.password` | `""` | Password. Generated (32 alphanumeric chars, kept across upgrades) when empty and no `existingSecret`. |
+| `postgresql.roles.app.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.app.existingSecretPasswordKey` | `postgres-app-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.app.connectionLimit` | `""` | CONNECTION LIMIT. Empty: the chart's pools (api `maxConnections` x `replicaCount`, aggregator 10, notifier 5, enricher 5, archive 2 when enabled) plus `connectionLimitSlack`. It is what makes `superuser_reserved_connections` a real admin reserve. |
+| `postgresql.roles.app.connectionLimitSlack` | `5` | Added to the computed CONNECTION LIMIT, for one-off binaries (backfills) run as the app role. |
+| `postgresql.roles.exporter.username` | `distant_signal_exporter` | Role name for postgres-exporter (pg_monitor). |
+| `postgresql.roles.exporter.password` | `""` | Password. Generated (32 alphanumeric chars, kept across upgrades) when empty and no `existingSecret`. |
+| `postgresql.roles.exporter.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.exporter.existingSecretPasswordKey` | `postgres-exporter-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.exporter.connectionLimit` | `3` | CONNECTION LIMIT. |
+| `postgresql.roles.dump.username` | `distant_signal_dump` | Role name for pg_dump (pg_read_all_data). |
+| `postgresql.roles.dump.password` | `""` | Password. Generated (32 alphanumeric chars, kept across upgrades) when empty and no `existingSecret`. |
+| `postgresql.roles.dump.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.dump.existingSecretPasswordKey` | `postgres-dump-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.dump.connectionLimit` | `2` | CONNECTION LIMIT (a parallel `pg_dump -j N` needs N + 1). |
+| `postgresql.roles.backup.username` | `distant_signal_backup` | Role name for pgBackRest (EXECUTE on pg_backup_start/stop, pg_switch_wal, pg_create_restore_point; pg_read_all_settings, pg_checkpoint). |
+| `postgresql.roles.backup.password` | `""` | Password. Generated (32 alphanumeric chars, kept across upgrades) when empty and no `existingSecret`. Defence in depth: pgBackRest uses the trusted local socket and never sends it. |
+| `postgresql.roles.backup.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.backup.existingSecretPasswordKey` | `postgres-backup-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.backup.connectionLimit` | `4` | CONNECTION LIMIT. |
+| `postgresql.roles.backup.database` | `postgres` | Database pgBackRest connects to (its pg1-database default); the function grants are made there and in `auth.database`. |
 | `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
 | `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |

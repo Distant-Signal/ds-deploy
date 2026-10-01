@@ -182,6 +182,11 @@ spec:
             # PGPASSWORD must stay immediately before DATABASE_URL -- the
             # kubelet only expands $(VAR) from EARLIER entries in this list.
             {{- include "distant-signal.databaseEnv" . | nindent 12 }}
+            {{- with include "distant-signal.migrationDatabaseEnv" . }}
+            # postgresql.roles.enabled: the migrations connect as the schema
+            # owner, the pools above as the DML-only app role.
+            {{- . | nindent 12 }}
+            {{- end }}
             - name: DATABASE_MAX_CONNECTIONS
               value: {{ .Values.api.database.maxConnections | int | quote }}
             # The dedicated startup migration connection; see

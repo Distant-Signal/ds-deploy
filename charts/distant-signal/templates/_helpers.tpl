@@ -687,13 +687,22 @@ the default path is never affected.
 */}}
 {{- define "distant-signal.databaseEnv" -}}
 {{- if .Values.postgresql.enabled -}}
+{{- /* With postgresql.roles.enabled, the non-superuser app role. */}}
+{{- $user := .Values.postgresql.auth.username -}}
+{{- $secretName := include "distant-signal.postgresSecretName" . -}}
+{{- $secretKey := include "distant-signal.postgresSecretPasswordKey" . -}}
+{{- if include "distant-signal.postgresRolesEnabled" . -}}
+{{- $user = .Values.postgresql.roles.app.username -}}
+{{- $secretName = include "distant-signal.postgresRoleSecretName" (dict "root" . "role" "app") -}}
+{{- $secretKey = include "distant-signal.postgresRoleSecretKey" (dict "root" . "role" "app") -}}
+{{- end -}}
 - name: PGPASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ include "distant-signal.postgresSecretName" . }}
-      key: {{ include "distant-signal.postgresSecretPasswordKey" . }}
+      name: {{ $secretName }}
+      key: {{ $secretKey }}
 - name: DATABASE_URL
-  value: {{ printf "postgres://%s:$(PGPASSWORD)@%s:%d/%s" .Values.postgresql.auth.username (include "distant-signal.postgresFullname" .) (int .Values.postgresql.service.port) .Values.postgresql.auth.database | quote }}
+  value: {{ printf "postgres://%s:$(PGPASSWORD)@%s:%d/%s" $user (include "distant-signal.postgresFullname" .) (int .Values.postgresql.service.port) .Values.postgresql.auth.database | quote }}
 {{- else if .Values.externalDatabase.existingSecret -}}
 - name: DATABASE_URL
   valueFrom:
@@ -713,6 +722,143 @@ the default path is never affected.
   value: {{ .Values.databasePool.idleInTransactionTimeoutSecs | int | quote }}
 - name: DATABASE_ACQUIRE_TIMEOUT_SECS
   value: {{ .Values.databasePool.acquireTimeoutSecs | int | quote }}
+{{- end }}
+
+{{/*
+postgresql.roles (docs/postgres-app-role.md). Every helper takes root
+unless it says otherwise.
+
+distant-signal.postgresRolesEnabled: true (non-empty) when the services
+connect as the separate roles. Needs the bundled Postgres.
+*/}}
+{{- define "distant-signal.postgresRolesEnabled" -}}
+{{- if .Values.postgresql.roles.enabled -}}
+{{- if not .Values.postgresql.enabled -}}
+{{- fail "postgresql.roles.enabled needs the bundled Postgres (postgresql.enabled: true). For an external database, give externalDatabase a non-superuser URL instead." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when anything needs the role passwords: the services
+(roles.enabled) or the setup Job (roles.setupJob.enabled).
+*/}}
+{{- define "distant-signal.postgresRolesOn" -}}
+{{- if or (include "distant-signal.postgresRolesEnabled" .) (include "distant-signal.postgresRolesSetupJob" .) -}}
+true
+{{- end -}}
+{{- end }}
+
+{{- define "distant-signal.postgresRolesSetupJob" -}}
+{{- if .Values.postgresql.roles.setupJob.enabled -}}
+{{- if not .Values.postgresql.enabled -}}
+{{- fail "postgresql.roles.setupJob.enabled needs the bundled Postgres (postgresql.enabled: true)." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when the Postgres pod carries the initdb script.
+*/}}
+{{- define "distant-signal.postgresRolesInitScript" -}}
+{{- if and (include "distant-signal.postgresRolesEnabled" .) .Values.postgresql.roles.initScript -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+Secret name / key of one role's password. Takes (dict "root" $ "role"
+"owner"|"app"|"exporter"|"dump"|"backup"). Same three-way shape as auth.password:
+the role's existingSecret, else the chart's Secret.
+*/}}
+{{- define "distant-signal.postgresRoleSecretName" -}}
+{{- $role := get .root.Values.postgresql.roles .role -}}
+{{- default (include "distant-signal.secretName" .root) $role.existingSecret -}}
+{{- end }}
+
+{{- define "distant-signal.postgresRoleSecretKey" -}}
+{{- $role := get .root.Values.postgresql.roles .role -}}
+{{- required (printf "postgresql.roles.%s.existingSecretPasswordKey must not be empty" .role) $role.existingSecretPasswordKey -}}
+{{- end }}
+
+{{/*
+A role's CONNECTION LIMIT. Takes (dict "root" $ "role" ...). An empty
+owner/app value is computed: the owner gets api.replicaCount + 2; the app
+gets the chart's pools (the same ones the api-deployment.yaml budget check
+counts, without the migration connection, which is the owner's) plus
+app.connectionLimitSlack.
+*/}}
+{{- define "distant-signal.postgresRoleConnectionLimit" -}}
+{{- $root := .root -}}
+{{- $role := get $root.Values.postgresql.roles .role -}}
+{{- $limit := toString (default "" $role.connectionLimit) -}}
+{{- if ne $limit "" -}}
+{{- if not (regexMatch "^[0-9]+$" $limit) -}}
+{{- fail (printf "postgresql.roles.%s.connectionLimit must be a whole number, or empty to compute it." .role) -}}
+{{- end -}}
+{{- $limit -}}
+{{- else if eq .role "owner" -}}
+{{- add (int $root.Values.api.replicaCount) 2 -}}
+{{- else if eq .role "app" -}}
+{{- $apiPool := mul (int $root.Values.api.replicaCount) (int $root.Values.api.database.maxConnections) -}}
+{{- $pools := add 10 5 5 (ternary 2 0 ($root.Values.archive.enabled | default false)) -}}
+{{- add $apiPool $pools (int $role.connectionLimitSlack) -}}
+{{- else -}}
+{{- fail (printf "postgresql.roles.%s.connectionLimit must be set." .role) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The DS_PG_<ROLE>_PASSWORD env entries files/postgres-roles.sql reads with
+psql's \getenv.
+*/}}
+{{- define "distant-signal.postgresRolesPasswordEnv" -}}
+{{- $root := . -}}
+{{- range $role := list "owner" "app" "exporter" "dump" "backup" }}
+- name: {{ printf "DS_PG_%s_PASSWORD" (upper $role) }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "distant-signal.postgresRoleSecretName" (dict "root" $root "role" $role) }}
+      key: {{ include "distant-signal.postgresRoleSecretKey" (dict "root" $root "role" $role) }}
+{{- end }}
+{{- end }}
+
+{{/*
+psql --variable arguments for files/postgres-roles.sql, one per line.
+`old_owner` is auth.username: the image's bootstrap superuser, whose
+objects move to the owner role.
+*/}}
+{{- define "distant-signal.postgresRolesPsqlVariables" -}}
+{{- $roles := .Values.postgresql.roles -}}
+--variable=old_owner={{ .Values.postgresql.auth.username }}
+{{- range $role := list "owner" "app" "exporter" "dump" "backup" }}
+--variable={{ $role }}={{ (get $roles $role).username }}
+--variable={{ $role }}_connection_limit={{ include "distant-signal.postgresRoleConnectionLimit" (dict "root" $ "role" $role) }}
+{{- end }}
+--variable=backup_database={{ $roles.backup.database }}
+{{- end }}
+
+{{- define "distant-signal.postgresRolesConfigMapName" -}}
+{{- printf "%s-roles" (include "distant-signal.postgresFullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+api's MIGRATION_DATABASE_URL (the owner role) with postgresql.roles.enabled;
+empty otherwise, and then api migrates with DATABASE_URL as before. Same
+$(VAR) indirection as distant-signal.databaseEnv.
+*/}}
+{{- define "distant-signal.migrationDatabaseEnv" -}}
+{{- if include "distant-signal.postgresRolesEnabled" . -}}
+- name: PG_MIGRATION_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "distant-signal.postgresRoleSecretName" (dict "root" . "role" "owner") }}
+      key: {{ include "distant-signal.postgresRoleSecretKey" (dict "root" . "role" "owner") }}
+- name: MIGRATION_DATABASE_URL
+  value: {{ printf "postgres://%s:$(PG_MIGRATION_PASSWORD)@%s:%d/%s" .Values.postgresql.roles.owner.username (include "distant-signal.postgresFullname" .) (int .Values.postgresql.service.port) .Values.postgresql.auth.database | quote }}
+{{- end -}}
 {{- end }}
 
 {{/*

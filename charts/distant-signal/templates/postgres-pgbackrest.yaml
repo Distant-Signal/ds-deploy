@@ -32,6 +32,28 @@ weekly verify CronJob runs it instead.
 {{- with $pb.backup.verifySchedule }}
 {{- $jobs = append $jobs (dict "suffix" "verify" "schedule" . "command" (list "pgbackrest" "--log-level-console=info" "verify")) }}
 {{- end }}
+{{- /*
+postgresql.roles.enabled: pgBackRest connects as the backup role (EXECUTE on
+the backup functions, pg_read_all_settings, pg_checkpoint; no superuser),
+to roles.backup.database where those grants are, instead of the container's
+PGBACKREST_PG1_USER (the superuser). Set per
+exec with `env`, not in the Postgres pod's env, so flipping it does not
+restart Postgres; archive-push never connects to the database anyway. A
+manual `kubectl exec ... pgbackrest` still runs as the superuser.
+
+No PGPASSWORD: pgBackRest connects over the local socket, which the image
+trusts, so the backup role's password (postgresql.roles.backup) is never
+sent. Passing it here would put it on the exec command line (visible in the
+CronJob spec and the pod's process list) for no gain.
+*/}}
+{{- if include "distant-signal.postgresRolesEnabled" . }}
+{{- $prefix := list "env" (printf "PGBACKREST_PG1_USER=%s" .Values.postgresql.roles.backup.username) (printf "PGBACKREST_PG1_DATABASE=%s" .Values.postgresql.roles.backup.database) }}
+{{- $prefixed := list }}
+{{- range $jobs }}
+{{- $prefixed = append $prefixed (set (deepCopy .) "command" (concat $prefix .command)) }}
+{{- end }}
+{{- $jobs = $prefixed }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

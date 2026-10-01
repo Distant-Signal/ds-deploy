@@ -48,6 +48,10 @@ spec:
                   - aggregator
                   - enricher
                   - notifier
+                  {{- if include "distant-signal.postgresRolesSetupJob" . }}
+                  # postgresql.roles.setupJob (templates/postgres-roles.yaml).
+                  - postgres-roles
+                  {{- end }}
         {{- with .Values.networkPolicy.postgresClients }}
         # networkPolicy.postgresClients: workloads outside this chart, e.g.
         # a postgres-exporter or a pg_dump backup CronJob.

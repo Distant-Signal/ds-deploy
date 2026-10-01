@@ -1,0 +1,142 @@
+{{- /*
+postgresql.roles (docs/postgres-app-role.md): the role setup script, and the
+hook Job that runs it on an existing cluster. Both render nothing unless
+postgresql.roles.initScript (with roles.enabled) or roles.setupJob.enabled.
+
+files/postgres-roles.sql is idempotent: it creates or updates the owner,
+app, exporter, dump and backup roles, moves schema public and everything
+in it from auth.username (the bootstrap superuser) to the owner, and
+grants the app role DML only.
+*/}}
+{{- $initScript := include "distant-signal.postgresRolesInitScript" . }}
+{{- $setupJob := include "distant-signal.postgresRolesSetupJob" . }}
+{{- if or $initScript $setupJob }}
+{{- $root := . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "distant-signal.postgresRolesConfigMapName" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "postgres-roles") | nindent 4 }}
+data:
+  postgres-roles.sql: |
+    {{- .Files.Get "files/postgres-roles.sql" | nindent 4 }}
+  {{- /*
+  Run by the official image's entrypoint from /docker-entrypoint-initdb.d,
+  on an EMPTY data directory only, against the temporary socket-only server
+  it starts after initdb, as POSTGRES_USER. Executable (the volume's
+  defaultMode), so the entrypoint runs it rather than sourcing it. The .sql
+  file is mounted elsewhere: the entrypoint would run any *.sql it finds
+  there itself, without the variables.
+  */}}
+  10-distant-signal-roles.sh: |
+    #!/bin/sh
+    # postgresql.roles.initScript: create the separate roles on a new cluster
+    # (charts/distant-signal/files/postgres-roles.sql). Passwords come from
+    # the DS_PG_*_PASSWORD env.
+    set -eu
+    exec psql -X --quiet --no-password --username "${POSTGRES_USER:?}" --dbname "${POSTGRES_DB:?}" \
+      {{- range splitList "\n" (include "distant-signal.postgresRolesPsqlVariables" .) }}
+      {{ . | squote }} \
+      {{- end }}
+      --file=/etc/distant-signal/postgres-roles/postgres-roles.sql
+{{- end }}
+{{- if $setupJob }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-setup" (include "distant-signal.postgresRolesConfigMapName" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "postgres-roles") | nindent 4 }}
+  annotations:
+    # A hook, so it runs again on every install and upgrade (after the
+    # release's resources are applied) and a failure fails the release.
+    # before-hook-creation keeps the last run's pod and logs until the next.
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ int64 .Values.postgresql.roles.setupJob.backoffLimit }}
+  activeDeadlineSeconds: {{ int64 .Values.postgresql.roles.setupJob.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres-roles") | nindent 8 }}
+        app.kubernetes.io/part-of: distant-signal
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- $defaults := dict "runAsNonRoot" true "runAsUser" 999 "runAsGroup" 999 "seccompProfile" (dict "type" "RuntimeDefault") }}
+        {{- toYaml (mergeOverwrite $defaults (default (dict) .Values.postgresql.roles.setupJob.podSecurityContext | deepCopy)) | nindent 8 }}
+      containers:
+        - name: postgres-roles
+          # The Postgres image itself: its psql matches the server, and the
+          # node already has it.
+          image: {{ include "distant-signal.postgresImage" . | quote }}
+          imagePullPolicy: {{ include "distant-signal.postgresImagePullPolicy" . }}
+          # The image's entrypoint only starts a server for `postgres`
+          # commands; anything else it execs as given.
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              # On a fresh install this runs while Postgres is still starting.
+              until pg_isready --quiet; do sleep 2; done
+              exec psql -X --quiet --no-password \
+              {{- range splitList "\n" (include "distant-signal.postgresRolesPsqlVariables" .) }}
+                {{ . | squote }} \
+              {{- end }}
+                --file=/etc/distant-signal/postgres-roles/postgres-roles.sql
+          env:
+            # libpq's own variables: the superuser, over the Service.
+            - name: PGHOST
+              value: {{ include "distant-signal.postgresFullname" . | quote }}
+            - name: PGPORT
+              value: {{ .Values.postgresql.service.port | quote }}
+            - name: PGUSER
+              value: {{ .Values.postgresql.auth.username | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.postgresql.auth.database | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.postgresSecretName" . }}
+                  key: {{ include "distant-signal.postgresSecretPasswordKey" . }}
+            - name: PGAPPNAME
+              value: distant-signal-postgres-roles
+            - name: PGCONNECT_TIMEOUT
+              value: "10"
+            {{- include "distant-signal.postgresRolesPasswordEnv" . | trim | nindent 12 }}
+            # psql's history and the like; the root filesystem is read-only.
+            - name: HOME
+              value: /tmp
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          {{- with .Values.postgresql.roles.setupJob.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: roles
+              mountPath: /etc/distant-signal/postgres-roles
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: roles
+          configMap:
+            name: {{ include "distant-signal.postgresRolesConfigMapName" . }}
+            items:
+              - key: postgres-roles.sql
+                path: postgres-roles.sql
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+{{- end }}

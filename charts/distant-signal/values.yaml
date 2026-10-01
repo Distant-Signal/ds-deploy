@@ -133,7 +133,9 @@ postgresql:
   # service pools. The app role (`auth.username`) is a superuser, so
   # Postgres's own superuser_reserved_connections protects nothing here:
   # every one of these must fit under max_connections alongside the pools
-  # (docs/postgres-app-role.md recommends a non-superuser app role).
+  # (docs/postgres-app-role.md). With `roles` below enabled the services
+  # are a non-superuser role with a CONNECTION LIMIT, so the reserve is
+  # real and `adminSessions` can drop to 0.
   # pgBackRest adds 2 more on its own when `pgbackrest.enabled` (a backup
   # holds one connection for its whole run, and the daily check or a
   # restore-time `stanza-create` can overlap it).
@@ -144,6 +146,130 @@ postgresql:
     externalClients: 2
     # -- Interactive `kubectl exec ... psql` sessions to keep room for.
     adminSessions: 3
+  # Separate database roles, so no service connects as a superuser
+  # (docs/postgres-app-role.md, the rollout runbook). Everything here is off
+  # by default and then renders nothing. `auth.username` stays the bootstrap
+  # superuser, for humans only. The roles and what they may do:
+  #   owner    -- owns schema public and every table; api's migrations
+  #               (MIGRATION_DATABASE_URL) and nothing else.
+  #   app      -- DML only; every pool (api, aggregator, enricher, notifier).
+  #   exporter -- pg_monitor; Ranma-Config's postgres-exporter.
+  #   dump     -- pg_read_all_data; Ranma-Config's nightly pg_dump.
+  #   backup   -- pgBackRest's backup functions; the pgBackRest CronJobs.
+  # The roles are created and kept up to date by
+  # files/postgres-roles.sql (idempotent), run by `initScript` on a new
+  # data directory and by `setupJob` on every install/upgrade.
+  #
+  # Each password works like `auth.password`:
+  # `password`, else `existingSecret`/`existingSecretPasswordKey`, else
+  # generated into the chart's Secret under the default key name. The same
+  # percent-encoding caveat applies to the owner's and the app's.
+  roles:
+    # -- Connect the api pools and every worker as `app`, api's migrations
+    # as `owner`, and the pgBackRest CronJobs as `backup`. The roles must
+    # exist first (`setupJob`, or `initScript` on a new cluster). Does not
+    # restart Postgres on its own (`initScript` does).
+    enabled: false
+    # -- With `enabled`: run files/postgres-roles.sql from
+    # /docker-entrypoint-initdb.d, which the image runs only on an EMPTY
+    # data directory (a new cluster), before any client connects. Adds a
+    # volume and the role passwords' env to the Postgres pod, so turning it
+    # on restarts Postgres: set it false on an existing cluster, where it
+    # would never run anyway.
+    initScript: true
+    setupJob:
+      # -- Run files/postgres-roles.sql as a Helm post-install/post-upgrade
+      # hook Job, as the superuser over the Service. Independent of
+      # `enabled`: on an existing cluster, turn this on FIRST to create the
+      # roles and move ownership to `owner`, then flip `enabled`. Running it
+      # on every upgrade keeps the CONNECTION LIMITs and grants current and
+      # moves to `owner` anything a superuser created meanwhile. A failure
+      # fails the helm upgrade.
+      enabled: false
+      # -- Seconds before the Job gives up (it first waits for Postgres).
+      activeDeadlineSeconds: 600
+      # -- Retries after a failed run.
+      backoffLimit: 2
+      # -- Container resources.
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+      # -- Overrides the pod securityContext (default: uid/gid 999, the
+      # image's postgres user, non-root, RuntimeDefault seccomp).
+      podSecurityContext: {}
+    owner:
+      # -- Role name of the schema owner.
+      username: distant_signal_owner
+      # -- Password. Generated when empty (and no `existingSecret`).
+      password: ""
+      # -- Read the password from this pre-existing Secret instead.
+      existingSecret: ""
+      # -- Key within `existingSecret` (and in the chart's Secret).
+      existingSecretPasswordKey: postgres-owner-password
+      # -- CONNECTION LIMIT. Empty: api.replicaCount + 2 (one migration
+      # connection per api pod, plus room for a hand-run migration or psql).
+      connectionLimit: ""
+    app:
+      # -- Role name the services connect as.
+      username: distant_signal_app
+      # -- Password. Generated when empty (and no `existingSecret`).
+      password: ""
+      # -- Read the password from this pre-existing Secret instead.
+      existingSecret: ""
+      # -- Key within `existingSecret` (and in the chart's Secret).
+      existingSecretPasswordKey: postgres-app-password
+      # -- CONNECTION LIMIT. Empty: the chart's own pools (api
+      # maxConnections x replicaCount, aggregator 10, notifier 5, enricher
+      # 5, archive 2 when enabled) plus `connectionLimitSlack`. This is
+      # what makes `superuser_reserved_connections` and the admin sessions a
+      # real reserve: the services can never take more.
+      connectionLimit: ""
+      # -- Added to the computed CONNECTION LIMIT, for one-off binaries
+      # (backfills) run as the app role.
+      connectionLimitSlack: 5
+    exporter:
+      # -- Role name for postgres-exporter (pg_monitor).
+      username: distant_signal_exporter
+      # -- Password. Generated when empty (and no `existingSecret`).
+      password: ""
+      # -- Read the password from this pre-existing Secret instead.
+      existingSecret: ""
+      # -- Key within `existingSecret` (and in the chart's Secret).
+      existingSecretPasswordKey: postgres-exporter-password
+      # -- CONNECTION LIMIT.
+      connectionLimit: 3
+    dump:
+      # -- Role name for pg_dump (pg_read_all_data).
+      username: distant_signal_dump
+      # -- Password. Generated when empty (and no `existingSecret`).
+      password: ""
+      # -- Read the password from this pre-existing Secret instead.
+      existingSecret: ""
+      # -- Key within `existingSecret` (and in the chart's Secret).
+      existingSecretPasswordKey: postgres-dump-password
+      # -- CONNECTION LIMIT (a parallel `pg_dump -j N` needs N + 1).
+      connectionLimit: 2
+    backup:
+      # -- Role name for pgBackRest (EXECUTE on pg_backup_start/stop,
+      # pg_switch_wal, pg_create_restore_point; pg_read_all_settings,
+      # pg_checkpoint).
+      username: distant_signal_backup
+      # -- Password. Generated when empty (and no `existingSecret`).
+      # Defence in depth: pgBackRest runs in the Postgres container and uses
+      # the local socket, which the image trusts, so it never sends it.
+      password: ""
+      # -- Read the password from this pre-existing Secret instead.
+      existingSecret: ""
+      # -- Key within `existingSecret` (and in the chart's Secret).
+      existingSecretPasswordKey: postgres-backup-password
+      # -- CONNECTION LIMIT.
+      connectionLimit: 4
+      # -- Database pgBackRest connects to (its pg1-database default); the
+      # function grants are made there and in `auth.database`.
+      database: postgres
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
     # succeeds, so crash recovery (WAL redo after a node reboot) is never
