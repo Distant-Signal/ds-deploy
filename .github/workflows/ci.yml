@@ -650,6 +650,11 @@ jobs:
       - name: Test scripts
         run: uv run --no-sync python -m unittest discover -s scripts/tests -v
 
+      # Stdlib unittest, no extra dependency: e.g. the schedulefeed sftp
+      # entrypoint's account policy (scripts/tests/).
+      - name: Script tests
+        run: python -m unittest discover -s scripts/tests
+
       # Every chart values.yaml key needs a row in the chart README's "Values
       # reference" tables, and every row must name a real key.
       # `scripts/chart-values-doc.py table <section>` drafts missing rows.
@@ -927,6 +932,154 @@ jobs:
           grep -q 'SFTPGO_TELEMETRY__BIND_PORT' <<<"${dep}" || fail "extraEnv must reach the SFTPGo container"
           dep=$(render --set 'scheduleFeed.sftp.hostKeys=null' --show-only templates/schedulefeed-deployment.yaml)
           if grep -q 'SFTPGO_SFTPD__HOST_KEYS' <<<"${dep}"; then fail "an empty hostKeys list must not set HOST_KEYS"; fi
+
+      # The push account's least-privilege policy reaches the entrypoint
+      # (scripts/tests/ checks what the entrypoint does with it), and a
+      # change to the entrypoint script rolls the pod.
+      - name: helm template (sftp push account policy)
+        run: |
+          set -euo pipefail
+          render() {
+            helm template distant-signal charts/distant-signal \
+              --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
+              --set trustConsumer.kafka.topic=test-topic \
+              --set trustConsumer.kafka.saslMechanism=PLAIN \
+              --set enricher.llm.baseUrl=http://llm.example.com/v1 \
+              --set enricher.llm.model=test-model \
+              --set api.sso.issuerUrl=https://sso.example.com \
+              --set api.sso.clientId=test-client \
+              --set api.sso.clientSecret=test-secret \
+              --set api.sso.redirectUrl=https://app.example.com/callback \
+              --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
+              --set scheduleFeed.enabled=true \
+              --set scheduleFeed.sftp.authMethod=password "$@" \
+              --show-only templates/schedulefeed-deployment.yaml
+          }
+          fail() { echo "::error::$1"; exit 1; }
+          dep=$(render)
+          grep -A1 'name: SCHEDULE_SFTP_PERMISSIONS' <<<"${dep}" | grep -q 'value: "upload,overwrite,list"' \
+            || fail "the push account must default to upload,overwrite,list"
+          grep -A1 'name: SCHEDULE_SFTP_MAX_SESSIONS' <<<"${dep}" | grep -q 'value: "2"' \
+            || fail "maxSessions must reach the entrypoint"
+          grep -A1 'name: SCHEDULE_SFTP_MAX_UPLOAD_FILE_SIZE' <<<"${dep}" | grep -q 'value: "536870912"' \
+            || fail "maxUploadFileSize must reach the entrypoint"
+          sum=$(grep 'checksum/sftp-entrypoint:' <<<"${dep}") || fail "the pod must carry the entrypoint checksum"
+          [[ "${sum}" =~ [0-9a-f]{64} ]] || fail "the entrypoint checksum must be a sha256"
+          dep=$(render --set 'scheduleFeed.sftp.permissions={upload}')
+          grep -A1 'name: SCHEDULE_SFTP_PERMISSIONS' <<<"${dep}" | grep -q 'value: "upload"' \
+            || fail "scheduleFeed.sftp.permissions must be configurable"
+          # Password strength: the entrypoint gets the policy, and a short
+          # password in values fails the render (with its length, not value).
+          grep -A1 'name: SCHEDULE_SFTP_PASSWORD_MIN_LENGTH' <<<"${dep}" | grep -q 'value: "24"' \
+            || fail "the password minimum must reach the entrypoint"
+          grep -A1 'name: SCHEDULE_SFTP_PASSWORD_POLICY' <<<"${dep}" | grep -q 'value: "enforce"' \
+            || fail "the password policy must default to enforce"
+          set +e
+          out=$(render --set scheduleFeed.sftp.password=tooShort-2026 2>&1)
+          status=$?
+          set -e
+          [[ "${status}" -ne 0 ]] || fail "a short scheduleFeed.sftp.password must fail the render"
+          grep -q '13 characters' <<<"${out}" || fail "the render error must give the length"
+          if grep -q 'tooShort-2026' <<<"${out}"; then fail "the render error must not print the password"; fi
+          # A 24-character one renders (set -e fails the step otherwise).
+          render --set scheduleFeed.sftp.password=abcdefghijklmnopqrstuvwx >/dev/null
+
+      # Brute-force protection is on by default: SSH commands off, the
+      # defender (never scoring probe connections), the per-host cap and
+      # the per-source rate limiter; the safelist reaches the entrypoint.
+      - name: helm template (sftp defender, rate limit, no SSH commands)
+        run: |
+          set -euo pipefail
+          render() {
+            helm template distant-signal charts/distant-signal \
+              --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
+              --set trustConsumer.kafka.topic=test-topic \
+              --set trustConsumer.kafka.saslMechanism=PLAIN \
+              --set enricher.llm.baseUrl=http://llm.example.com/v1 \
+              --set enricher.llm.model=test-model \
+              --set api.sso.issuerUrl=https://sso.example.com \
+              --set api.sso.clientId=test-client \
+              --set api.sso.clientSecret=test-secret \
+              --set api.sso.redirectUrl=https://app.example.com/callback \
+              --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
+              --set scheduleFeed.enabled=true \
+              --set scheduleFeed.sftp.authMethod=password "$@" \
+              --show-only templates/schedulefeed-deployment.yaml
+          }
+          fail() { echo "::error::$1"; exit 1; }
+          has() { grep -A1 "name: $1\$" <<<"${dep}" | grep -q "value: \"$2\"" || fail "$1 must be \"$2\""; }
+          dep=$(render)
+          has SFTPGO_SFTPD__ENABLED_SSH_COMMANDS ''
+          has SFTPGO_COMMON__DEFENDER__ENABLED true
+          has SFTPGO_COMMON__DEFENDER__SCORE_NO_AUTH 0
+          has SFTPGO_COMMON__DEFENDER__THRESHOLD 8
+          has SFTPGO_COMMON__MAX_PER_HOST_CONNECTIONS 8
+          has SFTPGO_COMMON__RATE_LIMITERS__0__AVERAGE 20
+          has SFTPGO_COMMON__RATE_LIMITERS__0__GENERATE_DEFENDER_EVENTS true
+          if grep -q 'SCHEDULE_SFTP_SAFELIST' <<<"${dep}"; then fail "no safelist by default"; fi
+          dep=$(render --set 'scheduleFeed.sftp.defender.safelist={192.0.2.0/24,198.51.100.7}')
+          has SCHEDULE_SFTP_SAFELIST '192.0.2.0/24 198.51.100.7'
+          has SFTPGO_LOG_LEVEL debug
+          has SFTPGO_LOG_UTC_TIME true
+          dep=$(render --set scheduleFeed.sftp.defender.enabled=false --set scheduleFeed.sftp.rateLimit.average=0)
+          has SFTPGO_COMMON__DEFENDER__ENABLED false
+          if grep -q 'SFTPGO_COMMON__DEFENDER__THRESHOLD\|SFTPGO_COMMON__RATE_LIMITERS' <<<"${dep}"; then
+            fail "a disabled defender and rate limiter must render no settings"
+          fi
+
+      # SFTPGo telemetry (on by default with metrics.enabled): the
+      # sftp-metrics container port, a PodMonitor endpoint, the
+      # monitoring-only NetworkPolicy port and the schedule-sftp alerts;
+      # never a port on the NodePort Service, which keeps exactly one.
+      - name: helm template (sftp telemetry)
+        run: |
+          set -euo pipefail
+          render() {
+            helm template distant-signal charts/distant-signal \
+              --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
+              --set trustConsumer.kafka.topic=test-topic \
+              --set trustConsumer.kafka.saslMechanism=PLAIN \
+              --set enricher.llm.baseUrl=http://llm.example.com/v1 \
+              --set enricher.llm.model=test-model \
+              --set api.sso.issuerUrl=https://sso.example.com \
+              --set api.sso.clientId=test-client \
+              --set api.sso.clientSecret=test-secret \
+              --set api.sso.redirectUrl=https://app.example.com/callback \
+              --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
+              --set scheduleFeed.enabled=true \
+              --set scheduleFeed.sftp.authMethod=password \
+              --set metrics.enabled=true \
+              --set metrics.podMonitor.enabled=true \
+              --set metrics.prometheusRule.enabled=true \
+              --set networkPolicy.enabled=true "$@"
+          }
+          fail() { echo "::error::$1"; exit 1; }
+          dep=$(render --show-only templates/schedulefeed-deployment.yaml)
+          grep -A1 'name: sftp-metrics' <<<"${dep}" | grep -q 'containerPort: 9097' || fail "sftp-metrics must be port 9097"
+          grep -A1 'name: SFTPGO_TELEMETRY__BIND_PORT' <<<"${dep}" | grep -q 'value: "9097"' || fail "telemetry must bind 9097"
+          grep -A1 'name: SFTPGO_TELEMETRY__BIND_ADDRESS' <<<"${dep}" | grep -q 'value: "0.0.0.0"' || fail "telemetry must bind all addresses"
+          grep -A1 'name: SFTPGO_TELEMETRY__ENABLE_PROFILER' <<<"${dep}" | grep -q 'value: "false"' || fail "the profiler must stay off"
+          svc=$(render --show-only templates/schedulefeed-service.yaml)
+          ports=$(grep -c 'targetPort:' <<<"${svc}" || true)
+          [[ "${ports}" -eq 1 ]] || fail "the schedulefeed Service must keep exactly one port"
+          if grep -q '9097\|sftp-metrics' <<<"${svc}"; then fail "telemetry must not be on the Service"; fi
+          pm=$(render --show-only templates/podmonitor.yaml)
+          grep -q 'port: sftp-metrics' <<<"${pm}" || fail "the PodMonitor must scrape sftp-metrics"
+          np=$(render --show-only templates/networkpolicy.yaml)
+          grep -A60 'name: distant-signal-schedulefeed$' <<<"${np}" | grep -q 'port: 9097' \
+            || fail "the schedulefeed NetworkPolicy must admit monitoring on 9097"
+          rule=$(render --show-only templates/prometheusrule.yaml)
+          for alert in DistantSignalSftpNoUpload DistantSignalSftpUploadErrors DistantSignalSftpUserStoreDown; do
+            grep -q "alert: ${alert}\$" <<<"${rule}" || fail "missing ${alert}"
+          done
+          off=$(render --set scheduleFeed.sftp.telemetry.enabled=false)
+          if grep -q 'sftp-metrics\|SFTPGO_TELEMETRY\|alert: DistantSignalSftp' <<<"${off}"; then
+            fail "telemetry.enabled=false must render no telemetry, endpoint or alerts"
+          fi
+          nometrics=$(render --set metrics.enabled=false --show-only templates/schedulefeed-deployment.yaml)
+          if grep -q 'sftp-metrics\|SFTPGO_TELEMETRY' <<<"${nometrics}"; then
+            fail "telemetry needs metrics.enabled"
+          fi
 
       # movement-relay is on by default (the three movement consumers read
       # only its stream). Empty movementRelay.kafka.* fields fall back to

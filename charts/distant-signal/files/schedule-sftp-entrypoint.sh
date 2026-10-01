@@ -12,6 +12,23 @@
 #   SCHEDULE_SFTP_PASSWORD      by this password (one of the two required)
 #   SCHEDULE_SFTP_LOADDATA_DIR  where the loaddata JSON is written
 #                               (default /run/sftp-bootstrap)
+#   SCHEDULE_SFTP_PERMISSIONS   comma-separated SFTPGo permissions on "/"
+#                               (default upload,overwrite,list)
+#   SCHEDULE_SFTP_MAX_SESSIONS  simultaneous sessions for the account
+#                               (default 2; 0 = unlimited)
+#   SCHEDULE_SFTP_MAX_UPLOAD_FILE_SIZE  largest single upload, in bytes
+#                               (default 0 = unlimited)
+#   SCHEDULE_SFTP_PASSWORD_MIN_LENGTH  shortest acceptable password
+#                               (default 24)
+#   SCHEDULE_SFTP_PASSWORD_POLICY  "enforce" (default: refuse to start with
+#                               a shorter password) or "warn"
+#   SCHEDULE_SFTP_SAFELIST      space-separated IPs/CIDRs the defender never
+#                               scores or bans and the rate limiter never
+#                               limits (default none)
+#
+# Least privilege (2026-10-01): the account can only write files into its
+# home directory. docs/schedule-feed-sftp.md has the evidence behind each
+# permission (what DTD's JSch 0.1.54 client was seen to do).
 #
 # SFTPGO_DEFAULT_ADMIN_USERNAME/PASSWORD (this repo's earlier approach, now
 # removed) never worked for this: confirmed directly against SFTPGo's own
@@ -38,9 +55,12 @@
 #     before anything can connect, and this needs no HTTP/API port exposed
 #     at all.
 #   - internal/httpd/api_maintenance.go's RestoreUsers does a
-#     username-keyed upsert: with mode 1, a user that already exists from a
-#     prior run is left untouched -- so re-running this on every container
-#     restart is safe and never resets an already-changed password.
+#     username-keyed upsert: mode 1 leaves a user that already exists
+#     untouched, mode 0 (used below since 2026-10-01) updates it to match
+#     this file. The SQLite user store lives on the container's writable
+#     layer, so in practice every start creates the account afresh ("adding
+#     new user" in the log); mode 0 makes that a guarantee, so a permission
+#     or password change here can never be silently ignored.
 #   - internal/dataprovider/dataprovider.go's createUserPasswordHash (run
 #     for every Add/UpdateUser, including the loaddata restore path) hashes
 #     any password that isn't already in a recognized hash format -- so the
@@ -98,10 +118,110 @@ if [ -n "${SCHEDULE_SFTP_PUBLIC_KEY:-}" ]; then
 else
     : "${SCHEDULE_SFTP_PASSWORD:?SCHEDULE_SFTP_PASSWORD must be set when SCHEDULE_SFTP_PUBLIC_KEY is not}"
     reject_control_chars SCHEDULE_SFTP_PASSWORD "${SCHEDULE_SFTP_PASSWORD}"
+    # Password strength. The account is internet-facing and DTD can't pin
+    # our host key, so the password is the whole defence. The chart's
+    # generated one is 32 random alphanumerics (~190 bits); a value from
+    # existingSecret (a sealed secret) can't be checked at render time, so
+    # it is checked here. Only the length is reported, never the value.
+    min_length="${SCHEDULE_SFTP_PASSWORD_MIN_LENGTH:-24}"
+    case "${min_length}" in
+        '' | *[!0-9]*)
+            echo "sftp-entrypoint: SCHEDULE_SFTP_PASSWORD_MIN_LENGTH must be a non-negative integer; refusing to start" >&2
+            exit 1
+            ;;
+        *) ;; # digits only: accept
+    esac
+    if [ "${#SCHEDULE_SFTP_PASSWORD}" -lt "${min_length}" ]; then
+        case "${SCHEDULE_SFTP_PASSWORD_POLICY:-enforce}" in
+            warn)
+                echo "sftp-entrypoint: WARNING: the push account password is ${#SCHEDULE_SFTP_PASSWORD} characters, under the minimum of ${min_length}; rotate it" >&2
+                ;;
+            enforce)
+                echo "sftp-entrypoint: the push account password is ${#SCHEDULE_SFTP_PASSWORD} characters, under the minimum of ${min_length}; refusing to start (rotate it, or set scheduleFeed.sftp.passwordPolicy.enforce=false to only warn)" >&2
+                exit 1
+                ;;
+            *)
+                echo "sftp-entrypoint: SCHEDULE_SFTP_PASSWORD_POLICY must be enforce or warn; refusing to start" >&2
+                exit 1
+                ;;
+        esac
+    fi
     AUTH_FIELD="\"password\": \"$(json_escape "${SCHEDULE_SFTP_PASSWORD}")\""
 fi
 USERNAME_JSON="$(json_escape "${SCHEDULE_SFTP_USERNAME}")"
 HOME_DIR_JSON="$(json_escape "${SCHEDULE_SFTP_HOME_DIR}")"
+
+# A non-negative integer setting, or exit.
+require_count() {
+    case "$2" in
+        '' | *[!0-9]*)
+            echo "sftp-entrypoint: $1 must be a non-negative integer; refusing to start" >&2
+            exit 1
+            ;;
+        *) ;; # digits only: accept
+    esac
+}
+MAX_SESSIONS="${SCHEDULE_SFTP_MAX_SESSIONS:-2}"
+MAX_UPLOAD_FILE_SIZE="${SCHEDULE_SFTP_MAX_UPLOAD_FILE_SIZE:-0}"
+require_count SCHEDULE_SFTP_MAX_SESSIONS "${MAX_SESSIONS}"
+require_count SCHEDULE_SFTP_MAX_UPLOAD_FILE_SIZE "${MAX_UPLOAD_FILE_SIZE}"
+
+# Permissions on the account's root, its home directory and the only place
+# it can see. Only names SFTPGo defines are accepted, so nothing here needs
+# JSON escaping. "*" (every permission, what this account had before
+# 2026-10-01) is refused.
+PERMISSIONS_JSON=""
+old_ifs="${IFS}"
+IFS=,
+set -f # split on commas only, never glob
+for permission in ${SCHEDULE_SFTP_PERMISSIONS:-upload,overwrite,list}; do
+    case "${permission}" in
+        list | download | upload | overwrite | delete | delete_files | delete_dirs | rename | rename_files | rename_dirs | create_dirs | create_symlinks | chmod | chown | chtimes | copy) ;;
+        *)
+            echo "sftp-entrypoint: SCHEDULE_SFTP_PERMISSIONS entry '${permission}' is not a single SFTPGo permission; refusing to start" >&2
+            exit 1
+            ;;
+    esac
+    PERMISSIONS_JSON="${PERMISSIONS_JSON:+${PERMISSIONS_JSON}, }\"${permission}\""
+done
+set +f
+IFS="${old_ifs}"
+if [ -z "${PERMISSIONS_JSON}" ]; then
+    echo "sftp-entrypoint: SCHEDULE_SFTP_PERMISSIONS is empty; refusing to start" >&2
+    exit 1
+fi
+
+# Login methods the account may NOT use: everything except its one
+# credential. DTD's JSch client logs in with keyboard-interactive (seen
+# 2026-09-30), which SFTPGo answers by asking for the account's password,
+# so password mode keeps both "password" and "keyboard-interactive".
+if [ -n "${SCHEDULE_SFTP_PUBLIC_KEY:-}" ]; then
+    DENIED_LOGIN_METHODS='"password", "password-over-SSH", "keyboard-interactive", "publickey+password", "publickey+keyboard-interactive", "TLSCertificate", "TLSCertificate+password"'
+else
+    DENIED_LOGIN_METHODS='"publickey", "publickey+password", "publickey+keyboard-interactive", "TLSCertificate", "TLSCertificate+password"'
+fi
+
+# Defender/rate-limiter safe list (scheduleFeed.sftp.defender.safelist),
+# space-separated IPs/CIDRs. Each becomes two SFTPGo IP list entries for SSH
+# (protocols 1): type 2 (defender) in mode 1 (allow: never scored or banned)
+# and type 3 (rate limiter safe list). Restricted to IP/CIDR characters, so
+# nothing here needs JSON escaping.
+IP_LISTS_JSON=""
+set -f # split on spaces only, never glob
+for cidr in ${SCHEDULE_SFTP_SAFELIST:-}; do
+    case "${cidr}" in
+        *[!0-9A-Fa-f:./]*)
+            echo "sftp-entrypoint: SCHEDULE_SFTP_SAFELIST entry '${cidr}' is not an IP or CIDR; refusing to start" >&2
+            exit 1
+            ;;
+        *) ;; # IP/CIDR characters only: accept
+    esac
+    for list_type in 2 3; do
+        IP_LISTS_JSON="${IP_LISTS_JSON:+${IP_LISTS_JSON},}
+    {\"ipornet\": \"${cidr}\", \"description\": \"scheduleFeed.sftp.defender.safelist\", \"type\": ${list_type}, \"mode\": 1, \"protocols\": 1}"
+    done
+done
+set +f
 
 cat >"${LOADDATA_FILE}" <<EOF
 {
@@ -112,12 +232,22 @@ cat >"${LOADDATA_FILE}" <<EOF
       "username": "${USERNAME_JSON}",
       "home_dir": "${HOME_DIR_JSON}",
       "permissions": {
-        "/": ["*"]
+        "/": [${PERMISSIONS_JSON}]
+      },
+      "max_sessions": ${MAX_SESSIONS},
+      "filters": {
+        "denied_login_methods": [${DENIED_LOGIN_METHODS}],
+        "denied_protocols": ["FTP", "DAV", "HTTP"],
+        "max_upload_file_size": ${MAX_UPLOAD_FILE_SIZE}
       },
       ${AUTH_FIELD}
     }
+  ],
+  "ip_lists": [${IP_LISTS_JSON}
   ]
 }
 EOF
 
-exec sftpgo serve --loaddata-from "${LOADDATA_FILE}" --loaddata-mode 1
+# --loaddata-mode 0: see the header comment. --loaddata-clean deletes the
+# file, which holds the credential, as soon as SFTPGo has loaded it.
+exec sftpgo serve --loaddata-from "${LOADDATA_FILE}" --loaddata-mode 0 --loaddata-clean

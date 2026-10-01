@@ -454,6 +454,11 @@ spec:
           port: {{ .Values.metrics.port }}
         - protocol: TCP
           port: {{ .Values.scheduleFeed.reference.metricsPort }}
+        {{- if .Values.scheduleFeed.sftp.telemetry.enabled }}
+        # The sftp container's SFTPGo telemetry (/metrics, /healthz).
+        - protocol: TCP
+          port: {{ .Values.scheduleFeed.sftp.telemetry.port }}
+        {{- end }}
   {{- end }}
 {{- with include "distant-signal.extraIngress" (dict "root" . "component" "schedulefeed") }}
     {{- . | nindent 4 }}

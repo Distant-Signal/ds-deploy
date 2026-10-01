@@ -2097,6 +2097,8 @@ Off by default.
 | `scheduleFeed.sftp.authMethod` | `""` | `password` or `public-key`. No default: enabling without it fails the render. |
 | `scheduleFeed.sftp.password` | `""` | Push account password (`authMethod: password`). Generated and preserved across upgrades when empty; NOTES.txt shows how to read it back. |
 | `scheduleFeed.sftp.publicKey` | `""` | The feed provider's public key (`authMethod: public-key`). |
+| `scheduleFeed.sftp.passwordPolicy.minLength` | `24` | Minimum push account password length. A `password` in values is checked at render time; one from `existingSecret` by the sftp entrypoint at start (only the length is logged). The generated default is 32 random alphanumerics (~190 bits). |
+| `scheduleFeed.sftp.passwordPolicy.enforce` | `true` | At start, refuse to run with a shorter password (`true`) or only log a warning (`false`). |
 | `scheduleFeed.sftp.existingSecret` | `""` | Read the SFTP credentials from this pre-existing Secret instead. |
 | `scheduleFeed.sftp.existingSecretPasswordKey` | `schedule-sftp-password` | Key for the push account password. |
 | `scheduleFeed.sftp.existingSecretPublicKeyKey` | `schedule-sftp-dtd-public-key` | Key for the provider's public key. |
@@ -2104,6 +2106,24 @@ Off by default.
 | `scheduleFeed.sftp.hostKeys` | `[ssh_host_ecdsa_key, ssh_host_ed25519_key]` | Keys in the host-key Secret that SFTPGo serves (`SFTPGO_SFTPD__HOST_KEYS`), mounted 0440 for the pod's fsGroup. ECDSA covers clients without ed25519 (DTD's JSch 0.1.54). With `existingSecretHostKey`, that Secret must hold every listed key. Empty: SFTPGo generates fresh keys on every start. |
 | `scheduleFeed.sftp.webAdmin.enabled` | `false` | Run SFTPGo's web admin/REST listener. Off, because with no admin account anyone who reaches it can create one. |
 | `scheduleFeed.sftp.extraEnv` | `[]` | Extra env entries for the SFTPGo container (e.g. `SFTPGO_*` telemetry, defender or log settings). |
+| `scheduleFeed.sftp.permissions` | `[upload, overwrite, list]` | SFTPGo permissions the push account has on its home directory. Least privilege from DTD's observed client behaviour: no download, delete, rename, mkdir, symlink, chmod/chown/chtimes or copy. `overwrite` is needed because DTD replaces `timetable_full.zip` in place daily. `*` is refused. See [docs/schedule-feed-sftp.md](../../docs/schedule-feed-sftp.md). |
+| `scheduleFeed.sftp.maxSessions` | `2` | Simultaneous sessions for the push account. `0` = unlimited. |
+| `scheduleFeed.sftp.maxUploadFileSize` | `536870912` | Largest single upload in bytes (512 MiB, ~6.6x the 77 MB CIF zip). Larger uploads fail and are deleted. `0` = unlimited. |
+| `scheduleFeed.sftp.sshCommands` | `[]` | SSH commands SFTPGo runs besides SFTP (`SFTPGO_SFTPD__ENABLED_SSH_COMMANDS`; the image enables `md5sum`, `sha1sum`, `sha256sum`, `cd`, `pwd`, `scp`). None by default. |
+| `scheduleFeed.sftp.defender.enabled` | `true` | SFTPGo's in-process brute-force defender: bans a source IP whose score reaches `threshold` within `observationTime` minutes. Needs real client IPs (`scheduleFeed.service.externalTrafficPolicy: Local`); behind source NAT a ban locks out every client. Bans are in memory, so a pod restart clears them. |
+| `scheduleFeed.sftp.defender.banTime` / `.banTimeIncrement` | `60` / `100` | Ban length in minutes, and the percentage of it added each time a banned host connects again. |
+| `scheduleFeed.sftp.defender.threshold` | `8` | Score at which a host is banned. |
+| `scheduleFeed.sftp.defender.scoreValid` / `.scoreInvalid` | `2` / `2` | Score per wrong password for an existing account, and per unknown username. An OpenSSH or JSch client with a wrong password scores twice per connection (keyboard-interactive, then password). |
+| `scheduleFeed.sftp.defender.scoreLimitExceeded` | `4` | Score per rejected connection from the rate limiter or the per-host connection cap. |
+| `scheduleFeed.sftp.defender.scoreNoAuth` | `0` | Score per connection that never tried to authenticate (the kubelet's TCP probe, port scanners). Keep 0 unless the probe source is safelisted. |
+| `scheduleFeed.sftp.defender.observationTime` | `30` | Minutes of history a host's score covers. |
+| `scheduleFeed.sftp.defender.entriesSoftLimit` / `.entriesHardLimit` | `500` / `1000` | Hosts kept in memory. |
+| `scheduleFeed.sftp.defender.safelist` | `[]` | IPs/CIDRs never scored, banned or rate-limited (loaded as SFTPGo IP list entries through the push account's loaddata file). |
+| `scheduleFeed.sftp.maxPerHostConnections` | `8` | Simultaneous connections allowed from one source IP; `0` disables the cap. |
+| `scheduleFeed.sftp.rateLimit.average` / `.periodMs` / `.burst` | `20` / `60000` / `10` | Per-source SSH connection rate limit: `average` connections per `periodMs`, bursting to `burst`. `average: 0` disables it. |
+| `scheduleFeed.sftp.logLevel` | `debug` | SFTPGo log level (`SFTPGO_LOG_LEVEL`). Failed logins and defender score changes are only logged at `debug`, so log-based alerts on them need it. Timestamps are always UTC (`SFTPGO_LOG_UTC_TIME`). Fields: [docs/schedule-feed-sftp.md](../../docs/schedule-feed-sftp.md#audit-log). |
+| `scheduleFeed.sftp.telemetry.enabled` | `true` | SFTPGo's telemetry listener (`/metrics`, `/healthz`), as container port `sftp-metrics` and a PodMonitor endpoint. Needs `metrics.enabled`. Not on the NodePort Service; the NetworkPolicy admits only the monitoring namespace. No auth, no profiler. |
+| `scheduleFeed.sftp.telemetry.port` | `9097` | Telemetry port. |
 | `scheduleFeed.sftp.destinationFolder` | `incoming` | Folder on the PVC the push account is chrooted to; also schedule-ingest's `WATCH_DIR`. |
 | `scheduleFeed.sftp.folderPath` | `""` | Optional subfolder within `destinationFolder`. |
 | `scheduleFeed.sftp.resources` | requests `25m`/`64Mi`, limit `128Mi` | SFTP container resource requests/limits. |
@@ -2215,7 +2235,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; `/docs/alerts.md#<alert name, lowercased>` is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
 
 #### Alerts
 
@@ -2275,7 +2295,7 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalArchiveExpiryCapReached` | warning | An expiry run hit `archive.expiry.maxDeletesPerRun` (`aggregator_archive_expiry_cap_reached_total`) within the last 1d. |
 | `DistantSignalArchiveExpiryOverdue` | warning | The oldest archived `service_date` (`aggregator_archive_oldest_service_date_seconds{table}`) is older than `archive.expiry.retentionDays` + 7 days, for 1h: expiry is not running, is failing, or is still in dry-run. |
 | `DistantSignalScheduleReferenceNotSeeded` | warning | schedule-reference has not read its last completed publish from api (`schedule_reference_seeded` is 0) for 30m. |
-| `DistantSignalScheduleFeedZipRejected` | warning | schedule-ingest quarantined a delivery zip (`schedule_feed_zip_rejected_total`) within the last 6h. |
+| `DistantSignalScheduleFeedZipRejected` | warning | schedule-ingest quarantined a delivery zip (`schedule_feed_zip_rejected_total`) within the last 6h: over the extraction caps, or failing a CIF content check (`scheduleFeed.ingest.cifChecks`). The `schedule_ingest::audit` line names the reason. |
 | `DistantSignalScheduleFeedIngestRejected` | warning | api answered 400/413/422 to schedule-ingest's delivery record (`schedule_feed_ingest_rejected_total`) within the last 6h (`schedulePipeline.rejectedWindow`). The delivery is not retried until a new upload. |
 | `DistantSignalCorpusRejected` | warning | schedule-ingest refused a CORPUS extract (`schedule_feed_corpus_rejected_total`) within the last 6h. The series exists only while `scheduleFeed.corpus.enabled`. |
 | `DistantSignalCorpusStale` | warning | The newest loaded CORPUS delivery (`api_corpus_last_delivered_at_seconds`, set by api from `corpus_deliveries` at startup and after each load) is over 45 days old (`schedulePipeline.corpusStaleAfterDays`), for 1h. CORPUS is published monthly: 45 days is one cycle plus two weeks' grace. Rendered only when `scheduleFeed.corpus.enabled`, and silent before the first load. |
@@ -2283,6 +2303,9 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalSchedulePublishStagedMismatch` | warning | api skipped a final chunk's delete because the staged key count did not match (`api_schedule_publish_staged_mismatch_total{product}`) within the last 6h. |
 | `DistantSignalScheduleReferencePublishRejected` | warning | api answered 400/413/422 to a schedule-reference product (`schedule_reference_publishes_total{outcome="rejected"}`) within the last 6h. |
 | `DistantSignalLinePopulationMissing` | warning | After 06:00 London, some line still has no schedule population for today (`full_coverage_consumer_population_missing_past_deadline_lines` above 0) for 15m. |
+| `DistantSignalSftpNoUpload` | warning | SFTPGo received no upload (`sftpgo_uploads_total`) in 30h (`scheduleSftp.noUploadWindow`), for 30m: DTD's daily push did not arrive. Quiet until the counter has a full window of history. Uploads are not per file type, so `DistantSignalScheduleReferencePublishStale` stays authoritative for the CIF. Group `distant-signal.schedule-sftp`, rendered with `scheduleFeed.enabled` and `scheduleFeed.sftp.telemetry.enabled`. Runbook: `docs/schedule-feed-sftp.md`. |
+| `DistantSignalSftpUploadErrors` | warning | Any failed or interrupted upload (`sftpgo_upload_errors_total`) in the last 1h. |
+| `DistantSignalSftpUserStoreDown` | critical | SFTPGo's user store is unavailable (`sftpgo_dataprovider_availability` 0) for 5m: every login fails. Failed-login alerts are Loki rules, not metrics: the counters carry no username or IP. |
 | `DistantSignalPollerFailing` | warning | A poller completed no successful cycle and at least one failed one (`poller_cycle_total{result}`) over the last 2h, or more than half its cycles over the last 15m failed (`pollerFailures.failureRatio`, `ratioWindow`), for 10m (SVC-08). Rendered only when a poller (including an island-of-Ireland one) is enabled, in a separate `<fullname>-pollers` PrometheusRule. |
 | `DistantSignalLdbwsStationStale` | warning | The least recently sampled LDBWS station (`ldbws_stalest_station_age_seconds`) is over 900s old (the aggregator's sample-age limit, past which it drops the station) for 15m: the rotation stopped reaching part of the list (SVC-04). Stations LDBWS rejects as an invalid CRS are excluded. Only when `pollers.ldbws.enabled`. |
 | `DistantSignalLdbwsInvalidCrs` | warning | LDBWS has answered "Invalid crs code supplied" for a sample station (`ldbws_invalid_crs_station{crs}` is 1) for 15m: a `lines/*.toml` typo. The poller re-probes it hourly instead of every cycle. Only when `pollers.ldbws.enabled`. |
@@ -2334,6 +2357,9 @@ See `docs/superpowers/specs/2026-09-28-corpus-sftp-ingest-design.md`.
 |---|---|---|
 | `scheduleFeed.ingest.cifFilePattern` | `timetable_full.zip` | Case-insensitive `*` globs (comma-separated) naming CIF deliveries in the landing folder. Locked to DTD's exact delivery name. |
 | `scheduleFeed.ingest.cifExcludePattern` | `CORPUSExtract*` | Globs that are never CIF deliveries, so a CORPUS or SMART file pushed as a zip is never published as the timetable. |
+| `scheduleFeed.ingest.cifChecks.maxGeneratedAgeDays` | `3` | Quarantine a CIF delivery whose MSN `Generated` date is more than this many days before the delivery (a replayed old extract). The structural checks (full-extract `HD`, known record types, one `ZZ` trailer, a `Generated` date) always run. `0` disables. See [docs/schedule-feed-sftp.md](../../docs/schedule-feed-sftp.md#delivery-checks). |
+| `scheduleFeed.ingest.cifChecks.minSchedules` | `100000` | Quarantine an MCA with fewer `BS` (schedule) records; the real extract has ~505,000. `0` disables. |
+| `scheduleFeed.ingest.cifChecks.maxRecordDropPercent` | `20` | Quarantine a delivery whose `BS` or `TI` count fell by more than this percentage since the last accepted delivery (real day-to-day change is under 0.3%). `0` disables. |
 | `scheduleFeed.corpus.enabled` | `false` | Load Network Rail CORPUS (`CORPUSExtract.json.gz`, pushed to the same SFTP account and folder) into `corpus_locations`. Off: the file stays in the landing folder with a one-time stray warning. |
 | `scheduleFeed.corpus.filePattern` | `CORPUSExtract.json.gz` | Globs naming the CORPUS extract. `CORPUSExtract.csv.gz` (SMART berth data) is deliberately ignored. |
 | `scheduleFeed.corpus.minRows` | `10000` | Fewer rows than this rejects the extract instead of replacing the table. |

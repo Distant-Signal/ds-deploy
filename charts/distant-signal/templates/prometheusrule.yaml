@@ -45,7 +45,8 @@ so that clause fired on every rollout.
 {{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled ($rule.deadLetterExpiring).enabled ($rule.longPending).enabled ($rule.parseEnvelope).enabled) }}
 {{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
 {{- $pipelineOn := and ($rule.schedulePipeline).enabled .Values.scheduleFeed.enabled }}
-{{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn }}
+{{- $sftpOn := and ($rule.scheduleSftp).enabled .Values.scheduleFeed.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
+{{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn $sftpOn }}
 {{- $notifierDroppedOn := ($rule.notifierPushDropped).enabled }}
 {{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
 {{- $signupSpikeOn := ($rule.userSignupSpike).enabled }}
@@ -864,7 +865,7 @@ spec:
             {{- end }}
           annotations:
             summary: "schedule-ingest rejected a CIF delivery zip"
-            description: "Over the extraction caps, or an entry larger than declared. The timetable is not refreshed until a new upload."
+            description: "Over the extraction caps, or a failed CIF content check. The timetable is not refreshed until a new upload."
             runbook_url: {{ printf "%s#distantsignalschedulefeedziprejected" $runbook | quote }}
         {{- /*
         N-2: api refused schedule-ingest's delivery record (400/413/422).
@@ -1004,6 +1005,69 @@ spec:
             summary: "{{ "{{ $value }}" }} lines have no schedule population for today"
             description: "Past 06:00 London, so their full-coverage stats stay Pending. Check the CIF publishes and the consumer's reload errors."
             runbook_url: {{ printf "%s#distantsignallinepopulationmissing" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $sftpOn }}
+    {{- with $rule.scheduleSftp }}
+    - name: distant-signal.schedule-sftp
+      rules:
+        {{- /*
+        SFTPGo's telemetry counters (scheduleFeed.sftp.telemetry) carry no
+        labels of their own, so every expression sums across pods: a
+        Recreate rollout leaves the old pod's series, which increase()
+        copes with. Uploads are not per file type, so a CORPUS upload can
+        mask a missing CIF; DistantSignalScheduleReferencePublishStale stays
+        authoritative for the timetable. The `offset` clause keeps
+        NoUpload quiet until the counter has a full window of history
+        (the first noUploadWindow after telemetry is turned on).
+        */}}
+        - alert: DistantSignalSftpNoUpload
+          expr: |
+            sum by (namespace) (increase(sftpgo_uploads_total{namespace="{{ $ns }}"}[{{ .noUploadWindow }}])) == 0
+            and on (namespace)
+            count by (namespace) (sftpgo_uploads_total{namespace="{{ $ns }}"} offset {{ .noUploadWindow }}) > 0
+          for: {{ .noUploadFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "No SFTP upload to schedulefeed in {{ .noUploadWindow }}"
+            description: >-
+              SFTPGo in {{ "{{ $labels.namespace }}" }} received no file in
+              {{ .noUploadWindow }}. DTD's daily push did not arrive.
+            runbook_url: {{ printf "%s/docs/schedule-feed-sftp.md#alerts" $runbookBase | quote }}
+        - alert: DistantSignalSftpUploadErrors
+          expr: |
+            sum by (namespace) (increase(sftpgo_upload_errors_total{namespace="{{ $ns }}"}[{{ .uploadErrorsWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "SFTP upload failed on schedulefeed"
+            description: >-
+              An upload to SFTPGo in {{ "{{ $labels.namespace }}" }} failed or was
+              interrupted in the last {{ .uploadErrorsWindow }}. Check the next ingest.
+            runbook_url: {{ printf "%s/docs/schedule-feed-sftp.md#alerts" $runbookBase | quote }}
+        - alert: DistantSignalSftpUserStoreDown
+          expr: |
+            max by (namespace) (sftpgo_dataprovider_availability{namespace="{{ $ns }}"}) == 0
+          for: {{ .userStoreDownFor }}
+          labels:
+            severity: {{ .userStoreDownSeverity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "SFTPGo user store unavailable on schedulefeed"
+            description: >-
+              SFTPGo in {{ "{{ $labels.namespace }}" }} reports its user store
+              down, so every login fails and DTD's push cannot land.
+            runbook_url: {{ printf "%s/docs/schedule-feed-sftp.md#alerts" $runbookBase | quote }}
     {{- end }}
     {{- end }}
 {{- end }}

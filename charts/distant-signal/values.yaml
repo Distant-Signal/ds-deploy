@@ -2934,6 +2934,15 @@ scheduleFeed:
     # -- DTD's public key, used when authMethod=public-key AND DTD's push
     # configuration turns out to support supplying one (unconfirmed).
     publicKey: ""
+    # -- Minimum length for the push account password (authMethod:
+    # password). A `password` set above is checked at render time; one from
+    # existingSecret (e.g. a sealed secret) is checked by the sftp
+    # entrypoint at start, which refuses to start (`enforce: true`) or only
+    # logs a warning (`enforce: false`). Only the length is ever logged. The
+    # generated default is 32 random alphanumerics, log2(62^32) ~ 190 bits.
+    passwordPolicy:
+      minLength: 24
+      enforce: true
     existingSecret: ""
     existingSecretPasswordKey: schedule-sftp-password
     existingSecretPublicKeyKey: schedule-sftp-dtd-public-key
@@ -2962,6 +2971,103 @@ scheduleFeed:
     # for telemetry, the defender or logging), appended after the chart's
     # own. Same shape as a container `env` list.
     extraEnv: []
+    # -- SFTPGo permissions the push account has on its home directory
+    # (the only directory it can see). Least privilege, from what DTD's
+    # JSch 0.1.54 client was seen to do (docs/schedule-feed-sftp.md):
+    # `upload` to write files; `overwrite` because DTD replaces
+    # timetable_full.zip in place every day (schedule-ingest reads it where
+    # it lands and never removes it); `list` because SFTP stat/lstat need
+    # it, and a client that stats or cds before its put would fail without
+    # it. No download, delete, rename, mkdir, symlink, chmod/chown/chtimes
+    # or copy. Any SFTPGo permission name except "*" is accepted.
+    permissions:
+      - upload
+      - overwrite
+      - list
+    # -- Simultaneous SFTP sessions for the push account (SFTPGo
+    # max_sessions). DTD opens one per delivery; 2 leaves room for a retry
+    # while a stalled session times out. 0 = unlimited.
+    maxSessions: 2
+    # -- Largest single upload the push account may write, in bytes (SFTPGo
+    # filters.max_upload_file_size; an upload past it fails and the partial
+    # file is deleted). The full CIF zip was 77,222,226 bytes on
+    # 2026-09-30 and the CORPUS extract is under 1 MB, so 512 MiB is ~6.6x
+    # the largest real file, and keeps one upload well inside the 5Gi PVC.
+    # 0 = unlimited.
+    maxUploadFileSize: 536870912
+    # -- SSH commands SFTPGo runs besides the SFTP subsystem
+    # (SFTPGO_SFTPD__ENABLED_SSH_COMMANDS; the image enables md5sum,
+    # sha1sum, sha256sum, cd, pwd and scp). None: DTD only uses SFTP.
+    sshCommands: []
+    # -- SFTPGo's built-in defender (fail2ban-style, in-process): bans a
+    # source IP whose score reaches `threshold` within `observationTime`
+    # minutes. Scores: a wrong password for an existing account
+    # (`scoreValid`), an unknown username (`scoreInvalid`), a rate-limit or
+    # per-host connection-limit hit (`scoreLimitExceeded`), a connection
+    # that never tried to authenticate (`scoreNoAuth`). Only meaningful when
+    # the pod sees real client IPs (scheduleFeed.service.externalTrafficPolicy:
+    # Local): behind source NAT every client shares one address, and a ban
+    # locks everyone out, the feed provider included. Bans live in memory
+    # (driver "memory"), so a pod restart clears them all. Rendered as
+    # SFTPGO_COMMON__DEFENDER__* env vars. With these defaults a source is
+    # banned after about 2 connections with a wrong password (OpenSSH and
+    # JSch each try keyboard-interactive and then password, 2 x 2 x 2 = 8)
+    # or 4 failed attempts at unknown usernames.
+    defender:
+      enabled: true
+      # -- Minutes a host stays banned.
+      banTime: 60
+      # -- Each connection a banned host makes adds this percentage of
+      # banTime to its ban (100 = another banTime per attempt).
+      banTimeIncrement: 100
+      threshold: 8
+      scoreInvalid: 2
+      scoreValid: 2
+      scoreLimitExceeded: 4
+      # -- 0 on purpose: the kubelet's TCP liveness probe and port scanners'
+      # banner reads connect and close without authenticating, and must
+      # never score.
+      scoreNoAuth: 0
+      # -- Minutes of history a host's score covers.
+      observationTime: 30
+      # -- Hosts (scored or banned) kept in memory; trimmed back to the soft
+      # limit when the hard limit is reached.
+      entriesSoftLimit: 500
+      entriesHardLimit: 1000
+      # -- Source IPs/CIDRs the defender never scores or bans, and the rate
+      # limiter never limits (SFTPGo IP lists of type "defender" in allow
+      # mode, and "rate limiter safe list"), loaded through the same
+      # --loaddata-from file as the push account. Leave the kubelet's probe
+      # source out unless scoreNoAuth is raised: its probes never
+      # authenticate, so they never score, and behind source NAT the probe
+      # address is every client's address.
+      safelist: []
+    # -- Max simultaneous connections from one source IP (SFTPGo
+    # common.max_per_host_connections; upstream default 20). Exceeding it
+    # scores defender.scoreLimitExceeded. 0 disables the limit.
+    maxPerHostConnections: 8
+    # -- Per-source-IP SSH connection rate limit (SFTPGo
+    # common.rate_limiters[0], type 2 = per source). `average` connections
+    # per `periodMs`, bursting to `burst`. Each rejected connection scores
+    # defender.scoreLimitExceeded. average: 0 disables it. The kubelet's TCP
+    # probe makes 2 connections a minute from the node address.
+    rateLimit:
+      average: 20
+      periodMs: 60000
+      burst: 10
+    # -- SFTPGo log level (SFTPGO_LOG_LEVEL), set explicitly rather than
+    # left to the image default. Keep "debug": SFTPGo logs failed logins
+    # (sender "connection_failed") and defender score changes only at
+    # debug; bans are at info. Log-based alerts on failed logins need it.
+    # The time field is always UTC (SFTPGO_LOG_UTC_TIME).
+    logLevel: debug
+    # -- SFTPGo's telemetry listener (/metrics, /healthz) on `port`, scraped
+    # by the PodMonitor's `sftp-metrics` endpoint. Needs metrics.enabled.
+    # Never on the NodePort Service; the NetworkPolicy admits only the
+    # monitoring namespace. Feeds the distant-signal.schedule-sftp alerts.
+    telemetry:
+      enabled: true
+      port: 9097
     # -- The folder DTD's account lands files in. CORRECTED 2026-09-01
     # (this task): this account's SFTP home/chroot directory is set to
     # EXACTLY /data/schedule-feed/<this value+folderPath> (see
@@ -3063,6 +3169,23 @@ scheduleFeed:
     # CORPUSExtract.json.gz (CORPUS) and CORPUSExtract.csv.gz (SMART berth
     # data); a zip of either must never be published as the timetable.
     cifExcludePattern: "CORPUSExtract*"
+    # -- Content checks on each extracted CIF delivery before it is marked
+    # complete (crates/schedule-ingest/src/cif_check.rs). Always on: the MCA
+    # must be a full CIF extract (an HD header with update indicator F,
+    # known record types, one ZZ trailer) and the MSN must carry a
+    # Generated date. A failure quarantines the delivery with the reason
+    # (DistantSignalScheduleFeedZipRejected) and the previous timetable
+    # stays in service. 0 disables each threshold below.
+    cifChecks:
+      # -- Days the MSN Generated date may trail the delivery (a replayed
+      # old extract). Real deliveries are generated the same day.
+      maxGeneratedAgeDays: 3
+      # -- Fewest schedule (BS) records an MCA may have; the real full
+      # extract has ~505,000.
+      minSchedules: 100000
+      # -- Largest drop, in percent, of the BS or TI record count since the
+      # last accepted delivery. Real day-to-day changes are under 0.3%.
+      maxRecordDropPercent: 20
   # -- Network Rail CORPUS location reference data, pushed by RDM to the SAME
   # SFTP account and landing folder as the CIF feed and loaded by the
   # `ingest` container into api's corpus_locations table (whole-table
@@ -3833,6 +3956,24 @@ metrics:
       rejectedWindow: 6h
       populationMissingFor: 15m
       severity: warning
+    # -- The schedulefeed SFTP server's own alerts
+    # (distant-signal.schedule-sftp), from SFTPGo's telemetry counters.
+    # Renders with scheduleFeed.enabled and scheduleFeed.sftp.telemetry.enabled.
+    # No failed-login alert here: the counters carry no username or IP, so
+    # Loki rules own that (docs/schedule-feed-sftp.md).
+    scheduleSftp:
+      enabled: true
+      # DistantSignalSftpNoUpload: no upload at all in this window. DTD
+      # pushes daily (~20:00 UTC), so 30h allows one late delivery.
+      noUploadWindow: 30h
+      noUploadFor: 30m
+      # DistantSignalSftpUploadErrors: any failed or interrupted upload.
+      uploadErrorsWindow: 1h
+      # DistantSignalSftpUserStoreDown: SFTPGo's user store unavailable, so
+      # every login fails.
+      userStoreDownFor: 5m
+      severity: warning
+      userStoreDownSeverity: critical
 
 # ---------------------------------------------------------------------------
 # NetworkPolicy (optional)
