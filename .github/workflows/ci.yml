@@ -749,6 +749,14 @@ jobs:
           grep -q -- '- "huge_pages=off"' <<<"${out}"
           grep -q -- '- "temp_file_limit=100000000"' <<<"${out}"
           grep -q -- '- "jit=off"' <<<"${out}"
+          # Server-level backstops (Train Register N4), and never a
+          # server-wide statement_timeout (pgBackRest's pg_backup_stop).
+          grep -q -- '- "idle_in_transaction_session_timeout=10min"' <<<"${out}"
+          grep -q -- '- "client_connection_check_interval=10s"' <<<"${out}"
+          grep -q -- '- "tcp_keepalives_idle=60"' <<<"${out}"
+          if grep -q -- '"statement_timeout=' <<<"${out}"; then
+            echo "server-wide statement_timeout rendered" >&2; exit 1
+          fi
           grep -q 'mountPath: /dev/shm' <<<"${out}"
           grep -q 'medium: Memory' <<<"${out}"
           grep -q 'sizeLimit: 1Gi' <<<"${out}"

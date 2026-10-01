@@ -1207,6 +1207,14 @@ override only needs to name the keys it changes:
 | `log_parameter_max_length` | `0` | `-1` | Never log bind parameters: bulk arrays of ~250k rows, user data, session tokens. |
 | `log_lock_waits` | `on` | `off` | Logs lock waits longer than `deadlock_timeout` (1s). |
 | `track_io_timing` | `on` | `off` | I/O timings in `EXPLAIN (ANALYZE, BUFFERS)`, `pg_stat_statements` and `pg_stat_database`. |
+| `idle_in_transaction_session_timeout` | `10min` | `0` | Backstop for sessions that skip `common::pg` (psql, exporters): ends one left idle inside an open transaction. The pools set 30s; pg_dump sets its own 0. |
+| `tcp_keepalives_idle` / `_interval` / `_count` | `60` / `10` / `6` | `0` (OS: 2h) | Detects a client that vanished without closing its socket. Same values every pool sets. |
+| `client_connection_check_interval` | `10s` | `0` | A running query checks its socket and aborts once the client is gone. |
+
+`statement_timeout` is deliberately not set server-wide. pgBackRest's
+`pg_backup_stop()` waits for WAL archiving, which takes minutes while object
+storage is down. Manual VACUUM, CREATE INDEX and the api's migration
+connection also run long. Every service pool sets its own 60s.
 
 `random_page_cost` defaults to `"1.1"`, which assumes SSD-class storage
 (SSD/NVMe, or network block storage backed by it, as most managed

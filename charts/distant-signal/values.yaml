@@ -259,6 +259,29 @@ postgresql:
     # pg_stat_database. Cheap on Linux's clock source; verify with
     # pg_test_timing if in doubt.
     track_io_timing: "on"
+    # --- Server-level backstops (Train Register N4, 2026-10-01). Every
+    # service pool already sets these per session (common::pg), so they only
+    # matter for a connection that doesn't: psql, pg_dump, exporters, a
+    # future crate. A session can still override any of them. ---
+    # End a session left idle inside an open transaction (a forgotten psql
+    # BEGIN), which would hold its locks and pin the xmin horizon. The pools
+    # use 30s; this is a looser catch-all. pg_dump sets its own 0, and
+    # pgBackRest and the CREATE INDEX CONCURRENTLY migrations never sit idle
+    # inside a transaction.
+    idle_in_transaction_session_timeout: "10min"
+    # Notice a client that vanished without a FIN/RST (a killed pod, a
+    # dropped node): keepalive probes after 60s idle, 6 x 10s apart, and a
+    # running query polls its socket every 10s and aborts once the client
+    # is gone, instead of running to completion for nobody.
+    tcp_keepalives_idle: 60
+    tcp_keepalives_interval: 10
+    tcp_keepalives_count: 6
+    client_connection_check_interval: "10s"
+    # statement_timeout is deliberately NOT set server-wide: pgBackRest's
+    # pg_backup_stop() waits for the last WAL segment to archive (minutes
+    # while object storage is down), as do manual VACUUM, CREATE INDEX and
+    # the api's migration connection (which sets its own, under the
+    # startup probe's budget). Every pool sets its own 60s.
   # A memory-backed /dev/shm for Postgres's dynamic shared memory
   # (dynamic_shared_memory_type=posix). The runtime default is 64MiB, and
   # that has ALREADY FAILED IN PRODUCTION: a manual
