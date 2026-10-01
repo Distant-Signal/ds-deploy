@@ -1247,6 +1247,26 @@ jobs:
           feed=$(render --set 'scheduleFeed.sftp.allowedCidrs={203.0.113.0/24}' \
             --show-only templates/networkpolicy.yaml | policy distant-signal-schedulefeed)
           grep -q 'cidr: "203.0.113.0/24"' <<<"${feed}" || fail "allowedCidrs must render as ipBlocks"
+          # The allow-list needs the client IP, i.e. externalTrafficPolicy:
+          # Local on the SFTP Service. Empty renders nothing; Local/Cluster
+          # render; anything else, or a ClusterIP Service, fails.
+          svc=$(render --show-only templates/schedulefeed-service.yaml)
+          if grep -q 'externalTrafficPolicy' <<<"${svc}"; then fail "empty externalTrafficPolicy must render nothing"; fi
+          for p in Local Cluster; do
+            svc=$(render --set "scheduleFeed.service.externalTrafficPolicy=${p}" \
+              --show-only templates/schedulefeed-service.yaml)
+            grep -q "^  externalTrafficPolicy: ${p}\$" <<<"${svc}" || fail "externalTrafficPolicy=${p} must render"
+          done
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set scheduleFeed.service.externalTrafficPolicy=local \
+              --show-only templates/schedulefeed-service.yaml >/dev/null 2>&1; then
+            fail "externalTrafficPolicy must reject values other than Local/Cluster"
+          fi
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set scheduleFeed.service.externalTrafficPolicy=Local --set scheduleFeed.service.type=ClusterIP \
+              --show-only templates/schedulefeed-service.yaml >/dev/null 2>&1; then
+            fail "externalTrafficPolicy must fail on a ClusterIP Service"
+          fi
 
           # INF-10: every background worker has its own policy, admitting its
           # health port (kubelet probes). Egress policies are opt-in.

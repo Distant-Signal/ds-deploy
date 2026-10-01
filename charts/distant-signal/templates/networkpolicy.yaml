@@ -417,9 +417,10 @@ spec:
     #
     # scheduleFeed.sftp.allowedCidrs narrows the sources. It only works when
     # the pod sees the real client address: set
-    # `externalTrafficPolicy: Local` on the Service (or use a load balancer
-    # that preserves the source IP). Behind a source-NATing hop the source
-    # is a node or LB address and an allow-list would drop every push.
+    # scheduleFeed.service.externalTrafficPolicy to Local (or use a load
+    # balancer that preserves the source IP). Behind a source-NATing hop
+    # the source is a node or LB address and an allow-list would drop every
+    # push.
     # Empty (the default) allows any source; SFTP authentication is the
     # control then.
     - ports:

@@ -7,6 +7,14 @@ comment for why LoadBalancer is the default here, unlike every HTTP
 workload in this chart.
 */}}
 {{- if .Values.scheduleFeed.enabled }}
+{{- with .Values.scheduleFeed.service.externalTrafficPolicy }}
+{{- if not (has . (list "Local" "Cluster")) }}
+{{- fail (printf "scheduleFeed.service.externalTrafficPolicy must be \"Local\" or \"Cluster\" (or empty), got %q" .) }}
+{{- end }}
+{{- if not (has $.Values.scheduleFeed.service.type (list "NodePort" "LoadBalancer")) }}
+{{- fail (printf "scheduleFeed.service.externalTrafficPolicy only applies when scheduleFeed.service.type is NodePort or LoadBalancer (got %q); Kubernetes rejects it on other Service types. Unset it, or change the type." $.Values.scheduleFeed.service.type) }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -19,6 +27,9 @@ metadata:
   {{- end }}
 spec:
   type: {{ .Values.scheduleFeed.service.type }}
+  {{- with .Values.scheduleFeed.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+  {{- end }}
   selector:
     {{- include "distant-signal.selectorLabels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
   ports:

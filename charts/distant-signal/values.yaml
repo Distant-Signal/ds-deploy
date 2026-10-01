@@ -2745,9 +2745,9 @@ scheduleFeed:
     # -- Source CIDRs allowed to reach the SFTP port when
     # networkPolicy.enabled (INF-2), e.g. DTD's published egress range.
     # Empty allows any source. Only effective when the pod sees the real
-    # client IP (Service `externalTrafficPolicy: Local`, or a load balancer
-    # that preserves it); behind source NAT a non-empty list blocks every
-    # push. See templates/networkpolicy.yaml.
+    # client IP (scheduleFeed.service.externalTrafficPolicy: Local, or a
+    # load balancer that preserves it); behind source NAT a non-empty list
+    # blocks every push. See templates/networkpolicy.yaml.
     allowedCidrs: []
     # -- Purely informational: the public hostname/DNS name an operator has
     # pointed at this Service's LoadBalancer, i.e. what actually gets
@@ -3010,6 +3010,21 @@ scheduleFeed:
     # and would break `kubectl apply`. If set, MUST be a real port in the
     # cluster's NodePort range (default 30000-32767).
     nodePort: null
+    # -- The Service's externalTrafficPolicy: "Local", "Cluster", or empty
+    # (the default), which renders nothing and leaves Kubernetes' own
+    # default, Cluster. Anything else fails the render, and so does setting
+    # it while type is not NodePort or LoadBalancer (Kubernetes rejects it
+    # on a ClusterIP Service). Cluster lets any node forward the push to
+    # the pod, source-NATing it on the way, so the pod sees a node address
+    # rather than DTD's. Local keeps the client's real IP, which
+    # sftp.allowedCidrs needs: the NetworkPolicy ipBlock allow-list matches
+    # on the source address, and behind source NAT a non-empty list drops
+    # every push. The cost of Local is that a node only accepts the traffic
+    # when it runs a ready schedulefeed pod (other nodes drop it, and a
+    # cloud LB's health check takes them out of rotation). On a single-node
+    # cluster that is no cost at all; on several nodes, point the LB/DNS at
+    # the node(s) that run the pod.
+    externalTrafficPolicy: ""
   persistence:
     enabled: true
     size: 5Gi
