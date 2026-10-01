@@ -3601,12 +3601,15 @@ metrics:
     # DistantSignalLdbwsStationStale (SVC-04): the least recently sampled
     # LDBWS station was last sampled more than `maxAgeSeconds` ago
     # (distant_signal_ldbws_stalest_station_age_seconds), i.e. the rotation
-    # has stopped reaching part of the list. Production's 7-day max was
-    # ~2,900s (2026-09-27). Only when pollers.ldbws.enabled.
+    # has stopped reaching part of the list. 900s is the aggregator's
+    # sample-age limit (common::STATION_SAMPLE_MAX_AGE_MINUTES): an older
+    # station is already dropped from inference. Production's 7-day max was
+    # 126s (2026-10-01; a full rotation takes 2-3 cycles). Only when
+    # pollers.ldbws.enabled.
     ldbwsStalestStation:
       enabled: true
-      maxAgeSeconds: 7200
-      for: 30m
+      maxAgeSeconds: 900
+      for: 15m
       severity: warning
     # DistantSignalLdbwsInvalidCrs: LDBWS answers "Invalid crs code
     # supplied" for a sampled station (distant_signal_ldbws_invalid_crs_station
