@@ -1072,6 +1072,47 @@ helm upgrade distant-signal ./charts/distant-signal -n distant-signal \
   --set pollers.incidents.apiKey=your-rdm-key
 ```
 
+## Logging
+
+Every Rust workload and the frontend's server side log **one JSON object
+per line** on stdout (no ANSI colour, no multi-line output), for Loki/Alloy.
+The chart sets nothing for this: `LOG_FORMAT` defaults to `json` in the
+binaries themselves (`common::logging`, `frontend/lib/logger.ts`). To get
+human-readable text from one workload while debugging, add
+`LOG_FORMAT=pretty` through its `extraEnv` (where it has one). Verbosity is
+unchanged: the per-component `logLevel` values (`RUST_LOG`, or the
+notifier's `LOG_LEVEL`).
+
+| Key | Value |
+|---|---|
+| `timestamp` | RFC 3339, UTC (`2026-10-01T09:30:00.123456Z`; the frontend has millisecond precision) |
+| `level` | `TRACE`, `DEBUG`, `INFO`, `WARN` or `ERROR` |
+| `service` | the binary: `api`, `aggregator`, `notifier`, `enricher`, `movement-relay`, `trust-consumer`, `full-coverage-consumer`, `trust-backlog-consumer`, `poller-<name>`, `schedule-ingest`, `schedule-reference`, `frontend` |
+| `target` | Rust: the module path (`api::routes::lines`), the `log` crate's target (`librdkafka`), `panic` or `fatal`. Frontend: the module (`lib/api`), `next` (`onRequestError`) or `console` (Next's own console output) |
+| `message` | the event's message |
+| *(event fields)* | flattened to the top level as snake_case keys (`line_id`, `count`, ...) |
+| `error` | an error's text with its cause chain |
+| `stack` | a backtrace: panics, frontend `Error`s |
+| `spans` | Rust only, when inside a span: the enclosing spans root first, each `{"name": ..., <fields>}` (e.g. the api's per-request span) |
+
+A panic is one `ERROR` line with target `panic`, message
+`panicked at <file:line:col>: <payload>` and a `stack`; an error returned from
+`main` is one `ERROR` line with target `fatal`. Credentials are never logged
+(Rust `Secret` fields print `Secret(***)`; the frontend logger redacts
+token/secret/password/cookie/authorization/email keys).
+
+LogQL examples:
+
+```logql
+{namespace="distant-signal"} | json | level="ERROR"
+{namespace="distant-signal"} | json | target="panic"
+{namespace="distant-signal"} | json | service="trust-consumer" | message=~".*NOGROUP.*"
+```
+
+Clap's own argument errors (a missing required env var at startup) are
+still printed by clap as plain text before logging starts, then the process
+exits with code 2.
+
 ## Values reference
 
 ### Global
