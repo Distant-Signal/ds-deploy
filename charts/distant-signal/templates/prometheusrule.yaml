@@ -1037,7 +1037,7 @@ spec:
             description: >-
               SFTPGo in {{ "{{ $labels.namespace }}" }} received no file in
               {{ .noUploadWindow }}. DTD's daily push did not arrive.
-            runbook_url: {{ printf "%s/docs/schedule-feed-sftp.md#alerts" $runbookBase | quote }}
+            runbook_url: {{ printf "%s#distantsignalsftpnoupload" $runbook | quote }}
         - alert: DistantSignalSftpUploadErrors
           expr: |
             sum by (namespace) (increase(sftpgo_upload_errors_total{namespace="{{ $ns }}"}[{{ .uploadErrorsWindow }}])) > 0
@@ -1052,7 +1052,7 @@ spec:
             description: >-
               An upload to SFTPGo in {{ "{{ $labels.namespace }}" }} failed or was
               interrupted in the last {{ .uploadErrorsWindow }}. Check the next ingest.
-            runbook_url: {{ printf "%s/docs/schedule-feed-sftp.md#alerts" $runbookBase | quote }}
+            runbook_url: {{ printf "%s#distantsignalsftpuploaderrors" $runbook | quote }}
         - alert: DistantSignalSftpUserStoreDown
           expr: |
             max by (namespace) (sftpgo_dataprovider_availability{namespace="{{ $ns }}"}) == 0
@@ -1067,7 +1067,7 @@ spec:
             description: >-
               SFTPGo in {{ "{{ $labels.namespace }}" }} reports its user store
               down, so every login fails and DTD's push cannot land.
-            runbook_url: {{ printf "%s/docs/schedule-feed-sftp.md#alerts" $runbookBase | quote }}
+            runbook_url: {{ printf "%s#distantsignalsftpuserstoredown" $runbook | quote }}
     {{- end }}
     {{- end }}
 {{- end }}

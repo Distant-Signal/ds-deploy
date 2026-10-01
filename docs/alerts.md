@@ -481,6 +481,36 @@ delivery failed to provide it. Check
 [DistantSignalScheduleReferencePublishStale](#distantsignalschedulereferencepublishstale)
 and the consumer's population reload errors.
 
+## schedule SFTP
+
+These read SFTPGo's own telemetry (`scheduleFeed.sftp.telemetry`), so they
+render only with `scheduleFeed.enabled` and telemetry on. Failed logins and
+anomalous `dtd-push` logins are Loki rules, not metrics: the counters carry no
+username or source IP. The full runbook is
+[schedule-feed-sftp.md](schedule-feed-sftp.md).
+
+### DistantSignalSftpNoUpload
+
+SFTPGo received no upload in `noUploadWindow` (30h): DTD's daily push did not
+arrive. Quiet until the counter has a full window of history. Uploads are not
+per file type, so a CORPUS upload can mask a missing CIF;
+DistantSignalScheduleReferencePublishStale stays authoritative for the
+timetable. Check the `sftp` container's log for DTD's `login` and `Upload`
+lines, and the defender for a ban on DTD's address.
+
+### DistantSignalSftpUploadErrors
+
+An upload failed or was interrupted in the last hour (`sftpgo_upload_errors_total`).
+The `Upload` log line's `error` field says why: a size cap, a disconnect, or a
+full volume. DTD normally retries; the next delivery replaces a partial file.
+
+### DistantSignalSftpUserStoreDown
+
+SFTPGo's user store is unavailable, so every login fails. The `sftp` container
+loads `dtd-push` from its entrypoint at start; restart the pod and read its
+startup log (`--loaddata-from` errors, or the password policy refusing a short
+password).
+
 ## pollers
 
 ### DistantSignalPollerFailing
