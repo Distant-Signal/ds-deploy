@@ -1,0 +1,42 @@
+# promtool unit tests for the distant-signal.full-coverage-window group
+# (see recorded-alerts.yaml's header for how rules.yaml is rendered; the
+# group renders because fullCoverageConsumer.windowedStats.enabled is set).
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # One POST fails at 5m (an api Recreate rollout, ~20-25 s down), then
+  # two more in one minute at 25m (a slower rollout): neither reaches 3
+  # failures in 5m, so the alert never fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_full_coverage_consumer_errors_total{namespace="distant-signal", pod="fcc", operation="post_window_stats"}'
+        values: '0x5 1x19 3x20'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DistantSignalFullCoverageWindowPostErrors
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalFullCoverageWindowPostErrors
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DistantSignalFullCoverageWindowPostErrors
+        exp_alerts: []
+  # Every POST fails from 5m (about one a minute, e.g. an api without the
+  # route answering 404): 3 or more per 5m from about 8m, firing once that
+  # has held for 10m.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_full_coverage_consumer_errors_total{namespace="distant-signal", pod="fcc", operation="post_window_stats"}'
+        values: '0x5 1+1x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DistantSignalFullCoverageWindowPostErrors
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: DistantSignalFullCoverageWindowPostErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: full-coverage window stats POSTs failing
+              description: "5 window-stats POSTs failed in 5m, for 10m. A 404 means api lacks the route."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalfullcoveragewindowposterrors

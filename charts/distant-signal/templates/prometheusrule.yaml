@@ -624,9 +624,17 @@ spec:
             summary: "full-coverage windows feed_stale for {{ .feedStaleFor }}"
             description: "Too few TRUST Activations or no recent movement event; no window affects severity. Expected during a TRUST outage."
             runbook_url: {{ printf "%s#distantsignalfullcoveragewindowfeedstale" $runbook | quote }}
+        {{- /*
+        2026-10-02: was `> 0` over 30m with no `for`, so the one POST that
+        fails while an api Recreate rollout is down (~20-25 s) fired it for
+        30 minutes (3 of 5 rollouts). Now the same shape as
+        DistantSignalConsumerApiCallsFailing: at least postErrorsThreshold
+        failures per postErrorsWindow, sustained for postErrorsFor. A
+        persistent 404 (one failure a minute) still fires.
+        */}}
         - alert: DistantSignalFullCoverageWindowPostErrors
           expr: |
-            sum by (namespace) (increase(distant_signal_full_coverage_consumer_errors_total{namespace="{{ $ns }}", operation="post_window_stats"}[{{ .postErrorsWindow }}])) > 0
+            sum by (namespace) (increase(distant_signal_full_coverage_consumer_errors_total{namespace="{{ $ns }}", operation="post_window_stats"}[{{ .postErrorsWindow }}])) >= {{ .postErrorsThreshold }}
           for: {{ .postErrorsFor }}
           labels:
             severity: {{ .severity }}
@@ -635,7 +643,7 @@ spec:
             {{- end }}
           annotations:
             summary: "full-coverage window stats POSTs failing"
-            description: "POSTs to /private/full-coverage-window-stats failed in the last {{ .postErrorsWindow }}. A 404 means api lacks the route."
+            description: "{{ "{{ $value | humanize }}" }} window-stats POSTs failed in {{ .postErrorsWindow }}, for {{ .postErrorsFor }}. A 404 means api lacks the route."
             runbook_url: {{ printf "%s#distantsignalfullcoveragewindowposterrors" $runbook | quote }}
         - alert: DistantSignalFullCoverageWindowStatsStalled
           expr: |

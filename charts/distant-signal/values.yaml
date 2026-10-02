@@ -1729,6 +1729,20 @@ aggregator:
     # Service; rank 3) are still recorded as would_escalate_to with
     # below_min_rank, for the evidence to lower this later.
     minEscalationRank: 4
+    # -- Lines enforce may raise with a SPARSE all-cancelled verdict (a
+    # window below the 6-train sample size in which every train, at least
+    # sparseMinCancelled of them, was explicitly cancelled: Part
+    # Suspended). Its own allowlist, NOT covered by enforceLines: comma
+    # list, or "*" for every full-coverage-enabled line. EMPTY by default,
+    # so sparse verdicts are recorded (shadow, basis sparse_all_cancelled)
+    # but never shown, even while enforceLines enforces the rate tiers.
+    sparseEnforceLines: ""
+    # -- Sparse all-cancelled rule: the fewest cancelled trains (all of the
+    # window's) that read Part Suspended below the sample size. 2 catches a
+    # two-trains-an-hour branch; 3 would miss exactly those. 0 turns the
+    # rule off. A line's severity_overrides
+    # (full_coverage_sparse_min_cancelled) wins over it.
+    sparseMinCancelled: 2
     # -- Retention of full_coverage_line_window_stats and
     # full_coverage_window_verdicts (pruned in every mode).
     retentionDays: 14
@@ -3838,16 +3852,20 @@ metrics:
     # windows feed_stale (too few Activations in the last hour, or no event
     # for feedStaleSecs) for `feedStaleFor` -- no window influences severity
     # meanwhile. Expected during a known TRUST outage.
-    # DistantSignalFullCoverageWindowPostErrors: a POST to
-    # /private/full-coverage-window-stats failed within `postErrorsWindow`
-    # (an api without the route answers 404).
+    # DistantSignalFullCoverageWindowPostErrors: at least
+    # `postErrorsThreshold` POSTs to /private/full-coverage-window-stats
+    # failed within `postErrorsWindow`, continuously for `postErrorsFor`
+    # (the shape of DistantSignalConsumerApiCallsFailing), so the one POST
+    # lost to an api rollout does not fire; a persistent failure (an api
+    # without the route answers 404 every minute) still does.
     # DistantSignalFullCoverageWindowStatsStalled: no window rows posted
     # over `stalledWindow` for `stalledFor` while the consumer is running.
     fullCoverageWindow:
       enabled: true
       feedStaleFor: 15m
-      postErrorsWindow: 30m
-      postErrorsFor: 0m
+      postErrorsWindow: 5m
+      postErrorsThreshold: 3
+      postErrorsFor: 10m
       stalledWindow: 10m
       stalledFor: 15m
       severity: warning

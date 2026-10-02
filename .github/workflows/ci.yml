@@ -926,6 +926,45 @@ jobs:
             --show-only templates/movement-relay-deployment.yaml)
           grep -A1 'name: MOVEMENT_STREAM_MAXLEN' <<<"${relay}" | grep -q 'value: "1048576"'
 
+      # Windowed full coverage's sparse all-cancelled rule: shadow-only by
+      # default (its own allowlist is empty, separate from enforceLines),
+      # minimum 2 cancelled trains, and both values reach the aggregator.
+      - name: helm template (full-coverage sparse rule)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          fail() { echo "::error::$*" >&2; exit 1; }
+          agg=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --show-only templates/aggregator-deployment.yaml)
+          grep -A1 'name: FULL_COVERAGE_WINDOW_SPARSE_ENFORCE_LINES$' <<<"${agg}" | grep -q 'value: ""' \
+            || fail "sparse verdicts must be shadow-only by default"
+          grep -A1 'name: FULL_COVERAGE_SPARSE_MIN_CANCELLED$' <<<"${agg}" | grep -q 'value: "2"' \
+            || fail "the sparse rule must need 2 cancelled trains by default"
+          agg=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set aggregator.fullCoverageWindow.mode=enforce \
+            --set 'aggregator.fullCoverageWindow.enforceLines=gwr-windsor-branch' \
+            --set 'aggregator.fullCoverageWindow.sparseEnforceLines=gwr-looe-valley\,swr-lymington-branch' \
+            --set aggregator.fullCoverageWindow.sparseMinCancelled=3 \
+            --show-only templates/aggregator-deployment.yaml)
+          grep -A1 'name: FULL_COVERAGE_WINDOW_ENFORCE_LINES$' <<<"${agg}" | grep -q 'value: "gwr-windsor-branch"' \
+            || fail "enforceLines must stay its own setting"
+          grep -A1 'name: FULL_COVERAGE_WINDOW_SPARSE_ENFORCE_LINES$' <<<"${agg}" \
+            | grep -q 'value: "gwr-looe-valley,swr-lymington-branch"' \
+            || fail "sparseEnforceLines must reach the aggregator"
+          grep -A1 'name: FULL_COVERAGE_SPARSE_MIN_CANCELLED$' <<<"${agg}" | grep -q 'value: "3"' \
+            || fail "sparseMinCancelled must reach the aggregator"
+
       # The sftp entrypoint ConfigMap embeds files/schedule-sftp-entrypoint.sh
       # (also bind-mounted by docker-compose.yml) with .Files.Get; the
       # rendered script must be that file, byte for byte.

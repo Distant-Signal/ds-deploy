@@ -147,6 +147,12 @@ with aggregator.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.aggregator.fullCoverageWindow.enforceLines | quote }}
             - name: FULL_COVERAGE_WINDOW_MIN_ESCALATION_RANK
               value: {{ .Values.aggregator.fullCoverageWindow.minEscalationRank | quote }}
+            # Sparse all-cancelled verdicts: their own allowlist (empty:
+            # recorded, never shown) and minimum cancelled trains.
+            - name: FULL_COVERAGE_WINDOW_SPARSE_ENFORCE_LINES
+              value: {{ .Values.aggregator.fullCoverageWindow.sparseEnforceLines | quote }}
+            - name: FULL_COVERAGE_SPARSE_MIN_CANCELLED
+              value: {{ .Values.aggregator.fullCoverageWindow.sparseMinCancelled | quote }}
             - name: FULL_COVERAGE_WINDOW_STATS_RETENTION_DAYS
               value: {{ .Values.aggregator.fullCoverageWindow.retentionDays | quote }}
             {{- /* Optional cold archive (archive.* in values.yaml): nothing at

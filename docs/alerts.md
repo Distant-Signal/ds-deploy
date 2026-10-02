@@ -315,8 +315,13 @@ outage; otherwise check movement-relay and the consumer's lag.
 
 ### DistantSignalFullCoverageWindowPostErrors
 
-A POST to `/private/full-coverage-window-stats` failed
-(`full_coverage_consumer_errors_total{operation="post_window_stats"}`). An api
+At least 3 POSTs to `/private/full-coverage-window-stats` failed
+(`full_coverage_consumer_errors_total{operation="post_window_stats"}`) within
+5 minutes, continuously for 10 minutes (`postErrorsThreshold`,
+`postErrorsWindow`, `postErrorsFor`), the same shape as
+[DistantSignalConsumerApiCallsFailing](#distantsignalconsumerapicallsfailing).
+The consumer posts about once a minute, so the one POST that fails while an
+api rollout is down does not fire it; a failure on every POST does. An api
 without that route (not yet deployed, or its migrations not run) answers 404.
 Check api's logs and the consumer's warn log.
 

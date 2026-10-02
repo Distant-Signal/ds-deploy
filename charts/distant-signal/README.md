@@ -1537,6 +1537,8 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 | `aggregator.fullCoverageWindow.mode` | `off` | Windowed full-coverage severity: `off`, `shadow` (record a verdict per line, change nothing) or `enforce` (also escalate the lines in `enforceLines`). |
 | `aggregator.fullCoverageWindow.enforceLines` | `""` | Lines `enforce` may change: comma list, or `*` for every full-coverage-enabled line. Empty enforces nothing. |
 | `aggregator.fullCoverageWindow.minEscalationRank` | `4` | Only verdicts of at least this severity rank are enforced (4 is Severe Delays / Part Suspended). |
+| `aggregator.fullCoverageWindow.sparseEnforceLines` | `""` | Lines `enforce` may raise with a sparse all-cancelled verdict (below the 6-train sample size, every train cancelled: Part Suspended). Its own allowlist, not covered by `enforceLines`: comma list or `*`. Empty: recorded in shadow, never shown. |
+| `aggregator.fullCoverageWindow.sparseMinCancelled` | `2` | Fewest cancelled trains (all of the window's) the sparse rule needs. 0 turns it off; a line's `full_coverage_sparse_min_cancelled` override wins. |
 | `aggregator.fullCoverageWindow.retentionDays` | `14` | Days window stats and verdicts are kept (pruned in every mode). |
 | `aggregator.trustEventBacklogRetentionDays` | `1` | Days `trust_event_backlog` rows are kept. Deliberately 1: a TRUST licensing safeguard. |
 | `aggregator.scheduleDestinationDeparturesRetentionDays` | `8` | Service dates of `schedule_destination_departures` kept (about 377,000 rows a day); covers the train search's 7-day backward window. |
@@ -2289,7 +2291,7 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalMovementGroupRecreated` | warning | Within 1h a consumer recreated its group after `NOGROUP` (`movement_feed_group_recreated_total`), or movement-relay recreated a missing stream with every group (`movement_relay_stream_created_total`): Redis lost its data. |
 | `DistantSignalEnricherErrors` | warning | Over 30m, more than 50% of an LLM call site's calls (`enricher_llm_call_total{outcome!="success"}`: `error`, `timeout`, `rate_limited`, `gateway_error`, `http_error` or `empty_content`) failed, with at least 3 failures, for 15m. |
 | `DistantSignalFullCoverageWindowFeedStale` | warning | full-coverage-consumer has marked its windows `feed_stale` (`full_coverage_consumer_window_feed_stale` is 1) for 15m. |
-| `DistantSignalFullCoverageWindowPostErrors` | warning | A POST to `/private/full-coverage-window-stats` failed (`full_coverage_consumer_errors_total{operation="post_window_stats"}`) within the last 30m. |
+| `DistantSignalFullCoverageWindowPostErrors` | warning | At least 3 POSTs to `/private/full-coverage-window-stats` failed (`full_coverage_consumer_errors_total{operation="post_window_stats"}`) within 5m, continuously for 10m (`postErrorsThreshold`, `postErrorsWindow`, `postErrorsFor`): one POST lost to an api rollout does not fire. |
 | `DistantSignalFullCoverageWindowStatsStalled` | warning | No window rows posted (`full_coverage_consumer_window_rows_posted_total`) over 10m, for 15m. |
 | `DistantSignalComponentMemoryHigh` | warning | A container in this release's pods (`pod=~"<fullname>-.*"`) has a working set (cadvisor) above 80% of its memory limit (kube-state-metrics) for 10m. |
 | `DistantSignalNotifierPushDropped` | warning | The notifier dropped at least 5 decided pushes (`notifier_push_dropped_total{reason}`) within the last 1h. Delivery is at-most-once. |
