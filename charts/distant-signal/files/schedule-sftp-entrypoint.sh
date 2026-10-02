@@ -248,6 +248,15 @@ cat >"${LOADDATA_FILE}" <<EOF
 }
 EOF
 
+# The umask 077 above is only for the loaddata file. SFTPGo inherits this
+# process's umask for every file DTD uploads, and schedule-ingest reads
+# them as a different uid through the pod's shared group (fsGroup), so
+# uploads must be group-readable: 027 gives 0640 files and 0750 dirs.
+# Under 077 a newly created upload was 0600 and ingest got EACCES (seen
+# with CORPUSExtract.json.gz on 2026-10-02); timetable_full.zip only
+# worked because DTD overwrites it in place and it kept an older mode.
+umask 027
+
 # --loaddata-mode 0: see the header comment. --loaddata-clean deletes the
 # file, which holds the credential, as soon as SFTPGo has loaded it.
 exec sftpgo serve --loaddata-from "${LOADDATA_FILE}" --loaddata-mode 0 --loaddata-clean

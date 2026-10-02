@@ -20,6 +20,8 @@ ENTRYPOINT = REPO / "charts/distant-signal/files/schedule-sftp-entrypoint.sh"
 STUB = """#!/bin/sh
 printf '%s\\n' "$@" >"${STUB_OUT}/args"
 cp "$3" "${STUB_OUT}/loaddata.json"
+umask >"${STUB_OUT}/umask"
+stat -c %a "$3" >"${STUB_OUT}/loaddata-mode"
 """
 
 PASSWORD = "Abcdefghijklmnopqrstuvwxyz012345"  # noqa: S105  # a test fixture, 32 characters like the chart's
@@ -62,6 +64,10 @@ class Run:
             args = out / "args"
             self.args = args.read_text().splitlines() if args.exists() else []
             loaddata = out / "loaddata.json"
+            umask = out / "umask"
+            self.umask = umask.read_text().strip() if umask.exists() else None
+            mode = out / "loaddata-mode"
+            self.loaddata_mode = mode.read_text().strip() if mode.exists() else None
             self.loaddata: dict[str, Any] | None = (
                 json.loads(loaddata.read_text()) if loaddata.exists() else None
             )
@@ -76,6 +82,22 @@ class Run:
             msg = f"expected one user, got {len(users)}"
             raise AssertionError(msg)
         return users[0]
+
+
+class FileModeTest(unittest.TestCase):
+    """Uploads must be readable by schedule-ingest; the credential must not."""
+
+    def test_sftpgo_runs_with_a_group_readable_umask(self) -> None:
+        """SFTPGo inherits umask 027, so new uploads are 0640 for ingest's group."""
+        run = Run({"SCHEDULE_SFTP_PASSWORD": PASSWORD})
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.umask, "0027")
+
+    def test_the_loaddata_file_stays_owner_only(self) -> None:
+        """The file holding the push credential is written 0600."""
+        run = Run({"SCHEDULE_SFTP_PASSWORD": PASSWORD})
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.loaddata_mode, "600")
 
 
 class AccountPolicyTest(unittest.TestCase):
