@@ -58,6 +58,30 @@ spec:
               protocol: TCP
           {{- end }}
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerNirStationsEnv" .) "extra" .Values.pollerNirStations.extraEnv) | trim | nindent 12 }}
+          {{- with .Values.pollerNirStations.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.pollerNirStations.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pollerNirStations.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pollerNirStations.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with pollerNirStations.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.pollerNirStationsEnv" }}
             - name: STATIONS_CSV_URL
               value: {{ .Values.pollerNirStations.stationsCsvUrl | quote }}
             - name: HALTS_CSV_URL
@@ -97,23 +121,4 @@ spec:
               value: {{ .Values.pollerNirStations.progressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ .Values.pollerNirStations.logLevel | quote }}
-            {{- with .Values.pollerNirStations.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with .Values.pollerNirStations.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.pollerNirStations.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.pollerNirStations.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.pollerNirStations.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
 {{- end }}

@@ -177,6 +177,56 @@ spec:
               protocol: TCP
             {{- end }}
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.apiEnv" (dict "root" . "issuerUrl" $issuerUrl "clientId" $clientId "redirectUrl" $redirectUrl "postLoginRedirectUrl" $postLoginRedirectUrl)) "extra" .Values.api.extraEnv) | trim | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.api.probes.path }}
+              port: http
+            periodSeconds: {{ .Values.api.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.api.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.api.probes.startup.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.api.probes.path }}
+              port: http
+            periodSeconds: {{ .Values.api.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.api.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.api.probes.readiness.timeoutSeconds }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.api.probes.path }}
+              port: http
+            periodSeconds: {{ .Values.api.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.api.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.api.probes.liveness.timeoutSeconds }}
+          {{- with .Values.api.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with api.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.apiEnv" }}
+{{- /* Takes dict "root" plus the issuerUrl, clientId, redirectUrl, postLoginRedirectUrl worked out at the top of this file. */}}
+{{- $issuerUrl := .issuerUrl }}
+{{- $clientId := .clientId }}
+{{- $redirectUrl := .redirectUrl }}
+{{- $postLoginRedirectUrl := .postLoginRedirectUrl }}
+{{- with .root }}
             - name: BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.api.service.port) | quote }}
             # PGPASSWORD must stay immediately before DATABASE_URL -- the
@@ -437,43 +487,5 @@ spec:
             - name: MALLOC_MMAP_THRESHOLD_
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.api.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          startupProbe:
-            httpGet:
-              path: {{ .Values.api.probes.path }}
-              port: http
-            periodSeconds: {{ .Values.api.probes.startup.periodSeconds }}
-            failureThreshold: {{ .Values.api.probes.startup.failureThreshold }}
-            timeoutSeconds: {{ .Values.api.probes.startup.timeoutSeconds }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.api.probes.path }}
-              port: http
-            periodSeconds: {{ .Values.api.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.api.probes.readiness.failureThreshold }}
-            timeoutSeconds: {{ .Values.api.probes.readiness.timeoutSeconds }}
-          livenessProbe:
-            httpGet:
-              path: {{ .Values.api.probes.path }}
-              port: http
-            periodSeconds: {{ .Values.api.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.api.probes.liveness.failureThreshold }}
-            timeoutSeconds: {{ .Values.api.probes.liveness.timeoutSeconds }}
-          {{- with .Values.api.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.api.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.api.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.api.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+{{- end }}
+{{- end }}

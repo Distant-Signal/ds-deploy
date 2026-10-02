@@ -78,6 +78,29 @@ spec:
           # full-coverage-consumer -- this crate only ever speaks Redis
           # (Task 7's own decision).
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.trustBacklogConsumerEnv" .) "extra" .Values.trustBacklogConsumer.extraEnv) | trim | nindent 12 }}
+          {{- with .Values.trustBacklogConsumer.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.trustBacklogConsumer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trustBacklogConsumer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trustBacklogConsumer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with trustBacklogConsumer.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.trustBacklogConsumerEnv" }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisPasswordEnv" . }}
@@ -138,22 +161,4 @@ spec:
             # trust_timestamp_correction_enabled doc comment).
             - name: TRUST_TIMESTAMP_CORRECTION_ENABLED
               value: {{ .Values.trustBacklogConsumer.trustTimestampCorrectionEnabled | quote }}
-            {{- with .Values.trustBacklogConsumer.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with .Values.trustBacklogConsumer.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.trustBacklogConsumer.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.trustBacklogConsumer.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.trustBacklogConsumer.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+{{- end }}

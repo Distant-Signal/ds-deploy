@@ -109,6 +109,36 @@ spec:
             # for progressStallSecs, so a wedged loop is restarted too.
             failureThreshold: 6
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.movementRelayEnv" (dict "root" . "brokers" $brokers "topic" $topic "group" $group "mechanism" $mechanism)) "extra" .Values.movementRelay.extraEnv) | trim | nindent 12 }}
+          {{- with .Values.movementRelay.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.movementRelay.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.movementRelay.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.movementRelay.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with movementRelay.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.movementRelayEnv" }}
+{{- /* Takes dict "root" plus the brokers, topic, group, mechanism worked out at the top of this file. */}}
+{{- $brokers := .brokers }}
+{{- $topic := .topic }}
+{{- $group := .group }}
+{{- $mechanism := .mechanism }}
+{{- with .root }}
             - name: KAFKA_BROKERS
               value: {{ $brokers | quote }}
             - name: KAFKA_TOPIC
@@ -153,23 +183,5 @@ spec:
             {{- end }}
             - name: RUST_LOG
               value: {{ .Values.movementRelay.logLevel | quote }}
-            {{- with .Values.movementRelay.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with .Values.movementRelay.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.movementRelay.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.movementRelay.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.movementRelay.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+{{- end }}
 {{- end }}

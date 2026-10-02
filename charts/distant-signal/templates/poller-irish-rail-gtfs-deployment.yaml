@@ -58,6 +58,30 @@ spec:
               protocol: TCP
           {{- end }}
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerIrishRailGtfsEnv" .) "extra" .Values.pollerIrishRailGtfs.extraEnv) | trim | nindent 12 }}
+          {{- with .Values.pollerIrishRailGtfs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.pollerIrishRailGtfs.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pollerIrishRailGtfs.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pollerIrishRailGtfs.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with pollerIrishRailGtfs.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.pollerIrishRailGtfsEnv" }}
             - name: GTFS_URL
               value: {{ .Values.pollerIrishRailGtfs.gtfsUrl | quote }}
             - name: API_STATIONS_INGEST_URL
@@ -95,23 +119,4 @@ spec:
               value: {{ .Values.pollerIrishRailGtfs.progressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ .Values.pollerIrishRailGtfs.logLevel | quote }}
-            {{- with .Values.pollerIrishRailGtfs.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with .Values.pollerIrishRailGtfs.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.pollerIrishRailGtfs.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.pollerIrishRailGtfs.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.pollerIrishRailGtfs.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
 {{- end }}

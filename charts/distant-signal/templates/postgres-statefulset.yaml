@@ -91,32 +91,7 @@ spec:
               containerPort: {{ .Values.postgresql.service.port }}
               protocol: TCP
           env:
-            - name: POSTGRES_USER
-              value: {{ .Values.postgresql.auth.username | quote }}
-            - name: POSTGRES_DB
-              value: {{ .Values.postgresql.auth.database | quote }}
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.postgresSecretName" . }}
-                  key: {{ include "distant-signal.postgresSecretPasswordKey" . }}
-            # PGDATA must be a SUBDIRECTORY of the mount, not the mount
-            # itself: many CSI drivers put a `lost+found` entry in a fresh
-            # volume, and initdb refuses to initialise a non-empty directory.
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
-            {{- if include "distant-signal.pgbackrestEnabled" . }}
-            {{- include "distant-signal.pgbackrestEnv" . | nindent 12 }}
-            {{- end }}
-            {{- if include "distant-signal.postgresRolesInitScript" . }}
-            # postgresql.roles.initScript: the role passwords for
-            # /docker-entrypoint-initdb.d/10-distant-signal-roles.sh, which
-            # only runs on an empty data directory.
-            {{- include "distant-signal.postgresRolesPasswordEnv" . | trim | nindent 12 }}
-            {{- end }}
-            {{- with .Values.postgresql.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.postgresEnv" .) "extra" .Values.postgresql.extraEnv) | trim | nindent 12 }}
           # Same probe command docker-compose.yml uses for its healthcheck.
           readinessProbe:
             exec:
@@ -260,4 +235,34 @@ spec:
         storageClassName: {{ .Values.postgresql.persistence.storageClass | quote }}
         {{- end }}
   {{- end }}
+{{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with postgresql.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.postgresEnv" }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgresql.auth.username | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.auth.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.postgresSecretName" . }}
+                  key: {{ include "distant-signal.postgresSecretPasswordKey" . }}
+            # PGDATA must be a SUBDIRECTORY of the mount, not the mount
+            # itself: many CSI drivers put a `lost+found` entry in a fresh
+            # volume, and initdb refuses to initialise a non-empty directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            {{- if include "distant-signal.pgbackrestEnabled" . }}
+            {{- include "distant-signal.pgbackrestEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if include "distant-signal.postgresRolesInitScript" . }}
+            # postgresql.roles.initScript: the role passwords for
+            # /docker-entrypoint-initdb.d/10-distant-signal-roles.sh, which
+            # only runs on an empty data directory.
+            {{- include "distant-signal.postgresRolesPasswordEnv" . | trim | nindent 12 }}
+            {{- end }}
 {{- end }}

@@ -963,6 +963,66 @@ jobs:
           dep=$(render --set 'scheduleFeed.sftp.hostKeys=null' --show-only templates/schedulefeed-deployment.yaml)
           if grep -q 'SFTPGO_SFTPD__HOST_KEYS' <<<"${dep}"; then fail "an empty hostKeys list must not set HOST_KEYS"; fi
 
+      # extraEnv is merged with the chart's env by name (distant-signal.mergeEnv):
+      # a name the chart already sets is rendered once, with the extraEnv
+      # value, in the chart's place. A repeated name makes server-side apply
+      # reject the Deployment (the 2026-10-02 prod deploy).
+      - name: helm template (extraEnv overrides chart env by name)
+        run: |
+          set -euo pipefail
+          render() {
+            helm template distant-signal charts/distant-signal \
+              --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
+              --set trustConsumer.kafka.topic=test-topic \
+              --set trustConsumer.kafka.saslMechanism=PLAIN \
+              --set enricher.llm.baseUrl=http://llm.example.com/v1 \
+              --set enricher.llm.model=test-model \
+              --set api.sso.issuerUrl=https://sso.example.com \
+              --set api.sso.clientId=test-client \
+              --set api.sso.clientSecret=test-secret \
+              --set api.sso.redirectUrl=https://app.example.com/callback \
+              --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
+              --set scheduleFeed.enabled=true \
+              --set scheduleFeed.sftp.authMethod=password "$@"
+          }
+          fail() { echo "::error::$1"; exit 1; }
+          once() {
+            local n
+            n=$(grep -c "name: $1\$" <<<"${dep}" || true)
+            [[ "${n}" -eq 1 ]] || fail "$1 must be rendered once, got ${n}"
+            grep -A1 "name: $1\$" <<<"${dep}" | grep -q "value: \"$2\"" || fail "$1 must be \"$2\""
+          }
+          dep=$(render \
+            --set 'scheduleFeed.sftp.extraEnv[0].name=SFTPGO_COMMON__DEFENDER__THRESHOLD' \
+            --set-string 'scheduleFeed.sftp.extraEnv[0].value=12' \
+            --set 'scheduleFeed.sftp.extraEnv[1].name=SFTPGO_EXTRA_ONLY' \
+            --set-string 'scheduleFeed.sftp.extraEnv[1].value=7' \
+            --set 'scheduleFeed.sftp.extraEnv[2].name=SFTPGO_COMMON__DEFENDER__THRESHOLD' \
+            --set-string 'scheduleFeed.sftp.extraEnv[2].value=16' \
+            --show-only templates/schedulefeed-deployment.yaml)
+          once SFTPGO_COMMON__DEFENDER__THRESHOLD 16
+          once SFTPGO_EXTRA_ONLY 7
+          once SFTPGO_COMMON__DEFENDER__SCORE_VALID 2
+          # The override keeps the chart's place: before SCORE_INVALID.
+          grep -A3 'name: SFTPGO_COMMON__DEFENDER__THRESHOLD$' <<<"${dep}" | grep -q 'SFTPGO_COMMON__DEFENDER__SCORE_INVALID' \
+            || fail "an override must stay in the chart entry's place"
+          # A valueFrom entry passes through, and can replace a value entry.
+          dep=$(render \
+            --set 'api.extraEnv[0].name=RUST_LOG' \
+            --set 'api.extraEnv[0].valueFrom.secretKeyRef.name=s' \
+            --set 'api.extraEnv[0].valueFrom.secretKeyRef.key=k' \
+            --show-only templates/api-deployment.yaml)
+          n=$(grep -c 'name: RUST_LOG$' <<<"${dep}" || true)
+          [[ "${n}" -eq 1 ]] || fail "api RUST_LOG must be rendered once, got ${n}"
+          grep -A4 'name: RUST_LOG$' <<<"${dep}" | grep -q 'secretKeyRef' || fail "an extraEnv valueFrom must replace the chart's value"
+          if grep -A1 'name: RUST_LOG$' <<<"${dep}" | grep -q 'value:'; then fail "the replaced entry must not keep the chart's value"; fi
+          # No container anywhere repeats a name (containers are the
+          # 8-space list items, their env entries the 12-space ones).
+          all=$(render -f charts/distant-signal/values-example.yaml \
+            --set 'pollers.tfl.extraEnv[0].name=RUST_LOG' --set-string 'pollers.tfl.extraEnv[0].value=debug')
+          dups=$(awk '/^---/{doc++} /^        - name: /{c=$NF} /^            - name: [A-Z_][A-Z0-9_]*$/{print doc, c, $NF}' <<<"${all}" | sort | uniq -d)
+          [[ -z "${dups}" ]] || fail "repeated env names: ${dups}"
+
       # The push account's least-privilege policy reaches the entrypoint
       # (scripts/tests/ checks what the entrypoint does with it), and a
       # change to the entrypoint script rolls the pod.
@@ -1046,6 +1106,17 @@ jobs:
           has SFTPGO_COMMON__MAX_PER_HOST_CONNECTIONS 8
           has SFTPGO_COMMON__RATE_LIMITERS__0__AVERAGE 20
           has SFTPGO_COMMON__RATE_LIMITERS__0__GENERATE_DEFENDER_EVENTS true
+          has SFTPGO_COMMON__RATE_LIMITERS__0__ENTRIES_SOFT_LIMIT 100
+          has SFTPGO_COMMON__RATE_LIMITERS__0__ENTRIES_HARD_LIMIT 150
+          dep=$(render --set scheduleFeed.sftp.rateLimit.entriesSoftLimit=200 --set scheduleFeed.sftp.rateLimit.entriesHardLimit=300)
+          has SFTPGO_COMMON__RATE_LIMITERS__0__ENTRIES_SOFT_LIMIT 200
+          has SFTPGO_COMMON__RATE_LIMITERS__0__ENTRIES_HARD_LIMIT 300
+          set +e
+          render --set scheduleFeed.sftp.rateLimit.entriesSoftLimit=150 >/dev/null 2>&1
+          status=$?
+          set -e
+          [[ "${status}" -ne 0 ]] || fail "a soft entries limit not below the hard one must fail the render"
+          dep=$(render)
           if grep -q 'SCHEDULE_SFTP_SAFELIST' <<<"${dep}"; then fail "no safelist by default"; fi
           dep=$(render --set 'scheduleFeed.sftp.defender.safelist={192.0.2.0/24,198.51.100.7}')
           has SCHEDULE_SFTP_SAFELIST '192.0.2.0/24 198.51.100.7'

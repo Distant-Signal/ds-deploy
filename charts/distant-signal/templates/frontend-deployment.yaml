@@ -41,6 +41,43 @@ spec:
               containerPort: {{ .Values.frontend.service.port }}
               protocol: TCP
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.frontendEnv" .) "extra" .Values.frontend.extraEnv) | trim | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.frontend.probes.path }}
+              port: http
+            periodSeconds: {{ .Values.frontend.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.frontend.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.frontend.probes.readiness.timeoutSeconds }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.frontend.probes.path }}
+              port: http
+            periodSeconds: {{ .Values.frontend.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.frontend.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.frontend.probes.liveness.timeoutSeconds }}
+          {{- with .Values.frontend.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.frontend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with frontend.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.frontendEnv" }}
             - name: API_BASE_URL
               value: {{ default (include "distant-signal.apiBaseUrl" .) .Values.frontend.apiBaseUrl | quote }}
             # frontend/lib/siteOrigin.ts's own preferred source for
@@ -88,36 +125,4 @@ spec:
             - name: NEXT_PUBLIC_RAILMCP_PUBLIC_URL
               value: {{ .Values.railMcp.publicUrl | quote }}
             {{- end }}
-            {{- with .Values.frontend.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.frontend.probes.path }}
-              port: http
-            periodSeconds: {{ .Values.frontend.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.frontend.probes.readiness.failureThreshold }}
-            timeoutSeconds: {{ .Values.frontend.probes.readiness.timeoutSeconds }}
-          livenessProbe:
-            httpGet:
-              path: {{ .Values.frontend.probes.path }}
-              port: http
-            periodSeconds: {{ .Values.frontend.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.frontend.probes.liveness.failureThreshold }}
-            timeoutSeconds: {{ .Values.frontend.probes.liveness.timeoutSeconds }}
-          {{- with .Values.frontend.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.frontend.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.frontend.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.frontend.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+{{- end }}

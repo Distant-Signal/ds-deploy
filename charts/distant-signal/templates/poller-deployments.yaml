@@ -74,6 +74,35 @@ spec:
               protocol: TCP
           {{- end }}
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerEnv" (dict "root" $root "name" $name "poller" $poller)) "extra" $poller.extraEnv) | trim | nindent 12 }}
+          {{- with $poller.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $poller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $poller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $poller.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with $poller.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.pollerEnv" }}
+{{- /* Takes dict "root", "name" and "poller" from the range above. */}}
+{{- $root := .root }}
+{{- $name := .name }}
+{{- $poller := .poller }}
             - name: {{ $poller.baseUrlEnvVar }}
               value: {{ $poller.baseUrl | quote }}
             # Always rendered, unlike the port env var below: this is
@@ -164,24 +193,4 @@ spec:
               value: {{ $poller.progressStallSecs | default $root.Values.workerHealth.pollerProgressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ $poller.logLevel | quote }}
-            {{- with $poller.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with $poller.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with $poller.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with $poller.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with $poller.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-{{- end }}
 {{- end }}

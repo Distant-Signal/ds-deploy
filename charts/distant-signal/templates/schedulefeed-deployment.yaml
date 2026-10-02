@@ -165,164 +165,7 @@ spec:
           # working default. Out of scope for this task (SFTP account
           # provisioning), not touched here.
           env:
-            - name: SFTPGO_SFTPD__BINDINGS__0__PORT
-              value: {{ .Values.scheduleFeed.sftp.port | quote }}
-            {{- with .Values.scheduleFeed.sftp.hostKeys }}
-            # Serve the mounted, preserved host keys. Without this SFTPGo
-            # generates fresh keys under /var/lib/sftpgo on every start, so
-            # the fingerprint changed on every restart and could never be
-            # pinned by the client.
-            - name: SFTPGO_SFTPD__HOST_KEYS
-              value: {{ include "distant-signal.scheduleFeedHostKeyPaths" $ | quote }}
-            {{- end }}
-            {{- if not .Values.scheduleFeed.sftp.webAdmin.enabled }}
-            # No httpd (web admin/REST) listener: see
-            # scheduleFeed.sftp.webAdmin in values.yaml.
-            - name: SFTPGO_HTTPD__BINDINGS__0__PORT
-              value: "0"
-            {{- end }}
-            # Audit log: SFTPGo's JSON lines on stdout. `login`, `Upload` and
-            # the command lines are info, but failed logins
-            # (`connection_failed`) and defender score changes are debug
-            # only, and the Loki rules on them need them, so the level is
-            # explicit (scheduleFeed.sftp.logLevel). UTC so the zone-less
-            # `time` field is UTC by definition. docs/schedule-feed-sftp.md
-            # lists the fields.
-            - name: SFTPGO_LOG_FILE_PATH
-              value: ""
-            - name: SFTPGO_LOG_LEVEL
-              value: {{ .Values.scheduleFeed.sftp.logLevel | quote }}
-            - name: SFTPGO_LOG_UTC_TIME
-              value: "true"
-            {{- if and .Values.metrics.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
-            # SFTPGo's telemetry listener: /metrics (unlabelled global
-            # counters: logins, uploads, errors) and /healthz, scraped
-            # through the PodMonitor's sftp-metrics endpoint. Never on the
-            # NodePort Service. No auth file: read-only counters, reachable
-            # only from the monitoring namespace (networkpolicy.yaml).
-            - name: SFTPGO_TELEMETRY__BIND_PORT
-              value: {{ .Values.scheduleFeed.sftp.telemetry.port | quote }}
-            - name: SFTPGO_TELEMETRY__BIND_ADDRESS
-              value: "0.0.0.0"
-            - name: SFTPGO_TELEMETRY__ENABLE_PROFILER
-              value: "false"
-            - name: SFTPGO_TELEMETRY__AUTH_USER_FILE
-              value: ""
-            {{- end }}
-            # SSH commands (md5sum, sha256sum, cd, pwd, scp... in the image's
-            # sftpgo.json) other than the SFTP subsystem itself. None by
-            # default: DTD only uses SFTP, and scp/hash commands are extra
-            # surface (scheduleFeed.sftp.sshCommands).
-            - name: SFTPGO_SFTPD__ENABLED_SSH_COMMANDS
-              value: {{ join "," .Values.scheduleFeed.sftp.sshCommands | quote }}
-            # Brute-force protection: SFTPGo's defender, per-host connection
-            # cap and per-source connection rate limiter (values.yaml
-            # scheduleFeed.sftp.defender/maxPerHostConnections/rateLimit).
-            {{- with .Values.scheduleFeed.sftp.defender }}
-            - name: SFTPGO_COMMON__DEFENDER__ENABLED
-              value: {{ .enabled | quote }}
-            {{- if .enabled }}
-            - name: SFTPGO_COMMON__DEFENDER__DRIVER
-              value: "memory"
-            - name: SFTPGO_COMMON__DEFENDER__BAN_TIME
-              value: {{ .banTime | quote }}
-            - name: SFTPGO_COMMON__DEFENDER__BAN_TIME_INCREMENT
-              value: {{ .banTimeIncrement | quote }}
-            - name: SFTPGO_COMMON__DEFENDER__THRESHOLD
-              value: {{ .threshold | quote }}
-            - name: SFTPGO_COMMON__DEFENDER__SCORE_INVALID
-              value: {{ .scoreInvalid | quote }}
-            - name: SFTPGO_COMMON__DEFENDER__SCORE_VALID
-              value: {{ .scoreValid | quote }}
-            - name: SFTPGO_COMMON__DEFENDER__SCORE_LIMIT_EXCEEDED
-              value: {{ .scoreLimitExceeded | quote }}
-            - name: SFTPGO_COMMON__DEFENDER__SCORE_NO_AUTH
-              value: {{ .scoreNoAuth | quote }}
-            - name: SFTPGO_COMMON__DEFENDER__OBSERVATION_TIME
-              value: {{ .observationTime | quote }}
-            - name: SFTPGO_COMMON__DEFENDER__ENTRIES_SOFT_LIMIT
-              value: {{ .entriesSoftLimit | quote }}
-            - name: SFTPGO_COMMON__DEFENDER__ENTRIES_HARD_LIMIT
-              value: {{ .entriesHardLimit | quote }}
-            {{- end }}
-            {{- with .safelist }}
-            # Read by the sftp-entrypoint script, which loads each entry
-            # into SFTPGo's defender and rate-limiter safe lists.
-            - name: SCHEDULE_SFTP_SAFELIST
-              value: {{ join " " . | quote }}
-            {{- end }}
-            {{- end }}
-            - name: SFTPGO_COMMON__MAX_PER_HOST_CONNECTIONS
-              value: {{ .Values.scheduleFeed.sftp.maxPerHostConnections | quote }}
-            {{- with .Values.scheduleFeed.sftp.rateLimit }}
-            {{- if .average }}
-            - name: SFTPGO_COMMON__RATE_LIMITERS__0__AVERAGE
-              value: {{ .average | quote }}
-            - name: SFTPGO_COMMON__RATE_LIMITERS__0__PERIOD
-              value: {{ .periodMs | quote }}
-            - name: SFTPGO_COMMON__RATE_LIMITERS__0__BURST
-              value: {{ .burst | quote }}
-            - name: SFTPGO_COMMON__RATE_LIMITERS__0__TYPE
-              value: "2"
-            - name: SFTPGO_COMMON__RATE_LIMITERS__0__PROTOCOLS
-              value: "SSH"
-            - name: SFTPGO_COMMON__RATE_LIMITERS__0__GENERATE_DEFENDER_EVENTS
-              value: "true"
-            {{- end }}
-            {{- end }}
-            # DTD's push account username/password/home-dir, consumed by
-            # the sftp-entrypoint ConfigMap's script (mounted below) via
-            # SFTPGo's real --loaddata-from mechanism -- CORRECTED
-            # 2026-09-01 (this task) from the previous
-            # SFTPGO_DEFAULT_ADMIN_USERNAME/PASSWORD pair, proven wrong by a
-            # real running container's log ("error authenticating user...
-            # not found: sql: no rows in result set": those vars only ever
-            # create SFTPGo's admin account, never an SFTP-login user).
-            - name: SCHEDULE_SFTP_USERNAME
-              value: {{ .Values.scheduleFeed.sftp.username | quote }}
-            # This account's home_dir IS its SFTP chroot root (SFTPGo's own
-            # local-filesystem-provider behaviour), set to the SAME
-            # absolute path the `ingest` container's WATCH_DIR below
-            # resolves to, so DTD's push client -- which will see itself
-            # uploading to "/" once connected, since home_dir already
-            # points at the destination -- lands files exactly where
-            # schedule-ingest looks for them. SFTPGo creates home_dir
-            # itself if missing (vfs/osfs.go's CheckRootPath), so this
-            # doesn't need to pre-exist on the PVC.
-            - name: SCHEDULE_SFTP_HOME_DIR
-              value: {{ printf "/data/schedule-feed/%s" (include "distant-signal.scheduleFeedDestinationPath" .) | quote }}
-            # Least privilege for the push account (scheduleFeed.sftp.
-            # permissions/maxSessions/maxUploadFileSize); the entrypoint
-            # writes them into the account and refuses unknown permissions.
-            - name: SCHEDULE_SFTP_PERMISSIONS
-              value: {{ join "," .Values.scheduleFeed.sftp.permissions | quote }}
-            - name: SCHEDULE_SFTP_MAX_SESSIONS
-              value: {{ .Values.scheduleFeed.sftp.maxSessions | int | quote }}
-            - name: SCHEDULE_SFTP_MAX_UPLOAD_FILE_SIZE
-              value: {{ .Values.scheduleFeed.sftp.maxUploadFileSize | int64 | quote }}
-            {{- if eq .Values.scheduleFeed.sftp.authMethod "password" }}
-            - name: SCHEDULE_SFTP_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.scheduleFeedDtdPasswordSecretName" . }}
-                  key: {{ include "distant-signal.scheduleFeedDtdPasswordSecretKey" . }}
-            # The entrypoint checks the password's length at start
-            # (scheduleFeed.sftp.passwordPolicy): a password from
-            # existingSecret can't be checked at render time.
-            - name: SCHEDULE_SFTP_PASSWORD_MIN_LENGTH
-              value: {{ .Values.scheduleFeed.sftp.passwordPolicy.minLength | int | quote }}
-            - name: SCHEDULE_SFTP_PASSWORD_POLICY
-              value: {{ ternary "enforce" "warn" .Values.scheduleFeed.sftp.passwordPolicy.enforce | quote }}
-            {{- else }}
-            - name: SCHEDULE_SFTP_PUBLIC_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretName" . }}
-                  key: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretKey" . }}
-            {{- end }}
-            {{- with .Values.scheduleFeed.sftp.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.scheduleFeedSftpEnv" .) "extra" .Values.scheduleFeed.sftp.extraEnv) | trim | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data/schedule-feed
@@ -598,4 +441,173 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end }}
+
+{{- /*
+The chart's own env entries for this container, merged with
+scheduleFeed.sftp.extraEnv by distant-signal.mergeEnv (an extraEnv entry replaces one of the same name).
+*/ -}}
+{{- define "distant-signal.scheduleFeedSftpEnv" }}
+            - name: SFTPGO_SFTPD__BINDINGS__0__PORT
+              value: {{ .Values.scheduleFeed.sftp.port | quote }}
+            {{- with .Values.scheduleFeed.sftp.hostKeys }}
+            # Serve the mounted, preserved host keys. Without this SFTPGo
+            # generates fresh keys under /var/lib/sftpgo on every start, so
+            # the fingerprint changed on every restart and could never be
+            # pinned by the client.
+            - name: SFTPGO_SFTPD__HOST_KEYS
+              value: {{ include "distant-signal.scheduleFeedHostKeyPaths" $ | quote }}
+            {{- end }}
+            {{- if not .Values.scheduleFeed.sftp.webAdmin.enabled }}
+            # No httpd (web admin/REST) listener: see
+            # scheduleFeed.sftp.webAdmin in values.yaml.
+            - name: SFTPGO_HTTPD__BINDINGS__0__PORT
+              value: "0"
+            {{- end }}
+            # Audit log: SFTPGo's JSON lines on stdout. `login`, `Upload` and
+            # the command lines are info, but failed logins
+            # (`connection_failed`) and defender score changes are debug
+            # only, and the Loki rules on them need them, so the level is
+            # explicit (scheduleFeed.sftp.logLevel). UTC so the zone-less
+            # `time` field is UTC by definition. docs/schedule-feed-sftp.md
+            # lists the fields.
+            - name: SFTPGO_LOG_FILE_PATH
+              value: ""
+            - name: SFTPGO_LOG_LEVEL
+              value: {{ .Values.scheduleFeed.sftp.logLevel | quote }}
+            - name: SFTPGO_LOG_UTC_TIME
+              value: "true"
+            {{- if and .Values.metrics.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
+            # SFTPGo's telemetry listener: /metrics (unlabelled global
+            # counters: logins, uploads, errors) and /healthz, scraped
+            # through the PodMonitor's sftp-metrics endpoint. Never on the
+            # NodePort Service. No auth file: read-only counters, reachable
+            # only from the monitoring namespace (networkpolicy.yaml).
+            - name: SFTPGO_TELEMETRY__BIND_PORT
+              value: {{ .Values.scheduleFeed.sftp.telemetry.port | quote }}
+            - name: SFTPGO_TELEMETRY__BIND_ADDRESS
+              value: "0.0.0.0"
+            - name: SFTPGO_TELEMETRY__ENABLE_PROFILER
+              value: "false"
+            - name: SFTPGO_TELEMETRY__AUTH_USER_FILE
+              value: ""
+            {{- end }}
+            # SSH commands (md5sum, sha256sum, cd, pwd, scp... in the image's
+            # sftpgo.json) other than the SFTP subsystem itself. None by
+            # default: DTD only uses SFTP, and scp/hash commands are extra
+            # surface (scheduleFeed.sftp.sshCommands).
+            - name: SFTPGO_SFTPD__ENABLED_SSH_COMMANDS
+              value: {{ join "," .Values.scheduleFeed.sftp.sshCommands | quote }}
+            # Brute-force protection: SFTPGo's defender, per-host connection
+            # cap and per-source connection rate limiter (values.yaml
+            # scheduleFeed.sftp.defender/maxPerHostConnections/rateLimit).
+            {{- with .Values.scheduleFeed.sftp.defender }}
+            - name: SFTPGO_COMMON__DEFENDER__ENABLED
+              value: {{ .enabled | quote }}
+            {{- if .enabled }}
+            - name: SFTPGO_COMMON__DEFENDER__DRIVER
+              value: "memory"
+            - name: SFTPGO_COMMON__DEFENDER__BAN_TIME
+              value: {{ .banTime | quote }}
+            - name: SFTPGO_COMMON__DEFENDER__BAN_TIME_INCREMENT
+              value: {{ .banTimeIncrement | quote }}
+            - name: SFTPGO_COMMON__DEFENDER__THRESHOLD
+              value: {{ .threshold | quote }}
+            - name: SFTPGO_COMMON__DEFENDER__SCORE_INVALID
+              value: {{ .scoreInvalid | quote }}
+            - name: SFTPGO_COMMON__DEFENDER__SCORE_VALID
+              value: {{ .scoreValid | quote }}
+            - name: SFTPGO_COMMON__DEFENDER__SCORE_LIMIT_EXCEEDED
+              value: {{ .scoreLimitExceeded | quote }}
+            - name: SFTPGO_COMMON__DEFENDER__SCORE_NO_AUTH
+              value: {{ .scoreNoAuth | quote }}
+            - name: SFTPGO_COMMON__DEFENDER__OBSERVATION_TIME
+              value: {{ .observationTime | quote }}
+            - name: SFTPGO_COMMON__DEFENDER__ENTRIES_SOFT_LIMIT
+              value: {{ .entriesSoftLimit | quote }}
+            - name: SFTPGO_COMMON__DEFENDER__ENTRIES_HARD_LIMIT
+              value: {{ .entriesHardLimit | quote }}
+            {{- end }}
+            {{- with .safelist }}
+            # Read by the sftp-entrypoint script, which loads each entry
+            # into SFTPGo's defender and rate-limiter safe lists.
+            - name: SCHEDULE_SFTP_SAFELIST
+              value: {{ join " " . | quote }}
+            {{- end }}
+            {{- end }}
+            - name: SFTPGO_COMMON__MAX_PER_HOST_CONNECTIONS
+              value: {{ .Values.scheduleFeed.sftp.maxPerHostConnections | quote }}
+            {{- with .Values.scheduleFeed.sftp.rateLimit }}
+            {{- if .average }}
+            - name: SFTPGO_COMMON__RATE_LIMITERS__0__AVERAGE
+              value: {{ .average | quote }}
+            - name: SFTPGO_COMMON__RATE_LIMITERS__0__PERIOD
+              value: {{ .periodMs | quote }}
+            - name: SFTPGO_COMMON__RATE_LIMITERS__0__BURST
+              value: {{ .burst | quote }}
+            - name: SFTPGO_COMMON__RATE_LIMITERS__0__TYPE
+              value: "2"
+            - name: SFTPGO_COMMON__RATE_LIMITERS__0__PROTOCOLS
+              value: "SSH"
+            - name: SFTPGO_COMMON__RATE_LIMITERS__0__GENERATE_DEFENDER_EVENTS
+              value: "true"
+            {{- if not (and (ge (int .entriesSoftLimit) 1) (gt (int .entriesHardLimit) (int .entriesSoftLimit))) }}
+            {{- fail (printf "scheduleFeed.sftp.rateLimit needs 1 <= entriesSoftLimit < entriesHardLimit, got %v and %v" .entriesSoftLimit .entriesHardLimit) }}
+            {{- end }}
+            - name: SFTPGO_COMMON__RATE_LIMITERS__0__ENTRIES_SOFT_LIMIT
+              value: {{ .entriesSoftLimit | int | quote }}
+            - name: SFTPGO_COMMON__RATE_LIMITERS__0__ENTRIES_HARD_LIMIT
+              value: {{ .entriesHardLimit | int | quote }}
+            {{- end }}
+            {{- end }}
+            # DTD's push account username/password/home-dir, consumed by
+            # the sftp-entrypoint ConfigMap's script (mounted below) via
+            # SFTPGo's real --loaddata-from mechanism -- CORRECTED
+            # 2026-09-01 (this task) from the previous
+            # SFTPGO_DEFAULT_ADMIN_USERNAME/PASSWORD pair, proven wrong by a
+            # real running container's log ("error authenticating user...
+            # not found: sql: no rows in result set": those vars only ever
+            # create SFTPGo's admin account, never an SFTP-login user).
+            - name: SCHEDULE_SFTP_USERNAME
+              value: {{ .Values.scheduleFeed.sftp.username | quote }}
+            # This account's home_dir IS its SFTP chroot root (SFTPGo's own
+            # local-filesystem-provider behaviour), set to the SAME
+            # absolute path the `ingest` container's WATCH_DIR below
+            # resolves to, so DTD's push client -- which will see itself
+            # uploading to "/" once connected, since home_dir already
+            # points at the destination -- lands files exactly where
+            # schedule-ingest looks for them. SFTPGo creates home_dir
+            # itself if missing (vfs/osfs.go's CheckRootPath), so this
+            # doesn't need to pre-exist on the PVC.
+            - name: SCHEDULE_SFTP_HOME_DIR
+              value: {{ printf "/data/schedule-feed/%s" (include "distant-signal.scheduleFeedDestinationPath" .) | quote }}
+            # Least privilege for the push account (scheduleFeed.sftp.
+            # permissions/maxSessions/maxUploadFileSize); the entrypoint
+            # writes them into the account and refuses unknown permissions.
+            - name: SCHEDULE_SFTP_PERMISSIONS
+              value: {{ join "," .Values.scheduleFeed.sftp.permissions | quote }}
+            - name: SCHEDULE_SFTP_MAX_SESSIONS
+              value: {{ .Values.scheduleFeed.sftp.maxSessions | int | quote }}
+            - name: SCHEDULE_SFTP_MAX_UPLOAD_FILE_SIZE
+              value: {{ .Values.scheduleFeed.sftp.maxUploadFileSize | int64 | quote }}
+            {{- if eq .Values.scheduleFeed.sftp.authMethod "password" }}
+            - name: SCHEDULE_SFTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleFeedDtdPasswordSecretName" . }}
+                  key: {{ include "distant-signal.scheduleFeedDtdPasswordSecretKey" . }}
+            # The entrypoint checks the password's length at start
+            # (scheduleFeed.sftp.passwordPolicy): a password from
+            # existingSecret can't be checked at render time.
+            - name: SCHEDULE_SFTP_PASSWORD_MIN_LENGTH
+              value: {{ .Values.scheduleFeed.sftp.passwordPolicy.minLength | int | quote }}
+            - name: SCHEDULE_SFTP_PASSWORD_POLICY
+              value: {{ ternary "enforce" "warn" .Values.scheduleFeed.sftp.passwordPolicy.enforce | quote }}
+            {{- else }}
+            - name: SCHEDULE_SFTP_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretName" . }}
+                  key: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretKey" . }}
+            {{- end }}
 {{- end }}

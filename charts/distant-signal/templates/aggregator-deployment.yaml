@@ -57,6 +57,29 @@ spec:
               protocol: TCP
           {{- end }}
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.aggregatorEnv" .) "extra" .Values.aggregator.extraEnv) | trim | nindent 12 }}
+          {{- with .Values.aggregator.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.aggregator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.aggregator.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.aggregator.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with aggregator.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.aggregatorEnv" }}
             {{- include "distant-signal.databaseEnv" . | nindent 12 }}
             # Always rendered, unlike the port env var below: this is
             # the Rust-side toggle that actually stops the binary from
@@ -140,22 +163,4 @@ spec:
               value: {{ .Values.aggregator.progressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ .Values.aggregator.logLevel | quote }}
-            {{- with .Values.aggregator.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with .Values.aggregator.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.aggregator.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.aggregator.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.aggregator.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+{{- end }}

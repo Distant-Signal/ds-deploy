@@ -77,6 +77,29 @@ spec:
           # names crates/full-coverage-consumer/src/config.rs actually
           # declares.
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.fullCoverageConsumerEnv" .) "extra" .Values.fullCoverageConsumer.extraEnv) | trim | nindent 12 }}
+          {{- with .Values.fullCoverageConsumer.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.fullCoverageConsumer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.fullCoverageConsumer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.fullCoverageConsumer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with fullCoverageConsumer.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.fullCoverageConsumerEnv" }}
             - name: SCHEDULE_LINE_POPULATION_URL
               value: {{ printf "%s/private/schedule-line-population" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: FULL_COVERAGE_STATS_URL
@@ -151,22 +174,4 @@ spec:
             {{- end }}
             - name: RUST_LOG
               value: {{ .Values.fullCoverageConsumer.logLevel | quote }}
-            {{- with .Values.fullCoverageConsumer.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with .Values.fullCoverageConsumer.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.fullCoverageConsumer.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.fullCoverageConsumer.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.fullCoverageConsumer.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+{{- end }}

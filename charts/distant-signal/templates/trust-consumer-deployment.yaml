@@ -72,6 +72,29 @@ spec:
             # progressStallSecs, so a wedged loop is restarted too.
             failureThreshold: 6
           env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.trustConsumerEnv" .) "extra" .Values.trustConsumer.extraEnv) | trim | nindent 12 }}
+          {{- with .Values.trustConsumer.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.trustConsumer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trustConsumer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trustConsumer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with trustConsumer.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.trustConsumerEnv" }}
             - name: API_INGEST_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/train-events" | quote }}
             - name: FORWARD_SIGNALS_URL
@@ -130,22 +153,4 @@ spec:
             # above.
             - name: TRUST_TIMESTAMP_CORRECTION_ENABLED
               value: {{ .Values.trustConsumer.trustTimestampCorrectionEnabled | quote }}
-            {{- with .Values.trustConsumer.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with .Values.trustConsumer.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.trustConsumer.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.trustConsumer.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.trustConsumer.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+{{- end }}

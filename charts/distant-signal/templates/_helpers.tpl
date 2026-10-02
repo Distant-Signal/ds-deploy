@@ -1612,3 +1612,92 @@ movementRelay.deadLetterMaxAgeSecs, refused outside 3600..86400: the TRUST
 {{- end -}}
 {{- $age -}}
 {{- end }}
+
+{{/*
+distant-signal.mergeEnv: a container's env list, the chart's own entries
+merged with the operator's extraEnv by name. An extraEnv entry REPLACES the
+chart entry of the same name, in the chart entry's place; extraEnv names
+the chart does not set follow, in extraEnv order. Within extraEnv the last
+entry of a name wins. Every name is rendered once: env is merged by name,
+so server-side apply rejects a list that repeats one.
+
+Args: dict "env" (the chart's entries, as rendered YAML text: an `include`
+of the container's own env define) and "extra" (the extraEnv list).
+
+The chart's entries the operator does not replace are copied as text,
+comments included, so they render exactly as before. The text is cut into
+one piece per list item (the lines at the first item's indent that start
+with "- "; comment and blank lines go with the item after them) and paired
+with the names parsed from the same text. extraEnv entries render with
+toYaml, as they always have.
+*/}}
+{{- define "distant-signal.mergeEnv" -}}
+{{- $extra := .extra | default list -}}
+{{- $override := dict -}}
+{{- range $entry := $extra -}}
+{{- if not (and (kindIs "map" $entry) (get $entry "name")) -}}
+{{- fail (printf "every extraEnv entry needs a name, got: %s" (toJson $entry)) -}}
+{{- end -}}
+{{- $_ := set $override $entry.name $entry -}}
+{{- end -}}
+{{- $text := default "" .env -}}
+{{- $names := list -}}
+{{- range $entry := fromYamlArray $text -}}
+{{- if not (and (kindIs "map" $entry) (get $entry "name")) -}}
+{{- fail (printf "distant-signal.mergeEnv: the chart's env is not a list of named entries: %s" (toJson $entry)) -}}
+{{- end -}}
+{{- $names = append $names $entry.name -}}
+{{- end -}}
+{{- $chunks := list -}}
+{{- $current := list -}}
+{{- $pending := list -}}
+{{- $indent := -1 -}}
+{{- range $line := splitList "\n" $text -}}
+{{- $body := trim $line -}}
+{{- $at := len (regexFind "^ *" $line) -}}
+{{- if or (eq $body "") (hasPrefix "#" $body) -}}
+{{- $pending = append $pending $line -}}
+{{- else if and (hasPrefix "- " $body) (or (eq $indent -1) (eq $at $indent)) -}}
+{{- if $current -}}
+{{- $chunks = append $chunks $current -}}
+{{- end -}}
+{{- $current = append $pending $line -}}
+{{- $pending = list -}}
+{{- $indent = $at -}}
+{{- else -}}
+{{- $current = concat $current $pending (list $line) -}}
+{{- $pending = list -}}
+{{- end -}}
+{{- end -}}
+{{- if $current -}}
+{{- $chunks = append $chunks $current -}}
+{{- end -}}
+{{- if ne (len $chunks) (len $names) -}}
+{{- fail (printf "distant-signal.mergeEnv: cut the chart's env into %d items but parsed %d" (len $chunks) (len $names)) -}}
+{{- end -}}
+{{- $margin := repeat (max $indent 0 | int) " " -}}
+{{- $out := list -}}
+{{- $seen := dict -}}
+{{- range $i, $chunk := $chunks -}}
+{{- $name := index $names $i -}}
+{{- if not (hasKey $seen $name) -}}
+{{- if hasKey $override $name -}}
+{{- $out = append $out (toYaml (list (get $override $name))) -}}
+{{- else -}}
+{{- $lines := list -}}
+{{- range $line := $chunk -}}
+{{- $lines = append $lines (trimPrefix $margin $line) -}}
+{{- end -}}
+{{- $out = append $out (join "\n" $lines) -}}
+{{- end -}}
+{{- $_ := set $seen $name true -}}
+{{- end -}}
+{{- end -}}
+{{- range $entry := $extra -}}
+{{- if not (hasKey $seen $entry.name) -}}
+{{- $out = append $out (toYaml (list (get $override $entry.name))) -}}
+{{- $_ := set $seen $entry.name true -}}
+{{- end -}}
+{{- end -}}
+{{- join "\n" $out -}}
+{{- end }}

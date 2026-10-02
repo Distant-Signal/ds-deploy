@@ -1480,7 +1480,8 @@ api:
       periodSeconds: 10
       failureThreshold: 3
       timeoutSeconds: 3
-  # -- Extra env vars appended to the container.
+  # -- Extra env vars for the container. One named like a chart-set var
+  # replaces it (distant-signal.mergeEnv); the rest follow the chart's own.
   extraEnv: []
   # glibc malloc tuning for the api container (debian:bookworm-slim, so
   # glibc's ptmalloc is the allocator; these env vars are read by glibc
@@ -2970,8 +2971,10 @@ scheduleFeed:
     webAdmin:
       enabled: false
     # -- Extra env vars for the SFTPGo container (e.g. SFTPGO_* settings
-    # for telemetry, the defender or logging), appended after the chart's
-    # own. Same shape as a container `env` list.
+    # for telemetry, the defender or logging). Same shape as a container
+    # `env` list. An entry named like one the chart sets replaces it (one
+    # entry per name; server-side apply rejects a repeated name); other
+    # entries follow the chart's own.
     extraEnv: []
     # -- SFTPGo permissions the push account has on its home directory
     # (the only directory it can see). Least privilege, from what DTD's
@@ -3057,6 +3060,15 @@ scheduleFeed:
       average: 20
       periodMs: 60000
       burst: 10
+      # -- Source IPs the per-source limiter keeps in memory; trimmed back to
+      # the soft limit when the hard limit is reached (SFTPGo
+      # rate_limiters[0].entries_soft_limit/entries_hard_limit). Set
+      # explicitly, like the rest of the limiter, rather than left to the
+      # image's config file; 100/150 are SFTPGo's documented defaults. Only
+      # rendered while the limiter is on (average > 0). The soft limit must
+      # be below the hard limit.
+      entriesSoftLimit: 100
+      entriesHardLimit: 150
     # -- SFTPGo log level (SFTPGO_LOG_LEVEL), set explicitly rather than
     # left to the image default. Keep "debug": SFTPGo logs failed logins
     # (sender "connection_failed") and defender score changes only at

@@ -1215,7 +1215,7 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
 | `postgresql.persistence.accessModes` | `[ReadWriteOnce]` | PVC access modes. |
 | `postgresql.persistence.existingClaim` | `""` | Use a pre-existing PVC instead of a `volumeClaimTemplates` entry. |
-| `postgresql.extraEnv` | `[]` | Extra container env vars. Server settings go in `postgresql.config`. |
+| `postgresql.extraEnv` | `[]` | Extra container env vars. One named like a chart-set var replaces it. Server settings go in `postgresql.config`. |
 | `postgresql.config` | see below | `postgresql.conf` settings, rendered as `-c name=value` args. Sized for the default 5Gi limit. A `null` key falls back to the Postgres default. Changing it restarts Postgres. |
 | `postgresql.shm.enabled` | `true` | Mount a memory-backed emptyDir at `/dev/shm` (the runtime default is 64MiB). |
 | `postgresql.shm.sizeLimit` | `1Gi` | Size of `/dev/shm`. Empty means unbounded apart from the memory limit. |
@@ -1480,7 +1480,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.fullCoverageEnabledDefault` | `true` | Treat every catalogued line as `full_coverage_enabled`, whatever its `lines/*.toml` entry says, so TRUST-vs-schedule delay and cancellation data is used everywhere. Set `aggregator.fullCoverageEnabledDefault` to the same value: both services gate on it. |
 | `api.malloc.arenaMax` | `"2"` | `MALLOC_ARENA_MAX`: caps glibc's retained per-arena memory. |
 | `api.malloc.mmapThreshold` | `"131072"` | `MALLOC_MMAP_THRESHOLD_` in bytes: allocations at least this large are returned to the OS on free. |
-| `api.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `api.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `api.resources` | requests `200m`/`1Gi`, limit `3Gi` | Container resource requests/limits. Deliberately generous, stopgap-derived sizes (production's OOM-era overrides); the raw-JSON population relay, ETag reloads and `api.malloc` tuning should bring real usage well below them. Resize from live `kubectl top`. |
 | `api.nodeSelector` | `{}` | Pod node selector. |
 | `api.tolerations` | `[]` | Pod tolerations. |
@@ -1540,7 +1540,7 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 | `aggregator.trainsRetentionDays` | `30` | Days a `trains` row (with its movement events and current state) is kept when a user tracked it. |
 | `aggregator.untrackedTrainsRetentionDays` | `14` | Days a `trains` row is kept when nobody tracked it. |
 | `aggregator.logLevel` | `info` | `RUST_LOG` value. |
-| `aggregator.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `aggregator.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `aggregator.resources` | requests `100m`/`256Mi`, limit `384Mi` | Container resource requests/limits. |
 | `aggregator.nodeSelector` | `{}` | Pod node selector. |
 | `aggregator.tolerations` | `[]` | Pod tolerations. |
@@ -1610,7 +1610,7 @@ twice.
 | `notifier.vapid.existingSecretPublicKeyKey` | `vapid-public-key` | Key within `notifier.vapid.existingSecret` for the public key. |
 | `notifier.vapid.existingSecretPrivateKeyKey` | `vapid-private-key` | Key within `notifier.vapid.existingSecret` for the private key. |
 | `notifier.logLevel` | `info` | `LOG_LEVEL` value. |
-| `notifier.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `notifier.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `notifier.resources` | requests `50m`/`128Mi`, limit `384Mi` | Container resource requests/limits. |
 | `notifier.nodeSelector` | `{}` | Pod node selector. |
 | `notifier.tolerations` | `[]` | Pod tolerations. |
@@ -1680,7 +1680,7 @@ pod that fails every request forever.
 | `enricher.reclaimMinIdleSecs` | `1000` | How long a pending entry must sit unacked before it's eligible for reclaim, i.e. the retry delay for a failed extraction. Entries whose incident is still being processed are skipped, so this is not a correctness bound; keeping it above `3 * llmRequestTimeoutSecs` avoids needless claim-and-skip passes. |
 | `enricher.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one incident is up to three LLM calls of `llmRequestTimeoutSecs`. |
 | `enricher.logLevel` | `info` | `RUST_LOG` value. |
-| `enricher.extraEnv` | `[]` | Extra env vars appended to the container. The off-by-default enricher settings below are set here. |
+| `enricher.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. The off-by-default enricher settings below are set here. |
 | `enricher.resources` | requests `50m`/`128Mi`, limit `256Mi` | Container resource requests/limits. |
 | `enricher.nodeSelector` | `{}` | Pod node selector. |
 | `enricher.tolerations` | `[]` | Pod tolerations. |
@@ -1755,7 +1755,7 @@ falls back to (see `movementRelay`).
 | `trustConsumer.metricsPort` | `9095` | Prometheus `/metrics` port. |
 | `trustConsumer.logLevel` | `info` | `RUST_LOG` value. |
 | `trustConsumer.trustTimestampCorrectionEnabled` | `true` | Kill switch for the TRUST timestamp Europe/London-mislabelling correction (`crates/common/src/trust_timestamp.rs`). |
-| `trustConsumer.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `trustConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `trustConsumer.resources` | requests `200m`/`256Mi`, limit `384Mi` | Container resource requests/limits. |
 | `trustConsumer.nodeSelector` | `{}` | Pod node selector. |
 | `trustConsumer.tolerations` | `[]` | Pod tolerations. |
@@ -1797,7 +1797,7 @@ its own.
 | `fullCoverageConsumer.windowedStats.activationsMin` | `20` | Fewer Activations than this in the last hour marks the write `feed_stale`, so its windows cannot affect severity. |
 | `fullCoverageConsumer.windowedStats.feedStaleSecs` | `300` | A newest consumed movement older than this also marks the write `feed_stale`. |
 | `fullCoverageConsumer.logLevel` | `info` | `RUST_LOG` value. |
-| `fullCoverageConsumer.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `fullCoverageConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `fullCoverageConsumer.resources` | requests `200m`/`512Mi`, limit `1Gi` | Container resource requests/limits. Holds per-line population caches, so it scales with the line catalogue. |
 | `fullCoverageConsumer.nodeSelector` | `{}` | Pod node selector. |
 | `fullCoverageConsumer.tolerations` | `[]` | Pod tolerations. |
@@ -1831,7 +1831,7 @@ Always reads movement-relay's stream (there is no Kafka mode).
 | `trustBacklogConsumer.retentionDaysWarningAcknowledged` | `false` | Documentation-only flag; the binary does not read it. The retention safeguard is `aggregator.trustEventBacklogRetentionDays`. |
 | `trustBacklogConsumer.logLevel` | `info` | `RUST_LOG` value. |
 | `trustBacklogConsumer.trustTimestampCorrectionEnabled` | `true` | See `trustConsumer.trustTimestampCorrectionEnabled`. |
-| `trustBacklogConsumer.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `trustBacklogConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `trustBacklogConsumer.resources` | requests `50m`/`128Mi`, limit `256Mi` | Container resource requests/limits. |
 | `trustBacklogConsumer.nodeSelector` | `{}` | Pod node selector. |
 | `trustBacklogConsumer.tolerations` | `[]` | Pod tolerations. |
@@ -1870,7 +1870,7 @@ credential of its own it uses trust-consumer's; see "Install" above.
 | `movementRelay.progressStallSecs` | `900` | `/livez` answers 503 once no relay-loop iteration has completed for this many seconds (waiting for Kafka never counts). |
 | `movementRelay.metricsPort` | `9094` | Prometheus `/metrics` port. |
 | `movementRelay.logLevel` | `info` | `RUST_LOG` value. |
-| `movementRelay.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `movementRelay.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `movementRelay.resources` | requests `100m`/`128Mi`, limit `192Mi` | Container resource requests/limits. |
 | `movementRelay.nodeSelector` | `{}` | Pod node selector. |
 | `movementRelay.tolerations` | `[]` | Pod tolerations. |
@@ -1899,7 +1899,7 @@ credential of its own it uses trust-consumer's; see "Install" above.
 | `frontend.siteUrl` | `""` | The deployment's public origin (e.g. `https://rail.example.com`), used for share and invite links and same-origin checks. Set it in production. Empty derives it from `ingress.frontend.host` when this chart's ingress publishes the frontend. |
 | `frontend.apiBaseUrl` | `""` | Override `API_BASE_URL`. Empty uses the in-cluster api Service. |
 | `frontend.legalPagesPublished` | `false` | Publish the DRAFT legal pages (`/privacy`, `/terms`, `/cookies`, `/contact`) and their footer links. Off by default: the text needs the operator's and a lawyer's review, and the operator values in `frontend/lib/legal.ts` must be filled in first. Even when `true`, the pages stay 404 while any placeholder is left in that file. `/attribution` is always public. |
-| `frontend.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `frontend.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `frontend.resources` | requests `100m`/`256Mi`, limit `768Mi` | Container resource requests/limits. |
 | `frontend.nodeSelector` | `{}` | Pod node selector. |
 | `frontend.tolerations` | `[]` | Pod tolerations. |
@@ -1965,7 +1965,7 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.<name>.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-poller-<name>` | Key within `pollers.<name>.existingSecret`. |
 | `pollers.<name>.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-<name>` | Key within `pollers.<name>.existingSecret`. |
 | `pollers.<name>.logLevel` | `info` | `RUST_LOG` value. |
-| `pollers.<name>.extraEnv` | `[]` (tfl: `TFL_MODES`) | Extra env vars appended to the container. |
+| `pollers.<name>.extraEnv` | `[]` (tfl: `TFL_MODES`) | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `pollers.<name>.resources` | requests `25m`/`64Mi`-`128Mi`, limit `128Mi`-`192Mi` | Container resource requests/limits. |
 | `pollers.<name>.nodeSelector` | `{}` | Pod node selector. |
 | `pollers.<name>.tolerations` | `[]` | Pod tolerations. |
@@ -2005,7 +2005,7 @@ Irish Rail GTFS zip. Off by default; no API key needed.
 | `pollerIrishRailGtfs.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-irish-rail-gtfs` | Key for the OAuth2 password. |
 | `pollerIrishRailGtfs.logLevel` | `info` | `RUST_LOG` value. |
 | `pollerIrishRailGtfs.metricsPort` | `9091` | Prometheus `/metrics` port. |
-| `pollerIrishRailGtfs.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `pollerIrishRailGtfs.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `pollerIrishRailGtfs.resources` | requests `100m`/`256Mi`, limit `768Mi` | Container resource requests/limits. The whole GTFS archive is held in memory. |
 | `pollerIrishRailGtfs.nodeSelector` | `{}` | Pod node selector. |
 | `pollerIrishRailGtfs.tolerations` | `[]` | Pod tolerations. |
@@ -2037,7 +2037,7 @@ default; no API key needed.
 | `pollerIrishRailLive.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-irish-rail-live` | Key for the OAuth2 password. |
 | `pollerIrishRailLive.logLevel` | `info` | `RUST_LOG` value. |
 | `pollerIrishRailLive.metricsPort` | `9091` | Prometheus `/metrics` port. |
-| `pollerIrishRailLive.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `pollerIrishRailLive.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `pollerIrishRailLive.resources` | requests `25m`/`64Mi`, limit `256Mi` | Container resource requests/limits. |
 | `pollerIrishRailLive.nodeSelector` | `{}` | Pod node selector. |
 | `pollerIrishRailLive.tolerations` | `[]` | Pod tolerations. |
@@ -2070,7 +2070,7 @@ Off by default; no API key needed.
 | `pollerNirStations.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-nir-stations` | Key for the OAuth2 password. |
 | `pollerNirStations.logLevel` | `info` | `RUST_LOG` value. |
 | `pollerNirStations.metricsPort` | `9091` | Prometheus `/metrics` port. |
-| `pollerNirStations.extraEnv` | `[]` | Extra env vars appended to the container. |
+| `pollerNirStations.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `pollerNirStations.resources` | requests `25m`/`64Mi`, limit `256Mi` | Container resource requests/limits. |
 | `pollerNirStations.nodeSelector` | `{}` | Pod node selector. |
 | `pollerNirStations.tolerations` | `[]` | Pod tolerations. |
@@ -2106,7 +2106,7 @@ Off by default.
 | `scheduleFeed.sftp.existingSecretHostKey` | `""` | Pre-existing Secret holding this server's own SSH host key (not the provider's). Empty: the chart generates and preserves them. |
 | `scheduleFeed.sftp.hostKeys` | `[ssh_host_ecdsa_key, ssh_host_ed25519_key]` | Keys in the host-key Secret that SFTPGo serves (`SFTPGO_SFTPD__HOST_KEYS`), mounted 0440 for the pod's fsGroup. ECDSA covers clients without ed25519 (DTD's JSch 0.1.54). With `existingSecretHostKey`, that Secret must hold every listed key. Empty: SFTPGo generates fresh keys on every start. |
 | `scheduleFeed.sftp.webAdmin.enabled` | `false` | Run SFTPGo's web admin/REST listener. Off, because with no admin account anyone who reaches it can create one. |
-| `scheduleFeed.sftp.extraEnv` | `[]` | Extra env entries for the SFTPGo container (e.g. `SFTPGO_*` telemetry, defender or log settings). |
+| `scheduleFeed.sftp.extraEnv` | `[]` | Extra env entries for the SFTPGo container (e.g. `SFTPGO_*` telemetry, defender or log settings). One named like a chart-set var (say `SFTPGO_COMMON__DEFENDER__THRESHOLD`) replaces it, so each name is rendered once; the rest follow the chart's own. |
 | `scheduleFeed.sftp.permissions` | `[upload, overwrite, list]` | SFTPGo permissions the push account has on its home directory. Least privilege from DTD's observed client behaviour: no download, delete, rename, mkdir, symlink, chmod/chown/chtimes or copy. `overwrite` is needed because DTD replaces `timetable_full.zip` in place daily. `*` is refused. See [docs/schedule-feed-sftp.md](../../docs/schedule-feed-sftp.md). |
 | `scheduleFeed.sftp.maxSessions` | `2` | Simultaneous sessions for the push account. `0` = unlimited. |
 | `scheduleFeed.sftp.maxUploadFileSize` | `536870912` | Largest single upload in bytes (512 MiB, ~6.6x the 77 MB CIF zip). Larger uploads fail and are deleted. `0` = unlimited. |
@@ -2122,6 +2122,7 @@ Off by default.
 | `scheduleFeed.sftp.defender.safelist` | `[]` | IPs/CIDRs never scored, banned or rate-limited (loaded as SFTPGo IP list entries through the push account's loaddata file). |
 | `scheduleFeed.sftp.maxPerHostConnections` | `8` | Simultaneous connections allowed from one source IP; `0` disables the cap. |
 | `scheduleFeed.sftp.rateLimit.average` / `.periodMs` / `.burst` | `20` / `60000` / `10` | Per-source SSH connection rate limit: `average` connections per `periodMs`, bursting to `burst`. `average: 0` disables it. |
+| `scheduleFeed.sftp.rateLimit.entriesSoftLimit` / `.entriesHardLimit` | `100` / `150` | Source IPs the rate limiter keeps in memory, trimmed back to the soft limit at the hard limit (`SFTPGO_COMMON__RATE_LIMITERS__0__ENTRIES_SOFT_LIMIT` / `_HARD_LIMIT`). Needs `1 <= soft < hard`. |
 | `scheduleFeed.sftp.logLevel` | `debug` | SFTPGo log level (`SFTPGO_LOG_LEVEL`). Failed logins and defender score changes are only logged at `debug`, so log-based alerts on them need it. Timestamps are always UTC (`SFTPGO_LOG_UTC_TIME`). Fields: [docs/schedule-feed-sftp.md](../../docs/schedule-feed-sftp.md#audit-log). |
 | `scheduleFeed.sftp.telemetry.enabled` | `true` | SFTPGo's telemetry listener (`/metrics`, `/healthz`), as container port `sftp-metrics` and a PodMonitor endpoint. Needs `metrics.enabled`. Not on the NodePort Service; the NetworkPolicy admits only the monitoring namespace. No auth, no profiler. |
 | `scheduleFeed.sftp.telemetry.port` | `9097` | Telemetry port. |
