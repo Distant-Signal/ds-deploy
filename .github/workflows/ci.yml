@@ -706,10 +706,12 @@ jobs:
       - name: alert payload sizes and promtool tests
         run: uv run --no-sync scripts/check-alert-payloads.py --report --download-promtool "${RUNNER_TEMP}/promtool"
 
-      # charts/ds-ingest-bucket's AWS policies, rendered in each mode: the
-      # publisher can only put, the reader can't write or (by default)
-      # delete, both buckets are private and TLS-only, the SQS queue only
-      # takes this bucket's S3 events, and bad values refuse to render.
+      # charts/ds-ingest-bucket's GCS settings and IAM, rendered in each
+      # mode: both buckets private (UBLA, enforced public access
+      # prevention), the delivery bucket's versioning, soft delete and
+      # lifecycle, every grant bucket-level and to service accounts only,
+      # exactly the publisher and reader bindings, and bad values (no
+      # publisher members, public members, admin roles) refuse to render.
       # Here rather than in helm-lint: it needs the pinned PyYAML above.
       - name: ds-ingest-bucket chart policies
         run: uv run --no-sync scripts/check-ingest-bucket-chart.py
@@ -737,16 +739,21 @@ jobs:
       - name: helm lint --strict (values-example.yaml)
         run: helm lint --strict charts/distant-signal -f charts/distant-signal/values-example.yaml
 
-      # The S3 landing-zone chart: off by default (renders nothing), and
-      # with its CI values (every resource). It renders ACK custom
-      # resources, so lint/template need no CRDs; install would.
+      # The GCS landing-zone chart: off by default (renders nothing), and
+      # with its CI values plus the optional alerts and Pub/Sub (every
+      # resource). It renders Crossplane managed resources, so
+      # lint/template need no CRDs; install would. The project number is a
+      # placeholder.
       - name: helm lint --strict (ds-ingest-bucket)
         run: |
           helm lint --strict charts/ds-ingest-bucket
           helm lint --strict charts/ds-ingest-bucket -f charts/ds-ingest-bucket/ci/example-values.yaml
           helm template ds-ingest-bucket charts/ds-ingest-bucket \
             -f charts/ds-ingest-bucket/ci/example-values.yaml \
-            --set notifications.sqs.enabled=true > /dev/null
+            --set usageAlerts.enabled=true \
+            --set 'usageAlerts.notificationChannels[0]=projects/example-project/notificationChannels/0' \
+            --set notifications.pubsub.enabled=true \
+            --set gcp.projectNumber=000000000000 > /dev/null
 
       # `enricher` (no `enabled` toggle) and movement-relay (on by default)
       # `fail()` at render time if their required connection settings are

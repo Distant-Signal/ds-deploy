@@ -1,35 +1,45 @@
 #!/usr/bin/env python3
 # ruff: noqa: T201  # a CLI whose output (the failures) is stdout
-"""Render charts/ds-ingest-bucket and check its AWS policies.
+"""Render charts/ds-ingest-bucket and check its GCS bucket and IAM settings.
 
   scripts/check-ingest-bucket-chart.py [--helm HELM]
 
 Renders the chart with ci/example-values.yaml in several modes and checks:
 
   - disabled (the default) renders nothing;
-  - the publisher (writer) can only PutObject/AbortMultipartUpload under the
-    delivery prefix, in both iamUser and crossAccount modes;
-  - the reader can only list and get under the prefix (and the access-log
-    prefix), with no delete unless reader.allowDelete, and never a write;
-  - both buckets block public access, enforce bucket ownership and deny
-    non-TLS and pre-1.2 TLS requests;
-  - with notifications.sqs.enabled the queue accepts SendMessage only from
-    s3.amazonaws.com for this bucket and account, and has a dead-letter
-    queue; without it no Queue renders;
-  - bad values (missing account, dotted bucket name, prefix without a
-    trailing slash, crossAccount without principals) fail to render.
+  - both buckets have uniform bucket-level access, public access prevention
+    enforced, no object retention, no force-destroy, EUROPE-WEST2 and
+    `helm.sh/resource-policy: keep`, and are orphaned on delete;
+  - the delivery bucket is unversioned (data is only in transit: the
+    reader deletes after a verified download), keeps soft-deleted objects
+    7 days, and has exactly two lifecycle rules (the 7-day backstop delete
+    and aborting unfinished multipart uploads after 1 day);
+  - every IAM grant is a bucket-level, non-authoritative BucketIAMMember
+    (or, with Pub/Sub, a topic/subscription member): no project-level IAM,
+    no *IAMPolicy/*IAMBinding, every member a `serviceAccount:` and never
+    allUsers/allAuthenticatedUsers, and every binding fully managed so that
+    removing it revokes it;
+  - the publisher bindings are exactly members x the four default roles on
+    the delivery bucket; the reader has exactly objectViewer plus the
+    delete-only custom role (whose only permission is storage.objects.delete)
+    on the delivery bucket and objectViewer on the audit-log bucket, so it
+    can never create or overwrite; the sink writer only objectCreator on
+    the audit-log bucket;
+  - usage alerts and Pub/Sub render only when enabled, and the topic only
+    accepts the Cloud Storage service agent;
+  - bad values fail to render, including enabled with no publisher members.
 
 Exit 1 with one line per failed check. Needs helm on PATH (or --helm) and
 PyYAML (pinned in pyproject.toml's `lint` dependency group).
 """
 
 import argparse
-import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from typing import cast
 
 import yaml
@@ -37,24 +47,53 @@ import yaml
 REPO = pathlib.Path(__file__).resolve().parent.parent
 CHART = REPO / "charts" / "ds-ingest-bucket"
 EXAMPLE = CHART / "ci" / "example-values.yaml"
-BUCKET_ARN = "arn:aws:s3:::example-ds-ingest"
-LOG_BUCKET_ARN = "arn:aws:s3:::example-ds-ingest-logs"
-QUEUE_ARN = "arn:aws:sqs:eu-west-2:123456789012:ds-ingest-events"
-DLQ_ARN = "arn:aws:sqs:eu-west-2:123456789012:ds-ingest-events-dlq"
-PUBLISHER_ROLE = "arn:aws:iam::111122223333:role/rdm-delivery"
-WRITER_ACTIONS = {"s3:PutObject", "s3:AbortMultipartUpload"}
-READER_S3_ACTIONS = {
-    "s3:ListBucket",
-    "s3:ListBucketVersions",
-    "s3:GetObject",
-    "s3:GetObjectVersion",
-}
-DELETE_ACTIONS = {"s3:DeleteObject", "s3:DeleteObjectVersion"}
-# blockPublicACLs, blockPublicPolicy, ignorePublicACLs, restrictPublicBuckets.
-PUBLIC_ACCESS_BLOCK_SWITCHES = 4
+BUCKET = "example-ds-ingest"
+AUDIT_BUCKET = "example-ds-ingest-audit"
+PUBLISHERS = (
+    "serviceAccount:publisher@example-publisher.iam.gserviceaccount.com",
+    "serviceAccount:scanner@example-publisher.iam.gserviceaccount.com",
+)
+READER = "serviceAccount:reader@example-project.iam.gserviceaccount.com"
+SINK = "serviceAccount:audit-sink@example-project.iam.gserviceaccount.com"
+PROJECT_NUMBER = "000000000000"
+STORAGE_AGENT = (
+    f"serviceAccount:service-{PROJECT_NUMBER}"
+    "@gs-project-accounts.iam.gserviceaccount.com"
+)
+PUBLISHER_ROLES = (
+    "roles/storage.objectViewer",
+    "roles/storage.legacyBucketReader",
+    "roles/storage.bucketViewer",
+    "roles/storage.legacyBucketWriter",
+)
+ORPHAN_POLICIES = ["Observe", "Create", "Update", "LateInitialize"]
+EXPECTED_LIFECYCLE = [
+    {"action": {"type": "Delete"}, "condition": {"age": 7}},
+    {"action": {"type": "AbortIncompleteMultipartUpload"}, "condition": {"age": 1}},
+]
+SOFT_DELETE_SECONDS = 7 * 86400
+DELETE_ROLE = "projects/example-project/roles/dsIngestObjectDeleter"
+# Bucket size, object count, write and delete requests, received and sent bytes.
+USAGE_ALERTS = 6
+IAM_MEMBER_KINDS = {"BucketIAMMember", "TopicIAMMember", "SubscriptionIAMMember"}
+SERVICE_ACCOUNT = re.compile(
+    r"^serviceAccount:[^@\s]+@[a-z0-9.-]+\.gserviceaccount\.com$"
+)
+PUBSUB_SET = (
+    "--set",
+    "notifications.pubsub.enabled=true",
+    "--set",
+    f"gcp.projectNumber={PROJECT_NUMBER}",
+)
+ALERTS_SET = (
+    "--set",
+    "usageAlerts.enabled=true",
+    "--set",
+    "usageAlerts.notificationChannels[0]=projects/example-project/notificationChannels/0",
+)
 
 type Doc = dict[str, object]
-type Statement = dict[str, object]
+type Binding = tuple[str, str, str]  # (bucket or topic/subscription, role, member)
 
 
 class Checker:
@@ -94,6 +133,11 @@ def spec(doc: Doc) -> dict[str, object]:
     return cast("dict[str, object]", doc["spec"])
 
 
+def for_provider(doc: Doc) -> dict[str, object]:
+    """Return the managed resource's spec.forProvider."""
+    return cast("dict[str, object]", spec(doc)["forProvider"])
+
+
 def by_kind(docs: Sequence[Doc], kind: str) -> dict[str, Doc]:
     """Resources of `kind`, by metadata.name."""
     out: dict[str, Doc] = {}
@@ -104,248 +148,223 @@ def by_kind(docs: Sequence[Doc], kind: str) -> dict[str, Doc]:
     return out
 
 
-def statements(policy_json: object) -> list[Statement]:
-    """Return the Statement list of a JSON policy string."""
-    policy = cast("dict[str, object]", json.loads(cast("str", policy_json)))
-    return cast("list[Statement]", policy["Statement"])
+def buckets(docs: Sequence[Doc]) -> dict[str, Doc]:
+    """Bucket resources, by their GCS name (forProvider has none; use external-name)."""
+    out: dict[str, Doc] = {}
+    for doc in by_kind(docs, "Bucket").values():
+        meta = cast("dict[str, dict[str, str]]", doc["metadata"])
+        out[meta["annotations"]["crossplane.io/external-name"]] = doc
+    return out
 
 
-def as_list(value: object) -> list[str]:
-    """Return a policy field that may be a string or a list, as a list."""
-    if isinstance(value, str):
-        return [value]
-    return cast("list[str]", value)
+def bindings(docs: Sequence[Doc], kind: str = "BucketIAMMember") -> set[Binding]:
+    """Every (target, role, member) granted by IAM member resources of `kind`."""
+    out: set[Binding] = set()
+    for doc in by_kind(docs, kind).values():
+        fp = for_provider(doc)
+        target = fp.get("bucket") or fp.get("topic") or fp.get("subscription")
+        out.add((str(target), str(fp["role"]), str(fp["member"])))
+    return out
 
 
-def allowed(stmts: Sequence[Statement]) -> Iterator[tuple[str, str]]:
-    """Every (action, resource) pair an Allow statement grants."""
-    for stmt in stmts:
-        if stmt.get("Effect") != "Allow":
-            continue
-        for action in as_list(stmt["Action"]):
-            for resource in as_list(stmt["Resource"]):
-                yield action, resource
-
-
-def has_tls_denies(stmts: Sequence[Statement], arn: str) -> bool:
-    """Whether the policy denies non-TLS and pre-1.2 TLS on `arn` and its objects."""
-    sids = {
-        cast("str", s.get("Sid"))
-        for s in stmts
-        if s.get("Effect") == "Deny"
-        and set(as_list(s["Resource"])) == {arn, f"{arn}/*"}
-    }
-    return {"DenyInsecureTransport", "DenyTlsBelow12"} <= sids
+def check_bucket_privacy(c: Checker, name: str, doc: Doc) -> None:
+    """Check UBLA, PAP, no retention, location, keep and orphan-on-delete."""
+    fp = for_provider(doc)
+    c.check(ok=fp.get("uniformBucketLevelAccess") is True, message=f"{name}: UBLA off")
+    c.check(
+        ok=fp.get("publicAccessPrevention") == "enforced",
+        message=f"{name}: public access prevention not enforced",
+    )
+    c.check(
+        ok=fp.get("enableObjectRetention") is False and "retentionPolicy" not in fp,
+        message=f"{name}: object retention or a retention policy is set",
+    )
+    c.check(
+        ok=fp.get("forceDestroy") is False, message=f"{name}: forceDestroy not false"
+    )
+    c.check(
+        ok=fp.get("location") == "EUROPE-WEST2", message=f"{name}: not EUROPE-WEST2"
+    )
+    c.check(ok="logging" not in fp, message=f"{name}: usage logging set")
+    meta = cast("dict[str, dict[str, str]]", doc["metadata"])
+    c.check(
+        ok=meta.get("annotations", {}).get("helm.sh/resource-policy") == "keep",
+        message=f"{name}: missing helm.sh/resource-policy: keep",
+    )
+    c.check(
+        ok=spec(doc).get("managementPolicies") == ORPHAN_POLICIES,
+        message=f"{name}: not orphaned on delete",
+    )
+    labels = cast("dict[str, str]", fp.get("labels", {}))
+    c.check(
+        ok=labels.get("purpose") == "schedule-feed-ingest",
+        message=f"{name}: missing purpose label",
+    )
 
 
 def check_buckets(c: Checker, docs: Sequence[Doc]) -> None:
-    """Both buckets are private, owner-enforced and TLS-only."""
-    buckets = by_kind(docs, "Bucket")
+    """Both buckets are private; the delivery bucket is versioned with lifecycle."""
+    found = buckets(docs)
     c.check(
-        ok=set(buckets) == {"example-ds-ingest", "example-ds-ingest-logs"},
-        message=f"expected the delivery and log buckets, got {sorted(buckets)}",
+        ok=set(found) == {BUCKET, AUDIT_BUCKET},
+        message=f"expected the delivery and audit-log buckets, got {sorted(found)}",
     )
-    for name, arn in (
-        ("example-ds-ingest", BUCKET_ARN),
-        ("example-ds-ingest-logs", LOG_BUCKET_ARN),
-    ):
-        if name not in buckets:
-            continue
-        s = spec(buckets[name])
-        block = cast("dict[str, bool]", s["publicAccessBlock"])
-        c.check(
-            ok=all(block.values()) and len(block) == PUBLIC_ACCESS_BLOCK_SWITCHES,
-            message=f"{name}: public access not fully blocked",
-        )
-        rules = cast("dict[str, list[dict[str, str]]]", s["ownershipControls"])["rules"]
-        c.check(
-            ok=rules == [{"objectOwnership": "BucketOwnerEnforced"}],
-            message=f"{name}: ownership is not BucketOwnerEnforced",
-        )
-        c.check(
-            ok=has_tls_denies(statements(s["policy"]), arn),
-            message=f"{name}: TLS denies missing",
-        )
-        meta = cast("dict[str, dict[str, str]]", buckets[name]["metadata"])
-        c.check(
-            ok=meta.get("annotations", {}).get("helm.sh/resource-policy") == "keep",
-            message=f"{name}: missing helm.sh/resource-policy: keep",
-        )
-    if "example-ds-ingest" in buckets:
-        s = spec(buckets["example-ds-ingest"])
-        c.check(
-            ok=cast("dict[str, str]", s["versioning"])["status"] == "Enabled",
-            message="delivery bucket: versioning is not Enabled",
-        )
-        c.check(
-            ok=cast("dict[str, dict[str, str]]", s["logging"])["loggingEnabled"][
-                "targetBucket"
-            ]
-            == "example-ds-ingest-logs",
-            message="delivery bucket: access logs do not go to the log bucket",
-        )
-        logs = buckets.get("example-ds-ingest-logs")
-        if logs is not None:
-            log_allows = list(allowed(statements(spec(logs)["policy"])))
-            c.check(
-                ok=log_allows == [("s3:PutObject", f"{LOG_BUCKET_ARN}/s3-access/*")],
-                message=f"log bucket: unexpected grants {log_allows}",
-            )
-
-
-def user_statements(docs: Sequence[Doc], name: str) -> list[Statement]:
-    """All inline-policy statements of the IAM user `name` (empty if absent)."""
-    user = by_kind(docs, "User").get(name)
-    if user is None:
-        return []
-    inline = cast("dict[str, str]", spec(user)["inlinePolicies"])
-    return [stmt for policy in inline.values() for stmt in statements(policy)]
-
-
-def check_reader(
-    c: Checker, docs: Sequence[Doc], *, allow_delete: bool, sqs: bool
-) -> None:
-    """Check the reader: list/get only, delete only if allowed."""
-    stmts = user_statements(docs, "ds-ingest-reader")
-    c.check(ok=bool(stmts), message="reader user missing")
-    expected_resources = {
-        BUCKET_ARN,
-        f"{BUCKET_ARN}/rdm/*",
-        LOG_BUCKET_ARN,
-        f"{LOG_BUCKET_ARN}/s3-access/*",
-    }
-    s3_actions: set[str] = set()
-    for action, resource in allowed(stmts):
-        if action.startswith("s3:"):
-            s3_actions.add(action)
-            c.check(
-                ok=resource in expected_resources,
-                message=f"reader: {action} on unexpected {resource}",
-            )
-        else:
-            c.check(
-                ok=sqs
-                and resource in {QUEUE_ARN, DLQ_ARN}
-                and action.startswith("sqs:"),
-                message=f"reader: unexpected grant {action} on {resource}",
-            )
-            c.check(
-                ok=not (
-                    resource == DLQ_ARN
-                    and action in {"sqs:ReceiveMessage", "sqs:DeleteMessage"}
-                ),
-                message="reader: may consume the dead-letter queue",
-            )
-    allowed_s3 = READER_S3_ACTIONS | (DELETE_ACTIONS if allow_delete else set())
-    c.check(
-        ok=s3_actions <= allowed_s3,
-        message=f"reader: unexpected S3 actions {sorted(s3_actions - allowed_s3)}",
-    )
-    granted = bool(s3_actions & DELETE_ACTIONS)
-    c.check(
-        ok=allow_delete == granted,
-        message=f"reader: delete granted={granted}, expected {allow_delete}",
-    )
-    for stmt in stmts:
-        if "s3:ListBucket" in as_list(stmt["Action"]):
-            c.check(
-                ok="Condition" in stmt,
-                message="reader: ListBucket without an s3:prefix condition",
-            )
-
-
-def check_writer_iam_user(c: Checker, docs: Sequence[Doc]) -> None:
-    """In iamUser mode the writer can only put under the delivery prefix."""
-    grants = list(allowed(user_statements(docs, "ds-ingest-rdm-writer")))
-    c.check(ok=bool(grants), message="writer user missing in iamUser mode")
-    for action, resource in grants:
-        c.check(
-            ok=action in WRITER_ACTIONS and resource == f"{BUCKET_ARN}/rdm/*",
-            message=f"writer: unexpected grant {action} on {resource}",
-        )
-
-
-def check_writer_cross_account(c: Checker, docs: Sequence[Doc]) -> None:
-    """Check crossAccount mode: no writer user, the bucket policy only puts."""
-    c.check(
-        ok="ds-ingest-rdm-writer" not in by_kind(docs, "User"),
-        message="writer user rendered in crossAccount mode",
-    )
-    bucket = by_kind(docs, "Bucket").get("example-ds-ingest")
-    if bucket is None:
-        c.check(ok=False, message="delivery bucket missing in crossAccount mode")
+    for name, doc in found.items():
+        check_bucket_privacy(c, name, doc)
+    delivery = found.get(BUCKET)
+    if delivery is None:
         return
-    grants = [
-        s for s in statements(spec(bucket)["policy"]) if s.get("Effect") == "Allow"
-    ]
+    fp = for_provider(delivery)
     c.check(
-        ok=len(grants) == 1,
-        message=f"crossAccount: expected one Allow, got {len(grants)}",
+        ok=fp.get("versioning") == {"enabled": False},
+        message="delivery bucket: versioning is not off",
     )
-    for stmt in grants:
-        principal = cast("dict[str, list[str]]", stmt["Principal"])
-        c.check(
-            ok=principal == {"AWS": [PUBLISHER_ROLE]},
-            message=f"crossAccount: principal {principal}",
-        )
-        c.check(
-            ok=set(as_list(stmt["Action"])) <= WRITER_ACTIONS
-            and as_list(stmt["Resource"]) == [f"{BUCKET_ARN}/rdm/*"],
-            message=f"crossAccount: unexpected grant {stmt}",
-        )
+    soft = cast("dict[str, int]", fp.get("softDeletePolicy", {}))
+    seconds = soft.get("retentionDurationSeconds")
+    c.check(
+        ok=seconds == SOFT_DELETE_SECONDS,
+        message=f"delivery bucket: soft delete {seconds}s, expected 7 days",
+    )
+    c.check(
+        ok=fp.get("lifecycleRule") == EXPECTED_LIFECYCLE,
+        message=f"delivery bucket: lifecycle {fp.get('lifecycleRule')}",
+    )
+    c.check(ok="encryption" not in fp, message="delivery bucket: CMEK set by default")
 
 
-def check_sqs(c: Checker, docs: Sequence[Doc]) -> None:
-    """Check the queue takes S3 events for this bucket only, with a DLQ."""
-    queues = by_kind(docs, "Queue")
-    c.check(
-        ok=set(queues) == {"ds-ingest-events", "ds-ingest-events-dlq"},
-        message=f"expected the queue and its DLQ, got {sorted(queues)}",
-    )
-    main = queues.get("ds-ingest-events")
-    if main is None:
-        return
-    s = spec(main)
-    c.check(ok=s.get("sqsManagedSSEEnabled") == "true", message="queue: SSE-SQS off")
-    redrive = cast("dict[str, object]", json.loads(cast("str", s["redrivePolicy"])))
-    c.check(
-        ok=redrive.get("deadLetterTargetArn") == DLQ_ARN,
-        message="queue: does not redrive to the DLQ",
-    )
-    allows = [st for st in statements(s["policy"]) if st.get("Effect") == "Allow"]
-    expected_condition = {
-        "ArnLike": {"aws:SourceArn": BUCKET_ARN},
-        "StringEquals": {"aws:SourceAccount": "123456789012"},
+def check_iam(c: Checker, docs: Sequence[Doc], *, pubsub: bool) -> None:
+    """Every grant is a bucket-level (or topic/subscription) member, as expected."""
+    for doc in docs:
+        kind = str(doc.get("kind"))
+        if re.search(r"IAM(Policy|Binding|Member|AuditConfig)$", kind):
+            c.check(
+                ok=kind in IAM_MEMBER_KINDS,
+                message=f"{kind}: only bucket/topic/subscription members allowed",
+            )
+        if kind in IAM_MEMBER_KINDS:
+            c.check(
+                ok=spec(doc).get("managementPolicies") == ["*"],
+                message=f"{kind}: not fully managed, so removal won't revoke it",
+            )
+    granted = bindings(docs)
+    for _, role, member in granted:
+        c.check(
+            ok=bool(SERVICE_ACCOUNT.match(member)),
+            message=f"member {member} ({role}) is not a service account",
+        )
+    expected = {(BUCKET, role, m) for m in PUBLISHERS for role in PUBLISHER_ROLES}
+    expected |= {
+        (BUCKET, "roles/storage.objectViewer", READER),
+        (BUCKET, DELETE_ROLE, READER),
+        (AUDIT_BUCKET, "roles/storage.objectViewer", READER),
+        (AUDIT_BUCKET, "roles/storage.objectCreator", SINK),
     }
     c.check(
-        ok=len(allows) == 1
-        and allows[0].get("Principal") == {"Service": "s3.amazonaws.com"}
-        and allows[0].get("Action") == "sqs:SendMessage"
-        and allows[0].get("Condition") == expected_condition,
-        message=f"queue: policy is not S3-only for this bucket: {allows}",
+        ok=granted == expected,
+        message=f"bucket bindings: unexpected {sorted(granted - expected)}, "
+        f"missing {sorted(expected - granted)}",
     )
-    bucket = by_kind(docs, "Bucket").get("example-ds-ingest")
-    if bucket is not None:
-        notification = cast(
-            "dict[str, list[dict[str, object]]]", spec(bucket).get("notification", {})
-        )
-        targets = [
-            q.get("queueARN") for q in notification.get("queueConfigurations", [])
-        ]
+    roles = by_kind(docs, "ProjectIAMCustomRole")
+    c.check(ok=len(roles) == 1, message=f"expected one custom role, got {len(roles)}")
+    for doc in roles.values():
+        meta = cast("dict[str, dict[str, str]]", doc["metadata"])
         c.check(
-            ok=targets == [QUEUE_ARN], message=f"bucket: notification targets {targets}"
+            ok=for_provider(doc).get("permissions") == ["storage.objects.delete"]
+            and meta["annotations"]["crossplane.io/external-name"]
+            == DELETE_ROLE.rsplit("/", 1)[1],
+            message=f"reader delete role: {for_provider(doc)}",
         )
+    topic = bindings(docs, "TopicIAMMember")
+    subscription = bindings(docs, "SubscriptionIAMMember")
+    if pubsub:
+        c.check(
+            ok=topic == {("ds-ingest-events", "roles/pubsub.publisher", STORAGE_AGENT)},
+            message=f"topic: publishers {topic}",
+        )
+        c.check(
+            ok=subscription
+            == {
+                ("ds-ingest-events-schedule-ingest", "roles/pubsub.subscriber", READER)
+            },
+            message=f"subscription: subscribers {subscription}",
+        )
+    else:
+        c.check(
+            ok=not topic and not subscription, message="Pub/Sub IAM without Pub/Sub"
+        )
+
+
+def check_pubsub(c: Checker, docs: Sequence[Doc]) -> None:
+    """Check the notification sends only OBJECT_FINALIZE to the topic."""
+    notes = by_kind(docs, "Notification")
+    c.check(ok=len(notes) == 1, message=f"expected one Notification, got {len(notes)}")
+    for doc in notes.values():
+        fp = for_provider(doc)
+        c.check(
+            ok=fp.get("bucket") == BUCKET
+            and fp.get("eventTypes") == ["OBJECT_FINALIZE"]
+            and fp.get("topic") == "projects/example-project/topics/ds-ingest-events",
+            message=f"notification: {fp}",
+        )
+    subs = by_kind(docs, "Subscription")
+    c.check(ok=len(subs) == 1, message="expected one pull Subscription")
+    for doc in subs.values():
+        c.check(
+            ok="pushConfig" not in for_provider(doc),
+            message="subscription is push, expected pull",
+        )
+
+
+def check_alerts(c: Checker, docs: Sequence[Doc]) -> None:
+    """Six alert policies, all on the delivery bucket, all notifying."""
+    policies = by_kind(docs, "AlertPolicy")
+    c.check(
+        ok=len(policies) == USAGE_ALERTS,
+        message=f"expected {USAGE_ALERTS} AlertPolicy, got {len(policies)}",
+    )
+    for name, doc in policies.items():
+        fp = for_provider(doc)
+        conditions = cast("list[dict[str, dict[str, str]]]", fp["conditions"])
+        c.check(
+            ok=all(
+                f'resource.label.bucket_name="{BUCKET}"'
+                in cond["conditionThreshold"]["filter"]
+                for cond in conditions
+            ),
+            message=f"{name}: not scoped to the delivery bucket",
+        )
+        c.check(ok=bool(fp.get("notificationChannels")), message=f"{name}: no channel")
 
 
 def check_failures(c: Checker) -> None:
     """Bad values must fail to render."""
     cases: list[tuple[str, list[str]]] = [
-        ("missing account", ["--set", "aws.accountId="]),
+        ("no publisher members", ["--set", "publisher.members=null"]),
+        ("allUsers publisher", ["--set", "publisher.members[0]=allUsers"]),
+        (
+            "allAuthenticatedUsers publisher",
+            ["--set", "publisher.members[0]=allAuthenticatedUsers"],
+        ),
+        ("domain publisher", ["--set", "publisher.members[0]=domain:example.com"]),
+        ("group publisher", ["--set", "publisher.members[0]=group:g@example.com"]),
+        ("admin role", ["--set", "publisher.roles[0]=roles/storage.admin"]),
+        ("objectAdmin role", ["--set", "publisher.roles[0]=roles/storage.objectAdmin"]),
+        (
+            "legacyBucketOwner role",
+            ["--set", "publisher.roles[0]=roles/storage.legacyBucketOwner"],
+        ),
+        ("non-storage role", ["--set", "publisher.roles[0]=roles/owner"]),
+        ("missing project", ["--set", "gcp.projectId="]),
+        ("missing reader", ["--set", "reader.member="]),
+        ("allUsers reader", ["--set", "reader.member=allUsers"]),
         ("dotted bucket name", ["--set", "bucket.name=a.b.c"]),
-        ("prefix without a trailing slash", ["--set", "bucket.deliveryPrefix=rdm"]),
-        ("crossAccount without principals", ["--set", "writer.mode=crossAccount"]),
-        ("missing permissions boundary", ["--set", "iam.permissionsBoundaryArn="]),
-        ("kms without a key", ["--set", "bucket.encryption.sseAlgorithm=aws:kms"]),
+        ("soft delete under 7 days", ["--set", "bucket.softDeleteRetentionDays=3"]),
+        ("soft delete over 90 days", ["--set", "bucket.softDeleteRetentionDays=91"]),
+        ("alerts without channels", ["--set", "usageAlerts.enabled=true"]),
+        (
+            "pubsub without project number",
+            ["--set", "notifications.pubsub.enabled=true"],
+        ),
     ]
     for label, args in cases:
         code, _ = c.render(*args)
@@ -371,28 +390,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     default = c.docs()
     check_buckets(c, default)
-    check_reader(c, default, allow_delete=False, sqs=False)
-    check_writer_iam_user(c, default)
+    check_iam(c, default, pubsub=False)
     c.check(
-        ok=not by_kind(default, "Queue"),
-        message="a Queue rendered with notifications.sqs.enabled=false",
+        ok=not by_kind(default, "AlertPolicy") and not by_kind(default, "Topic"),
+        message="alerts or Pub/Sub rendered while off",
     )
 
-    check_reader(
-        c, c.docs("--set", "reader.allowDelete=true"), allow_delete=True, sqs=False
-    )
-
-    cross = c.docs(
-        "--set",
-        "writer.mode=crossAccount",
-        "--set",
-        f"writer.principalArns[0]={PUBLISHER_ROLE}",
-    )
-    check_writer_cross_account(c, cross)
-
-    sqs = c.docs("--set", "notifications.sqs.enabled=true")
-    check_sqs(c, sqs)
-    check_reader(c, sqs, allow_delete=False, sqs=True)
+    everything = c.docs(*PUBSUB_SET, *ALERTS_SET)
+    check_buckets(c, everything)
+    check_iam(c, everything, pubsub=True)
+    check_pubsub(c, everything)
+    check_alerts(c, everything)
 
     check_failures(c)
 

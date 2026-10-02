@@ -1,23 +1,25 @@
 apiVersion: v2
 name: ds-ingest-bucket
 description: >-
-  The AWS landing zone for Distant Signal's schedule feed: an S3 bucket the
-  Rail Data Marketplace pushes the CIF timetable and CORPUS files into, its
-  access-log bucket, the IAM users for the publisher (write-only) and for
-  schedule-ingest (read-only), and an optional SQS queue for object-created
-  events. Renders AWS Controllers for Kubernetes (ACK) custom resources, so
-  installing it needs the ACK s3, iam (and, for notifications, sqs)
-  controllers and their CRDs. `helm template` and `helm lint` work without
-  them. Off by default (`enabled: false`).
-  Design: docs/superpowers/specs/2026-10-02-schedule-feed-s3-landing-design.md.
+  The Google Cloud Storage landing zone for Distant Signal's schedule feed: a
+  dedicated bucket the Rail Data Marketplace pushes the CIF timetable and
+  CORPUS files into, bucket-level IAM bindings for the publisher's service
+  accounts and for schedule-ingest's reader, an audit-log bucket, and
+  optional usage alerts and Pub/Sub object notifications. Renders Crossplane
+  v2 namespaced managed resources (crossplane-contrib/provider-upjet-gcp),
+  so installing it needs Crossplane and the GCP providers and their CRDs.
+  `helm template` and `helm lint` work without them. Off by default
+  (`enabled: false`).
+  Design: docs/superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md.
 type: application
 
 # Bump by hand for any template/values change, as charts/distant-signal does.
-version: 0.1.0
+# 0.2.0: the move from AWS S3 (ACK) to Google Cloud Storage (Crossplane).
+version: 0.2.0
 
 # Not an application image: the chart deploys no workload. Kept at the
 # version of the design it implements.
-appVersion: "0.1.0"
+appVersion: "0.2.0"
 
 kubeVersion: ">=1.23.0-0"
 
@@ -25,5 +27,5 @@ home: https://github.com/FasterSpeeding/Distant-Signal
 sources:
   - https://github.com/FasterSpeeding/Distant-Signal
 
-# No dependencies: the ACK controllers are cluster components owned by
-# Ranma-Config (one HelmRelease each), not subcharts of this chart.
+# No dependencies: Crossplane and its GCP providers are cluster components
+# owned by Ranma-Config, not subcharts of this chart.

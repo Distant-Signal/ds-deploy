@@ -1,0 +1,102 @@
+{{- /*
+Optional object notifications (notifications.pubsub.enabled, off by
+default): Cloud Storage OBJECT_FINALIZE events -> a Pub/Sub topic -> a pull
+subscription that schedule-ingest pulls over outbound HTTPS.
+
+- Only the project's Cloud Storage service agent may publish to the topic.
+- Only the reader may consume the subscription.
+- The subscription never expires from inactivity.
+- No dead-letter topic: messages are wake-up hints for a LIST reconcile, so
+  a message that can't be handled is acknowledged and the next poll finds
+  the object anyway (spec §6).
+
+Kinds: pubsub.gcp.m.upbound.io/v1beta1 Topic, TopicIAMMember, Subscription,
+SubscriptionIAMMember; storage.gcp.m.upbound.io/v1beta1 Notification.
+*/}}
+{{- if and .Values.enabled .Values.notifications.pubsub.enabled }}
+{{- include "ds-ingest-bucket.validate" . }}
+{{- $p := .Values.notifications.pubsub }}
+{{- $topic := include "ds-ingest-bucket.topicPath" . }}
+apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+kind: Topic
+metadata:
+  name: {{ $p.topicName }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: events-topic
+  annotations:
+    crossplane.io/external-name: {{ $p.topicName }}
+spec:
+  {{- include "ds-ingest-bucket.managed" . | nindent 2 }}
+  forProvider:
+    project: {{ .Values.gcp.projectId }}
+    labels:
+      {{- include "ds-ingest-bucket.gcpLabels" . | nindent 6 }}
+---
+apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+kind: TopicIAMMember
+metadata:
+  name: {{ printf "%s-storage-agent-publisher" .Release.Name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: events-topic
+spec:
+  {{- include "ds-ingest-bucket.managed" . | nindent 2 }}
+  forProvider:
+    project: {{ .Values.gcp.projectId }}
+    topic: {{ $p.topicName }}
+    role: roles/pubsub.publisher
+    member: {{ printf "serviceAccount:service-%s@gs-project-accounts.iam.gserviceaccount.com" (toString .Values.gcp.projectNumber) }}
+---
+apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+kind: Subscription
+metadata:
+  name: {{ $p.subscriptionName }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: events-subscription
+  annotations:
+    crossplane.io/external-name: {{ $p.subscriptionName }}
+spec:
+  {{- include "ds-ingest-bucket.managed" . | nindent 2 }}
+  forProvider:
+    project: {{ .Values.gcp.projectId }}
+    topic: {{ $topic }}
+    ackDeadlineSeconds: {{ int $p.ackDeadlineSeconds }}
+    messageRetentionDuration: {{ $p.messageRetentionDuration | quote }}
+    expirationPolicy:
+      ttl: ""
+    labels:
+      {{- include "ds-ingest-bucket.gcpLabels" . | nindent 6 }}
+---
+apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+kind: SubscriptionIAMMember
+metadata:
+  name: {{ printf "%s-reader-subscriber" .Release.Name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reader
+spec:
+  {{- include "ds-ingest-bucket.managed" . | nindent 2 }}
+  forProvider:
+    project: {{ .Values.gcp.projectId }}
+    subscription: {{ $p.subscriptionName }}
+    role: roles/pubsub.subscriber
+    member: {{ .Values.reader.member }}
+---
+apiVersion: storage.gcp.m.upbound.io/v1beta1
+kind: Notification
+metadata:
+  name: {{ printf "%s-object-finalize" .Release.Name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: events-topic
+spec:
+  {{- include "ds-ingest-bucket.managed" . | nindent 2 }}
+  forProvider:
+    bucket: {{ .Values.bucket.name }}
+    topic: {{ $topic }}
+    payloadFormat: JSON_API_V1
+    eventTypes:
+      - OBJECT_FINALIZE
+{{- end }}

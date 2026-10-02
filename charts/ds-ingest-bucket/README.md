@@ -1,100 +1,107 @@
 # ds-ingest-bucket
 
-The AWS side of the schedule feed's S3 source: the bucket the Rail Data
-Marketplace (RDM) pushes `timetable_full.zip` and `CORPUSExtract.json.gz`
-into, a private access-log bucket, a write-only IAM user for the publisher,
-a read-only IAM user for schedule-ingest, and optional object-created
-notifications to SQS. The S3 source runs alongside the SFTP receiver, or
+The Google Cloud side of the schedule feed's bucket source: a dedicated
+Cloud Storage bucket the Rail Data Marketplace (RDM) pushes
+`timetable_full.zip` and `CORPUSExtract.json.gz` into, bucket-level IAM
+for the publisher's service accounts and for schedule-ingest's reader, a
+private audit-log bucket, and optional usage alerts and Pub/Sub object
+notifications. The bucket source runs alongside the SFTP receiver, or
 instead of it; `charts/distant-signal`'s `scheduleFeed` switches each one
 on separately.
 
 Design and rationale:
-[2026-10-02-schedule-feed-s3-landing-design](../../docs/superpowers/specs/2026-10-02-schedule-feed-s3-landing-design.md).
+[2026-10-02-schedule-feed-gcs-landing-design](../../docs/superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md)
+(the file name predates the move from S3 to GCS).
 
-**Off by default** (`enabled: false`) and not deployed anywhere yet.
+**Off by default** (`enabled: false`) and not deployed anywhere yet. This
+chart holds only generic templates: every project id, bucket name and
+service-account email is set by Ranma-Config.
 
 ## What it renders
 
-Every resource is an [ACK](https://aws-controllers-k8s.github.io/community/)
-custom resource. Nothing runs in the cluster; the ACK controllers turn the
-resources into AWS API calls.
+Crossplane v2 namespaced managed resources from
+[provider-upjet-gcp](https://github.com/crossplane-contrib/provider-upjet-gcp).
+Nothing runs in the cluster; the providers turn the resources into GCP API
+calls.
 
-| Template | Kind | Controller | Renders when |
+| Template | Kinds | Provider | Renders when |
 | --- | --- | --- | --- |
-| `bucket.yaml` | `s3.services.k8s.aws/v1alpha1` `Bucket` | s3 | `enabled` |
-| `log-bucket.yaml` | `Bucket` (access logs) | s3 | `enabled` and `accessLogs.enabled` |
-| `iam-users.yaml` | `iam.services.k8s.aws/v1alpha1` `User` (reader; writer in `iamUser` mode) | iam | `enabled` |
-| `sqs.yaml` | `sqs.services.k8s.aws/v1alpha1` `Queue` (queue + dead-letter queue) | sqs | `enabled` and `notifications.sqs.enabled` |
+| `bucket.yaml` | `storage.gcp.m.upbound.io/v1beta1` `Bucket` (delivery) | storage | `enabled` |
+| `audit-bucket.yaml` | `Bucket` (audit-log sink destination) | storage | `enabled` and `auditLogs.bucket.enabled` |
+| `iam.yaml` | `BucketIAMMember` (publisher members × roles, reader, audit sink); `cloudplatform.gcp.m.upbound.io/v1beta1` `ProjectIAMCustomRole` (the reader's delete-only role) | storage, cloudplatform | `enabled` |
+| `alerts.yaml` | `monitoring.gcp.m.upbound.io/v1beta1` `AlertPolicy` × 6 | monitoring | `enabled` and `usageAlerts.enabled` |
+| `pubsub.yaml` | `pubsub.gcp.m.upbound.io/v1beta1` `Topic`, `Subscription`, `TopicIAMMember`, `SubscriptionIAMMember`; `storage` `Notification` | pubsub, storage | `enabled` and `notifications.pubsub.enabled` |
 
 The delivery bucket:
 
-- blocks all public access and disables ACLs (`BucketOwnerEnforced`);
-- denies any request that isn't TLS 1.2 or later;
-- encrypts with SSE-S3 by default;
-- is versioned;
-- expires current deliveries after 14 days and replaced ones after 3, and
-  aborts unfinished multipart uploads after 1 day;
-- logs every request to the access-log bucket.
+- has uniform bucket-level access and enforced public access prevention;
+- uses Google-managed encryption (CMEK optional);
+- is unversioned, with a 7-day soft delete: data is only in transit, since
+  schedule-ingest deletes each object after a verified download;
+- deletes anything older than 7 days (a backstop for a reader outage) and
+  aborts unfinished multipart uploads after 1 day.
 
-The publisher can only `PutObject` under `bucket.deliveryPrefix`. The reader
-can only list and get under it, unless `reader.allowDelete` is set. Both
-users carry the permissions boundary in `iam.permissionsBoundaryArn`.
+Every grant is a non-authoritative, bucket-level `BucketIAMMember`, never
+project-level. Publisher members get the roles in `publisher.roles`
+(default: the publisher's four documented roles). The reader gets
+`objectViewer` plus a custom role holding only `storage.objects.delete`;
+it can never create or overwrite. IAM bindings are fully managed, so
+removing a member from the values revokes it; the buckets are orphaned on
+delete and carry `helm.sh/resource-policy: keep`.
 
 ## Prerequisites
 
-1. The ACK `s3-chart` and `iam-chart` controllers, plus `sqs-chart` if
-   notifications are on, installed by Ranma-Config, each with:
-   - a sealed static-credentials Secret for the controller's IAM user;
-   - `aws.region: eu-west-2`;
-   - `watchNamespace` set to this release's namespace.
-
-   `helm template` and `helm lint` work without the CRDs. `helm install`
-   fails until the controllers are installed.
-2. The one-off bootstrap in the AWS account: the controller IAM user, its
-   policy and the permissions boundary policy (design spec, "Controller
-   credentials").
+1. Crossplane v2 and the GCP providers (`provider-gcp-storage`,
+   `provider-gcp-cloudplatform`; `-monitoring` and `-pubsub` if used),
+   installed by Ranma-Config, with a `ClusterProviderConfig` (default
+   name `default`) holding the controller's sealed service-account key.
+   `helm template` and `helm lint` work without the CRDs.
+2. The one-off project bootstrap in Ranma-Config: the project, budget,
+   the reader's service account, the Data Access audit config and sink,
+   and the kill switch (design spec §7, §12).
 
 ## Install
 
+In production, Ranma-Config's Flux HelmRelease sets the values. By hand
+(placeholders):
+
 ```sh
 helm upgrade --install ds-ingest-bucket charts/ds-ingest-bucket \
-  --namespace ds-ingest-aws --create-namespace \
+  --namespace ds-ingest-gcp --create-namespace \
   --set enabled=true \
-  --set aws.accountId=<12 digits> \
+  --set gcp.projectId=<project-id> \
   --set bucket.name=<globally unique name> \
-  --set iam.permissionsBoundaryArn=arn:aws:iam::<account>:policy/ds-ingest/ds-ingest-boundary
+  --set 'publisher.members[0]=serviceAccount:<publisher>@<publisher-project>.iam.gserviceaccount.com' \
+  --set reader.member=serviceAccount:<reader>@<project-id>.iam.gserviceaccount.com
 ```
-
-In production, Ranma-Config's Flux HelmRelease sets these values instead.
 
 ## After install
 
-ACK's iam controller has no `AccessKey` kind, so it never handles a secret
-key. Once both `User` resources show `ACK.ResourceSynced=True`:
-
-1. **Reader key.** With the bootstrap profile, run
-   `aws iam create-access-key --user-name ds-ingest-reader`. Pipe the
-   output straight into `kubeseal`, which writes the
-   `distant-signal-schedulefeed-bucket` SealedSecret (keys
-   `access-key-id` and `secret-access-key`) in the `distant-signal`
-   namespace in Ranma-Config. Don't write it to disk or a terminal
-   scrollback you keep.
-2. **Writer key** (`writer.mode: iamUser`). Create it the same way and
-   enter it in RDM's destination form for the timetable and CORPUS
-   subscriptions. Don't keep a copy. If it's lost, make a new one.
-3. **Rotation.** Every 90 days, and whenever someone who handled a key
-   leaves:
-   - create a second key (IAM allows two per user);
-   - swap it in (reseal it, or update RDM's form);
-   - confirm the next delivery, then delete the old key.
+- **Publisher.** Nothing to hand over: the publisher's own service
+  accounts are bound. To revoke, remove them from `publisher.members`.
+- **Reader key.** The controller never mints keys (a key minted by a
+  managed resource would land unsealed in a Secret). With the bootstrap
+  identity, run `gcloud iam service-accounts keys create` for the reader
+  and pipe it straight into `kubeseal`, producing the
+  `distant-signal-schedulefeed-bucket` SealedSecret (key
+  `service-account.json`) in Ranma-Config. Don't write it to disk.
+- **Rotation**, every 90 days: create a second key, reseal, roll the
+  ingest pod, confirm a successful poll, delete the old key.
+- **Kill switch.** Ranma's function removes bindings on a usage or budget
+  trip. Binding resources carry the label
+  `ds-ingest-bucket/kill-switch-group` (`publisher` or `reader`) so that a
+  watcher can pause them (`crossplane.io/paused: "true"`) and Crossplane
+  doesn't re-create them. The chart never sets that annotation itself.
 
 ## Values
 
-`values.yaml` documents every key. The ones without a usable default are
-`enabled`, `aws.accountId`, `bucket.name` and `iam.permissionsBoundaryArn`,
-plus `writer.principalArns` in `crossAccount` mode. The templates refuse
-to render without them, and refuse malformed names, prefixes, ARNs and
-CIDRs.
+`values.yaml` documents every key. Required when enabled: `gcp.projectId`,
+`bucket.name`, `publisher.members` and `reader.member`; also
+`usageAlerts.notificationChannels` with `usageAlerts.enabled`, and
+`gcp.projectNumber` with `notifications.pubsub.enabled`. The templates
+fail closed without them, and refuse public or non-service-account
+members, roles that can change IAM or bucket settings, and out-of-range
+soft delete.
 
 ## Tests
 
@@ -104,11 +111,9 @@ helm lint --strict charts/ds-ingest-bucket -f charts/ds-ingest-bucket/ci/example
 uv run scripts/check-ingest-bucket-chart.py
 ```
 
-`check-ingest-bucket-chart.py` renders the chart in each mode and checks
-its policies:
-
-- the publisher gets only `PutObject`;
-- the reader gets no delete or write;
-- TLS-only denies are present;
-- the queue accepts only S3 events from this bucket;
-- the bad-value guards fail as expected.
+`check-ingest-bucket-chart.py` renders every mode and checks the bucket
+settings (UBLA, enforced PAP, versioning off, soft delete, lifecycle, no
+retention, orphan and keep), every grant (bucket-level only, service
+accounts only, never public, fully managed, exactly the expected
+publisher and reader bindings, the delete-only custom role), and that bad
+values refuse to render.

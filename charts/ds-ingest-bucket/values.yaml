@@ -1,171 +1,189 @@
-# Values for ds-ingest-bucket: the AWS S3 landing zone for the schedule
-# feed's bucket source, which runs alongside (or instead of) the schedulefeed
-# SFTP receiver. Every resource is an ACK (AWS Controllers for
-# Kubernetes) custom resource; the ACK s3 and iam controllers (and sqs, with
-# notifications.sqs.enabled) reconcile them into AWS. See README.md and
-# docs/superpowers/specs/2026-10-02-schedule-feed-s3-landing-design.md.
+# Values for ds-ingest-bucket: the Google Cloud Storage landing zone for the
+# schedule feed's bucket source, which runs alongside (or instead of) the
+# schedulefeed SFTP receiver. Every resource is a Crossplane v2 namespaced
+# managed resource from crossplane-contrib/provider-upjet-gcp
+# (provider-gcp-storage and provider-gcp-cloudplatform; provider-gcp-monitoring
+# with usageAlerts.enabled; provider-gcp-pubsub with notifications.pubsub.enabled). See README.md and
+# docs/superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md.
 #
-# Nothing here is a secret. Access keys are never rendered by this chart:
-# ACK's iam controller cannot mint them (it has no AccessKey kind), so a
-# person creates them once and seals them in Ranma-Config (README.md,
-# "After install").
+# The bucket is dedicated to timetable/CORPUS ingest (decision D9): nothing
+# else ever goes in it.
+#
+# This file holds only generic defaults (decision D7, repo scope). Every
+# project id, project number, bucket name and service-account email is set
+# by Ranma-Config's HelmRelease; ci/example-values.yaml uses obvious
+# placeholders. Nothing here is a secret: the chart never renders a key.
 
 # -- Render anything at all. Off by default: the chart is not deployed
 # anywhere until the adoption plan's step 3.
 enabled: false
 
-aws:
-  # -- The 12-digit AWS account that owns every resource. Required when
-  # enabled. Used to build ARNs (ACK resources do not export them in a form
-  # one template can read from another).
-  accountId: ""
-  # -- Region of every resource, set per resource through the
-  # `services.k8s.aws/region` annotation. eu-west-2 (London): closest to
-  # the publisher and to the node, and egress from it falls in AWS's
-  # account-wide 100 GB/month free allowance.
-  region: eu-west-2
-  # -- ARN partition. Only `aws` has been considered.
-  partition: aws
+gcp:
+  # -- The dedicated GCP project that owns every resource (D2). Required
+  # when enabled.
+  projectId: ""
+  # -- The project's number. Only needed with notifications.pubsub.enabled,
+  # to name the Cloud Storage service agent that publishes to the topic.
+  projectNumber: ""
+  # -- Bucket location. EUROPE-WEST2 (London): the publisher already runs
+  # there, so its writes stay in-region, and it is the closest region to
+  # the node.
+  location: EUROPE-WEST2
 
-# -- Labels added to every rendered resource.
+crossplane:
+  # -- The provider config every managed resource uses. Ranma-Config
+  # creates it, with the controller's sealed service-account key.
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+  # -- Buckets only. `Orphan` (the default) leaves both buckets in GCP when
+  # their managed resource is deleted (helm uninstall, a namespace delete):
+  # their management policies omit `Delete`. `Delete` lets Crossplane
+  # delete them (only if empty). The buckets also carry
+  # `helm.sh/resource-policy: keep`. IAM bindings, alerts and Pub/Sub
+  # resources are always fully managed, so removing a member from the
+  # values really revokes its access.
+  deletionPolicy: Orphan
+
+# -- Kubernetes labels added to every rendered resource.
 commonLabels: {}
 
-# -- Tags added to every AWS resource that takes tags (buckets, queues,
-# users), on top of `app.kubernetes.io/managed-by=ds-ingest-bucket`.
-tags: {}
+# -- GCP labels added to the buckets, topic and subscription, on top of
+# `managed-by: ds-ingest-bucket` and `purpose: schedule-feed-ingest`. Keys
+# and values: lowercase letters, digits, `_` and `-`.
+labels: {}
 
 bucket:
-  # -- Globally unique S3 bucket name. Required when enabled. 3-63
-  # characters, lowercase letters, digits and hyphens (no dots: a dotted
-  # name breaks virtual-hosted TLS).
+  # -- Globally unique bucket name. Required when enabled. 3-63 lowercase
+  # letters, digits, `-` and `_`, starting and ending with a letter or
+  # digit (no dots). The publisher writes at the bucket root.
   name: ""
-  # -- ACK deletion policy: `retain` keeps the bucket in AWS when the custom
-  # resource is deleted (helm uninstall, a namespace delete), `delete`
-  # removes it (only if empty). The chart also sets
-  # `helm.sh/resource-policy: keep` on both buckets.
-  deletionPolicy: retain
-  # -- Key prefix the publisher writes under. Both IAM policies, the
-  # lifecycle rule and the event filter are scoped to it. Must end in `/`
-  # and must not start with one.
-  deliveryPrefix: rdm/
-  # -- `Enabled` or `Suspended`. Enabled (the default) lets schedule-ingest
-  # pin each delivery by version id, keeps an overwritten delivery for
-  # `lifecycle.noncurrentExpirationDays` (forensics after a leaked writer
-  # key), and makes "delete exactly the version I ingested" possible.
-  versioning: Enabled
+  # -- Storage class. STANDARD: the data is read within a day of landing.
+  storageClass: STANDARD
+  # -- Soft-delete retention in days: 0 (off) or 7-90. The bucket holds
+  # data only in transit: schedule-ingest deletes each object once it has a
+  # verified local copy, and the local archive is the recovery path. 7, the
+  # minimum, keeps what was deleted or overwritten restorable for a week
+  # for about a cent a month, mainly so that an unexpected object (which
+  # the reader deletes without downloading) can still be examined, and an
+  # overwrite or delete by the publisher before we fetched can be undone.
+  softDeleteRetentionDays: 7
+  # Object versioning is always off (not a value): with the reader
+  # deleting after a verified download, noncurrent generations would only
+  # retain bytes we removed on purpose.
   encryption:
-    # -- `AES256` (SSE-S3, the default) or `aws:kms`. SSE-S3 costs nothing
-    # and needs no KMS grants for a cross-account writer; a customer
-    # managed key adds $1/month and a key policy for the publisher.
-    sseAlgorithm: AES256
-    # -- KMS key ARN, only with `aws:kms`.
-    kmsKeyId: ""
-    # -- S3 Bucket Key (fewer KMS calls). Only matters with `aws:kms`.
-    bucketKeyEnabled: true
+    # -- Cloud KMS key for CMEK, as projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>.
+    # Empty (the default and the recommendation): Google-managed
+    # encryption. CMEK adds a key, a grant to the Cloud Storage service
+    # agent and a monthly key cost for public timetable data.
+    defaultKmsKeyName: ""
   lifecycle:
-    # -- Days after which the current version of a delivery expires (a
-    # delete marker replaces it). 14 keeps the last CIF for two weeks if the
-    # publisher stops, and a CORPUS file for two weeks after its monthly
-    # push; schedule-ingest has its own copy long before then.
-    currentExpirationDays: 14
-    # -- Days a version stays after a newer upload replaces it. 3 matches
-    # schedule-ingest's `retentionKeepDeliveries: 3`.
-    noncurrentExpirationDays: 3
-    # -- Days before an unfinished multipart upload is aborted and its parts
-    # deleted.
+    # -- Backstop only: days after which any object still in the bucket is
+    # deleted. Normally schedule-ingest deletes each object within minutes
+    # of fetching it; this rule matters only when the reader is down. 7 is
+    # well beyond the reader-outage alerts (ReadErrors after 15 minutes,
+    # NoNewObject after 30 hours), so it never races a working reader.
+    deleteAfterDays: 7
+    # -- Days before an unfinished XML-API multipart upload is aborted.
+    # (Unfinished JSON-API resumable uploads expire on their own after a
+    # week and hold no billed storage.)
     abortIncompleteMultipartUploadDays: 1
 
-accessLogs:
-  # -- S3 server access logging for the delivery bucket into a second,
-  # private bucket. The bucket's counterpart to SFTPGo's login/upload lines:
-  # each record has the requester ARN, source IP, operation, key, status
-  # and bytes. Best-effort delivery, usually within an hour.
-  enabled: true
-  # -- Log bucket name. Empty means `<bucket.name>-logs`.
-  bucketName: ""
-  # -- Key prefix inside the log bucket.
-  targetPrefix: s3-access/
-  # -- Days to keep access-log objects. 400 matches the SFTP delivery audit
-  # retention in Loki (Ranma-Config sftp-audit-observability.md).
-  expirationDays: 400
-
-iam:
-  # -- IAM path for both users. The ACK iam controller's own policy only
-  # allows users under this path, so it cannot touch any other identity.
-  path: /ds-ingest/
-  # -- ARN of the permissions boundary policy put on both users. Required
-  # when enabled: the controller's policy refuses CreateUser without it,
-  # which is what stops a compromised controller from minting an
-  # administrator. Created once by the bootstrap step (spec, "Controller
-  # credentials"), never by this chart.
-  permissionsBoundaryArn: ""
-
-writer:
-  # -- How the publisher authenticates. `iamUser`: this chart creates an
-  # IAM user with PutObject on the delivery prefix only, and a person mints
-  # its access key and enters it in the RDM destination form.
-  # `crossAccount`: the bucket policy grants `principalArns` (the
-  # publisher's own AWS role or account) PutObject on the prefix and no IAM
-  # user is created. Which one RDM supports is an open question (spec,
-  # "Open questions").
-  mode: iamUser
-  # -- IAM user name in `iamUser` mode.
-  userName: ds-ingest-rdm-writer
-  # -- Principals granted PutObject in `crossAccount` mode, e.g.
-  # arn:aws:iam::111122223333:role/rdm-delivery. Required in that mode.
-  principalArns: []
-  # -- Also grant ListBucket on the delivery prefix. Off: SFTPGo's logs
-  # showed DTD's client uploading straight to the final name. Turn on only
-  # if RDM's destination check needs it.
-  allowList: false
-  # -- Grant AbortMultipartUpload on the prefix, so a client that gives up
-  # on a multipart upload can clean it up (the lifecycle rule does it after
-  # a day anyway).
-  allowAbortMultipartUpload: true
+publisher:
+  # -- The publisher's principals, each bound on THIS BUCKET ONLY to every
+  # role in `roles` (never on the project). Required when enabled; the
+  # render fails closed without them. Each entry must be
+  # `serviceAccount:<email>`: allUsers, allAuthenticatedUsers, domain:,
+  # group: and user: members are refused. Placeholder form:
+  # serviceAccount:publisher@example-project.iam.gserviceaccount.com
+  members: []
+  # -- Roles granted to each publisher member on the bucket. The default is
+  # the publisher's documented requirement (spec §5, "Publisher access"):
+  # objectViewer (get, list), legacyBucketReader (bucket get, list),
+  # bucketViewer (bucket get) and legacyBucketWriter (create, overwrite,
+  # delete, list). Roles that can change IAM or bucket settings (admin,
+  # objectAdmin, legacyBucketOwner, legacyObjectOwner) are refused.
+  roles:
+    - roles/storage.objectViewer
+    - roles/storage.legacyBucketReader
+    - roles/storage.bucketViewer
+    - roles/storage.legacyBucketWriter
 
 reader:
-  # -- IAM user schedule-ingest signs as. Its key is sealed into the
-  # distant-signal namespace (README.md, "After install").
-  userName: ds-ingest-reader
-  # -- Grant DeleteObject/DeleteObjectVersion on the delivery prefix. Off:
-  # the lifecycle rules remove deliveries, so the reader never needs to
-  # delete, and a stolen reader key cannot destroy an unprocessed one.
-  allowDelete: false
-  # -- Also grant read on the access-log bucket's prefix, for the
-  # schedule-ingest access-log tailer that ships audit lines to Loki.
-  readAccessLogs: true
-  # -- Source CIDRs the reader key is restricted to (a bucket-policy Deny
-  # for any other source IP), e.g. the node's public egress address as a
-  # /32. Empty: no restriction. Set it once the node's egress address is
-  # known to be stable.
-  allowedSourceCidrs: []
+  # -- schedule-ingest's service account in our project, as
+  # `serviceAccount:<email>`. Required when enabled. Ranma-Config creates
+  # it and seals its key; this chart only binds it. On the delivery bucket
+  # it gets roles/storage.objectViewer (get, list) plus the custom
+  # delete-only role below; with auditLogs.bucket.enabled, objectViewer on
+  # the audit-log bucket. It can never create or overwrite an object.
+  member: ""
+  deleteRole:
+    # -- Project-level custom role holding only storage.objects.delete,
+    # bound to the reader on the delivery bucket only, so it can delete an
+    # object after a verified download. Chosen over roles/storage.objectUser,
+    # which would also let a leaked reader key create and overwrite
+    # objects, i.e. plant a delivery. Rendered as a provider-gcp-cloudplatform
+    # ProjectIAMCustomRole.
+    roleId: dsIngestObjectDeleter
+
+auditLogs:
+  bucket:
+    # -- A private bucket that receives the delivery bucket's Cloud Audit
+    # Logs (Data Access and Admin Activity) from a Logging sink, so
+    # schedule-ingest can ship them to Loki with the same reader key. The
+    # sink and the project's Data Access audit config are Ranma-Config's.
+    enabled: true
+    # -- Audit-log bucket name. Empty means `<bucket.name>-audit`.
+    name: ""
+    # -- Days to keep audit-log objects. 400 matches the SFTP delivery
+    # audit retention in Loki. (The reader only reads this bucket; it
+    # never deletes here.)
+    expirationDays: 400
+  # -- The Logging sink's writer identity (`serviceAccount:<email>`, from
+  # the sink's status), granted roles/storage.objectCreator on the
+  # audit-log bucket. Empty: no binding, and the sink can't write yet.
+  sinkWriterIdentity: ""
+
+usageAlerts:
+  # -- Cloud Monitoring alert policies on the delivery bucket's free
+  # Cloud Storage metrics (provider-gcp-monitoring AlertPolicy). Off: needs
+  # the monitoring provider and a notification channel, both Ranma's.
+  enabled: false
+  # -- Notification channel names (projects/<p>/notificationChannels/<id>).
+  # Required when enabled.
+  notificationChannels: []
+  # -- Alert when the bucket holds more bytes than this. Normal is at most
+  # one CIF zip (~78 MB) and a CORPUS file in transit.
+  totalBytes: 536870912
+  # -- Alert when the bucket holds more objects than this. Normal is 0-2.
+  objectCount: 20
+  # -- Alert when an hour's write requests (WriteObject, ComposeObject,
+  # RewriteObject) exceed this. Normal is a handful a day.
+  writeRequestsPerHour: 100
+  # -- Alert when an hour has more DeleteObject requests than this. Normal
+  # is the reader's one delete per delivery (lifecycle deletions are not
+  # requests).
+  deleteRequestsPerHour: 10
+  # -- Alert when an hour's received (uploaded) bytes exceed this. Normal
+  # is one ~78 MB zip a day.
+  receivedBytesPerHour: 536870912
+  # -- Alert when an hour's sent (downloaded) bytes exceed this. Normal is
+  # our one GET and the publisher's read-back and scan of each delivery.
+  sentBytesPerHour: 1073741824
 
 notifications:
-  sqs:
-    # -- Object-created events to an SQS queue that schedule-ingest
-    # long-polls (outbound HTTPS only), with a dead-letter queue. Off: the
-    # chosen design polls ListObjectVersions every few minutes, and at one
-    # CIF a day the queue saves minutes that schedule-reference's own
-    # 30-minute publish interval swallows (spec, "Learning of new objects").
+  pubsub:
+    # -- OBJECT_FINALIZE notifications to a Pub/Sub topic with a pull
+    # subscription that schedule-ingest pulls (outbound HTTPS only). Off:
+    # the chosen design polls the bucket every few minutes (spec §6). Needs
+    # gcp.projectNumber.
     enabled: false
-    # -- Main queue name.
-    queueName: ds-ingest-events
-    # -- Dead-letter queue name.
-    deadLetterQueueName: ds-ingest-events-dlq
-    # -- Events S3 sends. ObjectCreated covers Put, Post, Copy and
-    # CompleteMultipartUpload.
-    events:
-      - s3:ObjectCreated:*
-    # -- Seconds a received message stays hidden. Must exceed the longest
-    # ingest of one delivery (download ~78 MB, extract ~730 MB, check,
-    # POST: 1-2 minutes) with a wide margin; the consumer also extends it.
-    visibilityTimeoutSeconds: 900
-    # -- Long-poll wait, 0-20 seconds.
-    receiveWaitTimeSeconds: 20
-    # -- Seconds the main queue keeps an unreceived message (4 days).
-    messageRetentionSeconds: 345600
-    # -- Seconds the dead-letter queue keeps a message (14 days, the
-    # maximum).
-    deadLetterRetentionSeconds: 1209600
-    # -- Receives before a message moves to the dead-letter queue.
-    maxReceiveCount: 5
+    # -- Topic name.
+    topicName: ds-ingest-events
+    # -- Pull subscription name.
+    subscriptionName: ds-ingest-events-schedule-ingest
+    # -- Seconds a pulled message stays unacknowledged before redelivery.
+    # Must exceed one ingest (1-2 minutes); the consumer also extends it.
+    ackDeadlineSeconds: 600
+    # -- How long the subscription keeps unacknowledged messages.
+    messageRetentionDuration: 604800s

@@ -1,8 +1,8 @@
 {{/*
-Helpers for ds-ingest-bucket. ARNs are built from aws.accountId, aws.region
-and the names in values rather than read from ACK resource status: Helm
-renders every template before any resource exists, and the names are fixed,
-so the ARNs are known up front.
+Helpers for ds-ingest-bucket. Names and resource paths are built from the
+values rather than read from managed-resource status: Helm renders every
+template before anything exists in GCP, and the names are fixed, so they are
+known up front.
 */}}
 
 {{- define "ds-ingest-bucket.labels" -}}
@@ -15,64 +15,69 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- end }}
 {{- end }}
 
-{{/* ACK annotations every resource carries: the region it lives in. */}}
-{{- define "ds-ingest-bucket.ackAnnotations" -}}
-services.k8s.aws/region: {{ .Values.aws.region }}
+{{/* GCP labels for buckets, the topic and the subscription. */}}
+{{- define "ds-ingest-bucket.gcpLabels" -}}
+{{- $l := dict "managed-by" "ds-ingest-bucket" "purpose" "schedule-feed-ingest" }}
+{{- range $k, $v := .Values.labels }}
+{{- $_ := set $l $k (toString $v) }}
 {{- end }}
-
-{{/* ACK tag list ([{key, value}]) for buckets and IAM users. */}}
-{{- define "ds-ingest-bucket.tagSet" -}}
-{{- $tags := list (dict "key" "app.kubernetes.io/managed-by" "value" "ds-ingest-bucket") }}
-{{- range $k, $v := .Values.tags }}
-{{- $tags = append $tags (dict "key" $k "value" (toString $v)) }}
-{{- end }}
-{{- toYaml $tags }}
-{{- end }}
-
-{{/* ACK tag map ({key: value}) for queues. */}}
-{{- define "ds-ingest-bucket.tagMap" -}}
-{{- $tags := dict "app.kubernetes.io/managed-by" "ds-ingest-bucket" }}
-{{- range $k, $v := .Values.tags }}
-{{- $_ := set $tags $k (toString $v) }}
-{{- end }}
-{{- toYaml $tags }}
-{{- end }}
-
-{{- define "ds-ingest-bucket.logBucketName" -}}
-{{- .Values.accessLogs.bucketName | default (printf "%s-logs" .Values.bucket.name) }}
-{{- end }}
-
-{{- define "ds-ingest-bucket.bucketArn" -}}
-{{- printf "arn:%s:s3:::%s" .Values.aws.partition .Values.bucket.name }}
-{{- end }}
-
-{{- define "ds-ingest-bucket.logBucketArn" -}}
-{{- printf "arn:%s:s3:::%s" .Values.aws.partition (include "ds-ingest-bucket.logBucketName" .) }}
-{{- end }}
-
-{{/* ARN of an IAM user under iam.path. Call with (dict "root" $ "name" ...). */}}
-{{- define "ds-ingest-bucket.userArn" -}}
-{{- printf "arn:%s:iam::%s:user%s%s" .root.Values.aws.partition .root.Values.aws.accountId .root.Values.iam.path .name }}
-{{- end }}
-
-{{/* ARN of an SQS queue in this account and region. Call with (dict "root" $ "name" ...). */}}
-{{- define "ds-ingest-bucket.queueArn" -}}
-{{- printf "arn:%s:sqs:%s:%s:%s" .root.Values.aws.partition .root.Values.aws.region .root.Values.aws.accountId .name }}
+{{- toYaml $l }}
 {{- end }}
 
 {{/*
-A Deny statement for any request not over TLS 1.2 or later, on the given
-bucket ARN and its objects.
+The spec fields every managed resource except the buckets uses: the provider
+config and full management. IAM bindings must be fully managed so that
+removing a member from the values really revokes it in GCP; an orphaned
+binding would keep granting access.
 */}}
-{{- define "ds-ingest-bucket.denyInsecureTransport" -}}
-{{- $arn := . }}
-{{- $resources := list $arn (printf "%s/*" $arn) }}
-{{- list
-  (dict "Sid" "DenyInsecureTransport" "Effect" "Deny" "Principal" "*" "Action" "s3:*" "Resource" $resources
-    "Condition" (dict "Bool" (dict "aws:SecureTransport" "false")))
-  (dict "Sid" "DenyTlsBelow12" "Effect" "Deny" "Principal" "*" "Action" "s3:*" "Resource" $resources
-    "Condition" (dict "NumericLessThan" (dict "s3:TlsVersion" "1.2")))
-  | toJson }}
+{{- define "ds-ingest-bucket.managed" -}}
+providerConfigRef:
+  kind: {{ .Values.crossplane.providerConfigRef.kind }}
+  name: {{ .Values.crossplane.providerConfigRef.name }}
+managementPolicies: ["*"]
+{{- end }}
+
+{{/*
+The same for the two buckets, honouring crossplane.deletionPolicy: without
+`Delete`, removing the resource orphans the bucket and its data in GCP.
+*/}}
+{{- define "ds-ingest-bucket.managedBucket" -}}
+providerConfigRef:
+  kind: {{ .Values.crossplane.providerConfigRef.kind }}
+  name: {{ .Values.crossplane.providerConfigRef.name }}
+{{- if eq .Values.crossplane.deletionPolicy "Orphan" }}
+managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+{{- else }}
+managementPolicies: ["*"]
+{{- end }}
+{{- end }}
+
+{{- define "ds-ingest-bucket.auditBucketName" -}}
+{{- .Values.auditLogs.bucket.name | default (printf "%s-audit" .Values.bucket.name) }}
+{{- end }}
+
+{{- define "ds-ingest-bucket.deleteRoleName" -}}
+{{- printf "projects/%s/roles/%s" .Values.gcp.projectId .Values.reader.deleteRole.roleId }}
+{{- end }}
+
+{{- define "ds-ingest-bucket.topicPath" -}}
+{{- printf "projects/%s/topics/%s" .Values.gcp.projectId .Values.notifications.pubsub.topicName }}
+{{- end }}
+
+{{/*
+The bucket-privacy settings both buckets share: uniform bucket-level access
+(IAM only, no object ACLs), public access prevention enforced (allUsers and
+allAuthenticatedUsers can never be granted), no object retention (so the
+publisher's storage.objects.setRetention can't lock anything), and no
+force-destroy.
+*/}}
+{{- define "ds-ingest-bucket.privateBucket" -}}
+project: {{ .Values.gcp.projectId }}
+location: {{ .Values.gcp.location }}
+uniformBucketLevelAccess: true
+publicAccessPrevention: enforced
+enableObjectRetention: false
+forceDestroy: false
 {{- end }}
 
 {{/*
@@ -81,81 +86,88 @@ so a bad value fails `helm template` whichever file is rendered first.
 */}}
 {{- define "ds-ingest-bucket.validate" -}}
 {{- $v := .Values }}
-{{- if not (regexMatch "^[0-9]{12}$" (toString $v.aws.accountId)) }}
-{{- fail "aws.accountId must be the 12-digit AWS account id" }}
+{{- $saMember := "^serviceAccount:[a-z0-9][a-z0-9-]*@[a-z0-9][a-z0-9.-]*\\.gserviceaccount\\.com$" }}
+{{- $bucketName := "^[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]$" }}
+{{- if not (regexMatch "^[a-z][a-z0-9-]{4,28}[a-z0-9]$" (toString $v.gcp.projectId)) }}
+{{- fail "gcp.projectId must be the dedicated project's id (6-30 lowercase letters, digits and hyphens)" }}
 {{- end }}
-{{- if not (regexMatch "^[a-z]{2}(-[a-z]+)+-[0-9]$" $v.aws.region) }}
-{{- fail (printf "aws.region %q does not look like an AWS region" $v.aws.region) }}
+{{- if not (regexMatch "^[A-Z]+(-[A-Z]+[0-9]+)?$" $v.gcp.location) }}
+{{- fail (printf "gcp.location %q does not look like a Cloud Storage location (e.g. EUROPE-WEST2)" $v.gcp.location) }}
 {{- end }}
-{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$" $v.bucket.name) }}
-{{- fail "bucket.name must be 3-63 lowercase letters, digits or hyphens (no dots), starting and ending with a letter or digit" }}
+{{- if not (has $v.crossplane.deletionPolicy (list "Orphan" "Delete")) }}
+{{- fail "crossplane.deletionPolicy must be Orphan or Delete" }}
 {{- end }}
-{{- if and $v.accessLogs.enabled (not (regexMatch "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$" (include "ds-ingest-bucket.logBucketName" .))) }}
-{{- fail "the access-log bucket name (accessLogs.bucketName, or bucket.name + \"-logs\") must be 3-63 lowercase letters, digits or hyphens" }}
+{{- if not (regexMatch $bucketName $v.bucket.name) }}
+{{- fail "bucket.name must be 3-63 lowercase letters, digits, - or _ (no dots), starting and ending with a letter or digit" }}
 {{- end }}
-{{- if not (and (hasSuffix "/" $v.bucket.deliveryPrefix) (not (hasPrefix "/" $v.bucket.deliveryPrefix)) (gt (len $v.bucket.deliveryPrefix) 1)) }}
-{{- fail "bucket.deliveryPrefix must be non-empty, end in / and not start with /" }}
+{{- if and $v.auditLogs.bucket.enabled (not (regexMatch $bucketName (include "ds-ingest-bucket.auditBucketName" .))) }}
+{{- fail "the audit-log bucket name (auditLogs.bucket.name, or bucket.name + \"-audit\") must be 3-63 lowercase letters, digits, - or _" }}
 {{- end }}
-{{- if contains "*" $v.bucket.deliveryPrefix }}
-{{- fail "bucket.deliveryPrefix must not contain *" }}
+{{- $sd := int $v.bucket.softDeleteRetentionDays }}
+{{- if and (ne $sd 0) (or (lt $sd 7) (gt $sd 90)) }}
+{{- fail "bucket.softDeleteRetentionDays must be 0 (off) or 7-90, Cloud Storage's range" }}
 {{- end }}
-{{- if not (has $v.bucket.deletionPolicy (list "retain" "delete")) }}
-{{- fail "bucket.deletionPolicy must be retain or delete" }}
-{{- end }}
-{{- if not (has $v.bucket.versioning (list "Enabled" "Suspended")) }}
-{{- fail "bucket.versioning must be Enabled or Suspended" }}
-{{- end }}
-{{- if not (has $v.bucket.encryption.sseAlgorithm (list "AES256" "aws:kms")) }}
-{{- fail "bucket.encryption.sseAlgorithm must be AES256 or aws:kms" }}
-{{- end }}
-{{- if and (eq $v.bucket.encryption.sseAlgorithm "aws:kms") (not $v.bucket.encryption.kmsKeyId) }}
-{{- fail "bucket.encryption.kmsKeyId is required with aws:kms" }}
-{{- end }}
-{{- range $k := list "currentExpirationDays" "noncurrentExpirationDays" "abortIncompleteMultipartUploadDays" }}
+{{- range $k := list "deleteAfterDays" "abortIncompleteMultipartUploadDays" }}
 {{- if lt (int (index $v.bucket.lifecycle $k)) 1 }}
 {{- fail (printf "bucket.lifecycle.%s must be at least 1" $k) }}
 {{- end }}
 {{- end }}
-{{- if and $v.accessLogs.enabled (or (not (hasSuffix "/" $v.accessLogs.targetPrefix)) (hasPrefix "/" $v.accessLogs.targetPrefix)) }}
-{{- fail "accessLogs.targetPrefix must end in / and not start with /" }}
-{{- end }}
-{{- if not (regexMatch "^/([A-Za-z0-9+=,.@_-]+/)+$" $v.iam.path) }}
-{{- fail "iam.path must start and end with / (e.g. /ds-ingest/)" }}
-{{- end }}
-{{- if not (regexMatch "^arn:[a-z-]+:iam::[0-9]{12}:policy/.+$" $v.iam.permissionsBoundaryArn) }}
-{{- fail "iam.permissionsBoundaryArn must be the ARN of the boundary policy the bootstrap step created" }}
-{{- end }}
-{{- if not (has $v.writer.mode (list "iamUser" "crossAccount")) }}
-{{- fail "writer.mode must be iamUser or crossAccount" }}
-{{- end }}
-{{- if eq $v.writer.mode "crossAccount" }}
-{{- if not $v.writer.principalArns }}
-{{- fail "writer.principalArns is required in crossAccount mode" }}
-{{- end }}
-{{- range $v.writer.principalArns }}
-{{- if not (regexMatch "^arn:[a-z-]+:iam::[0-9]{12}:(root|role/.+|user/.+)$" .) }}
-{{- fail (printf "writer.principalArns: %q is not an IAM account, role or user ARN" .) }}
+{{- with $v.bucket.encryption.defaultKmsKeyName }}
+{{- if not (regexMatch "^projects/[^/]+/locations/[^/]+/keyRings/[^/]+/cryptoKeys/[^/]+$" .) }}
+{{- fail "bucket.encryption.defaultKmsKeyName must be a Cloud KMS key name, or empty for Google-managed encryption" }}
 {{- end }}
 {{- end }}
+{{- if not $v.publisher.members }}
+{{- fail "publisher.members is required: the publisher's service accounts (serviceAccount:<email>), set in Ranma-Config" }}
 {{- end }}
-{{- range $v.reader.allowedSourceCidrs }}
-{{- if not (regexMatch "^[0-9a-fA-F:.]+/[0-9]{1,3}$" .) }}
-{{- fail (printf "reader.allowedSourceCidrs: %q is not a CIDR" .) }}
+{{- range $v.publisher.members }}
+{{- if not (regexMatch $saMember .) }}
+{{- fail (printf "publisher.members: %q must be serviceAccount:<email> (allUsers, allAuthenticatedUsers, domain:, group: and user: are refused)" .) }}
 {{- end }}
 {{- end }}
-{{- if $v.notifications.sqs.enabled }}
-{{- $q := $v.notifications.sqs }}
-{{- if or (lt (int $q.receiveWaitTimeSeconds) 0) (gt (int $q.receiveWaitTimeSeconds) 20) }}
-{{- fail "notifications.sqs.receiveWaitTimeSeconds must be 0-20" }}
+{{- if not $v.publisher.roles }}
+{{- fail "publisher.roles must not be empty" }}
 {{- end }}
-{{- if or (lt (int $q.visibilityTimeoutSeconds) 300) (gt (int $q.visibilityTimeoutSeconds) 43200) }}
-{{- fail "notifications.sqs.visibilityTimeoutSeconds must be 300-43200 (an ingest takes 1-2 minutes)" }}
+{{- $refused := list "roles/storage.admin" "roles/storage.objectAdmin" "roles/storage.legacyBucketOwner" "roles/storage.legacyObjectOwner" }}
+{{- range $v.publisher.roles }}
+{{- if not (regexMatch "^roles/storage\\.[A-Za-z]+$" .) }}
+{{- fail (printf "publisher.roles: %q is not a predefined Cloud Storage role" .) }}
 {{- end }}
-{{- if lt (int $q.maxReceiveCount) 1 }}
-{{- fail "notifications.sqs.maxReceiveCount must be at least 1" }}
+{{- if has . $refused }}
+{{- fail (printf "publisher.roles: %q can change IAM or bucket settings and is refused" .) }}
 {{- end }}
-{{- if not $q.events }}
-{{- fail "notifications.sqs.events must not be empty" }}
+{{- end }}
+{{- if not (regexMatch $saMember $v.reader.member) }}
+{{- fail "reader.member is required: schedule-ingest's service account, as serviceAccount:<email>" }}
+{{- end }}
+{{- if not (regexMatch "^[a-zA-Z0-9_.]{3,64}$" $v.reader.deleteRole.roleId) }}
+{{- fail "reader.deleteRole.roleId must be 3-64 letters, digits, _ or ." }}
+{{- end }}
+{{- if has $v.reader.member $v.publisher.members }}
+{{- fail "reader.member must not also be a publisher member" }}
+{{- end }}
+{{- with $v.auditLogs.sinkWriterIdentity }}
+{{- if not (regexMatch $saMember .) }}
+{{- fail "auditLogs.sinkWriterIdentity must be serviceAccount:<email> (the sink's writer identity)" }}
+{{- end }}
+{{- end }}
+{{- if $v.usageAlerts.enabled }}
+{{- if not $v.usageAlerts.notificationChannels }}
+{{- fail "usageAlerts.notificationChannels is required with usageAlerts.enabled" }}
+{{- end }}
+{{- range $v.usageAlerts.notificationChannels }}
+{{- if not (regexMatch "^projects/[^/]+/notificationChannels/[0-9]+$" .) }}
+{{- fail (printf "usageAlerts.notificationChannels: %q is not a notification channel name" .) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $v.notifications.pubsub.enabled }}
+{{- if not (regexMatch "^[0-9]{6,20}$" (toString $v.gcp.projectNumber)) }}
+{{- fail "gcp.projectNumber is required with notifications.pubsub.enabled (it names the Cloud Storage service agent that publishes)" }}
+{{- end }}
+{{- $ack := int $v.notifications.pubsub.ackDeadlineSeconds }}
+{{- if or (lt $ack 120) (gt $ack 600) }}
+{{- fail "notifications.pubsub.ackDeadlineSeconds must be 120-600 (an ingest takes 1-2 minutes)" }}
 {{- end }}
 {{- end }}
 {{- end }}

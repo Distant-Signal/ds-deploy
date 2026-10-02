@@ -1,19 +1,19 @@
 {{- if .Values.enabled }}
-ds-ingest-bucket rendered ACK resources for bucket {{ .Values.bucket.name }} in {{ .Values.aws.region }}.
+ds-ingest-bucket rendered Crossplane managed resources for gs://{{ .Values.bucket.name }} in {{ .Values.gcp.location }} (project {{ .Values.gcp.projectId }}).
 
-Check they synced (ACK.ResourceSynced=True):
-  kubectl -n {{ .Release.Namespace }} get buckets.s3.services.k8s.aws,users.iam.services.k8s.aws{{ if .Values.notifications.sqs.enabled }},queues.sqs.services.k8s.aws{{ end }}
+Check they are ready (SYNCED and READY True):
+  kubectl -n {{ .Release.Namespace }} get buckets.storage.gcp.m.upbound.io,bucketiammembers.storage.gcp.m.upbound.io{{ if .Values.usageAlerts.enabled }},alertpolicies.monitoring.gcp.m.upbound.io{{ end }}{{ if .Values.notifications.pubsub.enabled }},topics.pubsub.gcp.m.upbound.io,subscriptions.pubsub.gcp.m.upbound.io{{ end }}
 
-ACK cannot mint access keys. Once the users exist, a person with the
-bootstrap profile creates them (README.md, "After install"):
-  - {{ .Values.reader.userName }}: seal into the distant-signal namespace as the
-    Secret named by scheduleFeed.bucket.existingSecret;
-{{- if eq .Values.writer.mode "iamUser" }}
-  - {{ .Values.writer.userName }}: enter in the Rail Data Marketplace destination form.
-{{- else }}
-  - no writer key: the bucket policy grants {{ join ", " .Values.writer.principalArns }}.
+The publisher needs no credential from us: its service accounts are bound
+on the bucket. Revoking it is removing them from publisher.members.
+
+The reader's key is created by hand and sealed in Ranma-Config
+(README.md, "After install"). Never commit or paste it unencrypted.
+{{- if and .Values.auditLogs.bucket.enabled (not .Values.auditLogs.sinkWriterIdentity) }}
+
+auditLogs.sinkWriterIdentity is empty: the audit-log sink can't write to
+gs://{{ include "ds-ingest-bucket.auditBucketName" . }} until it is set.
 {{- end }}
-Never commit or paste either key unencrypted.
 {{- else }}
 ds-ingest-bucket is disabled (enabled: false); nothing was rendered.
 {{- end }}

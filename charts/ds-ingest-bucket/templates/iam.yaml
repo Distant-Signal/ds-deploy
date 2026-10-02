@@ -1,0 +1,90 @@
+{{- /*
+Who may use the buckets: bucket-level IAM member bindings only
+(storage.gcp.m.upbound.io/v1beta1 BucketIAMMember), never project-level, and
+never authoritative (no BucketIAMPolicy, so a binding someone else adds is
+not silently removed, and this chart can't wipe the bucket's policy).
+
+- publisher.members x publisher.roles on the delivery bucket;
+- reader.member: roles/storage.objectViewer plus the delete-only custom
+  role (reader.deleteRole, a ProjectIAMCustomRole rendered here) on the
+  delivery bucket, and roles/storage.objectViewer on the audit-log bucket;
+- auditLogs.sinkWriterIdentity: roles/storage.objectCreator on the
+  audit-log bucket.
+
+Public access prevention (bucket.yaml) makes allUsers/allAuthenticatedUsers
+grants fail in GCP as well as at render time.
+*/}}
+{{- if .Values.enabled }}
+{{- include "ds-ingest-bucket.validate" . }}
+{{- $bindings := list }}
+{{- range $i, $m := .Values.publisher.members }}
+{{- range $.Values.publisher.roles }}
+{{- $bindings = append $bindings (dict
+  "name" (printf "publisher-%d-%s" $i (trimPrefix "roles/storage." . | lower))
+  "component" "publisher"
+  "bucket" $.Values.bucket.name "role" . "member" $m) }}
+{{- end }}
+{{- end }}
+{{- $bindings = append $bindings (dict
+  "name" "reader-objectviewer" "component" "reader"
+  "bucket" .Values.bucket.name "role" "roles/storage.objectViewer" "member" .Values.reader.member) }}
+{{- $bindings = append $bindings (dict
+  "name" "reader-objectdeleter" "component" "reader"
+  "bucket" .Values.bucket.name "role" (include "ds-ingest-bucket.deleteRoleName" .) "member" .Values.reader.member) }}
+{{- if .Values.auditLogs.bucket.enabled }}
+{{- $audit := include "ds-ingest-bucket.auditBucketName" . }}
+{{- $bindings = append $bindings (dict
+  "name" "reader-audit-objectviewer" "component" "reader"
+  "bucket" $audit "role" "roles/storage.objectViewer" "member" .Values.reader.member) }}
+{{- with .Values.auditLogs.sinkWriterIdentity }}
+{{- $bindings = append $bindings (dict
+  "name" "audit-sink-objectcreator" "component" "audit-sink"
+  "bucket" $audit "role" "roles/storage.objectCreator" "member" .) }}
+{{- end }}
+{{- end }}
+apiVersion: cloudplatform.gcp.m.upbound.io/v1beta1
+kind: ProjectIAMCustomRole
+metadata:
+  name: {{ printf "%s-reader-delete-role" .Release.Name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reader
+  annotations:
+    crossplane.io/external-name: {{ .Values.reader.deleteRole.roleId }}
+spec:
+  {{- include "ds-ingest-bucket.managed" . | nindent 2 }}
+  forProvider:
+    project: {{ .Values.gcp.projectId }}
+    title: ds-ingest object deleter
+    description: >-
+      Delete only. Bound on the schedule-feed landing bucket to
+      schedule-ingest's reader, which deletes each object after a verified
+      download (with ifGenerationMatch).
+    stage: GA
+    permissions:
+      - storage.objects.delete
+{{- range $b := $bindings }}
+---
+apiVersion: storage.gcp.m.upbound.io/v1beta1
+kind: BucketIAMMember
+metadata:
+  name: {{ printf "%s-%s" $.Release.Name $b.name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $b.component }}
+    {{- if has $b.component (list "publisher" "reader") }}
+    # Selector for Ranma's kill-switch watcher, which pauses these managed
+    # resources (crossplane.io/paused) after the GCP-side kill switch removes
+    # the bindings, so Crossplane doesn't re-create them (spec §5, "Usage
+    # limits"). The chart never sets crossplane.io/paused itself, so a Helm
+    # upgrade leaves a pause in place.
+    ds-ingest-bucket/kill-switch-group: {{ $b.component }}
+    {{- end }}
+spec:
+  {{- include "ds-ingest-bucket.managed" $ | nindent 2 }}
+  forProvider:
+    bucket: {{ $b.bucket }}
+    role: {{ $b.role }}
+    member: {{ $b.member }}
+{{- end }}
+{{- end }}

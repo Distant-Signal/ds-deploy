@@ -1,0 +1,36 @@
+{{- /*
+The audit-log bucket: the destination of Ranma-Config's Logging sink for the
+delivery bucket's Cloud Audit Logs (Data Access reads and writes, Admin
+Activity). schedule-ingest's audit tailer reads it with the reader's key and
+ships one line per entry to Loki. Same privacy settings as the delivery
+bucket; no versioning (the sink only ever creates objects); soft delete
+stays at Google's 7-day default. Only the sink's writer identity can create
+objects (iam.yaml).
+*/}}
+{{- if and .Values.enabled .Values.auditLogs.bucket.enabled }}
+{{- include "ds-ingest-bucket.validate" . }}
+apiVersion: storage.gcp.m.upbound.io/v1beta1
+kind: Bucket
+metadata:
+  name: {{ include "ds-ingest-bucket.auditBucketName" . }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-log-bucket
+  annotations:
+    crossplane.io/external-name: {{ include "ds-ingest-bucket.auditBucketName" . }}
+    helm.sh/resource-policy: keep
+spec:
+  {{- include "ds-ingest-bucket.managedBucket" . | nindent 2 }}
+  forProvider:
+    {{- include "ds-ingest-bucket.privateBucket" . | nindent 4 }}
+    storageClass: STANDARD
+    softDeletePolicy:
+      retentionDurationSeconds: 604800
+    lifecycleRule:
+      - action:
+          type: Delete
+        condition:
+          age: {{ int .Values.auditLogs.bucket.expirationDays }}
+    labels:
+      {{- include "ds-ingest-bucket.gcpLabels" . | nindent 6 }}
+{{- end }}

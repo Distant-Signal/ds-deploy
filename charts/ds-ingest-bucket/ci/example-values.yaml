@@ -1,10 +1,17 @@
 # Render-test values for CI (helm lint/template and
-# scripts/check-ingest-bucket-chart.py). 123456789012 is AWS's documentation
-# example account; nothing here names a real account, bucket or principal.
+# scripts/check-ingest-bucket-chart.py). Every identifier is an obvious
+# placeholder: nothing here names a real project, bucket or service account
+# (decision D7). The concrete values live in Ranma-Config.
 enabled: true
-aws:
-  accountId: "123456789012"
+gcp:
+  projectId: example-project
 bucket:
   name: example-ds-ingest
-iam:
-  permissionsBoundaryArn: arn:aws:iam::123456789012:policy/ds-ingest/ds-ingest-boundary
+publisher:
+  members:
+    - serviceAccount:publisher@example-publisher.iam.gserviceaccount.com
+    - serviceAccount:scanner@example-publisher.iam.gserviceaccount.com
+reader:
+  member: serviceAccount:reader@example-project.iam.gserviceaccount.com
+auditLogs:
+  sinkWriterIdentity: serviceAccount:audit-sink@example-project.iam.gserviceaccount.com

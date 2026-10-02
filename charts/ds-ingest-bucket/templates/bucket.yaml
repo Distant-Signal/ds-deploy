@@ -1,49 +1,19 @@
 {{- /*
-The delivery bucket the Rail Data Marketplace pushes into. Private (all four
-Block Public Access switches, ACLs disabled by BucketOwnerEnforced), TLS 1.2+
-only, SSE by default, versioned, with lifecycle expiry instead of deletes by
-the reader. ACK s3 controller kind: s3.services.k8s.aws/v1alpha1 Bucket.
+The delivery bucket the publisher pushes into, dedicated to timetable and
+CORPUS ingest (D9). Private (uniform bucket-level access, public access
+prevention enforced), unversioned, with a short soft delete. Data is only in
+transit here: schedule-ingest deletes each object once it holds a verified
+local copy, and a lifecycle rule is the backstop for a reader outage. Crossplane provider-gcp-storage kind:
+storage.gcp.m.upbound.io/v1beta1 Bucket (namespaced, Crossplane v2).
+
+No `logging` block: Cloud Storage usage logs carry no caller identity. The
+object-level audit trail is Cloud Audit Logs Data Access, routed by
+Ranma-Config's sink into the audit-log bucket (audit-bucket.yaml).
 */}}
 {{- if .Values.enabled }}
 {{- include "ds-ingest-bucket.validate" . }}
-{{- $bucketArn := include "ds-ingest-bucket.bucketArn" . }}
-{{- $prefix := .Values.bucket.deliveryPrefix }}
-{{- $statements := include "ds-ingest-bucket.denyInsecureTransport" $bucketArn | fromJsonArray }}
-{{- if eq .Values.writer.mode "crossAccount" }}
-{{- $writerActions := list "s3:PutObject" }}
-{{- if .Values.writer.allowAbortMultipartUpload }}
-{{- $writerActions = append $writerActions "s3:AbortMultipartUpload" }}
-{{- end }}
-{{- $statements = append $statements (dict
-  "Sid" "PublisherPutDeliveries"
-  "Effect" "Allow"
-  "Principal" (dict "AWS" .Values.writer.principalArns)
-  "Action" $writerActions
-  "Resource" (printf "%s/%s*" $bucketArn $prefix)) }}
-{{- if .Values.writer.allowList }}
-{{- $statements = append $statements (dict
-  "Sid" "PublisherListDeliveryPrefix"
-  "Effect" "Allow"
-  "Principal" (dict "AWS" .Values.writer.principalArns)
-  "Action" "s3:ListBucket"
-  "Resource" $bucketArn
-  "Condition" (dict "StringLike" (dict "s3:prefix" (printf "%s*" $prefix)))) }}
-{{- end }}
-{{- end }}
-{{- with .Values.reader.allowedSourceCidrs }}
-{{- $statements = append $statements (dict
-  "Sid" "ReaderOnlyFromAllowedSources"
-  "Effect" "Deny"
-  "Principal" "*"
-  "Action" "s3:*"
-  "Resource" (list $bucketArn (printf "%s/*" $bucketArn))
-  "Condition" (dict
-    "ArnEquals" (dict "aws:PrincipalArn" (include "ds-ingest-bucket.userArn" (dict "root" $ "name" $.Values.reader.userName)))
-    "NotIpAddress" (dict "aws:SourceIp" .))) }}
-{{- end }}
-{{- $policy := dict "Version" "2012-10-17" "Statement" $statements }}
 {{- $lc := .Values.bucket.lifecycle }}
-apiVersion: s3.services.k8s.aws/v1alpha1
+apiVersion: storage.gcp.m.upbound.io/v1beta1
 kind: Bucket
 metadata:
   name: {{ .Values.bucket.name }}
@@ -51,82 +21,36 @@ metadata:
     {{- include "ds-ingest-bucket.labels" . | nindent 4 }}
     app.kubernetes.io/component: delivery-bucket
   annotations:
-    {{- include "ds-ingest-bucket.ackAnnotations" . | nindent 4 }}
-    services.k8s.aws/deletion-policy: {{ .Values.bucket.deletionPolicy }}
-    # helm uninstall leaves the custom resource, so the bucket (and the
-    # deliveries in it) survive an accidental uninstall whatever the ACK
-    # deletion policy says.
+    crossplane.io/external-name: {{ .Values.bucket.name }}
+    # helm uninstall leaves the managed resource, so the bucket (and the
+    # deliveries in it) survive an accidental uninstall whatever the
+    # management policies say.
     helm.sh/resource-policy: keep
 spec:
-  name: {{ .Values.bucket.name }}
-  {{- if ne .Values.aws.region "us-east-1" }}
-  createBucketConfiguration:
-    locationConstraint: {{ .Values.aws.region }}
-  {{- end }}
-  publicAccessBlock:
-    blockPublicACLs: true
-    blockPublicPolicy: true
-    ignorePublicACLs: true
-    restrictPublicBuckets: true
-  ownershipControls:
-    rules:
-      # ACLs disabled; the bucket owner owns every object, including ones a
-      # cross-account publisher writes.
-      - objectOwnership: BucketOwnerEnforced
-  encryption:
-    rules:
-      - applyServerSideEncryptionByDefault:
-          sseAlgorithm: {{ .Values.bucket.encryption.sseAlgorithm | quote }}
-          {{- if eq .Values.bucket.encryption.sseAlgorithm "aws:kms" }}
-          kmsMasterKeyID: {{ .Values.bucket.encryption.kmsKeyId | quote }}
-          {{- end }}
-        bucketKeyEnabled: {{ .Values.bucket.encryption.bucketKeyEnabled }}
-  versioning:
-    status: {{ .Values.bucket.versioning }}
-  lifecycle:
-    rules:
-      - id: expire-deliveries
-        status: Enabled
-        filter:
-          prefix: {{ $prefix | quote }}
-        expiration:
-          days: {{ int $lc.currentExpirationDays }}
-        noncurrentVersionExpiration:
-          noncurrentDays: {{ int $lc.noncurrentExpirationDays }}
-        abortIncompleteMultipartUpload:
-          daysAfterInitiation: {{ int $lc.abortIncompleteMultipartUploadDays }}
-      {{- if eq .Values.bucket.versioning "Enabled" }}
-      # A delete marker with no versions behind it is removed. S3 refuses
-      # expiredObjectDeleteMarker in the same rule as `days`, hence a rule
-      # of its own.
-      - id: remove-expired-delete-markers
-        status: Enabled
-        filter:
-          prefix: {{ $prefix | quote }}
-        expiration:
-          expiredObjectDeleteMarker: true
-      {{- end }}
-  policy: {{ $policy | toJson | squote }}
-  {{- if .Values.accessLogs.enabled }}
-  logging:
-    loggingEnabled:
-      targetBucket: {{ include "ds-ingest-bucket.logBucketName" . }}
-      targetPrefix: {{ .Values.accessLogs.targetPrefix | quote }}
-  {{- end }}
-  {{- if .Values.notifications.sqs.enabled }}
-  notification:
-    queueConfigurations:
-      - id: ds-ingest-object-created
-        queueARN: {{ include "ds-ingest-bucket.queueArn" (dict "root" . "name" .Values.notifications.sqs.queueName) }}
-        events:
-          {{- toYaml .Values.notifications.sqs.events | nindent 10 }}
-        filter:
-          key:
-            filterRules:
-              - name: prefix
-                value: {{ $prefix | quote }}
-  {{- end }}
-  tagging:
-    tagSet:
-      {{- include "ds-ingest-bucket.tagSet" . | nindent 6 }}
+  {{- include "ds-ingest-bucket.managedBucket" . | nindent 2 }}
+  forProvider:
+    {{- include "ds-ingest-bucket.privateBucket" . | nindent 4 }}
+    storageClass: {{ .Values.bucket.storageClass }}
+    # Off: the bucket holds data only in transit (spec §5).
+    versioning:
+      enabled: false
+    softDeletePolicy:
+      retentionDurationSeconds: {{ mul (int .Values.bucket.softDeleteRetentionDays) 86400 }}
+    {{- with .Values.bucket.encryption.defaultKmsKeyName }}
+    encryption:
+      defaultKmsKeyName: {{ . }}
+    {{- end }}
+    lifecycleRule:
+      # Backstop for a reader outage: schedule-ingest normally deletes each
+      # object minutes after a verified download.
+      - action:
+          type: Delete
+        condition:
+          age: {{ int $lc.deleteAfterDays }}
+      - action:
+          type: AbortIncompleteMultipartUpload
+        condition:
+          age: {{ int $lc.abortIncompleteMultipartUploadDays }}
+    labels:
+      {{- include "ds-ingest-bucket.gcpLabels" . | nindent 6 }}
 {{- end }}

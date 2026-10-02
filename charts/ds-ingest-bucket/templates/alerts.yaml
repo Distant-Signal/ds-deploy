@@ -1,0 +1,72 @@
+{{- /*
+Usage alerts (usageAlerts.enabled, off by default): Cloud Monitoring alert
+policies on the delivery bucket's own Cloud Storage metrics, which are free.
+They are the blast-radius tripwires that IAM can't provide: IAM can't cap an
+upload's size, a request rate or egress (spec §5, "Usage limits"). The $5
+budget (Ranma-Config) is the backstop. Kind:
+monitoring.gcp.m.upbound.io/v1beta1 AlertPolicy.
+*/}}
+{{- if and .Values.enabled .Values.usageAlerts.enabled }}
+{{- include "ds-ingest-bucket.validate" . }}
+{{- $a := .Values.usageAlerts }}
+{{- $res := printf "resource.type=\"gcs_bucket\" AND resource.label.bucket_name=\"%s\"" .Values.bucket.name }}
+{{- $policies := list
+  (dict "name" "total-bytes" "display" "bucket size"
+    "filter" (printf "metric.type=\"storage.googleapis.com/storage/total_bytes\" AND %s" $res)
+    "aligner" "ALIGN_MAX" "threshold" $a.totalBytes)
+  (dict "name" "object-count" "display" "object count"
+    "filter" (printf "metric.type=\"storage.googleapis.com/storage/object_count\" AND %s" $res)
+    "aligner" "ALIGN_MAX" "threshold" $a.objectCount)
+  (dict "name" "write-requests" "display" "write requests per hour"
+    "filter" (printf "metric.type=\"storage.googleapis.com/api/request_count\" AND %s AND metric.label.method=monitoring.regex.full_match(\"WriteObject|ComposeObject|RewriteObject\")" $res)
+    "aligner" "ALIGN_SUM" "threshold" $a.writeRequestsPerHour)
+  (dict "name" "delete-requests" "display" "delete requests per hour"
+    "filter" (printf "metric.type=\"storage.googleapis.com/api/request_count\" AND %s AND metric.label.method=\"DeleteObject\"" $res)
+    "aligner" "ALIGN_SUM" "threshold" $a.deleteRequestsPerHour)
+  (dict "name" "received-bytes" "display" "uploaded bytes per hour"
+    "filter" (printf "metric.type=\"storage.googleapis.com/network/received_bytes_count\" AND %s" $res)
+    "aligner" "ALIGN_SUM" "threshold" $a.receivedBytesPerHour)
+  (dict "name" "sent-bytes" "display" "downloaded bytes per hour"
+    "filter" (printf "metric.type=\"storage.googleapis.com/network/sent_bytes_count\" AND %s" $res)
+    "aligner" "ALIGN_SUM" "threshold" $a.sentBytesPerHour) }}
+{{- range $i, $p := $policies }}
+{{- if $i }}
+---
+{{- end }}
+apiVersion: monitoring.gcp.m.upbound.io/v1beta1
+kind: AlertPolicy
+metadata:
+  name: {{ printf "%s-%s" $.Release.Name $p.name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: usage-alerts
+spec:
+  {{- include "ds-ingest-bucket.managed" $ | nindent 2 }}
+  forProvider:
+    project: {{ $.Values.gcp.projectId }}
+    displayName: {{ printf "ds-ingest %s: %s" $.Values.bucket.name $p.display | quote }}
+    combiner: OR
+    notificationChannels:
+      {{- toYaml $a.notificationChannels | nindent 6 }}
+    documentation:
+      - content: >-
+          The schedule-feed landing bucket {{ $.Values.bucket.name }} passed its
+          {{ $p.display }} limit. It holds only timetable and CORPUS
+          deliveries, so this means a looping reader, a runaway publisher
+          or a misused identity. Runbook: docs/schedule-feed-bucket.md.
+        mimeType: text/markdown
+    conditions:
+      - displayName: {{ printf "%s above %d" $p.display (int64 $p.threshold) | quote }}
+        conditionThreshold:
+          filter: {{ $p.filter | quote }}
+          comparison: COMPARISON_GT
+          thresholdValue: {{ int64 $p.threshold }}
+          duration: 0s
+          aggregations:
+            - alignmentPeriod: 3600s
+              perSeriesAligner: {{ $p.aligner }}
+              crossSeriesReducer: REDUCE_SUM
+    userLabels:
+      {{- include "ds-ingest-bucket.gcpLabels" $ | nindent 6 }}
+{{- end }}
+{{- end }}
