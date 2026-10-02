@@ -1,0 +1,19 @@
+{{- if .Values.enabled }}
+ds-ingest-bucket rendered ACK resources for bucket {{ .Values.bucket.name }} in {{ .Values.aws.region }}.
+
+Check they synced (ACK.ResourceSynced=True):
+  kubectl -n {{ .Release.Namespace }} get buckets.s3.services.k8s.aws,users.iam.services.k8s.aws{{ if .Values.notifications.sqs.enabled }},queues.sqs.services.k8s.aws{{ end }}
+
+ACK cannot mint access keys. Once the users exist, a person with the
+bootstrap profile creates them (README.md, "After install"):
+  - {{ .Values.reader.userName }}: seal into the distant-signal namespace as the
+    Secret named by scheduleFeed.bucket.existingSecret;
+{{- if eq .Values.writer.mode "iamUser" }}
+  - {{ .Values.writer.userName }}: enter in the Rail Data Marketplace destination form.
+{{- else }}
+  - no writer key: the bucket policy grants {{ join ", " .Values.writer.principalArns }}.
+{{- end }}
+Never commit or paste either key unencrypted.
+{{- else }}
+ds-ingest-bucket is disabled (enabled: false); nothing was rendered.
+{{- end }}

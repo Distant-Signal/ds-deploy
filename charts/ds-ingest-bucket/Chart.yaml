@@ -1,0 +1,29 @@
+apiVersion: v2
+name: ds-ingest-bucket
+description: >-
+  The AWS landing zone for Distant Signal's schedule feed: an S3 bucket the
+  Rail Data Marketplace pushes the CIF timetable and CORPUS files into, its
+  access-log bucket, the IAM users for the publisher (write-only) and for
+  schedule-ingest (read-only), and an optional SQS queue for object-created
+  events. Renders AWS Controllers for Kubernetes (ACK) custom resources, so
+  installing it needs the ACK s3, iam (and, for notifications, sqs)
+  controllers and their CRDs. `helm template` and `helm lint` work without
+  them. Off by default (`enabled: false`).
+  Design: docs/superpowers/specs/2026-10-02-schedule-feed-s3-landing-design.md.
+type: application
+
+# Bump by hand for any template/values change, as charts/distant-signal does.
+version: 0.1.0
+
+# Not an application image: the chart deploys no workload. Kept at the
+# version of the design it implements.
+appVersion: "0.1.0"
+
+kubeVersion: ">=1.23.0-0"
+
+home: https://github.com/FasterSpeeding/Distant-Signal
+sources:
+  - https://github.com/FasterSpeeding/Distant-Signal
+
+# No dependencies: the ACK controllers are cluster components owned by
+# Ranma-Config (one HelmRelease each), not subcharts of this chart.

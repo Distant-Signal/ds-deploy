@@ -1,0 +1,10 @@
+# Render-test values for CI (helm lint/template and
+# scripts/check-ingest-bucket-chart.py). 123456789012 is AWS's documentation
+# example account; nothing here names a real account, bucket or principal.
+enabled: true
+aws:
+  accountId: "123456789012"
+bucket:
+  name: example-ds-ingest
+iam:
+  permissionsBoundaryArn: arn:aws:iam::123456789012:policy/ds-ingest/ds-ingest-boundary

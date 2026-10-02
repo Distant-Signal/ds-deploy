@@ -1,0 +1,171 @@
+# Values for ds-ingest-bucket: the AWS S3 landing zone for the schedule
+# feed's bucket source, which runs alongside (or instead of) the schedulefeed
+# SFTP receiver. Every resource is an ACK (AWS Controllers for
+# Kubernetes) custom resource; the ACK s3 and iam controllers (and sqs, with
+# notifications.sqs.enabled) reconcile them into AWS. See README.md and
+# docs/superpowers/specs/2026-10-02-schedule-feed-s3-landing-design.md.
+#
+# Nothing here is a secret. Access keys are never rendered by this chart:
+# ACK's iam controller cannot mint them (it has no AccessKey kind), so a
+# person creates them once and seals them in Ranma-Config (README.md,
+# "After install").
+
+# -- Render anything at all. Off by default: the chart is not deployed
+# anywhere until the adoption plan's step 3.
+enabled: false
+
+aws:
+  # -- The 12-digit AWS account that owns every resource. Required when
+  # enabled. Used to build ARNs (ACK resources do not export them in a form
+  # one template can read from another).
+  accountId: ""
+  # -- Region of every resource, set per resource through the
+  # `services.k8s.aws/region` annotation. eu-west-2 (London): closest to
+  # the publisher and to the node, and egress from it falls in AWS's
+  # account-wide 100 GB/month free allowance.
+  region: eu-west-2
+  # -- ARN partition. Only `aws` has been considered.
+  partition: aws
+
+# -- Labels added to every rendered resource.
+commonLabels: {}
+
+# -- Tags added to every AWS resource that takes tags (buckets, queues,
+# users), on top of `app.kubernetes.io/managed-by=ds-ingest-bucket`.
+tags: {}
+
+bucket:
+  # -- Globally unique S3 bucket name. Required when enabled. 3-63
+  # characters, lowercase letters, digits and hyphens (no dots: a dotted
+  # name breaks virtual-hosted TLS).
+  name: ""
+  # -- ACK deletion policy: `retain` keeps the bucket in AWS when the custom
+  # resource is deleted (helm uninstall, a namespace delete), `delete`
+  # removes it (only if empty). The chart also sets
+  # `helm.sh/resource-policy: keep` on both buckets.
+  deletionPolicy: retain
+  # -- Key prefix the publisher writes under. Both IAM policies, the
+  # lifecycle rule and the event filter are scoped to it. Must end in `/`
+  # and must not start with one.
+  deliveryPrefix: rdm/
+  # -- `Enabled` or `Suspended`. Enabled (the default) lets schedule-ingest
+  # pin each delivery by version id, keeps an overwritten delivery for
+  # `lifecycle.noncurrentExpirationDays` (forensics after a leaked writer
+  # key), and makes "delete exactly the version I ingested" possible.
+  versioning: Enabled
+  encryption:
+    # -- `AES256` (SSE-S3, the default) or `aws:kms`. SSE-S3 costs nothing
+    # and needs no KMS grants for a cross-account writer; a customer
+    # managed key adds $1/month and a key policy for the publisher.
+    sseAlgorithm: AES256
+    # -- KMS key ARN, only with `aws:kms`.
+    kmsKeyId: ""
+    # -- S3 Bucket Key (fewer KMS calls). Only matters with `aws:kms`.
+    bucketKeyEnabled: true
+  lifecycle:
+    # -- Days after which the current version of a delivery expires (a
+    # delete marker replaces it). 14 keeps the last CIF for two weeks if the
+    # publisher stops, and a CORPUS file for two weeks after its monthly
+    # push; schedule-ingest has its own copy long before then.
+    currentExpirationDays: 14
+    # -- Days a version stays after a newer upload replaces it. 3 matches
+    # schedule-ingest's `retentionKeepDeliveries: 3`.
+    noncurrentExpirationDays: 3
+    # -- Days before an unfinished multipart upload is aborted and its parts
+    # deleted.
+    abortIncompleteMultipartUploadDays: 1
+
+accessLogs:
+  # -- S3 server access logging for the delivery bucket into a second,
+  # private bucket. The bucket's counterpart to SFTPGo's login/upload lines:
+  # each record has the requester ARN, source IP, operation, key, status
+  # and bytes. Best-effort delivery, usually within an hour.
+  enabled: true
+  # -- Log bucket name. Empty means `<bucket.name>-logs`.
+  bucketName: ""
+  # -- Key prefix inside the log bucket.
+  targetPrefix: s3-access/
+  # -- Days to keep access-log objects. 400 matches the SFTP delivery audit
+  # retention in Loki (Ranma-Config sftp-audit-observability.md).
+  expirationDays: 400
+
+iam:
+  # -- IAM path for both users. The ACK iam controller's own policy only
+  # allows users under this path, so it cannot touch any other identity.
+  path: /ds-ingest/
+  # -- ARN of the permissions boundary policy put on both users. Required
+  # when enabled: the controller's policy refuses CreateUser without it,
+  # which is what stops a compromised controller from minting an
+  # administrator. Created once by the bootstrap step (spec, "Controller
+  # credentials"), never by this chart.
+  permissionsBoundaryArn: ""
+
+writer:
+  # -- How the publisher authenticates. `iamUser`: this chart creates an
+  # IAM user with PutObject on the delivery prefix only, and a person mints
+  # its access key and enters it in the RDM destination form.
+  # `crossAccount`: the bucket policy grants `principalArns` (the
+  # publisher's own AWS role or account) PutObject on the prefix and no IAM
+  # user is created. Which one RDM supports is an open question (spec,
+  # "Open questions").
+  mode: iamUser
+  # -- IAM user name in `iamUser` mode.
+  userName: ds-ingest-rdm-writer
+  # -- Principals granted PutObject in `crossAccount` mode, e.g.
+  # arn:aws:iam::111122223333:role/rdm-delivery. Required in that mode.
+  principalArns: []
+  # -- Also grant ListBucket on the delivery prefix. Off: SFTPGo's logs
+  # showed DTD's client uploading straight to the final name. Turn on only
+  # if RDM's destination check needs it.
+  allowList: false
+  # -- Grant AbortMultipartUpload on the prefix, so a client that gives up
+  # on a multipart upload can clean it up (the lifecycle rule does it after
+  # a day anyway).
+  allowAbortMultipartUpload: true
+
+reader:
+  # -- IAM user schedule-ingest signs as. Its key is sealed into the
+  # distant-signal namespace (README.md, "After install").
+  userName: ds-ingest-reader
+  # -- Grant DeleteObject/DeleteObjectVersion on the delivery prefix. Off:
+  # the lifecycle rules remove deliveries, so the reader never needs to
+  # delete, and a stolen reader key cannot destroy an unprocessed one.
+  allowDelete: false
+  # -- Also grant read on the access-log bucket's prefix, for the
+  # schedule-ingest access-log tailer that ships audit lines to Loki.
+  readAccessLogs: true
+  # -- Source CIDRs the reader key is restricted to (a bucket-policy Deny
+  # for any other source IP), e.g. the node's public egress address as a
+  # /32. Empty: no restriction. Set it once the node's egress address is
+  # known to be stable.
+  allowedSourceCidrs: []
+
+notifications:
+  sqs:
+    # -- Object-created events to an SQS queue that schedule-ingest
+    # long-polls (outbound HTTPS only), with a dead-letter queue. Off: the
+    # chosen design polls ListObjectVersions every few minutes, and at one
+    # CIF a day the queue saves minutes that schedule-reference's own
+    # 30-minute publish interval swallows (spec, "Learning of new objects").
+    enabled: false
+    # -- Main queue name.
+    queueName: ds-ingest-events
+    # -- Dead-letter queue name.
+    deadLetterQueueName: ds-ingest-events-dlq
+    # -- Events S3 sends. ObjectCreated covers Put, Post, Copy and
+    # CompleteMultipartUpload.
+    events:
+      - s3:ObjectCreated:*
+    # -- Seconds a received message stays hidden. Must exceed the longest
+    # ingest of one delivery (download ~78 MB, extract ~730 MB, check,
+    # POST: 1-2 minutes) with a wide margin; the consumer also extends it.
+    visibilityTimeoutSeconds: 900
+    # -- Long-poll wait, 0-20 seconds.
+    receiveWaitTimeSeconds: 20
+    # -- Seconds the main queue keeps an unreceived message (4 days).
+    messageRetentionSeconds: 345600
+    # -- Seconds the dead-letter queue keeps a message (14 days, the
+    # maximum).
+    deadLetterRetentionSeconds: 1209600
+    # -- Receives before a message moves to the dead-letter queue.
+    maxReceiveCount: 5

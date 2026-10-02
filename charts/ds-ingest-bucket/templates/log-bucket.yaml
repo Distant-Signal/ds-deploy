@@ -1,0 +1,64 @@
+{{- /*
+Target of the delivery bucket's S3 server access logs: the audit trail that
+is the counterpart of SFTPGo's login and upload lines. Only the S3 logging service may
+write here, and only for the delivery bucket in this account (the
+aws:SourceArn/aws:SourceAccount conditions stop another bucket from logging
+into it). Server access logging needs SSE-S3 on the target, so this bucket
+always uses AES256 whatever bucket.encryption says.
+*/}}
+{{- if and .Values.enabled .Values.accessLogs.enabled }}
+{{- include "ds-ingest-bucket.validate" . }}
+{{- $logArn := include "ds-ingest-bucket.logBucketArn" . }}
+{{- $statements := include "ds-ingest-bucket.denyInsecureTransport" $logArn | fromJsonArray }}
+{{- $statements = append $statements (dict
+  "Sid" "S3ServerAccessLogsFromDeliveryBucket"
+  "Effect" "Allow"
+  "Principal" (dict "Service" "logging.s3.amazonaws.com")
+  "Action" "s3:PutObject"
+  "Resource" (printf "%s/%s*" $logArn .Values.accessLogs.targetPrefix)
+  "Condition" (dict
+    "ArnLike" (dict "aws:SourceArn" (include "ds-ingest-bucket.bucketArn" .))
+    "StringEquals" (dict "aws:SourceAccount" (toString .Values.aws.accountId)))) }}
+{{- $policy := dict "Version" "2012-10-17" "Statement" $statements }}
+apiVersion: s3.services.k8s.aws/v1alpha1
+kind: Bucket
+metadata:
+  name: {{ include "ds-ingest-bucket.logBucketName" . }}
+  labels:
+    {{- include "ds-ingest-bucket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: access-log-bucket
+  annotations:
+    {{- include "ds-ingest-bucket.ackAnnotations" . | nindent 4 }}
+    services.k8s.aws/deletion-policy: {{ .Values.bucket.deletionPolicy }}
+    helm.sh/resource-policy: keep
+spec:
+  name: {{ include "ds-ingest-bucket.logBucketName" . }}
+  {{- if ne .Values.aws.region "us-east-1" }}
+  createBucketConfiguration:
+    locationConstraint: {{ .Values.aws.region }}
+  {{- end }}
+  publicAccessBlock:
+    blockPublicACLs: true
+    blockPublicPolicy: true
+    ignorePublicACLs: true
+    restrictPublicBuckets: true
+  ownershipControls:
+    rules:
+      - objectOwnership: BucketOwnerEnforced
+  encryption:
+    rules:
+      - applyServerSideEncryptionByDefault:
+          sseAlgorithm: AES256
+  lifecycle:
+    rules:
+      - id: expire-access-logs
+        status: Enabled
+        filter:
+          prefix: {{ .Values.accessLogs.targetPrefix | quote }}
+        expiration:
+          days: {{ int .Values.accessLogs.expirationDays }}
+  policy: {{ $policy | toJson | squote }}
+  tagging:
+    tagSet:
+      {{- include "ds-ingest-bucket.tagSet" . | nindent 6 }}
+{{- end }}
