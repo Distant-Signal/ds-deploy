@@ -1719,7 +1719,8 @@ aggregator:
     mode: "off"
     # -- Lines enforce may change: comma list, or "*" for every
     # full-coverage-enabled line (fullCoverageEnabledDefault is true, so
-    # that is every line). EMPTY by default: nothing is enforced until the
+    # that is every catalogue line; users' custom lines never take part in
+    # full coverage). EMPTY by default: nothing is enforced until the
     # pilot lines are named (pick ~5 of different volumes from
     # `compare_full_coverage --windows --all-lines`).
     enforceLines: ""
@@ -2492,10 +2493,17 @@ fullCoverageConsumer:
   # 381,492 KB (~373 MiB) with a production-sized population (243 lines,
   # ~171k uid memberships per date) plus a startup replay of a full rail
   # day (1M stream entries). The 1Gi limit keeps well over 1.5x that peak.
+  #
+  # With windowedStats.enabled, the 2026-09-29..10-02 shadow run measured a
+  # 430-570 MiB working set, bounded and reset at each rail-day rollover
+  # (accepted by the user 2026-10-02; the design's resource target is now
+  # ~650 MiB). The request covers that target so the scheduler does not
+  # place the pod on a node that cannot hold its normal working set; the
+  # 1Gi limit is unchanged.
   resources:
     requests:
       cpu: 200m
-      memory: 512Mi
+      memory: 640Mi
     limits:
       memory: 1Gi
   nodeSelector: {}

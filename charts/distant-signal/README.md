@@ -728,7 +728,10 @@ consumes as its group, so a restart no longer corrupts that day's stats. A day
 it cannot replay in full (its start already trimmed) is
 marked `partial`. The measured startup peak with a production-sized population
 and a full day's stream is about 373 MiB, well inside
-`fullCoverageConsumer.resources.limits.memory`. See
+`fullCoverageConsumer.resources.limits.memory`. With
+`fullCoverageConsumer.windowedStats.enabled` the steady working set is
+430-570 MiB (measured in shadow, 2026-10-02), bounded and reset at each
+rail-day rollover; the request is sized for a ~650 MiB target. See
 [docs/full-coverage-consumer.md](../../docs/full-coverage-consumer.md) for the
 startup sequence, partial days, and the metrics to alert on
 (`distant_signal_full_coverage_consumer_startup_complete`,
@@ -1798,7 +1801,7 @@ its own.
 | `fullCoverageConsumer.windowedStats.feedStaleSecs` | `300` | A newest consumed movement older than this also marks the write `feed_stale`. |
 | `fullCoverageConsumer.logLevel` | `info` | `RUST_LOG` value. |
 | `fullCoverageConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
-| `fullCoverageConsumer.resources` | requests `200m`/`512Mi`, limit `1Gi` | Container resource requests/limits. Holds per-line population caches, so it scales with the line catalogue. |
+| `fullCoverageConsumer.resources` | requests `200m`/`640Mi`, limit `1Gi` | Container resource requests/limits. Holds per-line population caches, so it scales with the line catalogue; with windowed stats on, the working set is 430-570 MiB (target ~650 MiB). |
 | `fullCoverageConsumer.nodeSelector` | `{}` | Pod node selector. |
 | `fullCoverageConsumer.tolerations` | `[]` | Pod tolerations. |
 | `fullCoverageConsumer.affinity` | `{}` | Pod affinity rules. |
