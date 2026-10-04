@@ -1377,6 +1377,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.backup.diffSchedule` | `0 5 * * 1-6` | Differential backup the other days (05:00 UTC). |
 | `postgresql.pgbackrest.backup.checkSchedule` | `0 7 * * *` | Daily `check` and WAL gap check (07:00 UTC, after the backup). |
 | `postgresql.pgbackrest.backup.verifySchedule` | `0 8 * * 0` | Weekly `pgbackrest verify` CronJob (Sunday 08:00 UTC, after the full backup). It reads the whole repository back. Empty renders no verify CronJob. |
+| `postgresql.pgbackrest.backup.startFast` | `true` | Pass `--start-fast` to the full and diff backups, so `pg_backup_start` forces an immediate checkpoint. Off, it waits for the timed checkpoint under way and then a new spread one: 13.5-27 minutes as an `active` superuser query, which trips a long-running-query alert. Costs one burst of up to `shared_buffers` of writes at 05:00 UTC. |
 | `postgresql.pgbackrest.backup.suspend` | `false` | Suspend the CronJobs (archiving continues). |
 | `postgresql.pgbackrest.backup.activeDeadlineSeconds` | `21600` | Kill a backup or check Job that runs longer. |
 | `postgresql.pgbackrest.backup.backoffLimit` | `1` | Retries of a failed Job. A retried backup resumes. |

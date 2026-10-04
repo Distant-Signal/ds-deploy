@@ -664,6 +664,18 @@ postgresql:
       # traffic from S3. A separate CronJob, so its failures and history
       # are its own. Empty renders no verify CronJob.
       verifySchedule: "0 8 * * 0"
+      # -- Pass `--start-fast` to the full and diff backups: pg_backup_start
+      # forces an immediate checkpoint instead of waiting for a spread one.
+      # Without it, pg_backup_start waits for the timed checkpoint already
+      # under way (one is running ~90% of the time at checkpoint_timeout
+      # 15min) and then a whole new spread one, 13.5-27 minutes as an
+      # `active` superuser query in pg_stat_activity: that tripped the
+      # long-running-query alert on 2026-10-03 (06:02 BST start, 19m59s
+      # when it fired). The cost is one burst of writes (at most
+      # shared_buffers, 1GB) at 05:00 UTC. The backup role has
+      # pg_checkpoint for this (postgres-roles.sql). Changing it only
+      # changes the CronJobs, never the Postgres pod.
+      startFast: true
       # -- Suspend all the CronJobs (WAL archiving continues).
       suspend: false
       # -- Kill a backup or check Job that runs longer than this.

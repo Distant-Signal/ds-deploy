@@ -208,9 +208,15 @@ backups have aged past the retention window.
    kubectl -n distant-signal logs -f job/pgbackrest-check-initial
    ```
 
-   A backup starts at the next regular checkpoint (up to
-   `checkpoint_timeout`, 15 minutes), so the log is quiet for a while at
-   first.
+   The CronJobs pass `--start-fast` (`postgresql.pgbackrest.backup.startFast`),
+   so a backup forces an immediate checkpoint and starts within seconds.
+   With it off, `pg_backup_start` waits for the timed checkpoint already
+   under way and then a whole new spread one (13.5-27 minutes at
+   `checkpoint_timeout` 15min). For all that time it is an `active`
+   superuser query in `pg_stat_activity` (`application_name`
+   `pgBackRest [backup]`, wait event `IPC`/`CheckpointStart` or
+   `CheckpointDone`) using no CPU. Before `startFast` that tripped the
+   long-running-query alert (2026-10-03, the 05:00 UTC diff backup).
 
 9. **Watch it for 7 days**, then run the first drill (below).
 

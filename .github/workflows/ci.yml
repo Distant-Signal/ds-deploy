@@ -2259,7 +2259,17 @@ jobs:
             grep -q 'timeZone: "Etc/UTC"' <<<"${cj}" || fail "${s%%:*} CronJob must run in Etc/UTC"
             grep -q 'automountServiceAccountToken: true' <<<"${cj}" || fail "${s%%:*} CronJob needs its token"
           done
+          # backup.startFast (default on): an immediate checkpoint, not a
+          # 13.5-27 minute wait for spread ones inside pg_backup_start.
+          for s in full diff; do
+            cj=$(awk -v n="distant-signal-pgbackrest-${s}" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}' <<<"${jobs}")
+            grep -q -- '- "--start-fast"' <<<"${cj}" || fail "the ${s} backup must pass --start-fast"
+          done
+          slow_jobs=$(render "${on[@]}" --show-only templates/postgres-pgbackrest.yaml \
+            --set postgresql.pgbackrest.backup.startFast=false)
+          if grep -q -- '--start-fast' <<<"${slow_jobs}"; then fail "backup.startFast=false must drop --start-fast"; fi
           check_job=$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: distant-signal-pgbackrest-check\n" {print}' <<<"${jobs}")
+          if grep -q -- '--start-fast' <<<"${check_job}"; then fail "only the backups take --start-fast"; fi
           grep -A1 -- '- "pgbackrest-daily-check"' <<<"${check_job}" | grep -q -- '- "--no-verify"' \
             || fail "the daily check must skip verify (the weekly verify CronJob runs it)"
           verify_job=$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: distant-signal-pgbackrest-verify\n" {print}' <<<"${jobs}")

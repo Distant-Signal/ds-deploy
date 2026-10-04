@@ -24,9 +24,17 @@ Kubernetes API".
 The daily check skips `verify` (it reads the whole repository back); the
 weekly verify CronJob runs it instead.
 */}}
+{{- /*
+backup.startFast: an immediate checkpoint at pg_backup_start, rather than
+waiting 13.5-27 minutes for spread ones (see the value's comment).
+*/}}
+{{- $backupOpts := list "pgbackrest" "--log-level-console=info" }}
+{{- if ne (toString $pb.backup.startFast) "false" }}
+{{- $backupOpts = append $backupOpts "--start-fast" }}
+{{- end }}
 {{- $jobs := list
-  (dict "suffix" "full" "schedule" $pb.backup.fullSchedule "command" (list "pgbackrest" "--log-level-console=info" "--type=full" "backup"))
-  (dict "suffix" "diff" "schedule" $pb.backup.diffSchedule "command" (list "pgbackrest" "--log-level-console=info" "--type=diff" "backup"))
+  (dict "suffix" "full" "schedule" $pb.backup.fullSchedule "command" (concat $backupOpts (list "--type=full" "backup")))
+  (dict "suffix" "diff" "schedule" $pb.backup.diffSchedule "command" (concat $backupOpts (list "--type=diff" "backup")))
   (dict "suffix" "check" "schedule" $pb.backup.checkSchedule "command" (list "pgbackrest-daily-check" "--no-verify"))
 }}
 {{- with $pb.backup.verifySchedule }}
