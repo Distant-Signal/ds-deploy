@@ -209,6 +209,8 @@ window that excludes now or an elapsed period can lower it), and never
 suppress a status. A missing, failed or
 low-confidence extraction is a no-op, so a broken LLM endpoint degrades the
 enricher's own output and nothing else — the status pages keep working.
+To pick `enricher.llm.model` and check that it fits your timeouts on your
+hardware, see `docs/enricher-model-eval.md`.
 
 With the worked example values:
 
