@@ -104,7 +104,7 @@ spec:
       path: /metrics
       interval: {{ .Values.metrics.podMonitor.interval }}
       scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout }}
-    {{- if .Values.scheduleFeed.sftp.telemetry.enabled }}
+    {{- if and .Values.scheduleFeed.sftp.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
     {{- /*
     The `sftp` container's SFTPGo telemetry listener (sftpgo_* counters,
     scheduleFeed.sftp.telemetry), which the distant-signal.schedule-sftp

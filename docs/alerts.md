@@ -516,6 +516,75 @@ loads `dtd-push` from its entrypoint at start; restart the pod and read its
 startup log (`--loaddata-from` errors, or the password policy refusing a short
 password).
 
+## schedule bucket
+
+These read schedule-ingest's bucket source (`scheduleFeed.bucket`, metrics
+with `source="bucket"`), so they render only with `scheduleFeed.bucket.enabled`;
+`DistantSignalScheduleFeedSourcesDisagree` needs SFTP on as well. The bucket,
+its IAM and the kill switch are `charts/ds-ingest-bucket`'s and Ranma's. The
+full runbook is [schedule-feed-bucket.md](schedule-feed-bucket.md).
+
+### DistantSignalScheduleBucketAccessRevoked
+
+Every call to the bucket answered 401/403, or the reader has no usable key,
+for 10 minutes. The SFTP source is unaffected and carries on. The likely
+causes are the kill-switch trips (see
+[schedule-feed-bucket.md](schedule-feed-bucket.md#kill-switch)): the budget
+or a usage alert removed the reader's bindings, Ranma paused the
+`kill-switch-group: reader` bindings, or the reader's service account was
+disabled. DS backs off to `scheduleFeed.bucket.maxBackoffSecs` and logs once
+per state change; nothing in DS restarts it and nothing needs to.
+
+1. Check the bucket's audit log for a reader loop (repeated `objects.get` of
+   one generation). If there is one, fix it before anything else.
+2. Ask Ranma for a deliberate reapply, which removes `crossplane.io/paused`
+   from the `kill-switch-group: reader` bindings. The source recovers on its
+   next retry.
+
+A missing or rotated key raises this too: check that the Secret named by
+`scheduleFeed.bucket.existingSecret` exists (`kubectl get secret <name>`),
+without reading it.
+
+### DistantSignalScheduleBucketNoNewObject
+
+No new expected object has reached the bucket for 30 hours, once one has been
+seen. SFTP may still be delivering:
+[DistantSignalScheduleReferencePublishStale](#distantsignalschedulereferencepublishstale)
+is authoritative for the timetable. Causes are on the publisher's side
+(a late or failed push, or a publisher kill-switch trip) or a reader that
+cannot list (see the other bucket alerts).
+
+### DistantSignalScheduleBucketReadErrors
+
+The bucket source keeps failing; `kind` on
+`schedule_feed_source_errors_total` says where: `list`, `get` (the download),
+`verify` (size or CRC32C mismatch: the object is not used and is retried),
+`delete`, or `size`. Revoked access (`auth`) is its own alert. The reader backs
+off and SFTP is unaffected. Read schedule-ingest's log for the error.
+
+### DistantSignalScheduleBucketUnexpectedObject
+
+An object with a name outside `scheduleFeed.bucket.expectedKeys`, over
+`maxObjectBytes`, or not routable to CIF or CORPUS was flagged; it is deleted
+unread after `deleteMinAgeSecs` and stays recoverable from soft delete for
+7 days. To inspect it, restore it as in
+[schedule-feed-bucket.md](schedule-feed-bucket.md#restoring-a-deleted-object),
+and check the audit log for who wrote it.
+
+### DistantSignalScheduleBucketDownloadBudget
+
+The reader's hourly or daily download cap stopped it: a download loop or an
+attack, stopped by the reader itself. Don't raise the caps before finding the
+cause: check the audit log and schedule-ingest's log for repeated downloads
+of one object or many new objects.
+
+### DistantSignalScheduleFeedSourcesDisagree
+
+SFTP and the bucket delivered different content of one `kind` (`cif` or
+`corpus`) within `scheduleFeed.disagreementWindowMinutes`. The bucket copy won
+(decision D5, `scheduleFeed.sourcePrecedence`). Compare the two SHA-256s in
+schedule-ingest's audit lines, and ask the publisher which is right.
+
 ## pollers
 
 ### DistantSignalPollerFailing

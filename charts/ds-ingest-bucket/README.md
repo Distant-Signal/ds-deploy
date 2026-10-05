@@ -62,8 +62,11 @@ delete and carry `helm.sh/resource-policy: keep`.
 
 ## Install
 
-In production, Ranma-Config's Flux HelmRelease sets the values. By hand
-(placeholders):
+In production, Ranma-Config's Flux HelmRelease sets the values. CI
+publishes every push to main as
+`oci://ghcr.io/fasterspeeding/charts/ds-ingest-bucket`, signed with cosign
+like the distant-signal chart, at `<Chart.yaml version>+build.<run>.sha.<sha>`
+(OCI tags show the `+` as `_`). By hand, from a checkout (placeholders):
 
 ```sh
 helm upgrade --install ds-ingest-bucket charts/ds-ingest-bucket \
@@ -85,8 +88,15 @@ helm upgrade --install ds-ingest-bucket charts/ds-ingest-bucket \
   and pipe it straight into `kubeseal`, producing the
   `distant-signal-schedulefeed-bucket` SealedSecret (key
   `service-account.json`) in Ranma-Config. Don't write it to disk.
-- **Rotation**, every 90 days: create a second key, reseal, roll the
-  ingest pod, confirm a successful poll, delete the old key.
+- **Rotation**, every 90 days: create a second key, reseal, confirm a
+  successful poll, delete the old key. No pod restart: distant-signal
+  mounts the key without `subPath`, so the new one reaches the running
+  pod.
+- **Distant Signal's side.** Set `scheduleFeed.bucket.enabled`,
+  `scheduleFeed.bucket.name` (this chart's `bucket.name`) and
+  `scheduleFeed.bucket.existingSecret` (the SealedSecret above) in the
+  distant-signal release; see
+  [docs/schedule-feed-bucket.md](../../docs/schedule-feed-bucket.md).
 - **Kill switch.** Ranma's function removes bindings on a usage or budget
   trip. Binding resources carry the label
   `ds-ingest-bucket/kill-switch-group` (`publisher` or `reader`) so that a
@@ -108,12 +118,17 @@ soft delete.
 ```sh
 helm lint --strict charts/ds-ingest-bucket
 helm lint --strict charts/ds-ingest-bucket -f charts/ds-ingest-bucket/ci/example-values.yaml
-uv run scripts/check-ingest-bucket-chart.py
+uv run scripts/check-ingest-bucket-chart.py --download-crds "$TMPDIR/crossplane-crds"
 ```
 
 `check-ingest-bucket-chart.py` renders every mode and checks the bucket
 settings (UBLA, enforced PAP, versioning off, soft delete, lifecycle, no
 retention, orphan and keep), every grant (bucket-level only, service
 accounts only, never public, fully managed, exactly the expected
-publisher and reader bindings, the delete-only custom role), and that bad
-values refuse to render.
+publisher and reader bindings, the delete-only custom role), the
+kill-switch labels (and that nothing renders `crossplane.io/paused`), and
+that bad values refuse to render. With `--download-crds DIR` (as CI runs
+it) or `--crds DIR` it also validates every resource against
+provider-upjet-gcp's CRD schemas (the version and SHA-256s are pinned in
+the script; bump them by hand with the provider). Without either flag
+that check is skipped.

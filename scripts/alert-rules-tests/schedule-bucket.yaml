@@ -1,0 +1,81 @@
+# promtool unit tests for the distant-signal.schedule-bucket group (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered).
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Access is revoked at 5m: fires after `for: 10m`.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_access_revoked{namespace="distant-signal", pod="sf", source="bucket"}'
+        values: '0x5 1x20'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DistantSignalScheduleBucketAccessRevoked
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: DistantSignalScheduleBucketAccessRevoked
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: Schedule-feed bucket access revoked
+              description: "Every bucket call is refused (kill switch, or a missing or rotated key). SFTP carries on. Recovery is a Ranma reapply."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulebucketaccessrevoked
+  # Never seen an object (the gauge is 0): never fires, however long.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_last_new_object_seconds{namespace="distant-signal", pod="sf", source="bucket"}'
+        values: '0x2000'
+    alert_rule_test:
+      - eval_time: 32h
+        alertname: DistantSignalScheduleBucketNoNewObject
+        exp_alerts: []
+  # The last new object arrived at t=1s and nothing since: past 30h it
+  # is pending, and fires after `for: 30m`.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_last_new_object_seconds{namespace="distant-signal", pod="sf", source="bucket"}'
+        values: '1x2000'
+    alert_rule_test:
+      - eval_time: 30h20m
+        alertname: DistantSignalScheduleBucketNoNewObject
+        exp_alerts: []
+      - eval_time: 30h40m
+        alertname: DistantSignalScheduleBucketNoNewObject
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: No new object in the schedule-feed bucket in 30h
+              description: "The publisher's daily push has not reached the bucket. SFTP may still be delivering: PublishStale is authoritative."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulebucketnonewobject
+  # A download cap: fires on the first evaluation.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_download_capped{namespace="distant-signal", pod="sf", source="bucket"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: DistantSignalScheduleBucketDownloadBudget
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: Schedule-feed bucket download cap hit
+              description: "The reader's hourly or daily download cap stopped it: a loop or an attack. Find the cause before raising the caps."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulebucketdownloadbudget
+  # One unexpected object at 5m: fires, then resolves once the counter
+  # has been flat for more than the 1h window.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_unexpected_objects_total{namespace="distant-signal", pod="sf", source="bucket", reason="name"}'
+        values: '0x5 1x90'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalScheduleBucketUnexpectedObject
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: Unexpected object in the schedule-feed bucket
+              description: "An object with an unexpected name or size was flagged and is deleted unread (recoverable from soft delete for 7 days)."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulebucketunexpectedobject
+      - eval_time: 70m
+        alertname: DistantSignalScheduleBucketUnexpectedObject
+        exp_alerts: []

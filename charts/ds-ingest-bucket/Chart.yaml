@@ -15,7 +15,8 @@ type: application
 
 # Bump by hand for any template/values change, as charts/distant-signal does.
 # 0.2.0: the move from AWS S3 (ACK) to Google Cloud Storage (Crossplane).
-version: 0.2.0
+# 0.2.1: AlertPolicy documentation is an object, as the CRD requires.
+version: 0.2.1
 
 # Not an application image: the chart deploys no workload. Kept at the
 # version of the design it implements.

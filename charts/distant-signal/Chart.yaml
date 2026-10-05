@@ -19,7 +19,8 @@ type: application
 # immutable, distinguishable chart tag instead of silently re-pushing
 # this same bare string. Bump this when the chart's own shape changes;
 # CI's suffix is what makes each push distinct in the registry.
-version: 0.3.0
+# 0.4.0: scheduleFeed.sftp.enabled and the GCS bucket source (scheduleFeed.bucket), both opt-in.
+version: 0.4.0
 
 # Local-dev fallback ONLY. CI unconditionally overrides this at package
 # time (`helm package --app-version`, see `push-helm-chart`'s own comment

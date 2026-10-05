@@ -6,7 +6,7 @@ scheduleFeed's SFTP receiver to DTD; see values.yaml's scheduleFeed.service
 comment for why LoadBalancer is the default here, unlike every HTTP
 workload in this chart.
 */}}
-{{- if .Values.scheduleFeed.enabled }}
+{{- if and .Values.scheduleFeed.enabled .Values.scheduleFeed.sftp.enabled }}
 {{- with .Values.scheduleFeed.service.externalTrafficPolicy }}
 {{- if not (has . (list "Local" "Cluster")) }}
 {{- fail (printf "scheduleFeed.service.externalTrafficPolicy must be \"Local\" or \"Cluster\" (or empty), got %q" .) }}

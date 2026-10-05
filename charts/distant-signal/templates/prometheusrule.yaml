@@ -45,8 +45,9 @@ so that clause fired on every rollout.
 {{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled ($rule.deadLetterExpiring).enabled ($rule.longPending).enabled ($rule.parseEnvelope).enabled) }}
 {{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
 {{- $pipelineOn := and ($rule.schedulePipeline).enabled .Values.scheduleFeed.enabled }}
-{{- $sftpOn := and ($rule.scheduleSftp).enabled .Values.scheduleFeed.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
-{{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn $sftpOn }}
+{{- $sftpOn := and ($rule.scheduleSftp).enabled .Values.scheduleFeed.enabled .Values.scheduleFeed.sftp.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
+{{- $bucketOn := and ($rule.scheduleBucket).enabled .Values.scheduleFeed.enabled (.Values.scheduleFeed.bucket).enabled }}
+{{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn $sftpOn $bucketOn }}
 {{- $notifierDroppedOn := ($rule.notifierPushDropped).enabled }}
 {{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
 {{- $signupSpikeOn := ($rule.userSignupSpike).enabled }}
@@ -1076,6 +1077,109 @@ spec:
               SFTPGo in {{ "{{ $labels.namespace }}" }} reports its user store
               down, so every login fails and DTD's push cannot land.
             runbook_url: {{ printf "%s#distantsignalsftpuserstoredown" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $bucketOn }}
+    {{- with $rule.scheduleBucket }}
+    - name: distant-signal.schedule-bucket
+      rules:
+        {{- /*
+        The bucket source of schedule-ingest (scheduleFeed.bucket). Its
+        metrics carry source="bucket" and are registered at 0 when the
+        source starts, so a plain increase() sees the first error. See
+        docs/schedule-feed-bucket.md for the kill switch and the reader's
+        loop guards.
+        */}}
+        - alert: DistantSignalScheduleBucketAccessRevoked
+          expr: |
+            max by (namespace) (distant_signal_schedule_feed_source_access_revoked{namespace="{{ $ns }}", source="bucket"}) == 1
+          for: {{ .accessRevokedFor }}
+          labels:
+            severity: {{ .criticalSeverity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Schedule-feed bucket access revoked"
+            description: "Every bucket call is refused (kill switch, or a missing or rotated key). SFTP carries on. Recovery is a Ranma reapply."
+            runbook_url: {{ printf "%s#distantsignalschedulebucketaccessrevoked" $runbook | quote }}
+        {{- /*
+        Recorded so NoNewObject's expr (which reads it twice) stays well
+        under check-alert-payloads.py's 300 characters, and a 3-alert
+        webhook well under ntfy's 4,096 bytes (inline: 292 and ~4,040).
+        */}}
+        - record: distant_signal:schedule_bucket_last_new_object_seconds:max
+          expr: |
+            max by (namespace) (distant_signal_schedule_feed_source_last_new_object_seconds{namespace="{{ $ns }}", source="bucket"})
+        - alert: DistantSignalScheduleBucketNoNewObject
+          expr: |
+            time() - distant_signal:schedule_bucket_last_new_object_seconds:max{namespace="{{ $ns }}"} > {{ mul (int .noNewObjectHours) 3600 }}
+            and on (namespace)
+            distant_signal:schedule_bucket_last_new_object_seconds:max{namespace="{{ $ns }}"} > 0
+          for: {{ .noNewObjectFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "No new object in the schedule-feed bucket in {{ .noNewObjectHours }}h"
+            description: "The publisher's daily push has not reached the bucket. SFTP may still be delivering: PublishStale is authoritative."
+            runbook_url: {{ printf "%s#distantsignalschedulebucketnonewobject" $runbook | quote }}
+        - alert: DistantSignalScheduleBucketReadErrors
+          expr: |
+            sum by (namespace) (increase(distant_signal_schedule_feed_source_errors_total{namespace="{{ $ns }}", source="bucket", kind!="auth"}[{{ .readErrorsWindow }}])) > 0
+          for: {{ .readErrorsFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Schedule-feed bucket read errors"
+            description: "schedule-ingest's bucket source keeps failing to list, get, verify or delete. It backs off; SFTP is unaffected."
+            runbook_url: {{ printf "%s#distantsignalschedulebucketreaderrors" $runbook | quote }}
+        - alert: DistantSignalScheduleBucketUnexpectedObject
+          expr: |
+            sum by (namespace) (increase(distant_signal_schedule_feed_source_unexpected_objects_total{namespace="{{ $ns }}", source="bucket"}[{{ .unexpectedWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Unexpected object in the schedule-feed bucket"
+            description: "An object with an unexpected name or size was flagged and is deleted unread (recoverable from soft delete for 7 days)."
+            runbook_url: {{ printf "%s#distantsignalschedulebucketunexpectedobject" $runbook | quote }}
+        - alert: DistantSignalScheduleBucketDownloadBudget
+          expr: |
+            max by (namespace) (distant_signal_schedule_feed_source_download_capped{namespace="{{ $ns }}", source="bucket"}) == 1
+          for: 0m
+          labels:
+            severity: {{ .criticalSeverity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Schedule-feed bucket download cap hit"
+            description: "The reader's hourly or daily download cap stopped it: a loop or an attack. Find the cause before raising the caps."
+            runbook_url: {{ printf "%s#distantsignalschedulebucketdownloadbudget" $runbook | quote }}
+        {{- if $.Values.scheduleFeed.sftp.enabled }}
+        - alert: DistantSignalScheduleFeedSourcesDisagree
+          expr: |
+            sum by (namespace, kind) (increase(distant_signal_schedule_feed_source_disagreement_total{namespace="{{ $ns }}"}[{{ .disagreeWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "SFTP and bucket delivered different {{ "{{ $labels.kind }}" }}"
+            description: "The two sources delivered different content within the disagreement window. The bucket copy won (D5)."
+            runbook_url: {{ printf "%s#distantsignalschedulefeedsourcesdisagree" $runbook | quote }}
+        {{- end }}
     {{- end }}
     {{- end }}
 {{- end }}

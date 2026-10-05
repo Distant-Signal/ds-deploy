@@ -2089,11 +2089,17 @@ Off by default; no API key needed.
 The schedulefeed pod: an SFTP server (SFTPGo) that receives the pushed CIF
 timetable, `schedule-ingest` (waits for a complete delivery and posts it
 to api) and `schedule-reference` (derives the schedule products from it).
-Off by default.
+Off by default. The feed has two sources, switched separately:
+`scheduleFeed.sftp.enabled` (the SFTP receiver, on by default) and
+`scheduleFeed.bucket.enabled` (a Google Cloud Storage bucket, off; see
+"scheduleFeed: bucket source" below and
+[docs/schedule-feed-bucket.md](../../docs/schedule-feed-bucket.md)). Both
+can run at once, deduplicated by content; with neither the render fails.
 
 | Key | Default | Description |
 |---|---|---|
 | `scheduleFeed.enabled` | `false` | Deploy the schedulefeed pod, Service and PVC. |
+| `scheduleFeed.sftp.enabled` | `true` | Run the SFTP receiver (the `sftp` container, its Service/NodePort, host keys and entrypoint). Off for bucket-only delivery (`scheduleFeed.bucket`); the PVC and the ingest/reference containers stay. `scheduleFeed.enabled` with neither source enabled fails the render. |
 | `scheduleFeed.sftp.image.repository` | `drakkan/sftpgo` | SFTP server image. |
 | `scheduleFeed.sftp.image.tag` | `v2.7.5@sha256:…` | Must be a real `drakkan/sftpgo` tag: an empty tag would fall back to this chart's version. |
 | `scheduleFeed.sftp.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2143,6 +2149,7 @@ Off by default.
 | `scheduleFeed.ingest.pollIntervalSecs` | `120` | Seconds between scans of the watch folder. |
 | `scheduleFeed.ingest.retentionKeepDeliveries` | `2` | Complete deliveries kept on disk (current plus fallback). |
 | `scheduleFeed.ingest.stabilityCycles` | `5` | Consecutive unchanged scans before a file is treated as complete. |
+| `scheduleFeed.ingest.extraEnv` | `[]` | Extra env entries for the schedule-ingest container. One named like a chart-set var (say `RUST_LOG`) replaces it, so each name is rendered once; the rest follow the chart's own. |
 | `scheduleFeed.ingest.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`) for one scan cycle, including posting a delivery to api. |
 | `scheduleFeed.ingest.existingSecret` | `""` | Read schedule-ingest's internal OAuth2 credential from this pre-existing Secret. |
 | `scheduleFeed.ingest.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-schedule-ingest`). |
@@ -2169,7 +2176,7 @@ Off by default.
 | `scheduleFeed.service.nodePort` | `null` | Explicit NodePort for the SFTP port. Empty lets Kubernetes assign one. |
 | `scheduleFeed.service.externalTrafficPolicy` | `""` | `Local` or `Cluster`; empty renders nothing (Kubernetes defaults to `Cluster`). Only valid with type `NodePort` or `LoadBalancer`; anything else fails the render. `Local` keeps DTD's real source IP, which `scheduleFeed.sftp.allowedCidrs` needs, and only routes to nodes with a ready schedulefeed pod (no cost on a single node). |
 | `scheduleFeed.persistence.enabled` | `true` | Attach a PVC for deliveries. |
-| `scheduleFeed.persistence.size` | `5Gi` | Requested volume size. |
+| `scheduleFeed.persistence.size` | `5Gi` | Requested volume size. With `scheduleFeed.bucket` on, budget `(archiveKeep + 1) × maxObjectBytes` on top of today's use; the defaults fit in 5Gi. |
 | `scheduleFeed.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
 | `scheduleFeed.persistence.accessModes` | `[ReadWriteOnce]` | PVC access modes. |
 | `scheduleFeed.persistence.existingClaim` | `""` | Use this existing PVC instead of creating one. |
@@ -2243,7 +2250,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; `/docs/alerts.md#<alert name, lowercased>` is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `scheduleBucket`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
 
 #### Alerts
 
@@ -2314,6 +2321,12 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalSftpNoUpload` | warning | SFTPGo received no upload (`sftpgo_uploads_total`) in 30h (`scheduleSftp.noUploadWindow`), for 30m: DTD's daily push did not arrive. Quiet until the counter has a full window of history. Uploads are not per file type, so `DistantSignalScheduleReferencePublishStale` stays authoritative for the CIF. Group `distant-signal.schedule-sftp`, rendered with `scheduleFeed.enabled` and `scheduleFeed.sftp.telemetry.enabled`. Runbook: `docs/schedule-feed-sftp.md`. |
 | `DistantSignalSftpUploadErrors` | warning | Any failed or interrupted upload (`sftpgo_upload_errors_total`) in the last 1h. |
 | `DistantSignalSftpUserStoreDown` | critical | SFTPGo's user store is unavailable (`sftpgo_dataprovider_availability` 0) for 5m: every login fails. Failed-login alerts are Loki rules, not metrics: the counters carry no username or IP. |
+| `DistantSignalScheduleBucketAccessRevoked` | critical | Every schedule-feed bucket call was refused (`schedule_feed_source_access_revoked{source="bucket"}` is 1) for 10m (`scheduleBucket.accessRevokedFor`): the kill switch removed the reader, or its key is missing, rotated or disabled. SFTP carries on. Only with `scheduleFeed.bucket.enabled`. |
+| `DistantSignalScheduleBucketNoNewObject` | warning | No new expected object in the bucket (`schedule_feed_source_last_new_object_seconds{source="bucket"}`) for 30h (`scheduleBucket.noNewObjectHours`), for 30m. Quiet until the first object. |
+| `DistantSignalScheduleBucketReadErrors` | warning | List, get, verify or delete errors (`schedule_feed_source_errors_total{source="bucket", kind!="auth"}`) in the last 1h, for 15m. |
+| `DistantSignalScheduleBucketUnexpectedObject` | warning | An unexpected object (wrong name, too large, or unroutable) was flagged in the last 1h (`schedule_feed_source_unexpected_objects_total`); it is deleted unread. |
+| `DistantSignalScheduleBucketDownloadBudget` | critical | The hourly or daily download cap stopped the reader (`schedule_feed_source_download_capped{source="bucket"}` is 1): a loop or an attack. |
+| `DistantSignalScheduleFeedSourcesDisagree` | warning | SFTP and the bucket delivered different content of one kind within `scheduleFeed.disagreementWindowMinutes` (`schedule_feed_source_disagreement_total{kind}`) in the last 1d; the bucket copy won. Only with both sources on. |
 | `DistantSignalPollerFailing` | warning | A poller completed no successful cycle and at least one failed one (`poller_cycle_total{result}`) over the last 2h, or more than half its cycles over the last 15m failed (`pollerFailures.failureRatio`, `ratioWindow`), for 10m (SVC-08). Rendered only when a poller (including an island-of-Ireland one) is enabled, in a separate `<fullname>-pollers` PrometheusRule. |
 | `DistantSignalLdbwsStationStale` | warning | The least recently sampled LDBWS station (`ldbws_stalest_station_age_seconds`) is over 900s old (the aggregator's sample-age limit, past which it drops the station) for 15m: the rotation stopped reaching part of the list (SVC-04). Stations LDBWS rejects as an invalid CRS are excluded. Only when `pollers.ldbws.enabled`. |
 | `DistantSignalLdbwsInvalidCrs` | warning | LDBWS has answered "Invalid crs code supplied" for a sample station (`ldbws_invalid_crs_station{crs}` is 1) for 15m: a `lines/*.toml` typo. The poller re-probes it hourly instead of every cycle. Only when `pollers.ldbws.enabled`. |
@@ -2373,6 +2386,39 @@ See `docs/superpowers/specs/2026-09-28-corpus-sftp-ingest-design.md`.
 | `scheduleFeed.corpus.minRows` | `10000` | Fewer rows than this rejects the extract instead of replacing the table. |
 | `scheduleFeed.corpus.maxDecompressedBytes` | `268435456` | gzip-bomb guard. |
 | `scheduleFeed.corpus.retentionKeep` | `3` | Processed (and, separately, rejected) extracts kept under `/data/schedule-feed/corpus/`. |
+
+### scheduleFeed: bucket source
+
+The Google Cloud Storage delivery source, an alternative (or addition) to
+SFTP: schedule-ingest polls a dedicated bucket, downloads only the expected
+names, verifies size and CRC32C, archives each object on the PVC and deletes
+it from the bucket. `charts/ds-ingest-bucket` provisions the bucket and its
+IAM. See [docs/schedule-feed-bucket.md](../../docs/schedule-feed-bucket.md)
+and `docs/superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md`.
+Off by default; needs a schedule-ingest image with the bucket source.
+
+| Key | Default | Description |
+|---|---|---|
+| `scheduleFeed.bucket.enabled` | `false` | Run the bucket source. With `scheduleFeed.sftp.enabled` too, both run, deduplicated by SHA-256. |
+| `scheduleFeed.bucket.provider` | `gcs` | Only `gcs` is implemented; anything else fails the render. |
+| `scheduleFeed.bucket.name` | `""` | Bucket name (no dots). Required when enabled; set in deploy values. |
+| `scheduleFeed.bucket.baseUrl` | `""` | Empty means `https://storage.googleapis.com`. Set only for a fake-GCS test server. |
+| `scheduleFeed.bucket.existingSecret` | `""` | Pre-existing Secret holding the reader's service-account key (sealed in deploy config; never put the key in values). Required when enabled. Mounted read-only into `ingest` only, as an optional volume: a missing Secret leaves SFTP running and raises `DistantSignalScheduleBucketAccessRevoked`. |
+| `scheduleFeed.bucket.serviceAccountKey` | `service-account.json` | Key in `existingSecret` holding the JSON key. |
+| `scheduleFeed.bucket.expectedKeys` | `[timetable_full.zip, CORPUSExtract.json.gz]` | Case-insensitive `*` globs naming the objects (bucket root only) the reader downloads. Anything else is flagged and deleted unread after `deleteMinAgeSecs`. |
+| `scheduleFeed.bucket.pollIntervalSecs` | `300` | Seconds between bucket listings. At least 60. |
+| `scheduleFeed.bucket.deleteMinAgeSecs` | `3600` | Objects are deleted only once this old, so the publisher's read-back and scan finish first. Under 6 days (the bucket's lifecycle backstop is 7). |
+| `scheduleFeed.bucket.archiveKeep` | `5` | Raw objects kept under `/data/schedule-feed/sources/bucket/archive`. |
+| `scheduleFeed.bucket.maxObjectBytes` | `268435456` | Objects listed larger than this are never downloaded (flagged as unexpected). At most `maxDownloadBytesPerHour`. |
+| `scheduleFeed.bucket.maxDownloadsPerPoll` | `2` | Loop guard: downloads per poll; more wait for the next poll. |
+| `scheduleFeed.bucket.maxDownloadBytesPerHour` | `268435456` | Loop guard: bytes per rolling hour. Hitting it raises `DistantSignalScheduleBucketDownloadBudget`. At most `maxDownloadBytesPerDay`. |
+| `scheduleFeed.bucket.maxDownloadBytesPerDay` | `1073741824` | Loop guard: bytes per rolling day. |
+| `scheduleFeed.bucket.maxBackoffSecs` | `3600` | Ceiling of the exponential backoff after errors, and the retry interval while access is revoked. At least `pollIntervalSecs`. |
+| `scheduleFeed.bucket.auditLogs.ship` | `false` | Ship the bucket's Cloud Audit Logs (from the audit-log bucket) to stdout as `schedule_ingest::bucket_access` lines for Loki. |
+| `scheduleFeed.bucket.auditLogs.bucket` | `""` | Audit-log bucket name. Required with `ship`; must differ from `name`. |
+| `scheduleFeed.bucket.auditLogs.pollIntervalSecs` | `600` | Seconds between audit-log bucket listings. At least 60. |
+| `scheduleFeed.sourcePrecedence` | `[bucket, sftp]` | Which source wins when SFTP and the bucket deliver different content within `disagreementWindowMinutes` (decision D5: the bucket). Must be a permutation of `[bucket, sftp]`. |
+| `scheduleFeed.disagreementWindowMinutes` | `120` | Different content from the two sources within this many minutes is a disagreement (`DistantSignalScheduleFeedSourcesDisagree`). |
 
 ### tests
 

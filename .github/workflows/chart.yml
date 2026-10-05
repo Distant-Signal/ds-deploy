@@ -661,3 +661,46 @@ jobs:
           cosign verify "${CHART_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity "${IDENTITY}" > /dev/null
+
+      # charts/ds-ingest-bucket: the schedule feed's GCS landing bucket
+      # (Crossplane managed resources, no workload), pushed beside
+      # distant-signal as oci://ghcr.io/fasterspeeding/charts/ds-ingest-bucket.
+      # It has no images, so no digest pinning and no --app-version (its
+      # appVersion is the design version in its Chart.yaml). Same version
+      # scheme as distant-signal above: Chart.yaml's hand-bumped `version:`
+      # plus `+build.<run>.sha.<sha>`, so every push is a new, immutable
+      # tag. Signed and verified the same way (INF-12).
+      - name: helm package and push (ds-ingest-bucket)
+        id: push-ingest-bucket
+        env:
+          DEST: oci://${{ env.REGISTRY }}/fasterspeeding/charts
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:7}"
+          base_version="$(sed -n 's/^version: *"\?\([^"[:space:]]*\)"\?.*/\1/p' charts/ds-ingest-bucket/Chart.yaml)"
+          if [[ -z "${base_version}" ]]; then
+            echo "::error::could not parse version: from charts/ds-ingest-bucket/Chart.yaml" >&2
+            exit 1
+          fi
+          helm package charts/ds-ingest-bucket \
+            --version "${base_version}+build.${GITHUB_RUN_NUMBER}.sha.${short_sha}" \
+            --destination /tmp/helm-package-ingest-bucket
+          chart_tgz=$(find /tmp/helm-package-ingest-bucket -maxdepth 1 -name 'ds-ingest-bucket-*.tgz' -print -quit)
+          helm push "${chart_tgz}" "${DEST}" 2>&1 | tee /tmp/helm-push-ingest-bucket.log
+          digest=$(sed -n 's/^Digest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' /tmp/helm-push-ingest-bucket.log | head -n 1)
+          if [[ -z "${digest}" ]]; then
+            echo "::error::could not read the pushed ds-ingest-bucket chart's digest from helm push's output" >&2
+            exit 1
+          fi
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Sign and verify the pushed chart (ds-ingest-bucket)
+        env:
+          CHART_REF: ${{ env.REGISTRY }}/fasterspeeding/charts/ds-ingest-bucket@${{ steps.push-ingest-bucket.outputs.digest }}
+          IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${CHART_REF}"
+          cosign verify "${CHART_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "${IDENTITY}" > /dev/null

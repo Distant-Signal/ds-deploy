@@ -7,8 +7,17 @@ app's own verifier/uploader (the `ingest` container, crates/schedule-ingest)
 sharing one PVC -- see docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md.
 */}}
 {{- if .Values.scheduleFeed.enabled }}
+{{- $sftp := .Values.scheduleFeed.sftp.enabled }}
+{{- if not (or .Values.scheduleFeed.sftp.enabled (.Values.scheduleFeed.bucket).enabled) }}
+{{- fail "scheduleFeed.enabled needs at least one source: scheduleFeed.sftp.enabled and/or scheduleFeed.bucket.enabled" }}
+{{- end }}
+{{- if .Values.scheduleFeed.bucket.enabled }}
+{{- include "distant-signal.scheduleFeedValidateBucket" . }}
+{{- end }}
+{{- if $sftp }}
 {{- if not .Values.scheduleFeed.sftp.authMethod }}
 {{- fail "scheduleFeed.sftp.authMethod must be set (\"password\" or \"public-key\") when scheduleFeed.enabled -- see docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md, Credentials" }}
+{{- end }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -30,11 +39,14 @@ spec:
     metadata:
       labels:
         {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 8 }}
+      {{- if or $sftp .Values.metrics.enabled .Values.scheduleFeed.podAnnotations }}
       annotations:
+        {{- if $sftp }}
         # The sftp container reads its account policy (permissions, login
         # methods, limits) from the entrypoint script at start, so a change
         # to the script must replace the Pod; env changes already do.
         checksum/sftp-entrypoint: {{ include (print $.Template.BasePath "/schedulefeed-configmap.yaml") . | sha256sum }}
+        {{- end }}
         {{- if .Values.metrics.enabled }}
         # NOTE: this plain-annotation scrape fallback can only advertise
         # one port per Pod, so it still only ever advertises `ingest`'s
@@ -52,6 +64,7 @@ spec:
         {{- with .Values.scheduleFeed.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
       automountServiceAccountToken: false
@@ -65,6 +78,7 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ default (include "distant-signal.scheduleFeedFullname" .) .Values.scheduleFeed.persistence.existingClaim }}
+        {{- if $sftp }}
         - name: host-key
           secret:
             secretName: {{ default (include "distant-signal.scheduleFeedSecretName" .) .Values.scheduleFeed.sftp.existingSecretHostKey }}
@@ -89,7 +103,24 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        {{- end }}
+        {{- if .Values.scheduleFeed.bucket.enabled }}
+        # The bucket reader's service-account key (a sealed Secret from
+        # deploy config; the chart never renders it). Optional: a missing
+        # Secret or key must not stop the pod, and so SFTP; schedule-ingest
+        # reports it as revoked access instead. No subPath, so a rotated
+        # key reaches the running pod.
+        - name: bucket-credentials
+          secret:
+            secretName: {{ .Values.scheduleFeed.bucket.existingSecret }}
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.scheduleFeed.bucket.serviceAccountKey }}
+                path: service-account.json
+        {{- end }}
       containers:
+        {{- if $sftp }}
         - name: sftp
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.scheduleFeed.sftp.image) | quote }}
           imagePullPolicy: {{ .Values.scheduleFeed.sftp.image.pullPolicy }}
@@ -191,6 +222,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+        {{- end }}
         - name: ingest
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.scheduleFeed.ingest.image) | quote }}
           imagePullPolicy: {{ .Values.scheduleFeed.ingest.image.pullPolicy }}
@@ -215,84 +247,17 @@ spec:
           # stability_cycles, api_ingest_url, internal_oauth_token_url/
           # client_id/scope/username/password, metrics_port, metrics_enabled.
           env:
-            - name: WATCH_DIR
-              value: {{ printf "/data/schedule-feed/%s" (include "distant-signal.scheduleFeedDestinationPath" .) | quote }}
-            - name: STORAGE_DIR
-              value: /data/schedule-feed
-            - name: CHECK_TIMES
-              value: {{ .Values.scheduleFeed.ingest.checkTimes | quote }}
-            - name: POLL_INTERVAL_SECS
-              value: {{ .Values.scheduleFeed.ingest.pollIntervalSecs | quote }}
-            - name: RETENTION_KEEP_DELIVERIES
-              value: {{ .Values.scheduleFeed.ingest.retentionKeepDeliveries | quote }}
-            - name: STABILITY_CYCLES
-              value: {{ .Values.scheduleFeed.ingest.stabilityCycles | quote }}
-            - name: API_INGEST_URL
-              value: {{ printf "%s/private/schedule-feed-ingests" (include "distant-signal.apiBaseUrl" .) | quote }}
-            # CIF-vs-other routing and Network Rail CORPUS loading --
-            # scheduleFeed.ingest.cif*Pattern / scheduleFeed.corpus in
-            # values.yaml, crates/schedule-ingest/src/{pattern,corpus}.rs.
-            - name: CIF_FILE_PATTERN
-              value: {{ .Values.scheduleFeed.ingest.cifFilePattern | quote }}
-            - name: CIF_EXCLUDE_PATTERN
-              value: {{ .Values.scheduleFeed.ingest.cifExcludePattern | quote }}
-            # Content checks on each CIF delivery before it is accepted
-            # (scheduleFeed.ingest.cifChecks, crates/schedule-ingest/src/cif_check.rs).
-            - name: CIF_MAX_GENERATED_AGE_DAYS
-              value: {{ .Values.scheduleFeed.ingest.cifChecks.maxGeneratedAgeDays | int | quote }}
-            - name: CIF_MIN_SCHEDULES
-              value: {{ .Values.scheduleFeed.ingest.cifChecks.minSchedules | int64 | quote }}
-            - name: CIF_MAX_RECORD_DROP_PERCENT
-              value: {{ .Values.scheduleFeed.ingest.cifChecks.maxRecordDropPercent | int | quote }}
-            - name: CORPUS_INGEST_ENABLED
-              value: {{ .Values.scheduleFeed.corpus.enabled | quote }}
-            - name: CORPUS_FILE_PATTERN
-              value: {{ .Values.scheduleFeed.corpus.filePattern | quote }}
-            - name: CORPUS_API_URL
-              value: {{ printf "%s/private/corpus-locations" (include "distant-signal.apiBaseUrl" .) | quote }}
-            - name: CORPUS_MAX_DECOMPRESSED_BYTES
-              value: {{ .Values.scheduleFeed.corpus.maxDecompressedBytes | int64 | quote }}
-            - name: CORPUS_MIN_ROWS
-              value: {{ .Values.scheduleFeed.corpus.minRows | quote }}
-            - name: CORPUS_RETENTION_KEEP
-              value: {{ .Values.scheduleFeed.corpus.retentionKeep | quote }}
-            - name: INTERNAL_OAUTH_TOKEN_URL
-              value: {{ .Values.internalOauth.tokenUrl | quote }}
-            - name: INTERNAL_OAUTH_CLIENT_ID
-              value: {{ .Values.internalOauth.clientId | quote }}
-            - name: INTERNAL_OAUTH_SCOPE
-              value: {{ .Values.internalOauth.scope | quote }}
-            - name: INTERNAL_OAUTH_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.scheduleIngestSecretName" . }}
-                  key: {{ include "distant-signal.scheduleIngestOauthUsernameSecretKey" . }}
-            - name: INTERNAL_OAUTH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.scheduleIngestSecretName" . }}
-                  key: {{ include "distant-signal.scheduleIngestOauthPasswordSecretKey" . }}
-            # METRICS_ENABLED is always rendered (matching aggregator's/
-            # every poller's convention) -- this is the actual Rust-side
-            # toggle that stops the /metrics listener from starting.
-            # Omitting the containerPort/annotations above alone would not,
-            # since Kubernetes container ports are purely declarative.
-            - name: METRICS_ENABLED
-              value: {{ .Values.metrics.enabled | quote }}
-            {{- if .Values.metrics.enabled }}
-            - name: METRICS_PORT
-              value: {{ .Values.metrics.port | quote }}
-            {{- end }}
-            # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
-            - name: HEALTH_BIND_URL
-              value: {{ printf "0.0.0.0:%d" (int .Values.workerHealth.port) | quote }}
-            - name: PROGRESS_STALL_SECS
-              value: {{ .Values.scheduleFeed.ingest.progressStallSecs | quote }}
-            - name: RUST_LOG
-              value: {{ .Values.scheduleFeed.logLevel | quote }}
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.scheduleFeedIngestEnv" .) "extra" .Values.scheduleFeed.ingest.extraEnv) | trim | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data/schedule-feed
+            {{- if .Values.scheduleFeed.bucket.enabled }}
+            # Read-only, and on this container only: sftp and reference
+            # never see the reader key.
+            - name: bucket-credentials
+              mountPath: /var/run/secrets/distant-signal/gcs
+              readOnly: true
+            {{- end }}
           {{- with (.Values.scheduleFeed.ingest.resources | default .Values.scheduleFeed.resources) }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -609,5 +574,143 @@ scheduleFeed.sftp.extraEnv by distant-signal.mergeEnv (an extraEnv entry replace
                 secretKeyRef:
                   name: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretName" . }}
                   key: {{ include "distant-signal.scheduleFeedDtdPublicKeySecretKey" . }}
+            {{- end }}
+{{- end }}
+
+{{- /*
+The chart's own env entries for this container, merged with
+scheduleFeed.ingest.extraEnv by distant-signal.mergeEnv (an extraEnv entry replaces one of the same name).
+*/ -}}
+{{- define "distant-signal.scheduleFeedIngestEnv" }}
+            - name: WATCH_DIR
+              value: {{ printf "/data/schedule-feed/%s" (include "distant-signal.scheduleFeedDestinationPath" .) | quote }}
+            - name: STORAGE_DIR
+              value: /data/schedule-feed
+            - name: CHECK_TIMES
+              value: {{ .Values.scheduleFeed.ingest.checkTimes | quote }}
+            - name: POLL_INTERVAL_SECS
+              value: {{ .Values.scheduleFeed.ingest.pollIntervalSecs | quote }}
+            - name: RETENTION_KEEP_DELIVERIES
+              value: {{ .Values.scheduleFeed.ingest.retentionKeepDeliveries | quote }}
+            - name: STABILITY_CYCLES
+              value: {{ .Values.scheduleFeed.ingest.stabilityCycles | quote }}
+            - name: API_INGEST_URL
+              value: {{ printf "%s/private/schedule-feed-ingests" (include "distant-signal.apiBaseUrl" .) | quote }}
+            # CIF-vs-other routing and Network Rail CORPUS loading --
+            # scheduleFeed.ingest.cif*Pattern / scheduleFeed.corpus in
+            # values.yaml, crates/schedule-ingest/src/{pattern,corpus}.rs.
+            - name: CIF_FILE_PATTERN
+              value: {{ .Values.scheduleFeed.ingest.cifFilePattern | quote }}
+            - name: CIF_EXCLUDE_PATTERN
+              value: {{ .Values.scheduleFeed.ingest.cifExcludePattern | quote }}
+            # Content checks on each CIF delivery before it is accepted
+            # (scheduleFeed.ingest.cifChecks, crates/schedule-ingest/src/cif_check.rs).
+            - name: CIF_MAX_GENERATED_AGE_DAYS
+              value: {{ .Values.scheduleFeed.ingest.cifChecks.maxGeneratedAgeDays | int | quote }}
+            - name: CIF_MIN_SCHEDULES
+              value: {{ .Values.scheduleFeed.ingest.cifChecks.minSchedules | int64 | quote }}
+            - name: CIF_MAX_RECORD_DROP_PERCENT
+              value: {{ .Values.scheduleFeed.ingest.cifChecks.maxRecordDropPercent | int | quote }}
+            - name: CORPUS_INGEST_ENABLED
+              value: {{ .Values.scheduleFeed.corpus.enabled | quote }}
+            - name: CORPUS_FILE_PATTERN
+              value: {{ .Values.scheduleFeed.corpus.filePattern | quote }}
+            - name: CORPUS_API_URL
+              value: {{ printf "%s/private/corpus-locations" (include "distant-signal.apiBaseUrl" .) | quote }}
+            - name: CORPUS_MAX_DECOMPRESSED_BYTES
+              value: {{ .Values.scheduleFeed.corpus.maxDecompressedBytes | int64 | quote }}
+            - name: CORPUS_MIN_ROWS
+              value: {{ .Values.scheduleFeed.corpus.minRows | quote }}
+            - name: CORPUS_RETENTION_KEEP
+              value: {{ .Values.scheduleFeed.corpus.retentionKeep | quote }}
+            - name: INTERNAL_OAUTH_TOKEN_URL
+              value: {{ .Values.internalOauth.tokenUrl | quote }}
+            - name: INTERNAL_OAUTH_CLIENT_ID
+              value: {{ .Values.internalOauth.clientId | quote }}
+            - name: INTERNAL_OAUTH_SCOPE
+              value: {{ .Values.internalOauth.scope | quote }}
+            - name: INTERNAL_OAUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleIngestSecretName" . }}
+                  key: {{ include "distant-signal.scheduleIngestOauthUsernameSecretKey" . }}
+            - name: INTERNAL_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.scheduleIngestSecretName" . }}
+                  key: {{ include "distant-signal.scheduleIngestOauthPasswordSecretKey" . }}
+            # METRICS_ENABLED is always rendered (matching aggregator's/
+            # every poller's convention) -- this is the actual Rust-side
+            # toggle that stops the /metrics listener from starting.
+            # Omitting the containerPort/annotations above alone would not,
+            # since Kubernetes container ports are purely declarative.
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            {{- end }}
+            # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.workerHealth.port) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.scheduleFeed.ingest.progressStallSecs | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.scheduleFeed.logLevel | quote }}
+            {{- $sf := .Values.scheduleFeed }}
+            {{- if or $sf.bucket.enabled (not $sf.sftp.enabled) }}
+            # Source switches (docs/schedule-feed-bucket.md). Rendered only
+            # when they differ from schedule-ingest's defaults (SFTP on,
+            # bucket off), so an SFTP-only release renders as before.
+            - name: SFTP_SOURCE_ENABLED
+              value: {{ $sf.sftp.enabled | quote }}
+            - name: BUCKET_SOURCE_ENABLED
+              value: {{ $sf.bucket.enabled | quote }}
+            {{- end }}
+            {{- if $sf.bucket.enabled }}
+            {{- $b := $sf.bucket }}
+            # Which source wins a disagreement (decision D5), and the window.
+            - name: SOURCE_PRECEDENCE
+              value: {{ join "," $sf.sourcePrecedence | quote }}
+            - name: DISAGREEMENT_WINDOW_MINUTES
+              value: {{ $sf.disagreementWindowMinutes | int | quote }}
+            # The GCS source (scheduleFeed.bucket; the bucket and its IAM
+            # are charts/ds-ingest-bucket's).
+            - name: BUCKET_NAME
+              value: {{ $b.name | quote }}
+            {{- with $b.baseUrl }}
+            - name: BUCKET_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            # The reader key, mounted from scheduleFeed.bucket.existingSecret.
+            - name: GOOGLE_SERVICE_ACCOUNT_PATH
+              value: /var/run/secrets/distant-signal/gcs/service-account.json
+            - name: BUCKET_EXPECTED_KEYS
+              value: {{ join "," $b.expectedKeys | quote }}
+            - name: BUCKET_POLL_INTERVAL_SECS
+              value: {{ $b.pollIntervalSecs | int64 | quote }}
+            - name: BUCKET_DELETE_MIN_AGE_SECS
+              value: {{ $b.deleteMinAgeSecs | int64 | quote }}
+            - name: BUCKET_ARCHIVE_KEEP
+              value: {{ $b.archiveKeep | int64 | quote }}
+            - name: BUCKET_MAX_OBJECT_BYTES
+              value: {{ $b.maxObjectBytes | int64 | quote }}
+            - name: BUCKET_MAX_DOWNLOADS_PER_POLL
+              value: {{ $b.maxDownloadsPerPoll | int64 | quote }}
+            - name: BUCKET_MAX_DOWNLOAD_BYTES_PER_HOUR
+              value: {{ $b.maxDownloadBytesPerHour | int64 | quote }}
+            - name: BUCKET_MAX_DOWNLOAD_BYTES_PER_DAY
+              value: {{ $b.maxDownloadBytesPerDay | int64 | quote }}
+            - name: BUCKET_MAX_BACKOFF_SECS
+              value: {{ $b.maxBackoffSecs | int64 | quote }}
+            {{- if $b.auditLogs.ship }}
+            # Cloud Audit Logs to stdout (schedule_ingest::bucket_access).
+            - name: BUCKET_AUDIT_LOGS_SHIP
+              value: "true"
+            - name: BUCKET_AUDIT_LOGS_BUCKET
+              value: {{ $b.auditLogs.bucket | quote }}
+            - name: BUCKET_AUDIT_LOGS_POLL_INTERVAL_SECS
+              value: {{ $b.auditLogs.pollIntervalSecs | int64 | quote }}
+            {{- end }}
             {{- end }}
 {{- end }}

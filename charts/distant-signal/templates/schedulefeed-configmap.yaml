@@ -1,4 +1,4 @@
-{{- if .Values.scheduleFeed.enabled }}
+{{- if and .Values.scheduleFeed.enabled .Values.scheduleFeed.sftp.enabled }}
 {{/*
 The script itself is files/schedule-sftp-entrypoint.sh, embedded verbatim
 with .Files.Get: a static shell script with no Go-template interpolation

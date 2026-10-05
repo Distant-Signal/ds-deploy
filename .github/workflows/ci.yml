@@ -710,11 +710,20 @@ jobs:
       # mode: both buckets private (UBLA, enforced public access
       # prevention), the delivery bucket's versioning, soft delete and
       # lifecycle, every grant bucket-level and to service accounts only,
-      # exactly the publisher and reader bindings, and bad values (no
-      # publisher members, public members, admin roles) refuse to render.
-      # Here rather than in helm-lint: it needs the pinned PyYAML above.
+      # exactly the publisher and reader bindings, the kill-switch labels
+      # and no crossplane.io/paused, bad values (no publisher members,
+      # public members, admin roles) refuse to render, and every resource
+      # validates against provider-upjet-gcp's CRD schemas (downloaded and
+      # checksum-verified by the script). Here rather than in helm-lint:
+      # it needs the pinned PyYAML above.
       - name: ds-ingest-bucket chart policies
-        run: uv run --no-sync scripts/check-ingest-bucket-chart.py
+        run: uv run --no-sync scripts/check-ingest-bucket-chart.py --download-crds "${RUNNER_TEMP}/crossplane-crds"
+
+      # charts/distant-signal's schedulefeed in each source mode (SFTP only,
+      # bucket only, both, neither): what renders, the ingest env contract,
+      # the reader key mount, alerts, and bad values refusing to render.
+      - name: schedulefeed chart sources
+        run: uv run --no-sync scripts/check-schedulefeed-chart.py
 
   # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
   # `helm lint` + `helm template` against both the chart's own defaults and
@@ -1082,8 +1091,13 @@ jobs:
           grep -A4 'name: RUST_LOG$' <<<"${dep}" | grep -q 'secretKeyRef' || fail "an extraEnv valueFrom must replace the chart's value"
           if grep -A1 'name: RUST_LOG$' <<<"${dep}" | grep -q 'value:'; then fail "the replaced entry must not keep the chart's value"; fi
           # No container anywhere repeats a name (containers are the
-          # 8-space list items, their env entries the 12-space ones).
+          # 8-space list items, their env entries the 12-space ones),
+          # including schedulefeed's ingest with the bucket source's env.
           all=$(render -f charts/distant-signal/values-example.yaml \
+            --set scheduleFeed.enabled=true --set scheduleFeed.sftp.authMethod=password \
+            --set scheduleFeed.bucket.enabled=true \
+            --set scheduleFeed.bucket.name=example-ds-ingest \
+            --set scheduleFeed.bucket.existingSecret=distant-signal-schedulefeed-bucket \
             --set 'pollers.tfl.extraEnv[0].name=RUST_LOG' --set-string 'pollers.tfl.extraEnv[0].value=debug')
           dups=$(awk '/^---/{doc++} /^        - name: /{c=$NF} /^            - name: [A-Z_][A-Z0-9_]*$/{print doc, c, $NF}' <<<"${all}" | sort | uniq -d)
           [[ -z "${dups}" ]] || fail "repeated env names: ${dups}"

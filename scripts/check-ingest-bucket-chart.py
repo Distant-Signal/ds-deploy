@@ -2,7 +2,7 @@
 # ruff: noqa: T201  # a CLI whose output (the failures) is stdout
 """Render charts/ds-ingest-bucket and check its GCS bucket and IAM settings.
 
-  scripts/check-ingest-bucket-chart.py [--helm HELM]
+  scripts/check-ingest-bucket-chart.py [--helm HELM] [--crds DIR | --download-crds DIR]
 
 Renders the chart with ci/example-values.yaml in several modes and checks:
 
@@ -27,19 +27,35 @@ Renders the chart with ci/example-values.yaml in several modes and checks:
     the audit-log bucket;
   - usage alerts and Pub/Sub render only when enabled, and the topic only
     accepts the Cloud Storage service agent;
-  - bad values fail to render, including enabled with no publisher members.
+  - every publisher and reader BucketIAMMember carries the kill-switch
+    label `ds-ingest-bucket/kill-switch-group: publisher|reader` (the
+    selector for Ranma's kill-switch watcher, decision D13), the audit-sink
+    binding has none, and no rendered resource carries a
+    `crossplane.io/paused` annotation (pausing is Ranma's, never the
+    chart's);
+  - bad values fail to render, including enabled with no publisher members;
+  - with the provider's CRDs (--crds DIR, or --download-crds DIR, which
+    fetches PROVIDER_UPJET_GCP_VERSION's CRDs and checks their SHA-256), the
+    spec of every rendered resource (default, every feature on, and CMEK)
+    against its CRD's openAPIV3Schema: a served apiVersion, no unknown
+    field, the right types, enums, required fields, and the
+    `spec.forProvider.<x> is a required parameter` CEL rules. Without
+    either flag this check is skipped (with a note on stderr); CI always
+    downloads.
 
 Exit 1 with one line per failed check. Needs helm on PATH (or --helm) and
 PyYAML (pinned in pyproject.toml's `lint` dependency group).
 """
 
 import argparse
+import hashlib
 import pathlib
 import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+import urllib.request
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 import yaml
@@ -92,8 +108,56 @@ ALERTS_SET = (
     "usageAlerts.notificationChannels[0]=projects/example-project/notificationChannels/0",
 )
 
+CMEK_SET = (
+    "--set",
+    (
+        "bucket.encryption.defaultKmsKeyName="
+        "projects/example-project/locations/europe-west2/keyRings/r/cryptoKeys/k"
+    ),
+)
+KILL_SWITCH = "ds-ingest-bucket/kill-switch-group"
+PAUSED = "crossplane.io/paused"
+
+# The provider CRDs for --download-crds, checked against these SHA-256s
+# (fetched 2026-10-02). Not tracked by Renovate: bump both together by hand,
+# to the provider version Ranma-Config installs.
+PROVIDER_UPJET_GCP_VERSION = "3.0.0"
+CRD_SHA256 = {
+    "storage.gcp.m.upbound.io_buckets.yaml": (
+        "3f4fcc974532b86e49af744c432aa1feecba9911fc81dbe4093b4bac86a737f0"
+    ),
+    "storage.gcp.m.upbound.io_bucketiammembers.yaml": (
+        "448704a135030012b04535827a55cbba6480a44351727371103969b09ac571a2"
+    ),
+    "storage.gcp.m.upbound.io_notifications.yaml": (
+        "14a770e96674348f37993e6292e8d8577586eea92a4885c47115ff5ea411daca"
+    ),
+    "cloudplatform.gcp.m.upbound.io_projectiamcustomroles.yaml": (
+        "a1fc3f7da5bea5dbf4b2dd42e54f0c9c6429e4dc240c7627d0a28232a44a91a7"
+    ),
+    "monitoring.gcp.m.upbound.io_alertpolicies.yaml": (
+        "76d162546dc90779db96e5ce733b9bc323f253650417f945478079cf8a41e72a"
+    ),
+    "pubsub.gcp.m.upbound.io_topics.yaml": (
+        "908ff37dc3f20553438fef86a8e62447132b3675497655c20691c1eba4899eb0"
+    ),
+    "pubsub.gcp.m.upbound.io_subscriptions.yaml": (
+        "3c50f42fefdcc64386b48eb6976a49f98aed3a71c562e43ec9665606ebda8aff"
+    ),
+    "pubsub.gcp.m.upbound.io_topiciammembers.yaml": (
+        "dad422c633a72a786d861018be0727d2f89df4a56ef53b5ea41f70e5859ecb7b"
+    ),
+    "pubsub.gcp.m.upbound.io_subscriptioniammembers.yaml": (
+        "f2acddd4c20ad837fbdae2de54303d2babb6119e92f6adc5d4bcae5e4c956494"
+    ),
+}
+REQUIRED_PARAMETER = re.compile(r"^spec\.forProvider\.(\w+) is a required parameter$")
+
 type Doc = dict[str, object]
 type Binding = tuple[str, str, str]  # (bucket or topic/subscription, role, member)
+type Schema = Mapping[str, object]
+# (group, version, kind) -> (served, openAPIV3Schema)
+type Crds = dict[tuple[str, str, str], tuple[bool, Schema]]
 
 
 class Checker:
@@ -336,6 +400,135 @@ def check_alerts(c: Checker, docs: Sequence[Doc]) -> None:
         c.check(ok=bool(fp.get("notificationChannels")), message=f"{name}: no channel")
 
 
+def check_kill_switch(c: Checker, docs: Sequence[Doc]) -> None:
+    """Publisher/reader bindings carry the D13 label; nothing is ever paused."""
+    expected = {READER: "reader", SINK: None} | dict.fromkeys(PUBLISHERS, "publisher")
+    for name, doc in by_kind(docs, "BucketIAMMember").items():
+        member = str(for_provider(doc)["member"])
+        meta = cast("dict[str, dict[str, str]]", doc["metadata"])
+        label = meta.get("labels", {}).get(KILL_SWITCH)
+        c.check(
+            ok=member in expected and label == expected[member],
+            message=f"{name}: {KILL_SWITCH}={label} for {member}",
+        )
+    for doc in docs:
+        meta = cast("dict[str, dict[str, str]]", doc["metadata"])
+        c.check(
+            ok=PAUSED not in (meta.get("annotations") or {}),
+            message=f"{doc['kind']}/{meta['name']}: renders {PAUSED}",
+        )
+
+
+def download_crds(directory: pathlib.Path) -> pathlib.Path:
+    """Fetch CRD_SHA256's files into `directory` (once), checksum-verified."""
+    base = (
+        "https://raw.githubusercontent.com/crossplane-contrib/provider-upjet-gcp"
+        f"/v{PROVIDER_UPJET_GCP_VERSION}/package/crds/"
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, expected in CRD_SHA256.items():
+        target = directory / name
+        if not target.exists():
+            with urllib.request.urlopen(base + name) as response:  # noqa: S310  # a fixed https URL
+                target.write_bytes(response.read())
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        if digest != expected:
+            target.unlink()
+            msg = f"{name}: sha256 {digest}, expected {expected}"
+            raise SystemExit(msg)
+    return directory
+
+
+def load_crds(directory: pathlib.Path) -> Crds:
+    """Every CRD version in `directory`'s YAML files."""
+    out: Crds = {}
+    for path in sorted(directory.glob("*.yaml")):
+        crd = cast("dict[str, dict[str, object]]", yaml.safe_load(path.read_text()))
+        crd_spec = crd["spec"]
+        kind = cast("dict[str, str]", crd_spec["names"])["kind"]
+        for v in cast("list[dict[str, object]]", crd_spec["versions"]):
+            schema = cast("dict[str, Schema]", v["schema"])["openAPIV3Schema"]
+            key = (str(crd_spec["group"]), str(v["name"]), kind)
+            out[key] = (v.get("served") is True, schema)
+    return out
+
+
+TYPES: dict[str, tuple[type, ...]] = {
+    "object": (dict,),
+    "array": (list,),
+    "string": (str,),
+    "integer": (int,),
+    "number": (int, float),
+    "boolean": (bool,),
+}
+
+
+def walk(schema: Schema, value: object, path: str, errors: list[str]) -> None:
+    """Append every way `value` breaks the structural `schema` to `errors`."""
+    kind = str(schema.get("type", ""))
+    ok = isinstance(value, TYPES.get(kind, (object,)))
+    if schema.get("x-kubernetes-int-or-string"):
+        ok = isinstance(value, (int, str))
+    if not ok or (isinstance(value, bool) and kind in {"integer", "number"}):
+        errors.append(f"{path}: expected {kind}, got {type(value).__name__}")
+        return
+    if "enum" in schema and value not in cast("list[object]", schema["enum"]):
+        errors.append(f"{path}: {value!r} not in {schema['enum']}")
+    if isinstance(value, list):
+        items = cast("Schema", schema.get("items", {}))
+        for i, item in enumerate(cast("list[object]", value)):
+            walk(items, item, f"{path}[{i}]", errors)
+    if isinstance(value, dict):
+        walk_object(schema, cast("dict[str, object]", value), path, errors)
+
+
+def walk_object(
+    schema: Schema, obj: dict[str, object], path: str, errors: list[str]
+) -> None:
+    """`walk` for an object: required fields, then each field."""
+    open_ended = schema.get("x-kubernetes-preserve-unknown-fields") is True
+    props = cast("dict[str, Schema] | None", schema.get("properties"))
+    extra = schema.get("additionalProperties")
+    errors.extend(
+        f"{path}.{r}: required"
+        for r in cast("list[str]", schema.get("required", []))
+        if r not in obj
+    )
+    for key, item in obj.items():
+        if props is not None and key in props:
+            walk(props[key], item, f"{path}.{key}", errors)
+        elif isinstance(extra, dict):
+            walk(cast("Schema", extra), item, f"{path}.{key}", errors)
+        elif props is not None and not open_ended:
+            errors.append(f"{path}.{key}: unknown field")
+
+
+def check_schema(c: Checker, crds: Crds, docs: Sequence[Doc]) -> None:
+    """Every rendered resource's spec against its served CRD version."""
+    for doc in docs:
+        group, _, version = str(doc["apiVersion"]).rpartition("/")
+        name = f"{doc['kind']}/{cast('dict[str, str]', doc['metadata'])['name']}"
+        served, schema = crds.get((group, version, str(doc["kind"])), (False, {}))
+        if not served:
+            c.check(ok=False, message=f"{name}: {doc['apiVersion']} not served")
+            continue
+        spec_schema = cast("dict[str, dict[str, Schema]]", schema)["properties"]["spec"]
+        walk(spec_schema, doc["spec"], f"{name}: spec", c.failures)
+        rules = cast(
+            "list[dict[str, str]]", spec_schema.get("x-kubernetes-validations", [])
+        )
+        given = cast("dict[str, dict[str, object]]", doc["spec"])
+        for rule in rules:
+            match = REQUIRED_PARAMETER.match(rule.get("message", ""))
+            if match:
+                field = match[1]
+                c.check(
+                    ok=field in given.get("forProvider", {})
+                    or field in given.get("initProvider", {}),
+                    message=f"{name}: spec.forProvider.{field}: a required parameter",
+                )
+
+
 def check_failures(c: Checker) -> None:
     """Bad values must fail to render."""
     cases: list[tuple[str, list[str]]] = [
@@ -379,8 +572,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--helm", default=shutil.which("helm") or "helm", help="helm binary"
     )
+    crd_flags = parser.add_mutually_exclusive_group()
+    crd_flags.add_argument(
+        "--crds",
+        type=pathlib.Path,
+        metavar="DIR",
+        help="check every resource against the CRD YAMLs in DIR",
+    )
+    crd_flags.add_argument(
+        "--download-crds",
+        type=pathlib.Path,
+        metavar="DIR",
+        help=f"download provider-upjet-gcp v{PROVIDER_UPJET_GCP_VERSION}'s CRDs "
+        "into DIR, verify them, and check against them",
+    )
     args = parser.parse_args(argv)
     c = Checker(args.helm)
+    crd_dir: pathlib.Path | None = args.crds
+    if args.download_crds is not None:
+        crd_dir = download_crds(args.download_crds)
 
     code, out = c.render("--set", "enabled=false")
     c.check(
@@ -401,6 +611,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_iam(c, everything, pubsub=True)
     check_pubsub(c, everything)
     check_alerts(c, everything)
+
+    cmek = c.docs(*CMEK_SET)
+    for docs in (default, everything, cmek):
+        check_kill_switch(c, docs)
+    if crd_dir is None:
+        print("CRD schema check skipped: no --crds/--download-crds", file=sys.stderr)
+    else:
+        crds = load_crds(crd_dir)
+        for docs in (default, everything, cmek):
+            check_schema(c, crds, docs)
 
     check_failures(c)
 

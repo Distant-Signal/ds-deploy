@@ -382,3 +382,21 @@ final check time, and `DistantSignalScheduleReferencePublishStale` fires. To
 widen the account without a code change, add the permission to
 `scheduleFeed.sftp.permissions` (for example `rename`, if DTD switches to
 uploading under a temporary name); the pod restarts with the new policy.
+
+## Alongside the bucket source
+
+The same feed can also arrive through a Google Cloud Storage bucket
+([schedule-feed-bucket.md](schedule-feed-bucket.md)), as well as or instead
+of SFTP. `scheduleFeed.sftp.enabled` (default `true`) switches this receiver;
+`scheduleFeed.bucket.enabled` the bucket. With both on, each delivery is
+ingested once (deduplicated by SHA-256) and the bucket copy wins a
+disagreement.
+
+Bucket only (`scheduleFeed.sftp.enabled: false`) removes the `sftp`
+container, its NodePort Service (the cluster's only public listener), host
+keys, entrypoint, SFTP ingress rule, telemetry endpoint and the
+`distant-signal.schedule-sftp` alerts. The PVC and the ingest/reference
+containers stay. Ranma then drops the SFTP NodePort from
+`public-exposure-check.yml` and its monitoring exception. Turn SFTP off only
+after the bucket has carried the feed for a while (the adoption steps in
+schedule-feed-bucket.md).

@@ -48,13 +48,14 @@ spec:
     combiner: OR
     notificationChannels:
       {{- toYaml $a.notificationChannels | nindent 6 }}
+    # An object, not a list (provider-upjet-gcp v1beta1 AlertPolicy).
     documentation:
-      - content: >-
-          The schedule-feed landing bucket {{ $.Values.bucket.name }} passed its
-          {{ $p.display }} limit. It holds only timetable and CORPUS
-          deliveries, so this means a looping reader, a runaway publisher
-          or a misused identity. Runbook: docs/schedule-feed-bucket.md.
-        mimeType: text/markdown
+      content: >-
+        The schedule-feed landing bucket {{ $.Values.bucket.name }} passed its
+        {{ $p.display }} limit. It holds only timetable and CORPUS
+        deliveries, so this means a looping reader, a runaway publisher
+        or a misused identity. Runbook: docs/schedule-feed-bucket.md.
+      mimeType: text/markdown
     conditions:
       - displayName: {{ printf "%s above %d" $p.display (int64 $p.threshold) | quote }}
         conditionThreshold:

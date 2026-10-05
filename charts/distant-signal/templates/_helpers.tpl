@@ -1701,3 +1701,84 @@ toYaml, as they always have.
 {{- end -}}
 {{- join "\n" $out -}}
 {{- end }}
+
+{{/*
+distant-signal.scheduleFeedValidateBucket: refuse bad scheduleFeed.bucket
+values (and the two source settings) at render time, so a typo can't reach
+schedule-ingest. Called from schedulefeed-deployment.yaml only when
+scheduleFeed.bucket.enabled. Each message names the key.
+*/}}
+{{- define "distant-signal.scheduleFeedValidateBucket" -}}
+{{- $sf := .Values.scheduleFeed -}}
+{{- $b := $sf.bucket -}}
+{{- $bucketName := "^[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]$" -}}
+{{- if ne ($b.provider | default "" | toString) "gcs" -}}
+{{- fail (printf "scheduleFeed.bucket.provider must be \"gcs\" (the only provider implemented), got %q" ($b.provider | default "" | toString)) -}}
+{{- end -}}
+{{- if not (regexMatch $bucketName ($b.name | default "" | toString)) -}}
+{{- fail (printf "scheduleFeed.bucket.name must be a GCS bucket name (3-63 characters of a-z, 0-9, - and _, starting and ending with a letter or digit, no dots), got %q" ($b.name | default "" | toString)) -}}
+{{- end -}}
+{{- $secret := $b.existingSecret | default "" | toString -}}
+{{- if not (and (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $secret) (le (len $secret) 253)) -}}
+{{- fail (printf "scheduleFeed.bucket.existingSecret must name the pre-existing Secret holding the reader's service-account key (sealed in deploy config; never put the key in values), got %q" $secret) -}}
+{{- end -}}
+{{- if not (regexMatch "^[-._a-zA-Z0-9]+$" ($b.serviceAccountKey | default "" | toString)) -}}
+{{- fail (printf "scheduleFeed.bucket.serviceAccountKey must be a Secret key (letters, digits, -, _ and .), got %q" ($b.serviceAccountKey | default "" | toString)) -}}
+{{- end -}}
+{{- $keys := $b.expectedKeys | default list -}}
+{{- if not (and (kindIs "slice" $keys) $keys) -}}
+{{- fail "scheduleFeed.bucket.expectedKeys must list at least one object name (glob) to download" -}}
+{{- end -}}
+{{- range $keys -}}
+{{- $k := . | default "" | toString -}}
+{{- if or (eq $k "") (contains "/" $k) (contains "," $k) (gt (len $k) 1024) -}}
+{{- fail (printf "scheduleFeed.bucket.expectedKeys: %q must be a non-empty name at the bucket root (no / or ,) of at most 1024 bytes" $k) -}}
+{{- end -}}
+{{- end -}}
+{{- with $b.baseUrl -}}
+{{- if not (regexMatch "^https?://[^/]+" (toString .)) -}}
+{{- fail (printf "scheduleFeed.bucket.baseUrl must be empty or an http(s):// URL, got %q" (toString .)) -}}
+{{- end -}}
+{{- end -}}
+{{- $poll := $b.pollIntervalSecs | int64 -}}
+{{- if lt $poll 60 -}}
+{{- fail (printf "scheduleFeed.bucket.pollIntervalSecs must be at least 60, got %d" $poll) -}}
+{{- end -}}
+{{- if lt ($b.maxBackoffSecs | int64) $poll -}}
+{{- fail (printf "scheduleFeed.bucket.maxBackoffSecs (%d) must be at least scheduleFeed.bucket.pollIntervalSecs (%d)" ($b.maxBackoffSecs | int64) $poll) -}}
+{{- end -}}
+{{- $age := $b.deleteMinAgeSecs | int64 -}}
+{{- if or (lt $age 0) (ge $age 518400) -}}
+{{- fail (printf "scheduleFeed.bucket.deleteMinAgeSecs must be at least 0 and under 518400 (6 days; the bucket's 7-day lifecycle rule is the backstop), got %d" $age) -}}
+{{- end -}}
+{{- if lt ($b.archiveKeep | int64) 1 -}}
+{{- fail "scheduleFeed.bucket.archiveKeep must be at least 1" -}}
+{{- end -}}
+{{- if lt ($b.maxDownloadsPerPoll | int64) 1 -}}
+{{- fail "scheduleFeed.bucket.maxDownloadsPerPoll must be at least 1" -}}
+{{- end -}}
+{{- $object := $b.maxObjectBytes | int64 -}}
+{{- $hour := $b.maxDownloadBytesPerHour | int64 -}}
+{{- $day := $b.maxDownloadBytesPerDay | int64 -}}
+{{- if not (and (ge $object 1) (le $object $hour) (le $hour $day)) -}}
+{{- fail (printf "scheduleFeed.bucket needs 1 <= maxObjectBytes <= maxDownloadBytesPerHour <= maxDownloadBytesPerDay, got %d, %d and %d" $object $hour $day) -}}
+{{- end -}}
+{{- $order := $sf.sourcePrecedence | default list -}}
+{{- if not (and (kindIs "slice" $order) (eq (len $order) 2) (has "bucket" $order) (has "sftp" $order)) -}}
+{{- fail (printf "scheduleFeed.sourcePrecedence must be [bucket, sftp] or [sftp, bucket], got %s" (toJson $order)) -}}
+{{- end -}}
+{{- if lt ($sf.disagreementWindowMinutes | int64) 0 -}}
+{{- fail "scheduleFeed.disagreementWindowMinutes must be at least 0" -}}
+{{- end -}}
+{{- with $b.auditLogs -}}
+{{- if .ship -}}
+{{- $audit := .bucket | default "" | toString -}}
+{{- if or (not (regexMatch $bucketName $audit)) (eq $audit ($b.name | toString)) -}}
+{{- fail (printf "scheduleFeed.bucket.auditLogs.ship needs scheduleFeed.bucket.auditLogs.bucket: the audit-log bucket's name (no dots), not scheduleFeed.bucket.name; got %q" $audit) -}}
+{{- end -}}
+{{- if lt (.pollIntervalSecs | int64) 60 -}}
+{{- fail (printf "scheduleFeed.bucket.auditLogs.pollIntervalSecs must be at least 60, got %d" (.pollIntervalSecs | int64)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

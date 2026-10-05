@@ -122,6 +122,7 @@ Verify the api is serving:
 {{- end }}
 
 {{- if .Values.scheduleFeed.enabled }}
+{{- if .Values.scheduleFeed.sftp.enabled }}
 
 Connection details to give to DTD for pushing the schedule feed:
 
@@ -162,6 +163,26 @@ so DTD's push client can trust it:
   # OpenSSH's native container format -- whether `ssh-keygen -lf` actually
   # parses PKCS8 PEM directly from stdin like this has NOT been verified
   # against a real key in this pass; a conversion step may be required.
+{{- else }}
+
+SFTP receiver disabled (bucket-only): scheduleFeed.sftp.enabled is false, so
+there is no SFTP Service, NodePort or host key.
+{{- end }}
+{{- with .Values.scheduleFeed.bucket }}
+{{- if .enabled }}
+
+Schedule feed bucket source (docs/schedule-feed-bucket.md):
+
+  Bucket:        gs://{{ .name }}
+  Reader key:    Secret {{ .existingSecret }}, key {{ .serviceAccountKey }}. Sealed in
+                 deploy config, never set in values; the chart never renders it.
+                 Until it exists, the bucket source reports revoked access.
+  Expected keys: {{ join ", " .expectedKeys }}
+
+  charts/ds-ingest-bucket must grant this reader (its reader.member) on the
+  bucket, or schedule-ingest raises DistantSignalScheduleBucketAccessRevoked.
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if and .Values.redis.enabled .Values.redis.persistence.enabled (not .Values.redis.persistence.existingClaim) }}
 {{- $redisSize := include "distant-signal.redisPvcSize" . }}
