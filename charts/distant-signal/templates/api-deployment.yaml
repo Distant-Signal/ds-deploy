@@ -312,6 +312,8 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.timeouts.privateRequestTimeoutSecs | quote }}
             - name: API_HEADER_READ_TIMEOUT_SECS
               value: {{ .Values.api.timeouts.headerReadTimeoutSecs | quote }}
+            - name: API_UNAVAILABLE_RETRY_AFTER_SECS
+              value: {{ .Values.api.timeouts.unavailableRetryAfterSecs | quote }}
             - name: API_RATE_LIMIT_ENABLED
               value: {{ .Values.api.rateLimit.enabled | quote }}
             - name: API_RATE_LIMIT_TRUST_X_REAL_IP

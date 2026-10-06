@@ -116,6 +116,67 @@ isolated by the dead-letter path. full-coverage-consumer's
    retried, so nothing is lost until the stream's MAXLEN trims them: watch
    [DistantSignalMovementLagHigh](#distantsignalmovementlaghigh).
 
+### DistantSignalApiPublic5xx
+
+More than `api5xx.public.ratio` (5%) of api's public requests answered 5xx
+over `api5xx.window` (5m), with at least `minErrors` (3) of them, for `for`
+(10m). Public means every route except `/private/*`, `/public/health` and
+unmatched paths (`/{unmatched}`, scanner noise): what the frontend, the MCP
+and anyone else calling the API sees. The recording rules
+`distant_signal:api_requests:rate`, `distant_signal:api_5xx:rate` and
+`distant_signal:api_5xx:increase` carry a `scope` label (`public`,
+`ingest`).
+
+The cluster's own `DistantSignalApi5xx` (Ranma-Config) is one ratio over
+every route, so on 2026-10-01 the ingest retry storm (about 27 5xx a second
+on `/private/*`) hid what the public saw: about 20% of their few requests a
+minute failing for six hours.
+
+A 503 with `{"error":"service_unavailable"}` means a route could not reach
+the database (or Redis, or the IdP), see the 2026-10-06 entry in
+[the API changelog](api-changelog.md); a 500 is anything else.
+
+1. Check [DistantSignalApiDatabaseDown](#distantsignalapidatabasedown) and
+   [DistantSignalPostgresDown](#distantsignalpostgresdown) first.
+2. Which routes and codes:
+   `sum by (exported_endpoint, status) (increase(distant_signal_http_requests_total{status=~"5.."}[10m]))`.
+   Mostly 503: a dependency (api's log says "a dependency is unavailable;
+   answering 503"). Mostly 500: a bug or a failing query; api's error log
+   names the route's operation.
+3. A single route's 503s with "too many trip plans are being computed" in
+   the body is `/Trips/plan` shedding load, not an outage.
+
+### DistantSignalApiIngest5xx
+
+The same for the `/private/*` ingest routes, with at least `minErrors` (30)
+5xx in the window. The pollers and consumers retry with backoff (honouring
+`Retry-After` on a 503), so their data is late, not lost, until the
+movement-events stream's MAXLEN or a poller's retry budget runs out. See
+[DistantSignalConsumerApiCallsFailing](#distantsignalconsumerapicallsfailing)
+for the consumers' view and the same first steps as above.
+
+### Querying api request metrics
+
+- The route is the `exported_endpoint` label, not `endpoint`:
+  axum-prometheus names it `endpoint`, and the PodMonitor scrape sets its
+  own `endpoint` (`metrics`), so Prometheus renames api's to
+  `exported_endpoint`. The value is the route template
+  (`/Train/by-uid/{train_uid}/{date}`), never a concrete path.
+- api registers some series at 0 when it starts (`api::route_metrics`):
+  `http_requests_total` for the key public routes (`/Trips/plan`,
+  `/Train/by-uid/...`, line status, stations, trains search and resolve,
+  freshness, incidents, session) and every `/private` route, each with
+  status 200, 500 and 503; `http_requests_duration_seconds` for the key
+  public routes' 200s; and `api_trip_plan_graph_cache_total` for `hit` and
+  `miss`. Without that, a series appeared at 1 on its first request and
+  `increase()`/`rate()` never counted that request, so a rare route like
+  `/Trips/plan` read as zero across api's frequent restarts.
+- For any other route or status code the first request after a restart is
+  still invisible to `increase()`. For a rare route, sum over a window
+  longer than the restarts and read the raw counters
+  (`max_over_time(distant_signal_http_requests_total{exported_endpoint="/Trips/plan"}[1d])`
+  per pod) rather than trusting one `increase()`.
+
 ### DistantSignalAggregatorCycleFailing
 
 No aggregation cycle has succeeded for `cycleStalled.maxAgeSeconds`:

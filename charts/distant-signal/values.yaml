@@ -1301,11 +1301,15 @@ api:
   # requestTimeoutSecs (public routes) or privateRequestTimeoutSecs (the
   # /private ingest routes, which take up to 100 MB bodies) gets a 408; an
   # HTTP/1 client that hasn't sent its full headers within
-  # headerReadTimeoutSecs is disconnected.
+  # headerReadTimeoutSecs is disconnected. unavailableRetryAfterSecs is the
+  # Retry-After on a 503 (1-3600): a route that cannot reach the database
+  # answers 503 {"error":"service_unavailable","retryable":true} instead of
+  # a 500 (docs/api-changelog.md, 2026-10-06).
   timeouts:
     requestTimeoutSecs: 30
     privateRequestTimeoutSecs: 300
     headerReadTimeoutSecs: 10
+    unavailableRetryAfterSecs: 30
   # -- Per-client-IP rate limits (API-5, TRIPS-1; crates/api/src/rate_limit.rs).
   # 429 with Retry-After when exceeded; /private/* is never limited. The key
   # is the X-Real-IP header the frontend proxy sets from CF-Connecting-IP
@@ -3908,6 +3912,32 @@ metrics:
       minErrors: 3
       for: 10m
       severity: warning
+    # DistantSignalApiPublic5xx / DistantSignalApiIngest5xx: the share of
+    # api's requests answered 5xx (a dependency-unavailable 503 included)
+    # over `window`, split by route: `public` is every route except
+    # /private/*, /public/health and unmatched paths (scanner noise);
+    # `ingest` is /private/*. Fires when the ratio is above `ratio` AND at
+    # least `minErrors` 5xx happened in the window (public traffic is a few
+    # requests a minute, so one 500 would otherwise be 100%), for `for`.
+    # `for` is longer than `window`, so a burst shorter than for - window
+    # (an api rollout) never fires.
+    # routeLabel is the series' route label as Prometheus stores it:
+    # axum-prometheus calls it `endpoint`, and the PodMonitor scrape's own
+    # `endpoint` label renames it to `exported_endpoint`.
+    api5xx:
+      enabled: true
+      window: 5m
+      routeLabel: exported_endpoint
+      public:
+        ratio: 0.05
+        minErrors: 3
+        for: 10m
+        severity: warning
+      ingest:
+        ratio: 0.05
+        minErrors: 30
+        for: 10m
+        severity: warning
     # DistantSignalAggregatorCycleFailing / DistantSignalNotifierCycleFailing:
     # no successful aggregation cycle, or no successful run of one of the
     # notifier's line_status / forward_queue / skip_check loops, for

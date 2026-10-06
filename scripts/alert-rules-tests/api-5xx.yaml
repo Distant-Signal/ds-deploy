@@ -1,0 +1,81 @@
+# promtool unit tests for DistantSignalApiPublic5xx and
+# DistantSignalApiIngest5xx (see recorded-alerts.yaml's header for how
+# rules.yaml is rendered). The route label is `exported_endpoint`, as
+# Prometheus stores axum-prometheus' `endpoint` behind the PodMonitor.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # 2026-10-01 shape: from 5m one public request a minute answers 503 (20%
+  # of public traffic), /public/health answers 503 at a far higher rate,
+  # and the ingest routes are a 5xx storm. The public alert fires on the
+  # public share alone; health is not counted (it would make it 100%).
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/public/freshness", method="GET", status="200"}'
+        values: '0+4x40'
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/Trips/plan", method="GET", status="503"}'
+        values: '0x5 0+1x35'
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/public/health", method="GET", status="503"}'
+        values: '0x5 0+100x35'
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/private/stations", method="POST", status="503"}'
+        values: '0x5 0+1000x35'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: DistantSignalApiPublic5xx
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DistantSignalApiPublic5xx
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, scope: public}
+            exp_annotations:
+              summary: api answers 20% of public requests with 5xx
+              description: "Users, the frontend and the MCP get errors (503: a dependency is down). Check DistantSignalApiDatabaseDown and api's log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalapipublic5xx
+      - eval_time: 30m
+        alertname: DistantSignalApiIngest5xx
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, scope: ingest}
+            exp_annotations:
+              summary: api answers 100% of ingest requests with 5xx
+              description: "Producers' ingest POSTs fail and are retried. Check DistantSignalApiDatabaseDown and api's log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalapiingest5xx
+  # An ingest-only failure (half the POSTs) fires the ingest alert and not
+  # the public one; a single public 500 is a high ratio of very little
+  # traffic, below minErrors, and fires nothing.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/private/trust-event-backlog", method="POST", status="200"}'
+        values: '0+10x40'
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/private/trust-event-backlog", method="POST", status="500"}'
+        values: '0x5 0+10x35'
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/public/lines", method="GET", status="200"}'
+        values: '0+1x40'
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/public/lines", method="GET", status="500"}'
+        values: '0x5 1x35'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DistantSignalApiPublic5xx
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DistantSignalApiIngest5xx
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, scope: ingest}
+            exp_annotations:
+              summary: api answers 50% of ingest requests with 5xx
+              description: "Producers' ingest POSTs fail and are retried. Check DistantSignalApiDatabaseDown and api's log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalapiingest5xx
+  # A brief blip (an api rollout: 2 minutes of 503s) leaves the 5m window
+  # before the 10m `for` is up.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/public/freshness", method="GET", status="200"}'
+        values: '0+4x40'
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/public/freshness", method="GET", status="503"}'
+        values: '0x5 4 8 8x33'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DistantSignalApiPublic5xx
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalApiPublic5xx
+        exp_alerts: []

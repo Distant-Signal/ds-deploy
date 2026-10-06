@@ -56,7 +56,8 @@ so that clause fired on every rollout.
 {{- $apiDbDownOn := ($rule.apiDatabaseDown).enabled }}
 {{- $consumerApiOn := ($rule.consumerApiErrors).enabled }}
 {{- $cyclesOn := ($rule.cycleStalled).enabled }}
-{{- $healthOn := or $postgresDownOn $apiDbDownOn $consumerApiOn $cyclesOn }}
+{{- $api5xxOn := ($rule.api5xx).enabled }}
+{{- $healthOn := or $postgresDownOn $apiDbDownOn $consumerApiOn $cyclesOn $api5xxOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
 {{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn }}
 apiVersion: monitoring.coreos.com/v1
@@ -168,6 +169,53 @@ spec:
             summary: "{{ "{{ $labels.consumer }}" }} keeps failing its calls to api"
             description: "{{ "{{ $value | humanize }}" }} failed api calls in {{ .window }}, for {{ .for }}: its data is not landing. Check api and the consumer's log."
             runbook_url: {{ printf "%s#distantsignalconsumerapicallsfailing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.api5xx }}
+        {{- if .enabled }}
+        {{- /*
+        2026-10-01: the cluster's DistantSignalApi5xx (Ranma-Config) is one
+        ratio over every route, so the ingest retry storms (~27 5xx/s on
+        /private/*) drowned out what the public saw (~20% of a few requests
+        a minute). Split by route: `public` excludes /private/*, health and
+        unmatched paths; `ingest` is /private/*. The counter is
+        axum-prometheus' distant_signal_http_requests_total; its route label
+        is .routeLabel (`exported_endpoint` behind the PodMonitor). api
+        registers the key routes' 200/500/503 series at 0 at startup
+        (api::route_metrics), so a first 5xx after a restart counts.
+        */}}
+        {{- $label := .routeLabel }}
+        {{- $scopes := list
+          (list "public" (printf "%s!~\"/private/.*|/metrics|/public/health|/[{]unmatched[}]\"" $label))
+          (list "ingest" (printf "%s=~\"/private/.*\"" $label)) }}
+        {{- range $m := list (list "requests:rate" "rate" "") (list "5xx:rate" "rate" ", status=~\"5..\"") (list "5xx:increase" "increase" ", status=~\"5..\"") }}
+        - record: distant_signal:api_{{ index $m 0 }}
+          expr: |
+            {{- range $i, $s := $scopes }}
+            {{ if $i }}or {{ end }}label_replace(sum by (namespace) ({{ index $m 1 }}(distant_signal_http_requests_total{namespace="{{ $ns }}", {{ index $s 1 }}{{ index $m 2 }}}[{{ $rule.api5xx.window }}])), "scope", "{{ index $s 0 }}", "", "")
+            {{- end }}
+        {{- end }}
+        {{- range $scope := list "public" "ingest" }}
+        {{- $s := index $rule.api5xx $scope }}
+        - alert: DistantSignalApi{{ title $scope }}5xx
+          expr: |
+            distant_signal:api_5xx:rate{namespace="{{ $ns }}", scope="{{ $scope }}"} / distant_signal:api_requests:rate{namespace="{{ $ns }}", scope="{{ $scope }}"} > {{ $s.ratio }}
+            and distant_signal:api_5xx:increase{namespace="{{ $ns }}", scope="{{ $scope }}"} >= {{ $s.minErrors }}
+          for: {{ $s.for }}
+          labels:
+            severity: {{ $s.severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "api answers {{ "{{ $value | humanizePercentage }}" }} of {{ $scope }} requests with 5xx"
+            {{- if eq $scope "public" }}
+            description: "Users, the frontend and the MCP get errors (503: a dependency is down). Check DistantSignalApiDatabaseDown and api's log."
+            {{- else }}
+            description: "Producers' ingest POSTs fail and are retried. Check DistantSignalApiDatabaseDown and api's log."
+            {{- end }}
+            runbook_url: {{ printf "%s#distantsignalapi%s5xx" $runbook $scope | quote }}
+        {{- end }}
         {{- end }}
         {{- end }}
         {{- with $rule.cycleStalled }}
