@@ -4069,6 +4069,17 @@ metrics:
       enabled: true
       for: 15m
       severity: warning
+    # DistantSignalIncidentRemovalStalled: over `window`, api skipped the
+    # "Ended (no longer listed)" inference for an incomplete, empty or
+    # more-than-50%-shrunken incidents snapshot and applied it to none
+    # (distant_signal_api_incident_removal_inference_total{outcome}), so
+    # incidents that leave the Knowledgebase feed stay "active". 2h is 24
+    # polls at the 300s interval. Only when pollers.incidents.enabled.
+    incidentRemovalStalled:
+      enabled: true
+      window: 2h
+      for: 15m
+      severity: warning
     # DistantSignalNotifierPushDropped: at least minDrops decided push
     # notifications ended undelivered (queue full, every endpoint failed,
     # or the job errored) within `window`, per reason. Notifier delivery is

@@ -665,6 +665,33 @@ almost certainly a typo in a `lines/*.toml` `sample_stations` entry (e.g.
 excludes the station from the stale-station gauge and re-probes it hourly;
 the alert clears once api stops listing it or LDBWS accepts it.
 
+### DistantSignalIncidentRemovalStalled
+
+Over the last window (2h, 24 polls), api applied its "Ended (no longer
+listed)" inference to no incidents snapshot, and skipped at least one as
+`incomplete`, `empty` or a `shrink`
+(`api_incident_removal_inference_total{outcome}`; `too_soon` and
+`no_baseline` skips are benign and not counted). While this lasts,
+an incident that leaves the Knowledgebase feed without RDM clearing it stays
+"active" on the archive and in line status, the bug the inference exists to
+fix. See
+[the design](superpowers/specs/2026-10-06-incident-source-removal-design.md).
+
+- `incomplete`: poller-incidents skipped malformed `<PtIncident>` elements
+  (its "skipping malformed" warnings and
+  `poller_incidents_skipped_elements_total`), the feed body was cut short,
+  or an older poller image is sending the bare array. Find the bad element
+  in the poller's log; an old image needs redeploying.
+- `empty`: the feed returned no incidents at all, which looks like an RDM
+  outage or a changed URL or key. Check the poller's fetch.
+- `shrink`: every snapshot was more than 50% smaller than the one before.
+  One poll of that is expected after a large purge; the next becomes the
+  baseline. Repeated halving is an upstream problem.
+
+Nothing is lost while it fires: once a snapshot passes the guard, rows that
+are still missing are counted again, and two complete polls later they show
+as ended.
+
 ## pgBackRest
 
 Details and procedures: [Postgres PITR](postgres-pitr.md#alerts). The Job

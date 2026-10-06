@@ -1237,7 +1237,8 @@ scoping as above.
 {{- $pollerFailuresOn := and ($rule.pollerFailures).enabled $anyPoller }}
 {{- $ldbwsOn := and ($rule.ldbwsStalestStation).enabled (.Values.pollers.ldbws).enabled }}
 {{- $ldbwsInvalidCrsOn := and ($rule.ldbwsInvalidCrs).enabled (.Values.pollers.ldbws).enabled }}
-{{- if or $pollerFailuresOn $ldbwsOn $ldbwsInvalidCrsOn }}
+{{- $incidentRemovalOn := and ($rule.incidentRemovalStalled).enabled (.Values.pollers.incidents).enabled }}
+{{- if or $pollerFailuresOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -1343,6 +1344,36 @@ spec:
             summary: "LDBWS rejects sample station {{ "{{ $labels.crs }}" }} as an invalid CRS"
             description: "Almost certainly a lines/*.toml sample_stations typo. Fix it, run line-catalogue-validator and redeploy api."
             runbook_url: {{ printf "%s#distantsignalldbwsinvalidcrs" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.incidentRemovalStalled }}
+        {{- if $incidentRemovalOn }}
+        {{- /*
+        api skipped the "Ended (no longer listed)" inference for an
+        incomplete, empty or >50%-shrunken incidents snapshot, and applied it
+        to none, over `window`: incidents that leave the feed stay "active"
+        again. Counters registered at 0 by api at startup. too_soon and
+        no_baseline are benign and not counted. The per-outcome increase is
+        a recording rule to keep the alert's expr (and so its webhook) short.
+        */}}
+        - record: distant_signal:incident_removal_inference:increase
+          expr: |
+            sum by (namespace, outcome) (increase(distant_signal_api_incident_removal_inference_total{namespace="{{ $ns }}"}[{{ .window }}]))
+        - alert: DistantSignalIncidentRemovalStalled
+          expr: |
+            sum by (namespace) (distant_signal:incident_removal_inference:increase{namespace="{{ $ns }}", outcome=~"incomplete|empty|shrink"}) > 0
+            unless on (namespace)
+            distant_signal:incident_removal_inference:increase{namespace="{{ $ns }}", outcome="applied"} > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no incident snapshot fit to infer ended incidents in {{ .window }}"
+            description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents and api logs."
+            runbook_url: {{ printf "%s#distantsignalincidentremovalstalled" $runbook | quote }}
         {{- end }}
         {{- end }}
 {{- end }}

@@ -1,0 +1,65 @@
+# promtool unit tests for DistantSignalIncidentRemovalStalled (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered). Defaults:
+# window 2h, for 15m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # An older poller (bare array: every snapshot incomplete) and api's
+  # zero-registered `applied` series: fires once `for` has passed.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="incomplete"}'
+        values: '0+1x60'
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="applied"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalIncidentRemovalStalled
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DistantSignalIncidentRemovalStalled
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: no incident snapshot fit to infer ended incidents in 2h
+              description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents and api logs."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalincidentremovalstalled
+
+  # Healthy: inference applied every poll, with one shrink skip after a
+  # large nightly purge (the next poll applies again). No alert.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="applied"}'
+        values: '0+1x180'
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="shrink"}'
+        values: '0x60 1x120'
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="too_soon"}'
+        values: '0x30 1x150'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: DistantSignalIncidentRemovalStalled
+        exp_alerts: []
+      - eval_time: 170m
+        alertname: DistantSignalIncidentRemovalStalled
+        exp_alerts: []
+
+  # The feed went empty two hours after a healthy start: fires once the
+  # last applied poll has left the 2h window, plus `for`.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="applied"}'
+        values: '0+1x60 60x180'
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="empty"}'
+        values: '0x60 1+1x180'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: DistantSignalIncidentRemovalStalled
+        exp_alerts: []
+      - eval_time: 200m
+        alertname: DistantSignalIncidentRemovalStalled
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: no incident snapshot fit to infer ended incidents in 2h
+              description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents and api logs."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalincidentremovalstalled
