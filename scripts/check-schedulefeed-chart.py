@@ -14,8 +14,9 @@ checks:
     entries;
   - no container in any rendered document repeats an env name;
   - explicit equals implicit (CI's permanent byte-identity check): setting
-    `scheduleFeed.sftp.enabled=true` (the default) renders exactly what
-    leaving it unset does, for each of the --baseline value sets below;
+    `scheduleFeed.sftp.enabled=true` or `scheduleFeed.bucket.auth=key` (the
+    defaults) renders exactly what leaving it unset does, for each of the
+    --baseline value sets below;
   - schedulefeed with neither source (`scheduleFeed.sftp.enabled=false`,
     bucket off) refuses to render, naming both switches;
   - SFTP only (the default): no bucket or source-switch env on any
@@ -34,6 +35,16 @@ checks:
     443 (and a custom baseUrl's port);
   - audit-log shipping adds its three vars; extraEnv overrides a BUCKET_*
     var once;
+  - keyless (`scheduleFeed.bucket.auth=workloadIdentity`): ingest gets
+    GOOGLE_APPLICATION_CREDENTIALS (the ConfigMap's credential config) and
+    no GOOGLE_SERVICE_ACCOUNT_PATH; the ConfigMap is an optional 0440
+    volume and the projected token (audience, 3600 s, nothing else in the
+    projection) a second one, both mounted read-only on `ingest` only; no
+    Secret volume; the pod runs as the dedicated, non-automounting
+    `<release>-schedulefeed` ServiceAccount; the NetworkPolicy's internet
+    rule allows 443; key mode never renders that ServiceAccount unasked;
+    bad keyless values (no ConfigMap, a key-mode value, the shared
+    ServiceAccount, an unknown auth) refuse to render;
   - every env var of the chart -> schedule-ingest contract renders, and no
     mode renders a private key (outside the generated SFTP host keys) or a
     Secret named like the reader key's existingSecret;
@@ -46,7 +57,8 @@ checks:
 --baseline DIR renders DIR (a copy of charts/distant-signal from another
 commit, e.g. the merge base) and this chart with the same flags, for the
 defaults; schedulefeed on; schedulefeed on with the NetworkPolicy and its
-egress rules; and values-example.yaml. Every document must be identical
+egress rules; both sources (key auth); bucket only with the NetworkPolicy;
+and values-example.yaml. Every document must be identical
 after normalisation (the `data`/`stringData` of every Secret are dropped:
 genPrivateKey and randAlphaNum differ between runs). A difference fails
 with a unified diff per document. A one-off check for refactors; CI
@@ -122,6 +134,22 @@ AUDIT = (
     "scheduleFeed.bucket.auditLogs.bucket=example-ds-ingest-audit",
 )
 KEY_DIR = "/var/run/secrets/distant-signal/gcs"
+# Keyless (scheduleFeed.bucket.auth=workloadIdentity).
+WIF = (
+    "--set",
+    "scheduleFeed.bucket.enabled=true",
+    "--set",
+    "scheduleFeed.bucket.name=example-ds-ingest",
+    "--set",
+    "scheduleFeed.bucket.auth=workloadIdentity",
+    "--set",
+    "scheduleFeed.bucket.workloadIdentity.credentialConfigMap=ds-ingest-gcp-wif",
+    "--set",
+    "scheduleFeed.serviceAccount.create=true",
+)
+WIF_CONFIG = f"{KEY_DIR}/credential-config.json"
+WIF_TOKEN_DIR = "/var/run/secrets/distant-signal/gcs-token"  # noqa: S105  # a mount path, not a secret
+WIF_SERVICE_ACCOUNT = "distant-signal-schedulefeed"
 SOURCE_SWITCHES = {
     "SFTP_SOURCE_ENABLED",
     "BUCKET_SOURCE_ENABLED",
@@ -177,6 +205,18 @@ BASELINE_SETS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("defaults", ()),
     ("schedulefeed on", ON),
     ("schedulefeed on, network policy", (*ON, *NETPOL)),
+    ("both sources (key auth)", (*ON, *BUCKET)),
+    (
+        "bucket only, network policy",
+        (
+            *ON,
+            *BUCKET,
+            *SFTP_OFF,
+            *NETPOL,
+            "--set",
+            "networkPolicy.egress.internetPorts={443}",
+        ),
+    ),
     ("values-example.yaml", ("-f", EXAMPLE)),
 )
 
@@ -288,11 +328,18 @@ def check_baseline(c: Checker, base: pathlib.Path) -> None:
         compare(c, label, c.docs(*args, chart=base), c.docs(*args))
 
 
-def check_explicit_sftp(c: Checker) -> None:
-    """`scheduleFeed.sftp.enabled=true` renders exactly what the default does."""
-    explicit = ("--set", "scheduleFeed.sftp.enabled=true")
-    for label, args in BASELINE_SETS:
-        compare(c, f"explicit sftp, {label}", c.docs(*args), c.docs(*args, *explicit))
+def check_explicit_defaults(c: Checker) -> None:
+    """`sftp.enabled=true` and `bucket.auth=key` render exactly the default."""
+    for name, explicit in (
+        ("sftp", ("--set", "scheduleFeed.sftp.enabled=true")),
+        ("key auth", ("--set", "scheduleFeed.bucket.auth=key")),
+    ):
+        for label, args in BASELINE_SETS:
+            if name == "sftp" and SFTP_OFF[1] in args:
+                continue  # the set itself turns SFTP off
+            compare(
+                c, f"explicit {name}, {label}", c.docs(*args), c.docs(*args, *explicit)
+            )
 
 
 def check_neither_source(c: Checker) -> None:
@@ -619,6 +666,168 @@ def check_failures(c: Checker) -> None:
         )
 
 
+# Bad keyless values (on top of ON and WIF) and what the error must name.
+WIF_FAILURES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "no credential ConfigMap",
+        ("--set", "scheduleFeed.bucket.workloadIdentity.credentialConfigMap="),
+        "scheduleFeed.bucket.workloadIdentity.credentialConfigMap",
+    ),
+    (
+        "a key Secret too",
+        (
+            "--set",
+            "scheduleFeed.bucket.existingSecret=distant-signal-schedulefeed-bucket",
+        ),
+        "scheduleFeed.bucket.existingSecret",
+    ),
+    (
+        "a key name too",
+        ("--set", "scheduleFeed.bucket.serviceAccountKey=other.json"),
+        "scheduleFeed.bucket.serviceAccountKey",
+    ),
+    (
+        "the shared ServiceAccount",
+        ("--set", "scheduleFeed.serviceAccount.create=false"),
+        "scheduleFeed.serviceAccount.create",
+    ),
+    (
+        "the shared ServiceAccount by name",
+        (
+            "--set",
+            "scheduleFeed.serviceAccount.create=false",
+            "--set",
+            "scheduleFeed.serviceAccount.name=distant-signal",
+        ),
+        "dedicated ServiceAccount",
+    ),
+    (
+        "an unknown auth",
+        ("--set", "scheduleFeed.bucket.auth=wif"),
+        "scheduleFeed.bucket.auth",
+    ),
+    (
+        "no audience",
+        ("--set", "scheduleFeed.bucket.workloadIdentity.audience="),
+        "scheduleFeed.bucket.workloadIdentity.audience",
+    ),
+    (
+        "a bad ConfigMap key",
+        ("--set", "scheduleFeed.bucket.workloadIdentity.credentialConfigKey=a/b"),
+        "scheduleFeed.bucket.workloadIdentity.credentialConfigKey",
+    ),
+)
+
+# The keyless pod's two bucket volumes, exactly.
+WIF_VOLUMES = {
+    "bucket-credentials": {
+        "name": "bucket-credentials",
+        "configMap": {
+            "name": "ds-ingest-gcp-wif",
+            "optional": True,
+            "defaultMode": 0o440,
+            "items": [
+                {"key": "credential-config.json", "path": "credential-config.json"}
+            ],
+        },
+    },
+    "bucket-identity-token": {
+        "name": "bucket-identity-token",
+        "projected": {
+            "sources": [
+                {
+                    "serviceAccountToken": {
+                        "path": "token",
+                        "audience": "gcp-ds-ingest",
+                        "expirationSeconds": 3600,
+                    }
+                }
+            ]
+        },
+    },
+}
+
+
+def check_wif_pod(c: Checker, docs: Sequence[Doc]) -> None:
+    """Keyless: the ingest env, the two volumes and mounts, the ServiceAccount."""
+    ingest = env(container(docs, "ingest"))
+    got = ingest.get("GOOGLE_APPLICATION_CREDENTIALS", {}).get("value")
+    c.check(
+        ok=got == WIF_CONFIG,
+        message=f"keyless: GOOGLE_APPLICATION_CREDENTIALS={got!r}",
+    )
+    for name, value in BOTH_ENV.items():
+        want = None if name == "GOOGLE_SERVICE_ACCOUNT_PATH" else value
+        got = ingest.get(name, {}).get("value")
+        c.check(
+            ok=got == want, message=f"keyless: ingest {name}={got!r}, want {want!r}"
+        )
+    vols = {n: v for n, v in volumes(docs).items() if n.startswith("bucket")}
+    c.check(ok=vols == WIF_VOLUMES, message=f"keyless: bucket volumes {vols}")
+    ingest_mounts = mounts(container(docs, "ingest"))
+    for vol, path in (
+        ("bucket-credentials", KEY_DIR),
+        ("bucket-identity-token", WIF_TOKEN_DIR),
+    ):
+        mount = ingest_mounts.get(vol, {})
+        c.check(
+            ok=mount.get("mountPath") == path and mount.get("readOnly") is True,
+            message=f"keyless: ingest's {vol} mount {mount}",
+        )
+    for other in ("sftp", "reference"):
+        ctr = container(docs, other)
+        leaked = sorted(n for n in mounts(ctr) if n.startswith("bucket"))
+        leaked += sorted(n for n in env(ctr) if n.startswith(("BUCKET_", "GOOGLE_")))
+        c.check(ok=not leaked, message=f"keyless: {other} has {leaked}")
+    pod = pod_spec(docs)
+    c.check(
+        ok=pod.get("serviceAccountName") == WIF_SERVICE_ACCOUNT
+        and pod.get("automountServiceAccountToken") is False,
+        message=f"keyless: pod ServiceAccount {pod.get('serviceAccountName')}",
+    )
+    accounts = [
+        d for d in docs if name_of(d) == f"ServiceAccount/{WIF_SERVICE_ACCOUNT}"
+    ]
+    c.check(
+        ok=len(accounts) == 1
+        and accounts[0].get("automountServiceAccountToken") is False,
+        message=f"keyless: ServiceAccount/{WIF_SERVICE_ACCOUNT} {accounts}",
+    )
+
+
+def check_workload_identity(c: Checker) -> None:
+    """Keyless: pod, egress, key mode untouched, and the guards."""
+    netpol = (*NETPOL, "--set", "networkPolicy.egress.internetPorts={443}")
+    docs = c.docs(*ON, *WIF, *netpol)
+    check_wif_pod(c, docs)
+    ports = internet_ports(schedulefeed_policy(docs))
+    c.check(ok=HTTPS_PORT in ports, message=f"keyless: internet ports {ports}")
+    c.check(
+        ok=not any(
+            name_of(d) == f"ServiceAccount/{WIF_SERVICE_ACCOUNT}"
+            for d in c.docs(*ON, *BUCKET)
+        ),
+        message="key mode: the schedulefeed ServiceAccount rendered unasked",
+    )
+    code, out = c.render(
+        *ON,
+        *BUCKET,
+        "--set",
+        "scheduleFeed.bucket.workloadIdentity.credentialConfigMap=ds-ingest-gcp-wif",
+    )
+    c.check(
+        ok=code != 0 and "scheduleFeed.bucket.auth" in out,
+        message=f"key mode with a credential ConfigMap: {out.strip()[-300:]}",
+    )
+    for label, args, key in WIF_FAILURES:
+        code, out = c.render(*ON, *WIF, *args)
+        c.check(
+            ok=code != 0 and key in out,
+            message=f"keyless {label}: rendered, or the error doesn't name {key}: "
+            f"{out.strip()[-300:]}",
+        )
+
+
 def alert_groups(docs: Sequence[Doc]) -> dict[str, set[str]]:
     """Return every PrometheusRule group's alert names, by group name."""
     out: dict[str, set[str]] = {}
@@ -721,7 +930,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     check_no_duplicate_env(c, "schedulefeed on", c.docs(*ON))
     check_extra_env(c)
-    check_explicit_sftp(c)
+    check_explicit_defaults(c)
     check_neither_source(c)
     check_sftp_only(c)
     check_both(c)
@@ -730,10 +939,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_audit_and_override(c)
     check_contract_and_secrets(c)
     check_failures(c)
+    check_workload_identity(c)
     check_alerts(c)
     for label, values in (
         ("both", (*ON, *BUCKET)),
         ("bucket only", (*ON, *BUCKET, *SFTP_OFF, *AUDIT)),
+        ("keyless", (*ON, *WIF)),
     ):
         check_no_duplicate_env(c, label, c.docs(*values))
     if args.baseline is not None:

@@ -1233,6 +1233,56 @@ jobs:
           dups=$(awk '/^---/{doc++} /^        - name: /{c=$NF} /^            - name: [A-Z_][A-Z0-9_]*$/{print doc, c, $NF}' <<<"${all}" | sort | uniq -d)
           [[ -z "${dups}" ]] || fail "repeated env names: ${dups}"
 
+      # Keyless bucket access (scheduleFeed.bucket.auth=workloadIdentity):
+      # the projected token and the external_account config reach ingest,
+      # no key does, and the pod runs as its own ServiceAccount (Google's
+      # trust is pinned to its subject). scripts/check-schedulefeed-chart.py
+      # checks the rest (volumes exactly, guards, egress, key mode unchanged).
+      - name: helm template (schedulefeed keyless bucket)
+        run: |
+          set -euo pipefail
+          render() {
+            helm template distant-signal charts/distant-signal \
+              --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
+              --set trustConsumer.kafka.topic=test-topic \
+              --set trustConsumer.kafka.saslMechanism=PLAIN \
+              --set enricher.llm.baseUrl=http://llm.example.com/v1 \
+              --set enricher.llm.model=test-model \
+              --set api.sso.issuerUrl=https://sso.example.com \
+              --set api.sso.clientId=test-client \
+              --set api.sso.clientSecret=test-secret \
+              --set api.sso.redirectUrl=https://app.example.com/callback \
+              --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
+              --set scheduleFeed.enabled=true \
+              --set scheduleFeed.sftp.enabled=false \
+              --set scheduleFeed.bucket.enabled=true \
+              --set scheduleFeed.bucket.name=example-ds-ingest \
+              --set scheduleFeed.bucket.auth=workloadIdentity \
+              --set scheduleFeed.serviceAccount.create=true "$@"
+          }
+          fail() { echo "::error::$1"; exit 1; }
+          cm=(--set scheduleFeed.bucket.workloadIdentity.credentialConfigMap=ds-ingest-gcp-wif)
+          dep=$(render "${cm[@]}" --show-only templates/schedulefeed-deployment.yaml)
+          grep -A1 'name: GOOGLE_APPLICATION_CREDENTIALS$' <<<"${dep}" \
+            | grep -q 'value: /var/run/secrets/distant-signal/gcs/credential-config.json' \
+            || fail "ingest must get GOOGLE_APPLICATION_CREDENTIALS"
+          if grep -q 'GOOGLE_SERVICE_ACCOUNT_PATH' <<<"${dep}"; then fail "keyless must not render the key path"; fi
+          if grep -q 'secretName: distant-signal-schedulefeed-bucket' <<<"${dep}"; then fail "keyless must not mount a key Secret"; fi
+          grep -q 'audience: "gcp-ds-ingest"' <<<"${dep}" || fail "the projected token needs the gcp-ds-ingest audience"
+          grep -q 'mountPath: /var/run/secrets/distant-signal/gcs-token$' <<<"${dep}" \
+            || fail "the projected token must be mounted where credential_source.file points"
+          grep -q 'serviceAccountName: distant-signal-schedulefeed$' <<<"${dep}" \
+            || fail "keyless needs the dedicated schedulefeed ServiceAccount"
+          sa=$(render "${cm[@]}" --show-only templates/schedulefeed-serviceaccount.yaml)
+          grep -q 'automountServiceAccountToken: false' <<<"${sa}" \
+            || fail "the schedulefeed ServiceAccount must not automount its token"
+          set +e
+          out=$(render 2>&1)
+          status=$?
+          set -e
+          [[ "${status}" -ne 0 ]] || fail "keyless without a credential ConfigMap must fail the render"
+          grep -q 'workloadIdentity.credentialConfigMap' <<<"${out}" || fail "the error must name credentialConfigMap"
+
       # The push account's least-privilege policy reaches the entrypoint
       # (scripts/tests/ checks what the entrypoint does with it), and a
       # change to the entrypoint script rolls the pod.

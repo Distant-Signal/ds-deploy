@@ -174,9 +174,19 @@ there is no SFTP Service, NodePort or host key.
 Schedule feed bucket source (docs/schedule-feed-bucket.md):
 
   Bucket:        gs://{{ .name }}
+  {{- if include "distant-signal.scheduleFeedBucketWif" $ }}
+  Reader auth:   keyless (workload identity federation). ConfigMap
+                 {{ .workloadIdentity.credentialConfigMap }}, key {{ .workloadIdentity.credentialConfigKey }}: an external_account
+                 config whose credential_source.file is
+                 /var/run/secrets/distant-signal/gcs-token/token (token audience
+                 {{ .workloadIdentity.audience }}). Google must trust the subject
+                 system:serviceaccount:{{ $.Release.Namespace }}:{{ include "distant-signal.scheduleFeedServiceAccountName" $ }}.
+                 Until the ConfigMap exists, the bucket source reports revoked access.
+  {{- else }}
   Reader key:    Secret {{ .existingSecret }}, key {{ .serviceAccountKey }}. Sealed in
                  deploy config, never set in values; the chart never renders it.
                  Until it exists, the bucket source reports revoked access.
+  {{- end }}
   Expected keys: {{ join ", " .expectedKeys }}
 
   charts/ds-ingest-bucket must grant this reader (its reader.member) on the

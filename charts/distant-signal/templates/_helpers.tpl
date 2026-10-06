@@ -1023,6 +1023,39 @@ devAuthentikSecretName's exact pattern.
 {{- printf "%s-schedulefeed" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/*
+The schedulefeed pod's ServiceAccount: its dedicated one
+(scheduleFeed.serviceAccount, `<fullname>-schedulefeed` unless named) when
+created or named, else the shared one. Takes root.
+*/}}
+{{- define "distant-signal.scheduleFeedServiceAccountName" -}}
+{{- $sa := .Values.scheduleFeed.serviceAccount | default dict -}}
+{{- if $sa.create -}}
+{{- default (include "distant-signal.scheduleFeedFullname" .) $sa.name -}}
+{{- else if $sa.name -}}
+{{- $sa.name -}}
+{{- else -}}
+{{- include "distant-signal.serviceAccountName" . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+"true" when the schedulefeed bucket source is on with
+scheduleFeed.bucket.auth=workloadIdentity, empty otherwise (key mode, or
+the bucket off). Fails on an auth value other than key/workloadIdentity
+when the bucket is on. Takes root.
+*/}}
+{{- define "distant-signal.scheduleFeedBucketWif" -}}
+{{- $b := .Values.scheduleFeed.bucket -}}
+{{- if $b.enabled -}}
+{{- $auth := $b.auth | default "key" | toString -}}
+{{- if not (has $auth (list "key" "workloadIdentity")) -}}
+{{- fail (printf "scheduleFeed.bucket.auth must be \"key\" or \"workloadIdentity\", got %q" $auth) -}}
+{{- end -}}
+{{- if eq $auth "workloadIdentity" -}}true{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{- define "distant-signal.scheduleFeedSecretName" -}}
 {{- printf "%s-schedulefeed" (include "distant-signal.secretName" .) }}
 {{- end }}
@@ -1761,12 +1794,39 @@ scheduleFeed.bucket.enabled. Each message names the key.
 {{- if not (regexMatch $bucketName ($b.name | default "" | toString)) -}}
 {{- fail (printf "scheduleFeed.bucket.name must be a GCS bucket name (3-63 characters of a-z, 0-9, - and _, starting and ending with a letter or digit, no dots), got %q" ($b.name | default "" | toString)) -}}
 {{- end -}}
+{{- $dnsName := "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" -}}
 {{- $secret := $b.existingSecret | default "" | toString -}}
-{{- if not (and (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $secret) (le (len $secret) 253)) -}}
+{{- $wi := $b.workloadIdentity | default dict -}}
+{{- $cm := $wi.credentialConfigMap | default "" | toString -}}
+{{- if include "distant-signal.scheduleFeedBucketWif" . -}}
+{{- /* Keyless: the projected token, the external_account config from a
+ConfigMap, a dedicated ServiceAccount, and no key anywhere. */ -}}
+{{- if or $secret (ne ($b.serviceAccountKey | default "service-account.json" | toString) "service-account.json") -}}
+{{- fail "scheduleFeed.bucket.auth=workloadIdentity is keyless: unset scheduleFeed.bucket.existingSecret and scheduleFeed.bucket.serviceAccountKey (key mode only)" -}}
+{{- end -}}
+{{- if not (and (regexMatch $dnsName $cm) (le (len $cm) 253)) -}}
+{{- fail (printf "scheduleFeed.bucket.auth=workloadIdentity needs scheduleFeed.bucket.workloadIdentity.credentialConfigMap: the pre-existing ConfigMap holding the external_account credential configuration, got %q" $cm) -}}
+{{- end -}}
+{{- if not (regexMatch "^[-._a-zA-Z0-9]+$" ($wi.credentialConfigKey | default "" | toString)) -}}
+{{- fail (printf "scheduleFeed.bucket.workloadIdentity.credentialConfigKey must be a ConfigMap key (letters, digits, -, _ and .), got %q" ($wi.credentialConfigKey | default "" | toString)) -}}
+{{- end -}}
+{{- if not ($wi.audience | default "" | toString) -}}
+{{- fail "scheduleFeed.bucket.auth=workloadIdentity needs scheduleFeed.bucket.workloadIdentity.audience: the audience the Google workload identity pool provider allows" -}}
+{{- end -}}
+{{- $sa := $sf.serviceAccount | default dict -}}
+{{- if or (not (or $sa.create $sa.name)) (eq (include "distant-signal.scheduleFeedServiceAccountName" .) (include "distant-signal.serviceAccountName" .)) -}}
+{{- fail (printf "scheduleFeed.bucket.auth=workloadIdentity needs a dedicated ServiceAccount: set scheduleFeed.serviceAccount.create=true (or scheduleFeed.serviceAccount.name to an existing account other than the shared %q). Google trusts the subject system:serviceaccount:<namespace>:<that name>; on the shared account every pod in the release could read the bucket." (include "distant-signal.serviceAccountName" .)) -}}
+{{- end -}}
+{{- else -}}
+{{- if not (and (regexMatch $dnsName $secret) (le (len $secret) 253)) -}}
 {{- fail (printf "scheduleFeed.bucket.existingSecret must name the pre-existing Secret holding the reader's service-account key (sealed in deploy config; never put the key in values), got %q" $secret) -}}
 {{- end -}}
 {{- if not (regexMatch "^[-._a-zA-Z0-9]+$" ($b.serviceAccountKey | default "" | toString)) -}}
 {{- fail (printf "scheduleFeed.bucket.serviceAccountKey must be a Secret key (letters, digits, -, _ and .), got %q" ($b.serviceAccountKey | default "" | toString)) -}}
+{{- end -}}
+{{- if $cm -}}
+{{- fail "scheduleFeed.bucket.workloadIdentity.credentialConfigMap is set but scheduleFeed.bucket.auth is key: set auth=workloadIdentity (and unset existingSecret), or unset credentialConfigMap" -}}
+{{- end -}}
 {{- end -}}
 {{- $keys := $b.expectedKeys | default list -}}
 {{- if not (and (kindIs "slice" $keys) $keys) -}}

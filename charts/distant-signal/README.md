@@ -1801,6 +1801,16 @@ lifetime)` before it expires (default skew 60 s; set it through
 `enricher.extraEnv`), and keeps using the cached token while a refresh fails
 until it expires.
 
+LLM token usage, in every auth mode, for a keyless spend estimate (the
+query is in [docs/enricher-openai.md](../../docs/enricher-openai.md#cost)):
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `distant_signal_enricher_llm_tokens_total{call, kind}` | counter | Tokens the endpoint reported in each response's `usage`, by `call` (`primary`, `resolution_adversarial`, `severity_adversarial`, as on `enricher_llm_call_total`) and `kind` (`prompt`, `completion`, `reasoning`, `cached`). Counted on every 2xx response that carries `usage`, including ones the enricher then rejects (refused, empty, bad JSON), since those are billed; an endpoint that sends no `usage` counts nothing. `cached` is a subset of `prompt`, and `reasoning` a subset of `completion`: never add them on top. All 12 series are registered at 0. |
+| `distant_signal_enricher_llm_model_info{model, base_url_host}` | gauge | Always 1: the configured `enricher.llm.model` and the host (and port) of `enricher.llm.baseUrl`, for joining a price onto the counter. |
+
+No spend alert here: the OpenAI project's own budget is the limit.
+
 ### trustConsumer
 
 Resolves tracked trains from TRUST train movements. It reads
@@ -2264,6 +2274,8 @@ can run at once, deduplicated by content; with neither the render fails.
 | `scheduleFeed.tolerations` | `[]` | Pod tolerations. |
 | `scheduleFeed.affinity` | `{}` | Pod affinity rules. |
 | `scheduleFeed.podAnnotations` | `{}` | Pod annotations. |
+| `scheduleFeed.serviceAccount.create` | `false` | Create a dedicated ServiceAccount for the schedulefeed pod (`<fullname>-schedulefeed`, or `name`), with no RBAC and `automountServiceAccountToken: false`. Off: the pod uses the shared `serviceAccount`. Required (or `name`) by `scheduleFeed.bucket.auth=workloadIdentity`. |
+| `scheduleFeed.serviceAccount.name` | `""` | Its name. With `create: false`, an existing ServiceAccount, which must not be the shared one in `workloadIdentity` mode. |
 | `scheduleFeed.podSecurityContext` | `{fsGroup: 1000}` | `fsGroup: 1000` is required: the SFTPGo image runs as UID 1000 and does not chown a fresh volume. |
 
 ### workerHealth
@@ -2483,8 +2495,12 @@ Off by default; needs a schedule-ingest image with the bucket source.
 | `scheduleFeed.bucket.provider` | `gcs` | Only `gcs` is implemented; anything else fails the render. |
 | `scheduleFeed.bucket.name` | `""` | Bucket name (no dots). Required when enabled; set in deploy values. |
 | `scheduleFeed.bucket.baseUrl` | `""` | Empty means `https://storage.googleapis.com`. Set only for a fake-GCS test server. |
-| `scheduleFeed.bucket.existingSecret` | `""` | Pre-existing Secret holding the reader's service-account key (sealed in deploy config; never put the key in values). Required when enabled. Mounted read-only into `ingest` only, as an optional volume: a missing Secret leaves SFTP running and raises `DistantSignalScheduleBucketAccessRevoked`. |
-| `scheduleFeed.bucket.serviceAccountKey` | `service-account.json` | Key in `existingSecret` holding the JSON key. |
+| `scheduleFeed.bucket.auth` | `key` | How the reader authenticates. `key`: a sealed service-account key from `existingSecret` (`GOOGLE_SERVICE_ACCOUNT_PATH`). `workloadIdentity`: keyless Google workload identity federation (`GOOGLE_APPLICATION_CREDENTIALS`, an `external_account` config; see "Keyless bucket access" below). Anything else fails the render. |
+| `scheduleFeed.bucket.existingSecret` | `""` | `key` mode: pre-existing Secret holding the reader's service-account key (sealed in deploy config; never put the key in values). Required in `key` mode, refused in `workloadIdentity` mode. Mounted read-only into `ingest` only, as an optional volume: a missing Secret leaves SFTP running and raises `DistantSignalScheduleBucketAccessRevoked`. |
+| `scheduleFeed.bucket.serviceAccountKey` | `service-account.json` | `key` mode: key in `existingSecret` holding the JSON key. Changing it in `workloadIdentity` mode fails the render. |
+| `scheduleFeed.bucket.workloadIdentity.audience` | `gcp-ds-ingest` | Audience of the projected service-account token: what the Google workload identity pool provider allows. |
+| `scheduleFeed.bucket.workloadIdentity.credentialConfigMap` | `""` | `workloadIdentity` mode: pre-existing ConfigMap holding the `external_account` credential configuration (no secret in it). Required in that mode, refused in `key` mode. Mounted read-only into `ingest` only, as an optional volume, like the key Secret. |
+| `scheduleFeed.bucket.workloadIdentity.credentialConfigKey` | `credential-config.json` | Key in `credentialConfigMap` holding that JSON. |
 | `scheduleFeed.bucket.expectedKeys` | `[timetable_full.zip, CORPUSExtract.json.gz]` | Case-insensitive `*` globs naming the objects (bucket root only) the reader downloads. Anything else is flagged and deleted unread after `deleteMinAgeSecs`. |
 | `scheduleFeed.bucket.pollIntervalSecs` | `300` | Seconds between bucket listings. At least 60. |
 | `scheduleFeed.bucket.deleteMinAgeSecs` | `3600` | Objects are deleted only once this old, so the publisher's read-back and scan finish first. Under 6 days (the bucket's lifecycle backstop is 7). |
@@ -2499,6 +2515,68 @@ Off by default; needs a schedule-ingest image with the bucket source.
 | `scheduleFeed.bucket.auditLogs.pollIntervalSecs` | `600` | Seconds between audit-log bucket listings. At least 60. |
 | `scheduleFeed.sourcePrecedence` | `[bucket, sftp]` | Which source wins when SFTP and the bucket deliver different content within `disagreementWindowMinutes` (decision D5: the bucket). Must be a permutation of `[bucket, sftp]`. |
 | `scheduleFeed.disagreementWindowMinutes` | `120` | Different content from the two sources within this many minutes is a disagreement (`DistantSignalScheduleFeedSourcesDisagree`). |
+
+#### Keyless bucket access (workload identity federation)
+
+`scheduleFeed.bucket.auth: workloadIdentity` replaces the reader key with a
+short-lived token. Google's workload identity pool trusts the cluster's
+service-account token issuer (an uploaded JWKS) and is pinned to the subject
+`system:serviceaccount:<namespace>:<fullname>-schedulefeed` (for the
+`distant-signal` release in the `distant-signal` namespace:
+`system:serviceaccount:distant-signal:distant-signal-schedulefeed`), which is
+allowed to impersonate the reader's Google service account. The chart then:
+
+- mounts a projected service-account token (audience
+  `workloadIdentity.audience`, one hour, nothing else in the projection)
+  read-only on `ingest` only, at
+  `/var/run/secrets/distant-signal/gcs-token/token`;
+- mounts the `external_account` credential configuration from
+  `workloadIdentity.credentialConfigMap` at
+  `/var/run/secrets/distant-signal/gcs/credential-config.json` and points
+  `GOOGLE_APPLICATION_CREDENTIALS` at it (no key Secret, no
+  `GOOGLE_SERVICE_ACCOUNT_PATH`);
+- requires `scheduleFeed.serviceAccount` (a render on the shared account
+  fails), and refuses `existingSecret` or a changed `serviceAccountKey`;
+- opens `sts.googleapis.com` and `iamcredentials.googleapis.com` (443) in
+  the NetworkPolicy instead of `oauth2.googleapis.com`.
+
+The ConfigMap (deploy config's; it holds no secret) must point
+`credential_source.file` at the token path above:
+
+```json
+{
+  "type": "external_account",
+  "audience": "//iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<pool-id>/providers/<provider-id>",
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "token_url": "https://sts.googleapis.com/v1/token",
+  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/<reader-sa>@<project-id>.iam.gserviceaccount.com:generateAccessToken",
+  "credential_source": {
+    "file": "/var/run/secrets/distant-signal/gcs-token/token",
+    "format": { "type": "text" }
+  }
+}
+```
+
+The provider's allowed audience must be `workloadIdentity.audience`
+(`gcp-ds-ingest`), not the `//iam.googleapis.com/...` name: the k8s token's
+`aud` claim is what Google checks against the provider's allowed audiences.
+Needs a schedule-ingest image whose bucket reader supports
+`external_account` (see the GCS spec's "Keyless reader credentials"). `key`
+stays the default and renders exactly as before.
+
+```yaml
+scheduleFeed:
+  serviceAccount:
+    create: true
+  bucket:
+    enabled: true
+    name: <bucket-name>
+    auth: workloadIdentity
+    workloadIdentity:
+      audience: gcp-ds-ingest
+      credentialConfigMap: <configmap-name>
+      credentialConfigKey: credential-config.json
+```
 
 ### tests
 

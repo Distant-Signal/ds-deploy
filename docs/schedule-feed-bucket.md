@@ -35,9 +35,11 @@ With the bucket on, the chart:
 - passes the `ingest` container the `SFTP_SOURCE_ENABLED`,
   `BUCKET_SOURCE_ENABLED`, `SOURCE_PRECEDENCE`,
   `DISAGREEMENT_WINDOW_MINUTES`, `BUCKET_*` and
-  `GOOGLE_SERVICE_ACCOUNT_PATH` env vars (`scheduleFeed.ingest.extraEnv`
+  `GOOGLE_SERVICE_ACCOUNT_PATH` env vars (`GOOGLE_APPLICATION_CREDENTIALS`
+  instead of the last in keyless mode; `scheduleFeed.ingest.extraEnv`
   can override any of them);
-- mounts the reader key read-only on `ingest` only (below);
+- mounts the reader key read-only on `ingest` only (below), or in keyless
+  mode the credential configuration and a projected token;
 - adds the Google endpoints' ports to the schedulefeed egress rule when
   `networkPolicy.egress.internetPorts` narrows it;
 - renders the `distant-signal.schedule-bucket` alerts
@@ -142,6 +144,28 @@ logs a successful listing), then delete the old key in Google Cloud.
 
 Never read the Secret to check it. `kubectl get secret <name>` shows that
 it exists; that is enough.
+
+### Keyless instead: workload identity federation
+
+`scheduleFeed.bucket.auth: workloadIdentity` drops the key. Google's
+workload identity pool trusts the k3s token issuer (an uploaded JWKS) and
+lets exactly the subject
+`system:serviceaccount:<namespace>:<release>-schedulefeed` impersonate the
+reader's service account. The pod gets a projected token (audience
+`gcp-ds-ingest`, one hour, rotated by the kubelet) at
+`/var/run/secrets/distant-signal/gcs-token/token` and an `external_account`
+credential configuration from a ConfigMap (no secret in it), and the
+reader exchanges the token at Google STS and then `generateAccessToken` for
+an hour-long access token. Nothing to rotate. The values, the ConfigMap's
+exact JSON and the guards are in the chart README's "Keyless bucket access
+(workload identity federation)"; the reader's side is the GCS spec's
+"Keyless reader credentials". It needs a schedule-ingest image whose bucket
+reader supports `external_account`. Key mode stays the default, for any
+deployment without workload identity federation.
+
+In keyless mode, revoked access means the impersonation binding or the
+pool provider was removed (or the ConfigMap is missing), and the kill
+switch works the same way: remove the reader's bucket bindings.
 
 ## Restoring a deleted object
 

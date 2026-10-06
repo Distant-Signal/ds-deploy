@@ -479,7 +479,13 @@ spec:
 {{- if .Values.scheduleFeed.bucket.enabled }}
 {{- /* Ports only: the internet rule is by CIDR, so these add 443 (or a
 custom baseUrl's port) when networkPolicy.egress.internetPorts is set. */}}
+{{- if include "distant-signal.scheduleFeedBucketWif" . }}
+{{- /* Keyless: Google STS and service-account impersonation instead of
+the key's OAuth endpoint. */}}
+{{- $sfUrls = concat $sfUrls (list "https://storage.googleapis.com" "https://sts.googleapis.com" "https://iamcredentials.googleapis.com") }}
+{{- else }}
 {{- $sfUrls = concat $sfUrls (list "https://storage.googleapis.com" "https://oauth2.googleapis.com") }}
+{{- end }}
 {{- with .Values.scheduleFeed.bucket.baseUrl }}{{ $sfUrls = append $sfUrls . }}{{ end }}
 {{- end }}
 {{- with include "distant-signal.egressSection" (dict "root" . "component" "schedulefeed" "deps" (dict "api" true) "internet" true "urls" $sfUrls) }}

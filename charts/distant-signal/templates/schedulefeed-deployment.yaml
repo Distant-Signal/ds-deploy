@@ -66,7 +66,7 @@ spec:
         {{- end }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      serviceAccountName: {{ include "distant-signal.scheduleFeedServiceAccountName" . }}
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -104,7 +104,31 @@ spec:
             medium: Memory
             sizeLimit: 1Mi
         {{- end }}
-        {{- if .Values.scheduleFeed.bucket.enabled }}
+        {{- if include "distant-signal.scheduleFeedBucketWif" . }}
+        {{- $wi := .Values.scheduleFeed.bucket.workloadIdentity }}
+        # Keyless bucket access (scheduleFeed.bucket.auth=workloadIdentity):
+        # the external_account credential configuration from deploy
+        # config's ConfigMap (no secret in it). Optional, like the key
+        # Secret: a missing ConfigMap must not stop the pod, and so SFTP.
+        - name: bucket-credentials
+          configMap:
+            name: {{ $wi.credentialConfigMap }}
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: {{ $wi.credentialConfigKey }}
+                path: credential-config.json
+        # ONLY an audience-bound service-account token, rotated by the
+        # kubelet: the subject token the reader exchanges at Google STS. No
+        # ca.crt or namespace, so it is no use against the Kubernetes API.
+        - name: bucket-identity-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ $wi.audience | quote }}
+                  expirationSeconds: 3600
+        {{- else if .Values.scheduleFeed.bucket.enabled }}
         # The bucket reader's service-account key (a sealed Secret from
         # deploy config; the chart never renders it). Optional: a missing
         # Secret or key must not stop the pod, and so SFTP; schedule-ingest
@@ -257,6 +281,13 @@ spec:
             - name: bucket-credentials
               mountPath: /var/run/secrets/distant-signal/gcs
               readOnly: true
+            {{- if include "distant-signal.scheduleFeedBucketWif" . }}
+            # The external_account config's credential_source.file is
+            # /var/run/secrets/distant-signal/gcs-token/token.
+            - name: bucket-identity-token
+              mountPath: /var/run/secrets/distant-signal/gcs-token
+              readOnly: true
+            {{- end }}
             {{- end }}
           {{- with (.Values.scheduleFeed.ingest.resources | default .Values.scheduleFeed.resources) }}
           resources:
@@ -682,9 +713,18 @@ scheduleFeed.ingest.extraEnv by distant-signal.mergeEnv (an extraEnv entry repla
             - name: BUCKET_BASE_URL
               value: {{ . | quote }}
             {{- end }}
+            {{- if include "distant-signal.scheduleFeedBucketWif" . }}
+            # Keyless: the external_account credential configuration,
+            # mounted from scheduleFeed.bucket.workloadIdentity.credentialConfigMap.
+            # Its credential_source.file is the projected token at
+            # /var/run/secrets/distant-signal/gcs-token/token.
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/secrets/distant-signal/gcs/credential-config.json
+            {{- else }}
             # The reader key, mounted from scheduleFeed.bucket.existingSecret.
             - name: GOOGLE_SERVICE_ACCOUNT_PATH
               value: /var/run/secrets/distant-signal/gcs/service-account.json
+            {{- end }}
             - name: BUCKET_EXPECTED_KEYS
               value: {{ join "," $b.expectedKeys | quote }}
             - name: BUCKET_POLL_INTERVAL_SECS

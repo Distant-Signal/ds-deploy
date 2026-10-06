@@ -3339,14 +3339,37 @@ scheduleFeed:
     # -- Empty: https://storage.googleapis.com. Set only for a fake-GCS
     # test server.
     baseUrl: ""
-    # -- Pre-existing Secret holding the reader's service-account key
-    # (sealed in deploy config, never in values). Required when enabled.
-    # Mounted read-only into `ingest` only, as an optional volume, so a
-    # missing Secret leaves SFTP running and raises
+    # -- How the reader authenticates to GCS. `key` (the default): a
+    # sealed service-account key from existingSecret
+    # (GOOGLE_SERVICE_ACCOUNT_PATH). `workloadIdentity`: keyless; Google
+    # Workload Identity Federation trusts the cluster's service-account
+    # token issuer, and the reader exchanges a projected token through STS
+    # and service-account impersonation (GOOGLE_APPLICATION_CREDENTIALS,
+    # see workloadIdentity below). Needs scheduleFeed.serviceAccount.
+    # Anything else fails the render.
+    auth: key
+    # -- `key` mode only: pre-existing Secret holding the reader's
+    # service-account key (sealed in deploy config, never in values).
+    # Required in that mode, refused in workloadIdentity mode. Mounted
+    # read-only into `ingest` only, as an optional volume, so a missing
+    # Secret leaves SFTP running and raises
     # DistantSignalScheduleBucketAccessRevoked instead of blocking the pod.
     existingSecret: ""
-    # -- Key in existingSecret holding the JSON key.
+    # -- `key` mode only: key in existingSecret holding the JSON key.
     serviceAccountKey: service-account.json
+    workloadIdentity:
+      # -- Audience of the projected service-account token: the audience
+      # the Google workload identity pool provider allows.
+      audience: gcp-ds-ingest
+      # -- Pre-existing ConfigMap holding the `external_account` credential
+      # configuration (no secret in it; deploy config owns it). Required in
+      # workloadIdentity mode. Its `credential_source.file` must be
+      # /var/run/secrets/distant-signal/gcs-token/token, where the chart
+      # mounts the projected token. Mounted read-only into `ingest` only,
+      # as an optional volume, like the key Secret.
+      credentialConfigMap: ""
+      # -- Key in credentialConfigMap holding that JSON.
+      credentialConfigKey: credential-config.json
     # -- Object names (case-insensitive `*` globs, bucket root only) the
     # reader downloads. Anything else is flagged and deleted unread after
     # deleteMinAgeSecs.
@@ -3524,6 +3547,16 @@ scheduleFeed:
   tolerations: []
   affinity: {}
   podAnnotations: {}
+  serviceAccount:
+    # -- Create `<fullname>-schedulefeed` (or `name`): a dedicated
+    # ServiceAccount with no RBAC and automountServiceAccountToken false.
+    # Off: the pod uses the shared `serviceAccount`. Required (or `name`)
+    # by scheduleFeed.bucket.auth=workloadIdentity, whose Google trust is
+    # pinned to system:serviceaccount:<namespace>:<this name>.
+    create: false
+    # -- Its name. With `create: false`, an existing ServiceAccount, which
+    # must not be the shared one in workloadIdentity mode.
+    name: ""
   # -- fsGroup: 1000 is load-bearing, not a stylistic default -- confirmed
   # against a real deployment (docker-compose, same underlying image) that
   # drakkan/sftpgo's official image runs as a fixed non-root `USER
