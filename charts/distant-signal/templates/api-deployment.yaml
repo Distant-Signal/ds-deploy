@@ -350,6 +350,8 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.tripPlanGraphCache.maxAgeSecs | quote }}
             - name: TRIP_PLAN_MAX_WAYPOINTS
               value: {{ .Values.api.tripPlanMaxWaypoints | quote }}
+            - name: TRIP_PLAN_ROAD_WATER_CHANGE_MINUTES
+              value: {{ .Values.api.tripPlanRoadWaterChangeMinutes | quote }}
             # The /Trips/plan live overlay -- see api.tripPlanLive in
             # values.yaml.
             - name: TRIP_PLAN_LIVE_ENABLED

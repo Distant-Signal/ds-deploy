@@ -1359,6 +1359,12 @@ api:
   # grows with their number; 20 measured under ~0.35 s (fastest) and ~2 s
   # (options) on a production-scale day.
   tripPlanMaxWaypoints: 20
+  # -- Extra minutes /Trips/plan adds to a change on each bus or ferry side
+  # of it (0-30; values outside are clamped): bus-to-train +N, bus-to-bus
+  # +2N, never at the start or end of the journey. A coach stand or ferry
+  # berth is further from the platforms than the station's own minimum
+  # change time assumes.
+  tripPlanRoadWaterChangeMinutes: 5
   # -- /Trips/plan live overlay
   # (docs/superpowers/specs/2026-09-28-trips-plan-live-overlay-design.md):
   # for today's and yesterday's service dates, TRUST and Darwin facts are
