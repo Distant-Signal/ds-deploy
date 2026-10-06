@@ -14,6 +14,42 @@ to show for it.
 {{- if not .Values.enricher.llm.model }}
 {{- fail "enricher.llm.model is empty. Set it to a model name the endpoint at enricher.llm.baseUrl serves (e.g. --set enricher.llm.model=gpt-4o-mini). An empty value would deploy an enricher that fails every extraction request." }}
 {{- end }}
+{{- /*
+Workload identity federation (enricher.llm.auth, docs/enricher-openai.md
+"Keyless auth"): refuse to render a mode the enricher would reject at
+startup, or one whose trust rule could match more than this pod.
+*/}}
+{{- $wif := include "distant-signal.enricherWif" . }}
+{{- if $wif }}
+{{- $llm := .Values.enricher.llm }}
+{{- $wi := $llm.workloadIdentity }}
+{{- $sa := .Values.enricher.serviceAccount | default dict }}
+{{- if or (not (or $sa.create $sa.name)) (eq (include "distant-signal.enricherServiceAccountName" .) (include "distant-signal.serviceAccountName" .)) }}
+{{- fail (printf "enricher.llm.auth=%s needs a dedicated ServiceAccount: set enricher.serviceAccount.create=true (or enricher.serviceAccount.name to an existing account other than the shared %q). A trust rule on the shared account would let every pod in the release mint OpenAI tokens." $llm.auth (include "distant-signal.serviceAccountName" .)) }}
+{{- end }}
+{{- if or $llm.apiKey $llm.existingSecret }}
+{{- fail (printf "enricher.llm.auth=%s is keyless: unset enricher.llm.apiKey and enricher.llm.existingSecret." $llm.auth) }}
+{{- end }}
+{{- if not $wi.identityProviderId }}
+{{- fail (printf "enricher.llm.auth=%s needs enricher.llm.workloadIdentity.identityProviderId (the OpenAI Workload Identity Provider ID)." $llm.auth) }}
+{{- end }}
+{{- if not $wi.serviceAccountId }}
+{{- fail (printf "enricher.llm.auth=%s needs enricher.llm.workloadIdentity.serviceAccountId (the OpenAI service account ID)." $llm.auth) }}
+{{- end }}
+{{- if not $wi.tokenExchangeUrl }}
+{{- fail (printf "enricher.llm.auth=%s needs enricher.llm.workloadIdentity.tokenExchangeUrl." $llm.auth) }}
+{{- end }}
+{{- if eq $llm.auth "openaiWifAuthentik" }}
+{{- if not $wi.authentik.tokenUrl }}
+{{- fail "enricher.llm.auth=openaiWifAuthentik needs enricher.llm.workloadIdentity.authentik.tokenUrl (e.g. https://sso.example.com/application/o/token/)." }}
+{{- end }}
+{{- if not $wi.authentik.clientId }}
+{{- fail "enricher.llm.auth=openaiWifAuthentik needs enricher.llm.workloadIdentity.authentik.clientId." }}
+{{- end }}
+{{- else if not $wi.tokenAudience }}
+{{- fail "enricher.llm.auth=openaiWifKubernetes needs enricher.llm.workloadIdentity.tokenAudience: the audience configured on the OpenAI Workload Identity Provider." }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,7 +77,7 @@ spec:
         {{- end }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      serviceAccountName: {{ include "distant-signal.enricherServiceAccountName" . }}
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -73,6 +109,26 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if $wif }}
+          volumeMounts:
+            - name: openai-identity-token
+              mountPath: /var/run/secrets/openai
+              readOnly: true
+          {{- end }}
+      {{- if $wif }}
+      # The workload identity token (enricher.llm.auth): ONLY an
+      # audience-bound service-account token, rotated by the kubelet. No
+      # ca.crt or namespace, so it is no use against the Kubernetes API (and
+      # no RBAC binds the account anyway).
+      volumes:
+        - name: openai-identity-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ include "distant-signal.enricherTokenAudience" . | quote }}
+                  expirationSeconds: 3600
+      {{- end }}
       {{- with .Values.enricher.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -111,11 +167,40 @@ with enricher.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.enricher.llm.baseUrl | quote }}
             - name: LLM_MODEL
               value: {{ .Values.enricher.llm.model | quote }}
+            {{- if include "distant-signal.enricherWif" . }}
+            {{- $wi := .Values.enricher.llm.workloadIdentity }}
+            # Keyless (enricher.llm.auth): no API key env or Secret at all.
+            - name: LLM_AUTH
+              value: {{ ternary "openai-wif-authentik" "openai-wif-kubernetes" (eq .Values.enricher.llm.auth "openaiWifAuthentik") | quote }}
+            - name: OPENAI_IDENTITY_PROVIDER_ID
+              value: {{ $wi.identityProviderId | quote }}
+            - name: OPENAI_SERVICE_ACCOUNT_ID
+              value: {{ $wi.serviceAccountId | quote }}
+            - name: LLM_IDENTITY_TOKEN_FILE
+              value: "/var/run/secrets/openai/token"
+            - name: LLM_TOKEN_EXCHANGE_URL
+              value: {{ $wi.tokenExchangeUrl | quote }}
+            {{- if eq .Values.enricher.llm.auth "openaiWifAuthentik" }}
+            - name: LLM_AUTHENTIK_TOKEN_URL
+              value: {{ $wi.authentik.tokenUrl | quote }}
+            - name: LLM_AUTHENTIK_CLIENT_ID
+              value: {{ $wi.authentik.clientId | quote }}
+            {{- with $wi.authentik.scope }}
+            - name: LLM_AUTHENTIK_SCOPE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- else }}
             - name: LLM_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ default (include "distant-signal.secretName" .) .Values.enricher.llm.existingSecret }}
                   key: {{ .Values.enricher.llm.existingSecretApiKeyKey }}
+            {{- end }}
+            {{- with .Values.enricher.llm.reasoningEffort }}
+            - name: LLM_REASONING_EFFORT
+              value: {{ . | quote }}
+            {{- end }}
             - name: LLM_REQUEST_TIMEOUT_SECS
               value: {{ .Values.enricher.llmRequestTimeoutSecs | quote }}
             - name: SWEEP_INTERVAL_SECS

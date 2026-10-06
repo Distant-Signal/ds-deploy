@@ -80,6 +80,49 @@ ServiceAccount name. Takes root.
 {{- end }}
 
 {{/*
+The enricher pod's ServiceAccount: its dedicated one (enricher.serviceAccount,
+`<fullname>-enricher` unless named) when created or named, else the shared
+one above. Takes root.
+*/}}
+{{- define "distant-signal.enricherServiceAccountName" -}}
+{{- $sa := .Values.enricher.serviceAccount | default dict -}}
+{{- if $sa.create -}}
+{{- default (printf "%s-enricher" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-") $sa.name -}}
+{{- else if $sa.name -}}
+{{- $sa.name -}}
+{{- else -}}
+{{- include "distant-signal.serviceAccountName" . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+"true" when enricher.llm.auth is a workload identity federation mode
+(openaiWifAuthentik / openaiWifKubernetes), empty for apiKey; fails on any
+other value. Takes root.
+*/}}
+{{- define "distant-signal.enricherWif" -}}
+{{- $auth := .Values.enricher.llm.auth | default "apiKey" -}}
+{{- if not (has $auth (list "apiKey" "openaiWifAuthentik" "openaiWifKubernetes")) -}}
+{{- fail (printf "enricher.llm.auth=%q is not one of apiKey, openaiWifAuthentik, openaiWifKubernetes." $auth) -}}
+{{- end -}}
+{{- if ne $auth "apiKey" -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Audience of the enricher's projected service-account token:
+workloadIdentity.tokenAudience, else (openaiWifAuthentik) the Authentik
+client ID. Takes root.
+*/}}
+{{- define "distant-signal.enricherTokenAudience" -}}
+{{- $wi := .Values.enricher.llm.workloadIdentity -}}
+{{- if $wi.tokenAudience -}}
+{{- $wi.tokenAudience -}}
+{{- else if eq .Values.enricher.llm.auth "openaiWifAuthentik" -}}
+{{- $wi.authentik.clientId -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Image reference. Call as:
   {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) }}
 An empty `tag` falls back to the chart's appVersion. An explicit

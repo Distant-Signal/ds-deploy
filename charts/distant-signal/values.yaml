@@ -2273,6 +2273,62 @@ enricher:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: llm-api-key
+    # -- LLM_REASONING_EFFORT, sent as the request's `reasoning_effort`.
+    # Empty (the default) renders nothing, so no `reasoning_effort` is sent.
+    # OpenAI gpt-6-luna needs "none" (its default effort forbids the
+    # `temperature: 0` every request sends -- docs/enricher-openai.md);
+    # NVIDIA's GLM wants "low". An enricher.extraEnv entry of the same name
+    # still wins.
+    reasoningEffort: ""
+    # -- LLM_AUTH: how the enricher authenticates to the LLM endpoint.
+    # `apiKey` (the default) is apiKey/existingSecret above, as before.
+    # `openaiWifAuthentik` and `openaiWifKubernetes` are keyless OpenAI
+    # workload identity federation (docs/enricher-openai.md, "Keyless
+    # auth"): a projected service-account token is exchanged for a
+    # short-lived OpenAI token, via Authentik (primary) or directly
+    # (fallback). Both need enricher.serviceAccount (a dedicated account),
+    # the workloadIdentity IDs below, and apiKey/existingSecret empty: the
+    # chart renders no LLM_API_KEY and no llm-api-key Secret entry then.
+    auth: apiKey
+    workloadIdentity:
+      # -- OPENAI_IDENTITY_PROVIDER_ID: the OpenAI Workload Identity
+      # Provider's ID. Required in both WIF modes.
+      identityProviderId: ""
+      # -- OPENAI_SERVICE_ACCOUNT_ID: the OpenAI service account the
+      # provider's mapping resolves to. Required in both WIF modes.
+      serviceAccountId: ""
+      # -- Audience of the projected service-account token. Empty in
+      # openaiWifAuthentik mode means authentik.clientId (what the
+      # Authentik expression policy checks); required in
+      # openaiWifKubernetes mode, where it must equal the OpenAI Workload
+      # Identity Provider's audience.
+      tokenAudience: ""
+      # -- LLM_TOKEN_EXCHANGE_URL: OpenAI's token-exchange endpoint. Its
+      # host gets a NetworkPolicy egress entry.
+      tokenExchangeUrl: https://auth.openai.com/oauth/token
+      authentik:
+        # -- LLM_AUTHENTIK_TOKEN_URL, e.g.
+        # https://sso.example.com/application/o/token/. Required in
+        # openaiWifAuthentik mode. Its host gets a NetworkPolicy egress
+        # entry.
+        tokenUrl: ""
+        # -- LLM_AUTHENTIK_CLIENT_ID: the dedicated Authentik OAuth2
+        # provider's client ID. Required in openaiWifAuthentik mode.
+        clientId: ""
+        # -- LLM_AUTHENTIK_SCOPE: scopes requested from Authentik, e.g.
+        # "profile" so its mapping emits the groups claim. Empty sends none.
+        scope: ""
+  # -- A dedicated ServiceAccount for the enricher pod. Off by default (the
+  # pod uses the shared `serviceAccount`, like every other pod). Required
+  # by the WIF modes (enricher.llm.auth): an OpenAI or Authentik trust rule
+  # on the shared account's subject would let every pod in the release
+  # mint OpenAI tokens. Its API token is never automounted.
+  serviceAccount:
+    # -- Create `<fullname>-enricher` (or `name`).
+    create: false
+    # -- Its name. With `create: false`, an existing ServiceAccount, which
+    # must not be the shared one.
+    name: ""
   # -- Per-request timeout for a single LLM call, in seconds. One incident
   # makes three sequential calls (primary, resolution-adversarial,
   # severity-adversarial), so the worst case for one incident is roughly
@@ -3926,6 +3982,18 @@ metrics:
       errorRatio: 0.5
       minErrors: 3
       for: 15m
+      severity: warning
+    # DistantSignalEnricherTokenExchangeFailing: in a workload identity mode
+    # (enricher.llm.auth), at least minFailures token requests to one stage
+    # (authentik or openai) failed over `window` with none succeeding, for
+    # `for`. Rendered only in those modes (the metric exists only there).
+    # The enricher keeps using a cached token until it expires, so this
+    # can fire before extractions start failing.
+    enricherTokenExchange:
+      enabled: true
+      window: 30m
+      minFailures: 3
+      for: 10m
       severity: warning
     # DistantSignalComponentMemoryHigh: a container in this release's pods
     # using more than `ratio` of its memory limit. Reads cadvisor

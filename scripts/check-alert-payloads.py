@@ -83,6 +83,13 @@ RENDER_FLAGS = [
     "trustConsumer.kafka.saslMechanism=PLAIN",
     "enricher.llm.baseUrl=http://llm.example.com/v1",
     "enricher.llm.model=test-model",
+    # Workload identity mode, for DistantSignalEnricherTokenExchangeFailing.
+    "enricher.llm.auth=openaiWifAuthentik",
+    "enricher.serviceAccount.create=true",
+    "enricher.llm.workloadIdentity.identityProviderId=idp_test",
+    "enricher.llm.workloadIdentity.serviceAccountId=svc_acct_test",
+    "enricher.llm.workloadIdentity.authentik.tokenUrl=https://sso.example.com/application/o/token/",
+    "enricher.llm.workloadIdentity.authentik.clientId=test-enricher-client",
     "api.sso.issuerUrl=https://sso.example.com",
     "api.sso.clientId=test-client",
     "api.sso.clientSecret=test-secret",

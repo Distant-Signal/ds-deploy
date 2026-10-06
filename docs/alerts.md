@@ -299,7 +299,53 @@ the window, with at least `minErrors` failures
 (`distant_signal:enricher_llm_call_failures:ratio` and `:increase`, from
 `enricher_llm_call_total{outcome!="success"}`). Incidents are not being
 enriched. Check the LLM endpoint (`enricher.llm.baseUrl`), its credentials
-and rate limits, and enricher's logs.
+and rate limits, and enricher's logs. The `outcome` label narrows it down:
+`quota_exhausted` means the provider account is out of credit or at its
+billing limit (top it up; no retry helps), and `refused` means the model
+declined the text on safety grounds. Failure log lines carry the
+provider's `request_id` where it sends one (OpenAI does); see
+[enricher-openai.md](enricher-openai.md). With keyless auth
+(`enricher.llm.auth`), `auth_error` means no access token could be minted
+(see DistantSignalEnricherTokenExchangeFailing below) and `unauthorized`
+means OpenAI answered 401 even to a freshly exchanged token: check that the
+OpenAI service account, its project and the mapping still exist and are
+enabled.
+
+### DistantSignalEnricherTokenExchangeFailing
+
+Only rendered with keyless auth (`enricher.llm.auth` is `openaiWifAuthentik`
+or `openaiWifKubernetes`). At least `enricherTokenExchange.minFailures`
+token requests to one `stage` failed over the window and none succeeded
+(`distant_signal:enricher_llm_token_exchange_failures:increase` and
+`:successes:increase`, from `enricher_llm_token_exchange_total`). The
+enricher keeps using its cached OpenAI token until it expires (at most an
+hour; `enricher_llm_token_remaining_seconds` shows what is left), so this
+can fire before extractions fail with `outcome="auth_error"`.
+
+The `outcome` label of `enricher_llm_token_exchange_total` and enricher's
+`LLM token request rejected` log lines (`stage`, `status`, `error_code`,
+`error_description`; never a token) narrow it down:
+
+- `token_file_error`: the projected token is missing or empty. Check the
+  pod's `openai-identity-token` volume and that the pod runs as
+  `enricher.serviceAccount`.
+- `stage="authentik"`, `invalid_client` or `invalid_grant`: Authentik
+  refused the k8s token. The k3s signing key rotated (update the Generic
+  OAuth Source's JWKS), the token's audience no longer matches the
+  application's expression policy, or the generated service account left
+  the `<ds-openai-enricher>` group.
+- `stage="openai"`, `invalid_subject_token` or `invalid_grant`: OpenAI
+  refused the subject token or found no mapping: an issuer/audience change,
+  a signing-key rotation (in `openaiWifKubernetes` mode, upload the new
+  JWKS first), or a mapping that no longer matches the `sub` or the group
+  attribute.
+- `timeout`, `error`, `http_error`: the endpoint is unreachable or failing
+  (NetworkPolicy egress, DNS, an Authentik or OpenAI outage).
+
+The checklist and rotation runbook are in
+[enricher-openai.md](enricher-openai.md#keyless-auth-workload-identity-federation).
+To switch from Authentik to the fallback, follow "Switching to the fallback"
+there.
 
 ## full-coverage windows
 

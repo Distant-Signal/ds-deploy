@@ -1682,6 +1682,17 @@ pod that fails every request forever.
 | `enricher.llm.apiKey` | `""` | API key for that endpoint. Rendered into the chart Secret when `existingSecret` is empty. Empty is valid for a local endpoint needing no auth, and is never auto-generated. |
 | `enricher.llm.existingSecret` | `""` | Read the API key from this pre-existing Secret instead. |
 | `enricher.llm.existingSecretApiKeyKey` | `llm-api-key` | Key within `enricher.llm.existingSecret`. |
+| `enricher.llm.reasoningEffort` | `""` | `LLM_REASONING_EFFORT`, sent as `reasoning_effort`. Empty renders nothing (no `reasoning_effort` sent). OpenAI's gpt-6-luna needs `none` (see [docs/enricher-openai.md](../../docs/enricher-openai.md)); NVIDIA's GLM wants `low`. An `enricher.extraEnv` entry of the same name wins. |
+| `enricher.llm.auth` | `apiKey` | `LLM_AUTH`. `apiKey` uses `apiKey`/`existingSecret` above, as before. `openaiWifAuthentik` (primary) and `openaiWifKubernetes` (fallback) are keyless OpenAI workload identity federation: see "Keyless OpenAI auth" below. Any other value aborts the render. |
+| `enricher.llm.workloadIdentity.identityProviderId` | `""` | `OPENAI_IDENTITY_PROVIDER_ID`, the OpenAI Workload Identity Provider's ID. Required in both WIF modes. |
+| `enricher.llm.workloadIdentity.serviceAccountId` | `""` | `OPENAI_SERVICE_ACCOUNT_ID`, the OpenAI service account the mapping resolves to. Required in both WIF modes. |
+| `enricher.llm.workloadIdentity.tokenAudience` | `""` | Audience of the projected service-account token. Empty in `openaiWifAuthentik` means `authentik.clientId`; required in `openaiWifKubernetes`, where it must equal the OpenAI provider's audience. |
+| `enricher.llm.workloadIdentity.tokenExchangeUrl` | `https://auth.openai.com/oauth/token` | `LLM_TOKEN_EXCHANGE_URL`. |
+| `enricher.llm.workloadIdentity.authentik.tokenUrl` | `""` | `LLM_AUTHENTIK_TOKEN_URL` (e.g. `https://sso.example.com/application/o/token/`). Required in `openaiWifAuthentik`. |
+| `enricher.llm.workloadIdentity.authentik.clientId` | `""` | `LLM_AUTHENTIK_CLIENT_ID`, the dedicated Authentik OAuth2 provider's client ID. Required in `openaiWifAuthentik`. |
+| `enricher.llm.workloadIdentity.authentik.scope` | `""` | `LLM_AUTHENTIK_SCOPE`, e.g. `profile` so Authentik's mapping emits the `groups` claim. Empty sends no `scope`. |
+| `enricher.serviceAccount.create` | `false` | Create a dedicated ServiceAccount for the enricher (`<fullname>-enricher`, or `name`), with no RBAC and `automountServiceAccountToken: false`. Off: the enricher uses the shared `serviceAccount`. Required (or `name`) by both WIF modes. |
+| `enricher.serviceAccount.name` | `""` | Its name. With `create: false`, an existing ServiceAccount, which must not be the shared one. |
 | `enricher.llmRequestTimeoutSecs` | `300` | Per-request timeout for a single LLM call (`LLM_REQUEST_TIMEOUT_SECS`). One incident makes three sequential calls. Behind a gateway that cuts calls itself (e.g. a 504 at ~302 s), set this slightly above the gateway's cutoff (e.g. `320`) so the 504 is what gets reported. |
 | `enricher.sweepIntervalSecs` | `3600` | Cadence of the backstop sweep that re-checks every uncleared incident's text hash and model version. |
 | `enricher.reclaimIntervalSecs` | `60` | How often the reclaim loop checks for stream entries stuck unacked past `reclaimMinIdleSecs` (a timed-out request, or a crash between processing and acking). |
@@ -1696,18 +1707,19 @@ pod that fails every request forever.
 | `enricher.podAnnotations` | `{}` | Pod annotations. |
 | `enricher.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 
-The enricher has off-by-default settings with no dedicated value. Set them
-through `enricher.extraEnv`; with none set, it sends exactly the same
-requests as before and never retries a call in-process.
+The enricher has off-by-default settings with no dedicated value (apart
+from `LLM_REASONING_EFFORT`, which `enricher.llm.reasoningEffort` also
+sets). Set them through `enricher.extraEnv`; with none set, it sends the
+same requests as before and never retries a call in-process.
 
 | Env var | Default | Description |
 |---|---|---|
-| `LLM_REASONING_EFFORT` | unset | Sent as `reasoning_effort` (e.g. `low`). Reasoning models whose default effort is high need it, or they can spend their whole budget thinking and return empty content (`outcome="empty_content"`). |
-| `LLM_MAX_TOKENS` | unset | Sent as `max_tokens` (e.g. `8192`). |
+| `LLM_REASONING_EFFORT` | unset | Sent as `reasoning_effort` (e.g. `low`, or `none` for OpenAI's gpt-6-luna). Reasoning models whose default effort is high need it, or they can spend their whole budget thinking and return empty content (`outcome="empty_content"`). Prefer `enricher.llm.reasoningEffort`. |
+| `LLM_MAX_TOKENS` | unset | Sent as `max_tokens` (e.g. `8192`). Leave unset for OpenAI's gpt-6-luna, which rejects `max_tokens`. |
 | `LLM_MAX_IN_FLIGHT` | unset | Cap on concurrent LLM HTTP requests across the stream, sweep and reclaim loops. |
-| `LLM_RATE_LIMIT_RETRIES` | `0` | In-call retries on HTTP 429. Each waits `Retry-After` (at least `LLM_RATE_LIMIT_RETRY_SECS`); a `Retry-After` over 600 s fails the call instead. |
+| `LLM_RATE_LIMIT_RETRIES` | `0` | In-call retries on HTTP 429. Each waits `Retry-After` (at least `LLM_RATE_LIMIT_RETRY_SECS`); a `Retry-After` over 600 s fails the call instead. A 429 whose body says the account is out of quota or at its billing limit (`insufficient_quota`, `outcome="quota_exhausted"`) is never retried. |
 | `LLM_RATE_LIMIT_RETRY_SECS` | `20` | Minimum wait before a 429 retry. |
-| `LLM_GATEWAY_RETRIES` | `0` | In-call retries on 502/503/504 and client timeouts. Above `0` it also stops a timeout or 504 feeding the per-text retry backoff. (429, 502 and 503 never feed it.) |
+| `LLM_GATEWAY_RETRIES` | `0` | In-call retries on 502/503/504 and client timeouts. A 502/503/504 retry waits the response's `Retry-After` (over 600 s fails the call instead), or else 2 s, 4 s, ... up to 30 s; a client timeout retries at once. Above `0` it also stops a timeout or 504 feeding the per-text retry backoff. (429, 502 and 503 never feed it.) |
 | `CARRY_FORWARD_SEMANTIC_NOOPS` | `false` | When `true`, a text change that only touches HTML, whitespace, entities, case or in-word punctuation re-stamps the existing extraction instead of re-running the LLM (`enricher_extraction_carried_forward_total`). With it off, the edit class only labels `enricher_extraction_rerun_total` and `enricher_extraction_churn_total` (`edit_class`). |
 
 For example, for a slow, rate-limited hosted reasoning model:
@@ -1724,6 +1736,70 @@ enricher:
     - { name: LLM_GATEWAY_RETRIES, value: "2" }
     - { name: CARRY_FORWARD_SEMANTIC_NOOPS, value: "true" }
 ```
+
+#### Keyless OpenAI auth (workload identity federation)
+
+Off by default. With `enricher.llm.auth` set to `openaiWifAuthentik` or
+`openaiWifKubernetes`, the enricher holds no API key: it exchanges a
+short-lived, audience-bound Kubernetes service-account token for an OpenAI
+access token (at most an hour), through Authentik in the primary mode or
+directly in the fallback. The setup on the Authentik and OpenAI side, and
+why there are two modes, are in
+[docs/enricher-openai.md](../../docs/enricher-openai.md#keyless-auth-workload-identity-federation).
+
+The chart then:
+
+- requires a dedicated ServiceAccount (`enricher.serviceAccount.create:
+  true`, or `name` naming another existing account) and fails the render
+  without one: a trust rule on the shared account's subject would let every
+  pod in the release mint OpenAI tokens. The pod keeps
+  `automountServiceAccountToken: false`;
+- mounts a projected volume with only a `serviceAccountToken` source (path
+  `token`, the configured audience, `expirationSeconds: 3600`) read-only at
+  `/var/run/secrets/openai`: no `ca.crt`, no namespace, no API access. The
+  kubelet rotates it and the enricher re-reads it on every exchange;
+- renders `LLM_AUTH`, the IDs and URLs as env, and neither `LLM_API_KEY`
+  nor the Secret's `llm-api-key` entry. A non-empty `enricher.llm.apiKey`
+  or `existingSecret` fails the render, as does a missing required value;
+- with `networkPolicy.egress.enabled`, adds the token-exchange and
+  (primary mode) Authentik token URLs' ports to the enricher's internet
+  rule. The rule is IP-based: it opens ports, not hosts;
+- renders `DistantSignalEnricherTokenExchangeFailing` (with
+  `metrics.prometheusRule.enabled`).
+
+For example, the primary mode:
+
+```yaml
+enricher:
+  serviceAccount:
+    create: true
+  llm:
+    baseUrl: https://api.openai.com/v1
+    model: gpt-6-luna
+    reasoningEffort: none
+    auth: openaiWifAuthentik
+    workloadIdentity:
+      identityProviderId: <openai-identity-provider-id>
+      serviceAccountId: <openai-service-account-id>
+      authentik:
+        tokenUrl: https://sso.example.com/application/o/token/
+        clientId: <authentik-client-id>
+        scope: profile
+```
+
+Its metrics, on top of `enricher_llm_call_total` (whose `outcome` gains
+`auth_error`, no token could be minted, and `unauthorized`, a 401 to a
+freshly exchanged token):
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `distant_signal_enricher_llm_token_exchange_total{stage, outcome}` | counter | Token requests by `stage` (`authentik`, `openai`) and `outcome`: `success`, `token_file_error` (the projected token is missing or empty), `invalid_grant`, `invalid_client`, `invalid_subject_token` (the endpoint's OAuth error), `http_error` (any other non-2xx), `timeout` (10 s), `error` (connection or response failure). Registered at 0 for each mode's stages. Alert on failures with no success. |
+| `distant_signal_enricher_llm_token_remaining_seconds` | gauge | Remaining lifetime of the cached OpenAI token, set at each exchange and each LLM call (so it holds still between calls); 0 before the first token and after a 401. |
+
+The enricher refreshes a token `max(LLM_TOKEN_REFRESH_SKEW_SECS, 10% of its
+lifetime)` before it expires (default skew 60 s; set it through
+`enricher.extraEnv`), and keeps using the cached token while a refresh fails
+until it expires.
 
 ### trustConsumer
 
@@ -2252,7 +2328,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; `/docs/alerts.md#<alert name, lowercased>` is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `scheduleBucket`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `enricherTokenExchange`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `scheduleBucket`, `pollerFailures`, `ldbwsStalestStation` and `ldbwsInvalidCrs`. |
 
 #### Alerts
 
@@ -2269,8 +2345,9 @@ an equivalent scrape that sets `namespace`). The `movement-events` group is
 rendered only when `movementRelay.enabled` is true, the full-coverage-window
 group only when `fullCoverageConsumer.windowedStats.enabled`, the archive
 alert only when `archive.enabled`, the archive-expiry group only when
-`archive.expiry.enabled` too, and the schedule-pipeline group only when
-`scheduleFeed.enabled`.
+`archive.expiry.enabled` too, the schedule-pipeline group only when
+`scheduleFeed.enabled`, and the enricher token-exchange group only when
+`enricher.llm.auth` is a keyless (workload identity) mode.
 
 Each alert carries a one-line `summary`, a short `description` and a
 `runbook_url` into [docs/alerts.md](../../docs/alerts.md), which holds the
@@ -2299,7 +2376,8 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalMovementRelayPublishFailing` | critical | movement-relay failed every `XADD` (`movement_relay_errors_total{operation=~"publish_event\|redis_oom"}`) and published nothing over 10m, for 5m: Redis is refusing writes and TRUST ingestion has stopped. |
 | `DistantSignalRedisPersistenceFailing` | critical | Redis's last AOF write or rewrite failed (`redis_aof_last_write_ok` / `redis_aof_last_bgrewrite_ok` is 0, from movement-relay's `INFO persistence`), or, for the bundled Redis with persistence, AOF is off, for 5m. |
 | `DistantSignalMovementGroupRecreated` | warning | Within 1h a consumer recreated its group after `NOGROUP` (`movement_feed_group_recreated_total`), or movement-relay recreated a missing stream with every group (`movement_relay_stream_created_total`): Redis lost its data. |
-| `DistantSignalEnricherErrors` | warning | Over 30m, more than 50% of an LLM call site's calls (`enricher_llm_call_total{outcome!="success"}`: `error`, `timeout`, `rate_limited`, `gateway_error`, `http_error` or `empty_content`) failed, with at least 3 failures, for 15m. |
+| `DistantSignalEnricherErrors` | warning | Over 30m, more than 50% of an LLM call site's calls (`enricher_llm_call_total{outcome!="success"}`: `error`, `timeout`, `rate_limited`, `quota_exhausted`, `gateway_error`, `http_error`, `empty_content` or `refused`) failed, with at least 3 failures, for 15m. |
+| `DistantSignalEnricherTokenExchangeFailing` | warning | Keyless auth only (`enricher.llm.auth` not `apiKey`; not rendered otherwise): at least 3 token requests to one `stage` (`enricher_llm_token_exchange_total{outcome!="success"}`) failed over 30m with none succeeding, for 10m (`enricherTokenExchange.minFailures`, `window`, `for`). The cached OpenAI token lasts at most an hour after the last success. |
 | `DistantSignalFullCoverageWindowFeedStale` | warning | full-coverage-consumer has marked its windows `feed_stale` (`full_coverage_consumer_window_feed_stale` is 1) for 15m. |
 | `DistantSignalFullCoverageWindowPostErrors` | warning | At least 3 POSTs to `/private/full-coverage-window-stats` failed (`full_coverage_consumer_errors_total{operation="post_window_stats"}`) within 5m, continuously for 10m (`postErrorsThreshold`, `postErrorsWindow`, `postErrorsFor`): one POST lost to an api rollout does not fire. |
 | `DistantSignalFullCoverageWindowStatsStalled` | warning | No window rows posted (`full_coverage_consumer_window_rows_posted_total`) over 10m, for 15m. |

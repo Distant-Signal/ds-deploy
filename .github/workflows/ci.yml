@@ -786,6 +786,137 @@ jobs:
             --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
             > /dev/null
 
+      # Keyless OpenAI auth (enricher.llm.auth, docs/enricher-openai.md):
+      # off by default, with exactly the old enricher (shared ServiceAccount,
+      # LLM_API_KEY, llm-api-key). In each WIF mode: a dedicated
+      # ServiceAccount with no automounted token, a projected volume with
+      # ONLY an audience-bound serviceAccountToken, the WIF env and no
+      # static secret, the token URLs' ports in the egress rule, the
+      # token-exchange alert; and every unsafe or incomplete config refuses
+      # to render.
+      - name: helm template (enricher workload identity)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=https://api.openai.com/v1
+            --set enricher.llm.model=gpt-6-luna
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          ids=(
+            --set enricher.llm.workloadIdentity.identityProviderId=idp_test
+            --set enricher.llm.workloadIdentity.serviceAccountId=svc_acct_test
+          )
+          authentik=(
+            --set enricher.llm.auth=openaiWifAuthentik
+            --set enricher.serviceAccount.create=true
+            "${ids[@]}"
+            --set enricher.llm.workloadIdentity.authentik.tokenUrl=https://sso.example.com:8443/application/o/token/
+            --set enricher.llm.workloadIdentity.authentik.clientId=test-enricher-client
+          )
+          kubernetes=(
+            --set enricher.llm.auth=openaiWifKubernetes
+            --set enricher.serviceAccount.create=true
+            "${ids[@]}"
+            --set enricher.llm.workloadIdentity.tokenAudience=https://api.openai.com/v1
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          # One document by kind and name.
+          doc() { awk -v k="$1" -v n="$2" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: " k "\n" && $0 ~ "\n  name: " n "\n" {print}'; }
+          env_is() { grep -A1 "name: $2\$" <<<"$1" | grep -q "value: \"$3\"" || fail "$2 must be \"$3\""; }
+
+          # Default: the old enricher, byte for byte.
+          out=$(render)
+          dep=$(doc Deployment distant-signal-enricher <<<"${out}")
+          grep -q 'serviceAccountName: distant-signal$' <<<"${dep}" || fail "default must use the shared ServiceAccount"
+          grep -A4 'name: LLM_API_KEY$' <<<"${dep}" | grep -q 'key: llm-api-key' || fail "default must read LLM_API_KEY"
+          if grep -E -q 'LLM_AUTH|OPENAI_|openai-identity-token|volumes:' <<<"${dep}"; then fail "default must render no WIF env or volume"; fi
+          sa=$(doc ServiceAccount distant-signal-enricher <<<"${out}")
+          [[ -z "${sa}" ]] || fail "default must not create an enricher ServiceAccount"
+          secret=$(doc Secret distant-signal <<<"${out}")
+          grep -q '  llm-api-key: ' <<<"${secret}" || fail "default must render llm-api-key"
+
+          # Primary: k8s token -> Authentik -> OpenAI.
+          out=$(render "${authentik[@]}" --set enricher.llm.workloadIdentity.authentik.scope=profile)
+          dep=$(doc Deployment distant-signal-enricher <<<"${out}")
+          sa=$(doc ServiceAccount distant-signal-enricher <<<"${out}")
+          grep -q 'automountServiceAccountToken: false' <<<"${sa}" || fail "the enricher ServiceAccount must not automount"
+          grep -q 'serviceAccountName: distant-signal-enricher$' <<<"${dep}" || fail "WIF must use the dedicated ServiceAccount"
+          grep -q 'automountServiceAccountToken: false' <<<"${dep}" || fail "the enricher pod must not automount"
+          env_is "${dep}" LLM_AUTH openai-wif-authentik
+          env_is "${dep}" OPENAI_IDENTITY_PROVIDER_ID idp_test
+          env_is "${dep}" OPENAI_SERVICE_ACCOUNT_ID svc_acct_test
+          env_is "${dep}" LLM_IDENTITY_TOKEN_FILE /var/run/secrets/openai/token
+          env_is "${dep}" LLM_TOKEN_EXCHANGE_URL https://auth.openai.com/oauth/token
+          env_is "${dep}" LLM_AUTHENTIK_TOKEN_URL https://sso.example.com:8443/application/o/token/
+          env_is "${dep}" LLM_AUTHENTIK_CLIENT_ID test-enricher-client
+          env_is "${dep}" LLM_AUTHENTIK_SCOPE profile
+          if grep -q 'LLM_API_KEY' <<<"${dep}"; then fail "WIF must not render LLM_API_KEY"; fi
+          if grep -q 'llm-api-key' <<<"${out}"; then fail "WIF must not render an llm-api-key Secret entry"; fi
+          # The volume holds ONLY the audience-bound token, read-only.
+          vol=$(awk '/^      volumes:/{f=1} f' <<<"${dep}")
+          grep -q 'audience: "test-enricher-client"' <<<"${vol}" || fail "authentik mode's audience must default to the client ID"
+          grep -q 'expirationSeconds: 3600' <<<"${vol}" || fail "the projected token must expire after 3600s"
+          grep -q 'path: token$' <<<"${vol}" || fail "the projected token must be at path token"
+          n=$(grep -c -E '^              - [a-zA-Z]+:' <<<"${vol}" || true)
+          [[ "${n}" == 1 ]] || fail "the projected volume must have exactly one source, got ${n}"
+          if grep -E -q 'configMap|downwardAPI|secret:|ca.crt|clusterTrustBundle' <<<"${vol}"; then fail "the projected volume must hold only the token"; fi
+          grep -A2 'mountPath: /var/run/secrets/openai$' <<<"${dep}" | grep -q 'readOnly: true' || fail "the token mount must be read-only"
+          # Egress: the token URLs' ports (8443 for this Authentik URL).
+          eg=$(render "${authentik[@]}" --set networkPolicy.enabled=true --set networkPolicy.egress.enabled=true \
+            --show-only templates/networkpolicy.yaml)
+          ports=$(awk -v n="distant-signal-enricher" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}' <<<"${eg}" \
+            | awk '/^  egress:/{f=1} f' | awk '/cidr: "::\/0"/{f=1} f && /port:/{print $2}' | sort -n | tr '\n' ' ')
+          [[ "${ports}" == "443 8443 " ]] || fail "enricher internet ports: want '443 8443 ', got '${ports}'"
+          # The token-exchange alert renders in WIF modes only.
+          rule=$(render "${authentik[@]}" --set metrics.prometheusRule.enabled=true --show-only templates/prometheusrule.yaml)
+          grep -q 'alert: DistantSignalEnricherTokenExchangeFailing' <<<"${rule}" || fail "WIF must render the token-exchange alert"
+          rule=$(render --set metrics.prometheusRule.enabled=true --show-only templates/prometheusrule.yaml)
+          if grep -q 'TokenExchange' <<<"${rule}"; then fail "apiKey mode must not render the token-exchange alert"; fi
+
+          # Fallback: the k8s token straight to OpenAI.
+          out=$(render "${kubernetes[@]}")
+          dep=$(doc Deployment distant-signal-enricher <<<"${out}")
+          env_is "${dep}" LLM_AUTH openai-wif-kubernetes
+          grep -q 'audience: "https://api.openai.com/v1"' <<<"${dep}" || fail "kubernetes mode must use tokenAudience"
+          if grep -E -q 'LLM_AUTHENTIK_|LLM_API_KEY' <<<"${dep}"; then fail "kubernetes mode must render no Authentik env or API key"; fi
+          # An existing dedicated ServiceAccount, by name.
+          out=$(render "${kubernetes[@]}" --set enricher.serviceAccount.create=false --set enricher.serviceAccount.name=ds-enricher)
+          dep=$(doc Deployment distant-signal-enricher <<<"${out}")
+          grep -q 'serviceAccountName: ds-enricher$' <<<"${dep}" || fail "enricher.serviceAccount.name must be used"
+          sa=$(doc ServiceAccount ds-enricher <<<"${out}")
+          [[ -z "${sa}" ]] || fail "an existing enricher ServiceAccount must not be created"
+
+          # Refuses to render: no dedicated account, the shared one, a
+          # static secret, missing IDs/URLs/audience, an unknown mode.
+          refuses() {
+            local why="$1"; shift
+            if helm template distant-signal charts/distant-signal "${base[@]}" "$@" >/dev/null 2>&1; then
+              fail "must refuse to render: ${why}"
+            fi
+          }
+          refuses "WIF without a dedicated ServiceAccount" "${authentik[@]}" --set enricher.serviceAccount.create=false
+          refuses "WIF on the shared ServiceAccount" "${authentik[@]}" --set enricher.serviceAccount.create=false \
+            --set enricher.serviceAccount.name=distant-signal
+          refuses "a dedicated account named like the shared one" "${authentik[@]}" --set enricher.serviceAccount.name=distant-signal
+          refuses "WIF with an API key" "${authentik[@]}" --set enricher.llm.apiKey=sk-test
+          refuses "WIF with an existingSecret" "${authentik[@]}" --set enricher.llm.existingSecret=llm
+          refuses "no identityProviderId" "${authentik[@]}" --set enricher.llm.workloadIdentity.identityProviderId=
+          refuses "no serviceAccountId" "${authentik[@]}" --set enricher.llm.workloadIdentity.serviceAccountId=
+          refuses "no tokenExchangeUrl" "${authentik[@]}" --set enricher.llm.workloadIdentity.tokenExchangeUrl=
+          refuses "authentik without tokenUrl" "${authentik[@]}" --set enricher.llm.workloadIdentity.authentik.tokenUrl=
+          refuses "authentik without clientId" "${authentik[@]}" --set enricher.llm.workloadIdentity.authentik.clientId=
+          refuses "kubernetes without tokenAudience" "${kubernetes[@]}" --set enricher.llm.workloadIdentity.tokenAudience=
+          refuses "an unknown auth mode" --set enricher.llm.auth=openaiWifGcp
+          echo "enricher workload identity renders OK"
+
       # Disabled (the default) must render no ARCHIVE_* env at all; enabled
       # must wire the credentials from the named existing Secret.
       - name: helm template (cold archive enabled)

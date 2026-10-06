@@ -57,7 +57,8 @@ so that clause fired on every rollout.
 {{- $consumerApiOn := ($rule.consumerApiErrors).enabled }}
 {{- $cyclesOn := ($rule.cycleStalled).enabled }}
 {{- $healthOn := or $postgresDownOn $apiDbDownOn $consumerApiOn $cyclesOn }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn }}
+{{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -598,6 +599,39 @@ spec:
             summary: "enricher LLM {{ "{{ $labels.call }}" }} calls failing ({{ "{{ $value | humanizePercentage }}" }})"
             description: "Over {{ .errorRatio }} of calls failed in {{ .window }} (at least {{ .minErrors }}). Check enricher.llm.baseUrl and enricher's logs."
             runbook_url: {{ printf "%s#distantsignalenrichererrors" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $tokenExchangeOn }}
+    {{- with $rule.enricherTokenExchange }}
+    {{- /*
+    Workload identity federation (enricher.llm.auth): token requests to one
+    stage (authentik, openai) keep failing and none succeeds. The counter is
+    registered at 0 for every stage and outcome, so increase() sees the
+    first failure and the success series exists (== 0) before any success.
+    */}}
+    - name: distant-signal.enricher-token-exchange
+      rules:
+        - record: distant_signal:enricher_llm_token_exchange_failures:increase
+          expr: |
+            sum by (namespace, stage) (increase(distant_signal_enricher_llm_token_exchange_total{namespace="{{ $ns }}", outcome!="success"}[{{ .window }}]))
+        - record: distant_signal:enricher_llm_token_exchange_successes:increase
+          expr: |
+            sum by (namespace, stage) (increase(distant_signal_enricher_llm_token_exchange_total{namespace="{{ $ns }}", outcome="success"}[{{ .window }}]))
+        - alert: DistantSignalEnricherTokenExchangeFailing
+          expr: |
+            distant_signal:enricher_llm_token_exchange_failures:increase{namespace="{{ $ns }}"} >= {{ .minFailures }}
+            and on (namespace, stage)
+            distant_signal:enricher_llm_token_exchange_successes:increase{namespace="{{ $ns }}"} == 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "enricher {{ "{{ $labels.stage }}" }} LLM token exchange failing"
+            description: "{{ "{{ $value | humanize }}" }} failed token requests and no success in {{ .window }}. Extractions stop once the cached token expires."
+            runbook_url: {{ printf "%s#distantsignalenrichertokenexchangefailing" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $fcwOn }}

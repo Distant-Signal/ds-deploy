@@ -1,0 +1,48 @@
+# promtool unit tests for the distant-signal.enricher-token-exchange group
+# (keyless OpenAI auth; see recorded-alerts.yaml's header for how rules.yaml
+# is rendered: scripts/check-alert-payloads.py renders it in
+# openaiWifAuthentik mode, so this group is present).
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Authentik refuses every request (one a minute) and nothing succeeds:
+  # past minFailures (3) within a few minutes, then `for: 10m`. The openai
+  # stage, which also failed but recovered, does not fire.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_token_exchange_total{namespace="distant-signal", pod="enricher", stage="authentik", outcome="invalid_client"}'
+        values: '0+1x60'
+      - series: 'distant_signal_enricher_llm_token_exchange_total{namespace="distant-signal", pod="enricher", stage="authentik", outcome="success"}'
+        values: '0x60'
+      - series: 'distant_signal_enricher_llm_token_exchange_total{namespace="distant-signal", pod="enricher", stage="openai", outcome="timeout"}'
+        values: '0+1x60'
+      - series: 'distant_signal_enricher_llm_token_exchange_total{namespace="distant-signal", pod="enricher", stage="openai", outcome="success"}'
+        values: '0+1x60'
+      # Another namespace is ignored.
+      - series: 'distant_signal_enricher_llm_token_exchange_total{namespace="elsewhere", pod="enricher", stage="openai", outcome="invalid_grant"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DistantSignalEnricherTokenExchangeFailing
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: DistantSignalEnricherTokenExchangeFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stage: authentik}
+            exp_annotations:
+              summary: enricher authentik LLM token exchange failing
+              description: "30 failed token requests and no success in 30m. Extractions stop once the cached token expires."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalenrichertokenexchangefailing
+
+  # Occasional failures (fewer than minFailures in the window) never fire,
+  # even with no success at all (an idle enricher exchanges rarely).
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_token_exchange_total{namespace="distant-signal", pod="enricher", stage="openai", outcome="http_error"}'
+        values: '0x10 1x20 2x30'
+      - series: 'distant_signal_enricher_llm_token_exchange_total{namespace="distant-signal", pod="enricher", stage="openai", outcome="success"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: DistantSignalEnricherTokenExchangeFailing
+        exp_alerts: []

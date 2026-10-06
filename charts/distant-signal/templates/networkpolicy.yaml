@@ -368,9 +368,19 @@ networkPolicy.components.<component>.extraEgress.
 {{- $queueWorker := dict "api" true "redis" true }}
 {{- /* Upstreams whose ports the internet rule must allow (internetPorts). */}}
 {{- $token := list .Values.internalOauth.tokenUrl }}
+{{- /* enricher: the LLM endpoint, plus OpenAI's token exchange and (primary
+mode) Authentik's token endpoint in a workload identity mode. The internet
+rule is IP-based, so this only opens their ports, not their hosts. */}}
+{{- $enricherUrls := list .Values.enricher.llm.baseUrl }}
+{{- if include "distant-signal.enricherWif" . }}
+{{- $enricherUrls = append $enricherUrls .Values.enricher.llm.workloadIdentity.tokenExchangeUrl }}
+{{- if eq .Values.enricher.llm.auth "openaiWifAuthentik" }}
+{{- $enricherUrls = append $enricherUrls .Values.enricher.llm.workloadIdentity.authentik.tokenUrl }}
+{{- end }}
+{{- end }}
 {{- $workers := list
   (dict "component" "aggregator" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true) "internet" .Values.archive.enabled "urls" (list (.Values.archive.s3.endpoint | default "https://s3.amazonaws.com")))
-  (dict "component" "enricher" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true "redis" true) "urls" (list .Values.enricher.llm.baseUrl))
+  (dict "component" "enricher" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true "redis" true) "urls" $enricherUrls)
   (dict "component" "notifier" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true))
   (dict "component" "trust-consumer" "metricsPort" .Values.trustConsumer.metricsPort "healthPorts" (list .Values.trustConsumer.healthPort) "egress" $queueWorker "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
   (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $queueWorker "urls" $token)
