@@ -2562,6 +2562,11 @@ fullCoverageConsumer:
     # (no window from it may influence severity; no presumed cancellations).
     activationsMin: 20
     feedStaleSecs: 300
+    # -- Which trains count for a line's windowed stats: legacy (operator +
+    # calls at two stations), scope (schedule-reference's train membership,
+    # scope == line), or shadow (legacy output; both compared in the
+    # full_coverage_consumer_line_membership_* metrics and logs).
+    lineMembership: legacy
   logLevel: info
   extraEnv: []
   # Called out by the 2026-09-25 review as one of the two real leak/

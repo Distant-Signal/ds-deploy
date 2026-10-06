@@ -166,6 +166,8 @@ with fullCoverageConsumer.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.fullCoverageConsumer.windowedStats.activationsMin | quote }}
             - name: FULL_COVERAGE_FEED_STALE_SECS
               value: {{ .Values.fullCoverageConsumer.windowedStats.feedStaleSecs | quote }}
+            - name: FULL_COVERAGE_LINE_MEMBERSHIP
+              value: {{ .Values.fullCoverageConsumer.windowedStats.lineMembership | quote }}
             - name: METRICS_ENABLED
               value: {{ .Values.metrics.enabled | quote }}
             {{- if .Values.metrics.enabled }}

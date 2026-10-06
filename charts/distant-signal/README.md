@@ -1890,6 +1890,7 @@ its own.
 | `fullCoverageConsumer.windowedStats.graceMinutes` | `10` | Windows end this many minutes ago (feed lag p99 plus the write cadence). |
 | `fullCoverageConsumer.windowedStats.activationsMin` | `20` | Fewer Activations than this in the last hour marks the write `feed_stale`, so its windows cannot affect severity. |
 | `fullCoverageConsumer.windowedStats.feedStaleSecs` | `300` | A newest consumed movement older than this also marks the write `feed_stale`. |
+| `fullCoverageConsumer.windowedStats.lineMembership` | `legacy` | Which trains count for a line's windowed stats: `legacy` (§4.1: operator + calls at two stations), `scope` (`schedule-reference`'s train membership, `scope == line`, §4.1 for entries without it) or `shadow` (legacy output, both compared in the `full_coverage_consumer_line_membership_*` gauges and an info log per line). Needs `windowedStats.enabled`. See `docs/superpowers/specs/2026-10-06-line-membership-design.md`. |
 | `fullCoverageConsumer.logLevel` | `info` | `RUST_LOG` value. |
 | `fullCoverageConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `fullCoverageConsumer.resources` | requests `200m`/`640Mi`, limit `1Gi` | Container resource requests/limits. Holds per-line population caches, so it scales with the line catalogue; with windowed stats on, the working set is 430-570 MiB (target ~650 MiB). |
