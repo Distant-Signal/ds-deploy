@@ -1,0 +1,140 @@
+{{- /*
+The schema migrations as a Helm hook Job (ingest spec §12.1, plan 1B.4;
+migrate.job in values.yaml). Renders nothing unless migrate.job.enabled.
+
+`ds-migrate run` (plan 1B.1, in the api image) is today's
+api::migrate::run: the advisory lock, lock_timeout and statement_timeout
+(api.migrations), the INVALID-index heal, then every pending migration.
+
+Hook order: on an upgrade this runs before any of the release's resources
+change (pre-upgrade), so a failure fails the release and the old pods keep
+serving; on an install it runs once Postgres exists (post-install, weight
+-5: before the role setup Job's weight 0). The two NetworkPolicies below
+are hooks too (weight -10): a pre-upgrade hook runs before the release's
+own networkpolicy.yaml changes are applied, so the Postgres admission for
+this Job cannot live there. They stay in the cluster between releases
+(before-hook-creation replaces them on the next one) and admit nothing
+while no migrate pod exists. Removing migrate.job leaves them behind until
+deleted by hand (`kubectl delete networkpolicy -l
+app.kubernetes.io/component=migrate`).
+*/}}
+{{- if .Values.migrate.job.enabled }}
+{{- $job := .Values.migrate.job }}
+{{- $name := printf "%s-migrate" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- if and .Values.networkPolicy.enabled .Values.postgresql.enabled }}
+# Admits the migrate Job's pods to Postgres, in addition to the postgres
+# policy in networkpolicy.yaml (NetworkPolicies are additive).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-from-migrate" (include "distant-signal.postgresFullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "distant-signal.selectorLabels" (dict "root" . "component" "migrate") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.service.port }}
+---
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+{{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" . "component" "migrate" "deps" (dict "postgres" true) "hook" "pre-install,pre-upgrade") }}
+{{ . }}
+---
+{{- end }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-upgrade,post-install
+    helm.sh/hook-weight: "-5"
+    # Keeps the last run's pod and logs until the next release.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ int64 $job.backoffLimit }}
+  activeDeadlineSeconds: {{ int64 $job.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "migrate") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" $job.podSecurityContext) | nindent 8 }}
+      initContainers:
+        # The api image has no libpq tools, so the wait for Postgres (on a
+        # fresh install it may still be starting) uses the Postgres image,
+        # as the role setup Job does. pg_isready only connects; it does not
+        # log in.
+        - name: wait-for-postgres
+          image: {{ include "distant-signal.postgresImage" . | quote }}
+          imagePullPolicy: {{ include "distant-signal.postgresImagePullPolicy" . }}
+          command:
+            - sh
+            - -c
+            - until pg_isready --quiet --dbname="${MIGRATION_DATABASE_URL:?}"; do sleep 2; done
+          env:
+            {{- include "distant-signal.migrateJobDatabaseEnv" . | nindent 12 }}
+          securityContext:
+            # The image's postgres user; its default user is root.
+            runAsUser: 999
+            runAsGroup: 999
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+      containers:
+        - name: migrate
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) | quote }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          command:
+            {{- toYaml $job.command | nindent 12 }}
+          {{- with $job.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            # The schema owner: only this pod has its credentials once
+            # api.migrateOnStartup is false.
+            {{- include "distant-signal.migrateJobDatabaseEnv" . | nindent 12 }}
+            - name: MIGRATION_LOCK_TIMEOUT_SECS
+              value: {{ .Values.api.migrations.lockTimeoutSecs | int | quote }}
+            - name: MIGRATION_STATEMENT_TIMEOUT_SECS
+              value: {{ .Values.api.migrations.statementTimeoutSecs | int | quote }}
+            - name: RUST_LOG
+              value: {{ $job.logLevel | quote }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          {{- with $job.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $job.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $job.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

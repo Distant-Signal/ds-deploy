@@ -1,0 +1,97 @@
+{{- /*
+The api's user-data sweeps as an hourly CronJob (ingest spec §12.3, plan
+1B.8; apiMaintenance in values.yaml). Renders nothing unless
+apiMaintenance.enabled.
+
+Runs the api image's `maintenance` binary (plan 1B.8,
+crates/api/src/bin/maintenance.rs): one pass of prune_expired_sessions,
+prune_dead_links and prune_personal_data, then exit. Until the api image
+carries it, enabling this fails every run. The api's own
+session_cleanup_sweep_loop keeps running until API_BACKGROUND_LOOPS=false
+(plan 1B.7, rollout release N+2); both are idempotent, so the overlap is
+harmless.
+
+It connects as the api does (distant-signal.databaseEnvFor "api": the api's
+own role with postgresql.roles.perService.api.connect, else the app role or
+the bootstrap user), and its pool counts in the connection budget.
+*/}}
+{{- if .Values.apiMaintenance.enabled }}
+{{- $m := .Values.apiMaintenance }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-api-maintenance" (include "distant-signal.fullname" .) | trunc 52 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "api-maintenance") | nindent 4 }}
+spec:
+  schedule: {{ $m.schedule | quote }}
+  # Explicit, never the node's local zone (chart README, "Scheduled jobs and
+  # time zones"; CI checks every CronJob has one).
+  timeZone: {{ required "apiMaintenance.timeZone is required" $m.timeZone | quote }}
+  # One pass at a time: a slow prune is skipped, not doubled.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ int64 $m.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ int64 $m.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ int64 $m.failedJobsHistoryLimit }}
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api-maintenance") | nindent 8 }}
+        app.kubernetes.io/part-of: distant-signal
+    spec:
+      backoffLimit: {{ int64 $m.backoffLimit }}
+      activeDeadlineSeconds: {{ int64 $m.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api-maintenance") | nindent 12 }}
+            app.kubernetes.io/part-of: distant-signal
+        spec:
+          serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- include "distant-signal.podSecurityContext" (dict "override" $m.podSecurityContext) | nindent 12 }}
+          containers:
+            - name: api-maintenance
+              image: {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) | quote }}
+              imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+              command:
+                {{- toYaml $m.command | nindent 16 }}
+              {{- with $m.args }}
+              args:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              env:
+                {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "api") | nindent 16 }}
+                - name: DATABASE_MAX_CONNECTIONS
+                  value: {{ $m.database.maxConnections | int | quote }}
+                # The retention settings, from the api's own values so the
+                # CronJob and the api's sweep cannot drift apart.
+                - name: PAST_TRAVEL_RETENTION_DAYS
+                  value: {{ .Values.api.pastTravelRetentionDays | quote }}
+                - name: STALE_PUSH_SUBSCRIPTION_DAYS
+                  value: {{ .Values.api.stalePushSubscriptionDays | quote }}
+                - name: INACTIVE_ACCOUNT_RETENTION_DAYS
+                  value: {{ .Values.api.inactiveAccountRetentionDays | quote }}
+                - name: RUST_LOG
+                  value: {{ $m.logLevel | quote }}
+              securityContext:
+                {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 16 }}
+              {{- with $m.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+          {{- with $m.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $m.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

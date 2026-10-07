@@ -1,0 +1,121 @@
+{{- /*
+The ingest-writer (ingest spec §10, plan 1B.6/1B.9; ingestWriter in
+values.yaml). Renders nothing unless ingestWriter.enabled.
+
+Phase 1B: the train-domain loops (INGEST_WRITER_LOOPS, ingestWriter.loops)
+under Postgres advisory locks. Phase 3 adds the Redis ingest streams (and
+REDIS_URL, the redis NetworkPolicy admission and egress).
+*/}}
+{{- if .Values.ingestWriter.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-ingest-writer" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "ingest-writer") | nindent 4 }}
+spec:
+  # One replica, Recreate (spec §10): the loops' advisory locks would make a
+  # second one harmless, but the stream consumers of phase 3 assume one.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "ingest-writer") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.labels" (dict "root" . "component" "ingest-writer") | nindent 8 }}
+      {{- if or .Values.metrics.enabled .Values.ingestWriter.podAnnotations }}
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.ingestWriter.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.ingestWriter.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: ingest-writer
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.ingestWriter.image) | quote }}
+          imagePullPolicy: {{ .Values.ingestWriter.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          # /livez restarts a stalled loop; /healthz keeps the pod NotReady
+          # until the schema gate has passed and Postgres answers.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" . "port" .Values.workerHealth.port "readiness" true) | nindent 10 }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.workerHealth.port }}
+              protocol: TCP
+          {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          {{- end }}
+          env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.ingestWriterEnv" .) "extra" .Values.ingestWriter.extraEnv) | trim | nindent 12 }}
+          {{- with .Values.ingestWriter.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.ingestWriter.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ingestWriter.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ingestWriter.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with ingestWriter.extraEnv, which replaces an entry of the same name.
+*/ -}}
+{{- define "distant-signal.ingestWriterEnv" }}
+            {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "writer") | nindent 12 }}
+            - name: DATABASE_MAX_CONNECTIONS
+              value: {{ .Values.ingestWriter.database.maxConnections | int | quote }}
+            # The train-domain loops (plan 1B.6); "false" runs none.
+            - name: INGEST_WRITER_LOOPS
+              value: {{ .Values.ingestWriter.loops.enabled | toString | quote }}
+            # The loops' settings, from the api's own values so the writer
+            # and the api's loops cannot drift apart during the cutover.
+            - name: RECONCILIATION_SWEEP_INTERVAL_SECS
+              value: {{ .Values.api.reconciliationSweepIntervalSecs | quote }}
+            - name: SCHEDULE_ENRICHMENT_GRACE_MINUTES
+              value: {{ .Values.api.scheduleEnrichmentGraceMinutes | quote }}
+            - name: BACKLOG_MATCH_SWEEP_INTERVAL_SECS
+              value: {{ .Values.api.backlogMatchSweepIntervalSecs | quote }}
+            # Always rendered, "false" included: it decides whether the
+            # binary starts its metrics listener.
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            {{- end }}
+            # /livez + /healthz listener -- see workerHealth.
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.workerHealth.port) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.ingestWriter.progressStallSecs | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.ingestWriter.logLevel | quote }}
+{{- end }}

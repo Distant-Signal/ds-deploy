@@ -995,6 +995,13 @@ app.connectionLimitSlack.
 {{- $total = add $total (include "distant-signal.servicePool" (dict "root" $root "service" $service)) -}}
 {{- end -}}
 {{- end -}}
+{{- /* The api-maintenance CronJob connects as the api does. */ -}}
+{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "api")) -}}
+{{- $total = add $total (include "distant-signal.apiMaintenancePool" $root) -}}
+{{- end -}}
+{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "writer")) -}}
+{{- $total = add $total (include "distant-signal.ingestWriterPool" $root) -}}
+{{- end -}}
 {{- $total -}}
 {{- else -}}
 {{- fail (printf "postgresql.roles.%s.connectionLimit must be set." .role) -}}
@@ -1048,10 +1055,10 @@ Every helper takes root unless it says otherwise.
 
 distant-signal.perServiceKeys: the services this chart can move to their
 own role, space-separated. Each must be a created (not `planned`) role in
-db-grants.yaml.
+db-grants.yaml. `writer` is the ingest-writer's (ingestWriter, plan 1B.9).
 */}}
 {{- define "distant-signal.perServiceKeys" -}}
-api aggregator enricher notifier
+api aggregator enricher notifier writer
 {{- end }}
 
 {{- define "distant-signal.perServiceEnabled" -}}
@@ -1075,6 +1082,9 @@ True (non-empty) when the service connects as its own role. Takes (dict
 {{- end -}}
 {{- if not (include "distant-signal.postgresRolesEnabled" .root) -}}
 {{- fail (printf "postgresql.roles.perService.%s.connect needs postgresql.roles.enabled: the per-service roles are members of the app role." .service) -}}
+{{- end -}}
+{{- if and (eq .service "writer") (not .root.Values.ingestWriter.enabled) -}}
+{{- fail "postgresql.roles.perService.writer.connect needs ingestWriter.enabled: nothing else connects as the writer role." -}}
 {{- end -}}
 true
 {{- end -}}
@@ -1105,16 +1115,44 @@ The role name from files/db-grants.yaml. Takes (dict "root" $ "service" ...).
 {{/*
 A service's Postgres pool as the chart runs it: the api's DATABASE_MAX_CONNECTIONS
 times its replicas, the workers' crate defaults (common::pg), the
-aggregator's archive pool. Takes (dict "root" $ "service" ...).
+aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnections
+(whether or not it is enabled; see distant-signal.ingestWriterPool). Takes
+(dict "root" $ "service" ...).
 */}}
 {{- define "distant-signal.servicePool" -}}
 {{- $root := .root -}}
 {{- if eq .service "api" -}}
-{{- mul (int $root.Values.api.replicaCount) (int (include "distant-signal.apiMaxConnections" $root)) -}}
+{{- mul (int (include "distant-signal.apiPods" $root)) (int (include "distant-signal.apiMaxConnections" $root)) -}}
 {{- else if eq .service "aggregator" -}}
 {{- add 10 (ternary 2 0 ($root.Values.archive.enabled | default false)) -}}
+{{- else if eq .service "writer" -}}
+{{- int $root.Values.ingestWriter.database.maxConnections -}}
 {{- else -}}
 5
+{{- end -}}
+{{- end }}
+
+{{/*
+The ingest-writer's pool (ingestWriter.database.maxConnections) when
+ingestWriter.enabled, else 0. Takes root.
+*/}}
+{{- define "distant-signal.ingestWriterPool" -}}
+{{- if .Values.ingestWriter.enabled -}}
+{{- int .Values.ingestWriter.database.maxConnections -}}
+{{- else -}}
+0
+{{- end -}}
+{{- end }}
+
+{{/*
+The api-maintenance CronJob's pool (apiMaintenance.database.maxConnections)
+when apiMaintenance.enabled, else 0. Takes root.
+*/}}
+{{- define "distant-signal.apiMaintenancePool" -}}
+{{- if .Values.apiMaintenance.enabled -}}
+{{- int .Values.apiMaintenance.database.maxConnections -}}
+{{- else -}}
+0
 {{- end -}}
 {{- end }}
 
@@ -1145,7 +1183,7 @@ from its pool. Takes (dict "root" $ "service" ...).
 {{- $limit -}}
 {{- else if eq .service "api" -}}
 {{- $pool := int $cfg.maxConnections -}}
-{{- add (mul (add (int $root.Values.api.replicaCount) 1) $pool) 2 -}}
+{{- add (mul (add (int $root.Values.api.replicaCount) 1) $pool) 2 (include "distant-signal.apiMaintenancePool" $root) -}}
 {{- else -}}
 {{- add (include "distant-signal.servicePool" .) 1 -}}
 {{- end -}}
@@ -1220,6 +1258,114 @@ $(VAR) indirection as distant-signal.databaseEnv.
       key: {{ include "distant-signal.postgresRoleSecretKey" (dict "root" . "role" "owner") }}
 - name: MIGRATION_DATABASE_URL
   value: {{ printf "postgres://%s:$(PG_MIGRATION_PASSWORD)@%s:%d/%s" .Values.postgresql.roles.owner.username (include "distant-signal.postgresFullname" .) (int .Values.postgresql.service.port) .Values.postgresql.auth.database | quote }}
+{{- end -}}
+{{- end }}
+
+{{/*
+Ingest plan 1B.3/1B.4: true (non-empty) when the api migrates at startup
+(api.migrateOnStartup, the default). false needs migrate.job.enabled, or
+nothing would migrate. Takes root.
+*/}}
+{{- define "distant-signal.apiMigratesOnStartup" -}}
+{{- if ne (toString .Values.api.migrateOnStartup) "false" -}}
+true
+{{- else if not .Values.migrate.job.enabled -}}
+{{- fail "api.migrateOnStartup is false but migrate.job.enabled is not: nothing would run the migrations. Enable migrate.job (same release), or keep api.migrateOnStartup true." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Ingest plan 1B.10: the api Deployment's strategy type, api.strategy.type.
+Recreate (the default) or RollingUpdate; RollingUpdate only once the api no
+longer migrates at startup (migrate.job.enabled and api.migrateOnStartup
+false), or a new pod would migrate under the old one. Takes root.
+*/}}
+{{- define "distant-signal.apiStrategy" -}}
+{{- $type := toString (dig "strategy" "type" "Recreate" .Values.api) -}}
+{{- if eq $type "RollingUpdate" -}}
+{{- if or (not .Values.migrate.job.enabled) (include "distant-signal.apiMigratesOnStartup" .) -}}
+{{- fail "api.strategy.type RollingUpdate needs migrate.job.enabled and api.migrateOnStartup false: a new api pod that migrates at startup would change the schema under the old pod still serving (see api-deployment.yaml's strategy comment)." -}}
+{{- end -}}
+{{- else if ne $type "Recreate" -}}
+{{- fail (printf "api.strategy.type must be Recreate or RollingUpdate, not %q." $type) -}}
+{{- end -}}
+{{- $type -}}
+{{- end }}
+
+{{/*
+The most api pods that can run at once: api.replicaCount, plus the
+RollingUpdate surge pod (maxSurge 1). Each has its own pool. Takes root.
+*/}}
+{{- define "distant-signal.apiPods" -}}
+{{- add (int .Values.api.replicaCount) (ternary 1 0 (eq (include "distant-signal.apiStrategy" .) "RollingUpdate")) -}}
+{{- end }}
+
+{{/*
+The migrate hook Job's MIGRATION_DATABASE_URL (templates/migrate-job.yaml):
+the schema owner with postgresql.roles.enabled (as the api's
+distant-signal.migrationDatabaseEnv), else the bundled superuser
+(auth.username, what the api migrates as today), or the external
+database's URL. Same $(VAR) indirection as distant-signal.databaseEnv.
+Takes root.
+*/}}
+{{- define "distant-signal.migrateJobDatabaseEnv" -}}
+{{- if include "distant-signal.postgresRolesEnabled" . -}}
+{{- include "distant-signal.migrationDatabaseEnv" . -}}
+{{- else if .Values.postgresql.enabled -}}
+- name: PG_MIGRATION_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "distant-signal.postgresSecretName" . }}
+      key: {{ include "distant-signal.postgresSecretPasswordKey" . }}
+- name: MIGRATION_DATABASE_URL
+  value: {{ printf "postgres://%s:$(PG_MIGRATION_PASSWORD)@%s:%d/%s" .Values.postgresql.auth.username (include "distant-signal.postgresFullname" .) (int .Values.postgresql.service.port) .Values.postgresql.auth.database | quote }}
+{{- else if .Values.externalDatabase.existingSecret -}}
+- name: MIGRATION_DATABASE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.externalDatabase.existingSecret }}
+      key: {{ .Values.externalDatabase.existingSecretUrlKey }}
+{{- else if .Values.externalDatabase.url -}}
+- name: MIGRATION_DATABASE_URL
+  value: {{ .Values.externalDatabase.url | quote }}
+{{- else -}}
+{{- fail "migrate.job.enabled: postgresql.enabled is false but no external database is configured (externalDatabase.existingSecret or externalDatabase.url)." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+An egress-only NetworkPolicy for a Job's pods (the postgres-roles setup
+Job, the migrate hook Job, the api-maintenance CronJob): DNS and the
+in-cluster services in `deps` (distant-signal.egressRules). Renders nothing
+unless distant-signal.egressOn for the component: without egress policies a
+Job's egress is not restricted by this chart, and its ingress stays as
+before (a Job serves nothing). `hook` (optional) makes it a Helm hook
+created before that hook Job (weight -10). Takes (dict "root" $
+"component" "migrate" "deps" (dict "postgres" true) "hook" "pre-install,pre-upgrade").
+*/}}
+{{- define "distant-signal.jobEgressNetworkPolicy" -}}
+{{- $root := .root -}}
+{{- if include "distant-signal.egressOn" (dict "root" $root "component" .component) -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-%s" (include "distant-signal.fullname" $root) .component | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" $root "component" .component) | nindent 4 }}
+  {{- with .hook }}
+  annotations:
+    helm.sh/hook: {{ . }}
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+  {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" $root "component" .component) | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    {{- include "distant-signal.egressRules" (dict "root" $root "component" .component "deps" .deps "internet" false) | nindent 4 }}
 {{- end -}}
 {{- end }}
 
@@ -1728,7 +1874,7 @@ this chart can render, so a typo cannot silently drop a rule. Takes
 {{- define "distant-signal.npComponent" -}}
 {{- $root := .root -}}
 {{- $all := $root.Values.networkPolicy.components | default dict -}}
-{{- $known := list "api" "frontend" "aggregator" "enricher" "notifier" "postgres" "redis" "schedulefeed" "trust-consumer" "trust-backlog-consumer" "full-coverage-consumer" "movement-relay" "poller-irish-rail-gtfs" "poller-irish-rail-live" "poller-nir-stations" -}}
+{{- $known := list "api" "frontend" "aggregator" "enricher" "notifier" "postgres" "redis" "schedulefeed" "trust-consumer" "trust-backlog-consumer" "full-coverage-consumer" "movement-relay" "poller-irish-rail-gtfs" "poller-irish-rail-live" "poller-nir-stations" "postgres-roles" "migrate" "api-maintenance" "ingest-writer" -}}
 {{- range $name, $_ := $root.Values.pollers -}}
 {{- $known = append $known (printf "poller-%s" $name) -}}
 {{- end -}}

@@ -697,6 +697,9 @@ jobs:
   # the same script fails when a migration the base already had is
   # modified, deleted or renamed, so it needs no lock-file upkeep;
   # crates/api/tests/migration_checksums.rs is the second line of defence.
+  # Ingest plan 1B.5: it also fails on destructive DDL (DROP, RENAME, a
+  # column type change, SET NOT NULL) without a `-- contract: ...` header,
+  # in migrations added since the base or newer than its cutoff.
   # The job name is unchanged in case a branch-protection rule requires it.
   migration-order:
     name: migration versions are newer than the base
@@ -1788,6 +1791,147 @@ jobs:
             fail "postgresql.roles.enabled with an external database must fail the render"
           fi
 
+      # Ingest plan 1B.4: migrate.job (off by default) renders a
+      # pre-upgrade,post-install hook Job that holds the schema owner's
+      # credentials; with api.migrateOnStartup false the api has none. Its
+      # hook NetworkPolicies, and the role setup Job's egress policy, let
+      # both Jobs reach Postgres.
+      - name: helm template (migrate hook Job)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          roles=(
+            --set postgresql.roles.enabled=true --set postgresql.roles.setupJob.enabled=true
+            --set networkPolicy.enabled=true --set networkPolicy.egress.enabled=true
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          doc() { awk -v k="$1" -v n="$2" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: " k "\n" && $0 ~ "\n  name: " n "\n" {print}'; }
+
+          off=$(render "${roles[@]}")
+          if grep -E -q 'migrate-job.yaml|API_MIGRATE_ON_STARTUP|component: migrate' <<<"${off}"; then
+            fail "migrate.job off must render nothing of it"
+          fi
+
+          on=$(render "${roles[@]}" --set migrate.job.enabled=true)
+          job=$(doc Job distant-signal-migrate <<<"${on}")
+          [[ -n "${job}" ]] || fail "no migrate Job rendered"
+          for want in 'helm.sh/hook: pre-upgrade,post-install' 'helm.sh/hook-weight: "-5"' \
+              'helm.sh/hook-delete-policy: before-hook-creation' 'backoffLimit: 1' \
+              'activeDeadlineSeconds: 900' 'until pg_isready' '- /usr/local/bin/ds-migrate' '- run'; do
+            grep -q -F -- "${want}" <<<"${job}" || fail "migrate Job lacks: ${want}"
+          done
+          urls=$(grep -A1 'name: MIGRATION_DATABASE_URL$' <<<"${job}")
+          n=$(grep -c 'value: "postgres://distant_signal_owner:' <<<"${urls}" || true)
+          [[ "${n}" -eq 2 ]] || fail "the Job's wait and migrate containers must use the owner role"
+          api=$(doc Deployment distant-signal-api <<<"${on}")
+          grep -q 'name: MIGRATION_DATABASE_URL$' <<<"${api}" \
+            || fail "with migrateOnStartup still true the api keeps MIGRATION_DATABASE_URL"
+
+          moved=$(render "${roles[@]}" --set migrate.job.enabled=true --set api.migrateOnStartup=false)
+          api=$(doc Deployment distant-signal-api <<<"${moved}")
+          if grep -E -q 'MIGRATION_DATABASE_URL|PG_MIGRATION_PASSWORD|distant_signal_owner' <<<"${api}"; then
+            fail "migrateOnStartup=false: the api must hold no owner credentials"
+          fi
+          grep -A1 'name: API_MIGRATE_ON_STARTUP$' <<<"${api}" | grep -q 'value: "false"' \
+            || fail "migrateOnStartup=false must render API_MIGRATE_ON_STARTUP=false"
+          deployments=$(awk 'BEGIN{RS="\n---\n"} /\nkind: (Deployment|CronJob)\n/ {print}' <<<"${moved}")
+          if grep -q 'postgres-owner-password' <<<"${deployments}"; then
+            fail "no Deployment or CronJob may read the owner's password"
+          fi
+
+          # The hook policies exist before the Job (weight -10) and admit it.
+          np=$(doc NetworkPolicy distant-signal-postgres-from-migrate <<<"${moved}")
+          grep -q 'helm.sh/hook: pre-install,pre-upgrade' <<<"${np}" || fail "the Postgres admission must be a hook"
+          grep -q 'helm.sh/hook-weight: "-10"' <<<"${np}" || fail "the Postgres admission must precede the Job"
+          grep -q 'app.kubernetes.io/component: migrate' <<<"${np}" || fail "the Postgres admission must name the Job's pods"
+          for c in migrate postgres-roles; do
+            eg=$(doc NetworkPolicy "distant-signal-${c}" <<<"${moved}")
+            grep -q 'port: 5432' <<<"${eg}" || fail "${c} must be allowed out to Postgres"
+          done
+          pg=$(doc NetworkPolicy distant-signal-postgres <<<"${moved}")
+          grep -q -- '- postgres-roles$' <<<"${pg}" || fail "the setup Job must be admitted to Postgres"
+
+          # Without the role split the Job migrates as the bootstrap superuser,
+          # with an external database as its URL.
+          plain=$(render --set migrate.job.enabled=true --show-only templates/migrate-job.yaml)
+          # shellcheck disable=SC2016 # "$(PG_MIGRATION_PASSWORD)" is Kubernetes env-var syntax, matched literally
+          grep -A1 'name: MIGRATION_DATABASE_URL$' <<<"${plain}" \
+            | grep -q 'value: "postgres://distant_signal:\$(PG_MIGRATION_PASSWORD)@' \
+            || fail "roles off: the Job must migrate as postgresql.auth.username"
+          ext=$(render --set migrate.job.enabled=true --set postgresql.enabled=false \
+            --set externalDatabase.existingSecret=ext-db --show-only templates/migrate-job.yaml)
+          grep -A4 'name: MIGRATION_DATABASE_URL$' <<<"${ext}" | grep -q 'name: ext-db' \
+            || fail "an external database: the Job must read externalDatabase.existingSecret"
+
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set api.migrateOnStartup=false >/dev/null 2>&1; then
+            fail "api.migrateOnStartup=false without migrate.job.enabled must fail the render"
+          fi
+
+      # Ingest plan 1B.10: api.strategy.type stays Recreate by default;
+      # RollingUpdate (maxSurge 1, maxUnavailable 0) renders only once the
+      # hook Job migrates instead of the api, and its surge pod's pool counts
+      # in the INF-7 connection budget.
+      - name: helm template (api rollout strategy)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --show-only templates/api-deployment.yaml
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          job=(--set migrate.job.enabled=true --set api.migrateOnStartup=false)
+
+          out=$(render)
+          grep -q '^    type: Recreate$' <<<"${out}" || fail "the default strategy must stay Recreate"
+          if grep -q 'rollingUpdate:' <<<"${out}"; then fail "Recreate must render no rollingUpdate"; fi
+
+          out=$(render "${job[@]}" --set api.strategy.type=RollingUpdate --set api.database.maxConnections=35)
+          grep -q '^    type: RollingUpdate$' <<<"${out}" || fail "RollingUpdate must render"
+          grep -A2 'rollingUpdate:' <<<"${out}" | grep -q 'maxSurge: 1' || fail "maxSurge must be 1"
+          grep -A2 'rollingUpdate:' <<<"${out}" | grep -q 'maxUnavailable: 0' || fail "maxUnavailable must be 0"
+
+          # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
+          {
+            if render --set api.strategy.type=RollingUpdate --set api.database.maxConnections=35 >/dev/null 2>&1; then
+              fail "RollingUpdate while the api migrates at startup must fail the render"
+            fi
+            if render --set migrate.job.enabled=true --set api.strategy.type=RollingUpdate \
+                --set api.database.maxConnections=35 >/dev/null 2>&1; then
+              fail "RollingUpdate with the Job but migrateOnStartup still true must fail the render"
+            fi
+            if render "${job[@]}" --set api.strategy.type=Rolling >/dev/null 2>&1; then
+              fail "an unknown strategy type must fail the render"
+            fi
+            # 2 pods x 36 + 21 other pools + 5 reserved = 98 > 97; x 35 = 96 fits.
+            if render "${job[@]}" --set api.strategy.type=RollingUpdate \
+                --set api.database.maxConnections=36 >/dev/null 2>&1; then
+              fail "the surge pod's pool must count in the connection budget"
+            fi
+          }
+
       # Reboot resilience: redis must roll with Recreate (single RWO AOF
       # volume, INF-1); postgres needs a startupProbe so WAL redo is never
       # killed by liveness (INF-4); the frontend probes must hit the
@@ -2054,6 +2198,84 @@ jobs:
               full-coverage-consumer movement-relay; do
             grep -q -- "- ${c}\$" <<<"${pm}" || { echo "PodMonitor must select ${c}" >&2; exit 1; }
           done
+
+      # Ingest plan 1B.9: ingestWriter (off by default) is one Recreate
+      # replica with its own NetworkPolicy (egress to Postgres only),
+      # PodMonitor entry, IngestWriterDown alert and, with perService, the
+      # distant_signal_writer role; its loops stay off until loops.enabled.
+      - name: helm template (ingest-writer)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set metrics.podMonitor.enabled=true --set metrics.prometheusRule.enabled=true
+            --set networkPolicy.enabled=true --set networkPolicy.egress.enabled=true
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          doc() { awk -v k="$1" -v n="$2" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: " k "\n" && $0 ~ "\n  name: " n "\n" {print}'; }
+          env_is() { grep -A1 "name: $2\$" <<<"$1" | grep -q "value: \"$3\"" || fail "$2 must be \"$3\""; }
+
+          off=$(render)
+          if grep -q -i 'ingest-writer\|IngestWriter' <<<"${off}"; then fail "ingestWriter off must render nothing of it"; fi
+
+          on=$(render --set ingestWriter.enabled=true --set ingestWriter.image.tag=test)
+          dep=$(doc Deployment distant-signal-ingest-writer <<<"${on}")
+          [[ -n "${dep}" ]] || fail "no ingest-writer Deployment rendered"
+          grep -q '^  replicas: 1$' <<<"${dep}" || fail "the ingest-writer must run one replica"
+          grep -q '^    type: Recreate$' <<<"${dep}" || fail "the ingest-writer must roll with Recreate"
+          grep -q 'image: "ghcr.io/fasterspeeding/distant-signal/ingest-writer:test"' <<<"${dep}" \
+            || fail "ingestWriter.image must set the image"
+          grep -q 'path: /livez' <<<"${dep}" || fail "the ingest-writer needs the worker liveness probe"
+          env_is "${dep}" INGEST_WRITER_LOOPS false
+          env_is "${dep}" RECONCILIATION_SWEEP_INTERVAL_SECS 300
+          env_is "${dep}" DATABASE_MAX_CONNECTIONS 5
+          loops=$(render --set ingestWriter.enabled=true --set ingestWriter.loops.enabled=true \
+            --show-only templates/ingest-writer-deployment.yaml)
+          env_is "${loops}" INGEST_WRITER_LOOPS true
+
+          np=$(doc NetworkPolicy distant-signal-ingest-writer <<<"${on}")
+          grep -q 'port: 5432' <<<"${np}" || fail "the ingest-writer must be allowed out to Postgres"
+          if grep -q -E 'port: 6379|ipBlock' <<<"${np}"; then
+            fail "phase 1B: the ingest-writer gets neither Redis nor the internet"
+          fi
+          pg=$(doc NetworkPolicy distant-signal-postgres <<<"${on}")
+          grep -q -- '- ingest-writer$' <<<"${pg}" || fail "Postgres must admit the ingest-writer"
+          pm=$(doc PodMonitor distant-signal <<<"${on}")
+          grep -q -- '- ingest-writer$' <<<"${pm}" || fail "the PodMonitor must select the ingest-writer"
+          rule=$(doc PrometheusRule distant-signal <<<"${on}")
+          grep -q 'alert: DistantSignalIngestWriterDown$' <<<"${rule}" || fail "IngestWriterDown must render"
+          grep -q 'deployment="distant-signal-ingest-writer"' <<<"${rule}" || fail "IngestWriterDown must name the Deployment"
+
+          # The writer role: created with perService, used only with connect.
+          roles=(--set postgresql.roles.enabled=true --set postgresql.roles.setupJob.enabled=true
+            --set postgresql.roles.perService.enabled=true)
+          ps=$(render "${roles[@]}")
+          grep -q "'--variable=writer_connection_limit=6'" <<<"${ps}" || fail "the writer role's limit must be its pool + 1"
+          grep -q 'name: DS_PG_WRITER_PASSWORD$' <<<"${ps}" || fail "the setup Job must get the writer's password"
+          ps=$(render "${roles[@]}" --set ingestWriter.enabled=true)
+          dep=$(doc Deployment distant-signal-ingest-writer <<<"${ps}")
+          # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
+          grep -q 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${dep}" || fail "without connect the ingest-writer connects as app"
+          grep -q "'--variable=app_connection_limit=80'" <<<"${ps}" || fail "the writer's pool (5) must count in app's limit (75)"
+          ps=$(render "${roles[@]}" --set ingestWriter.enabled=true --set postgresql.roles.perService.writer.connect=true)
+          dep=$(doc Deployment distant-signal-ingest-writer <<<"${ps}")
+          # shellcheck disable=SC2016 # as above
+          grep -q 'postgres://distant_signal_writer:\$(PGPASSWORD)@' <<<"${dep}" \
+            || fail "writer.connect: the ingest-writer must connect as distant_signal_writer"
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render "${roles[@]}" --set postgresql.roles.perService.writer.connect=true >/dev/null 2>&1; then
+            fail "writer.connect without ingestWriter.enabled must fail the render"
+          fi
 
       # INF-7: with the bundled Postgres, api replicas x pool plus the other
       # pools must fit in max_connections - 3, or rendering fails.
@@ -2453,6 +2675,67 @@ jobs:
           render "${pgbackrest[@]}" | check "pgBackRest enabled" 4
           render "${pgbackrest[@]}" --set postgresql.pgbackrest.backup.verifySchedule= \
             | check "pgBackRest enabled, no weekly verify" 3
+          render --set apiMaintenance.enabled=true | check "apiMaintenance enabled" 1
+
+      # Ingest plan 1B.8: apiMaintenance (off by default) is an hourly
+      # Forbid-concurrency CronJob running the api image's maintenance
+      # binary as the api's database role, admitted to Postgres, with its
+      # pool in the connection budgets.
+      - name: helm template (api-maintenance CronJob)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          doc() { awk -v k="$1" -v n="$2" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: " k "\n" && $0 ~ "\n  name: " n "\n" {print}'; }
+          on=(--set apiMaintenance.enabled=true --set networkPolicy.enabled=true --set networkPolicy.egress.enabled=true)
+
+          off=$(render --set networkPolicy.enabled=true --set networkPolicy.egress.enabled=true)
+          if grep -q 'api-maintenance' <<<"${off}"; then fail "apiMaintenance off must render nothing of it"; fi
+
+          out=$(render "${on[@]}")
+          cj=$(doc CronJob distant-signal-api-maintenance <<<"${out}")
+          [[ -n "${cj}" ]] || fail "no api-maintenance CronJob rendered"
+          for want in 'schedule: "17 * * * *"' 'timeZone: "Etc/UTC"' 'concurrencyPolicy: Forbid' \
+              '- /usr/local/bin/maintenance' 'image: "ghcr.io/fasterspeeding/distant-signal/api:'; do
+            grep -q -F -- "${want}" <<<"${cj}" || fail "api-maintenance CronJob lacks: ${want}"
+          done
+          for env in PAST_TRAVEL_RETENTION_DAYS STALE_PUSH_SUBSCRIPTION_DAYS INACTIVE_ACCOUNT_RETENTION_DAYS; do
+            grep -q "name: ${env}\$" <<<"${cj}" || fail "api-maintenance CronJob lacks ${env}"
+          done
+          pg=$(doc NetworkPolicy distant-signal-postgres <<<"${out}")
+          grep -q -- '- api-maintenance$' <<<"${pg}" || fail "Postgres must admit the CronJob"
+          eg=$(doc NetworkPolicy distant-signal-api-maintenance <<<"${out}")
+          grep -q 'port: 5432' <<<"${eg}" || fail "the CronJob must be allowed out to Postgres"
+
+          # The api role: its own with perService.api.connect, else app.
+          roles=(--set postgresql.roles.enabled=true --set postgresql.roles.setupJob.enabled=true)
+          cj=$(render "${on[@]}" "${roles[@]}" --show-only templates/api-maintenance-cronjob.yaml)
+          # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
+          grep -q 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${cj}" || fail "roles on: the CronJob must connect as app"
+          cj=$(render "${on[@]}" "${roles[@]}" --set postgresql.roles.perService.enabled=true \
+            --set postgresql.roles.perService.api.connect=true --show-only templates/api-maintenance-cronjob.yaml)
+          # shellcheck disable=SC2016 # as above
+          grep -q 'postgres://distant_signal_api:\$(PGPASSWORD)@' <<<"${cj}" || fail "api.connect: the CronJob must connect as the api role"
+          # Its 2 connections count: the app limit 75 -> 77, the INF-7 budget 71 -> 69.
+          out=$(render "${on[@]}" "${roles[@]}")
+          grep -q "'--variable=app_connection_limit=77'" <<<"${out}" || fail "the CronJob's pool must count in the app role's limit"
+          render "${on[@]}" --set api.database.maxConnections=69 >/dev/null
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render "${on[@]}" --set api.database.maxConnections=70 >/dev/null 2>&1; then
+            fail "the CronJob's pool must count in the INF-7 budget"
+          fi
 
       # postgresql.pgbackrest (docs/postgres-pitr.md). Off (the default)
       # must render nothing of it: the Postgres pod stays exactly as before.

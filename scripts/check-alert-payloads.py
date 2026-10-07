@@ -113,6 +113,8 @@ RENDER_FLAGS = [
     "scheduleFeed.bucket.name=example-ds-ingest",
     "scheduleFeed.bucket.existingSecret=distant-signal-schedulefeed-bucket",
     "fullCoverageConsumer.windowedStats.enabled=true",
+    # DistantSignalIngestWriterDown.
+    "ingestWriter.enabled=true",
     "postgresql.pgbackrest.enabled=true",
     "postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest",
     "postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0",

@@ -320,7 +320,11 @@ Prerequisites: Stage B is done (every service connects as
 **1. The passwords.** Add four keys to the roles Secret (or a Secret per
 service, Q12's default; letters and digits only):
 `postgres-api-password`, `postgres-aggregator-password`,
-`postgres-enricher-password`, `postgres-notifier-password`. Then:
+`postgres-enricher-password`, `postgres-notifier-password`. (From plan task
+1B.9 the setup Job also creates `distant_signal_writer`, the ingest-writer's
+role, unused until `perService.writer.connect`; without
+`perService.writer.existingSecret` its password,
+`postgres-writer-password`, is generated into the chart's Secret.) Then:
 
 ```yaml
 postgresql:

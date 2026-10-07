@@ -465,6 +465,36 @@ The notifier dropped decided notifications
 
 Design: [line-status notifications](superpowers/specs/2026-09-02-line-status-notifications-design.md#delivery-guarantee-at-most-once).
 
+## ingest-writer
+
+### DistantSignalIngestWriterDown
+
+The ingest-writer (`ingestWriter.enabled`) has been down for
+`ingestWriterDown.for`: its scrape target's `up` is 0, or its Deployment
+(`<release>-ingest-writer`) has no available replica. It owns the
+train-domain sweeps once `ingestWriter.loops.enabled` is on (schedule-match,
+reconciliation, backlog-match, the CORPUS crosswalk), and from phase 3 it
+applies the ingest streams. While it is down, new trains stay unmatched to
+their schedules and the TRUST backlog is not matched; nothing is lost, the
+sweeps catch up when it is back.
+
+1. `kubectl -n distant-signal get pods -l app.kubernetes.io/component=ingest-writer`
+   and `kubectl -n distant-signal logs deploy/distant-signal-ingest-writer --previous`:
+   a crash loop, an OOM, or a failed start.
+2. Not ready but running: it waits at the schema gate until the migrations
+   it was built with are applied (the migrate hook Job's logs), then needs
+   Postgres (see [DistantSignalPostgresDown](#distantsignalpostgresdown)).
+   A `permission denied` (42501) means its role lacks a grant
+   (`files/db-grants.yaml`, the role setup Job).
+3. Restarting: `/livez` fails when a loop makes no progress for
+   `ingestWriter.progressStallSecs`; the log names the loop.
+4. While the api still runs its own loops (`API_BACKGROUND_LOOPS` true, the
+   default), they keep sweeping; if the api's are already off and the
+   writer cannot be fixed quickly, set `API_BACKGROUND_LOOPS=true` on the
+   api (the advisory locks keep the two from sweeping at once).
+
+Design: [ingest architecture](superpowers/specs/2026-10-06-ingest-architecture-design.md#10-the-ingest-writer).
+
 ## users
 
 ### DistantSignalUserSignupSpike

@@ -59,7 +59,8 @@ so that clause fired on every rollout.
 {{- $api5xxOn := ($rule.api5xx).enabled }}
 {{- $healthOn := or $postgresDownOn $apiDbDownOn $consumerApiOn $cyclesOn $api5xxOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn }}
+{{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -795,6 +796,35 @@ spec:
             summary: "notifier dropped {{ "{{ $value | humanize }}" }} pushes ({{ "{{ $labels.reason }}" }})"
             description: "Over the last {{ .window }}. Delivery is at-most-once, so these users may never get them. The runbook covers each reason."
             runbook_url: {{ printf "%s#distantsignalnotifierpushdropped" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $writerDownOn }}
+    {{- with $rule.ingestWriterDown }}
+    - name: distant-signal.ingest-writer
+      rules:
+        {{- /*
+        Ingest spec §14.2 (plan 1B.9): the ingest-writer runs the
+        train-domain sweeps (and, from phase 3, applies the ingest streams).
+        Two sources, either enough: its scrape target is down (the
+        PodMonitor's app_kubernetes_io_component label), or its Deployment
+        has no available replica (kube-state-metrics; a failing /livez
+        restarts the pod, a failing /healthz makes it unavailable), which
+        still answers when the pod is gone and has no target at all.
+        */}}
+        - alert: DistantSignalIngestWriterDown
+          expr: |
+            max by (namespace) (up{namespace="{{ $ns }}", app_kubernetes_io_component="ingest-writer"}) == 0
+            or max by (namespace) (kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ printf "%s-ingest-writer" $fullname | trunc 63 | trimSuffix "-" }}"}) < 1
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "the ingest-writer is down"
+            description: "Not scraped, or no available replica, for {{ .for }}: the train-domain sweeps it owns are not running."
+            runbook_url: {{ printf "%s#distantsignalingestwriterdown" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $signupSpikeOn }}

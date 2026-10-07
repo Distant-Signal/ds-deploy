@@ -70,6 +70,9 @@ spec:
           {{- if .Values.movementRelay.enabled }}
           - movement-relay
           {{- end }}
+          {{- if .Values.ingestWriter.enabled }}
+          - ingest-writer
+          {{- end }}
           {{- if .Values.pollerIrishRailGtfs.enabled }}
           - poller-irish-rail-gtfs
           {{- end }}

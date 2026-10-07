@@ -11,7 +11,7 @@
 --     -f postgres-grants.sql
 --
 -- Passwords come from the environment (psql's \getenv), one per created
--- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD.
+-- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD.
 --
 -- In ONE transaction:
 --   1. the group roles (NOLOGIN) and every role whose status is not
@@ -70,6 +70,14 @@
 \else
 \set notifier_connection_limit 5
 \endif
+\if :{?writer}
+\else
+\set writer distant_signal_writer
+\endif
+\if :{?writer_connection_limit}
+\else
+\set writer_connection_limit 7
+\endif
 \getenv api_password DS_PG_API_PASSWORD
 \if :{?api_password}
 \else
@@ -90,6 +98,11 @@
 \else
 \set notifier_password ''
 \endif
+\getenv writer_password DS_PG_WRITER_PASSWORD
+\if :{?writer_password}
+\else
+\set writer_password ''
+\endif
 
 BEGIN;
 
@@ -109,7 +122,10 @@ SELECT
     set_config('ds_grants.enricher_connection_limit', :'enricher_connection_limit', true),
     set_config('ds_grants.notifier', :'notifier', true),
     set_config('ds_grants.notifier_password', :'notifier_password', true),
-    set_config('ds_grants.notifier_connection_limit', :'notifier_connection_limit', true)
+    set_config('ds_grants.notifier_connection_limit', :'notifier_connection_limit', true),
+    set_config('ds_grants.writer', :'writer', true),
+    set_config('ds_grants.writer_password', :'writer_password', true),
+    set_config('ds_grants.writer_connection_limit', :'writer_connection_limit', true)
 \gset ignored_
 
 -- 1. Roles.
@@ -158,7 +174,8 @@ BEGIN
         ('api', 'observed'),
         ('aggregator', 'observed'),
         ('enricher', 'observed'),
-        ('notifier', 'observed')) AS v(kind, status)
+        ('notifier', 'observed'),
+        ('writer', 'observed')) AS v(kind, status)
     LOOP
         IF r.name = app OR r.name = current_user OR r.name = ANY (seen) THEN
             RAISE EXCEPTION 'the % role name % must be a new, separate role',
@@ -202,7 +219,8 @@ BEGIN
         ('api', 'observed'),
         ('aggregator', 'observed'),
         ('enricher', 'observed'),
-        ('notifier', 'observed')) AS v(kind, status)
+        ('notifier', 'observed'),
+        ('writer', 'observed')) AS v(kind, status)
     LOOP
         member_oid := (SELECT oid FROM pg_roles WHERE rolname = r.name);
         IF r.status = 'observed' AND NOT EXISTS (
@@ -228,7 +246,9 @@ BEGIN
         ('aggregator', 'schema_gate'),
         ('enricher', 'schema_gate'),
         ('notifier', 'read_shared'),
-        ('notifier', 'schema_gate')) AS v(kind, grp)
+        ('notifier', 'schema_gate'),
+        ('writer', 'read_shared'),
+        ('writer', 'schema_gate')) AS v(kind, grp)
     LOOP
         IF NOT EXISTS (
             SELECT 1 FROM pg_auth_members
@@ -257,7 +277,8 @@ BEGIN
         ('api'),
         ('aggregator'),
         ('enricher'),
-        ('notifier')) AS v(kind)
+        ('notifier'),
+        ('writer')) AS v(kind)
     LOOP
         EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', grantee);
         EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM %I', grantee);

@@ -1,0 +1,50 @@
+# promtool unit tests for DistantSignalIngestWriterDown (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered, with
+# ingestWriter.enabled). Default: for 5m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # The scrape target goes down at 5m while the Deployment still reports an
+  # available replica (a wedged process): fires after `for: 5m`. Another
+  # component's target being down is ignored.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="distant-signal", app_kubernetes_io_component="ingest-writer", pod="distant-signal-ingest-writer-1"}'
+        values: '1x5 0x15'
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-ingest-writer"}'
+        values: '1x20'
+      - series: 'up{namespace="distant-signal", app_kubernetes_io_component="notifier", pod="distant-signal-notifier-1"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DistantSignalIngestWriterDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DistantSignalIngestWriterDown
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: the ingest-writer is down
+              description: "Not scraped, or no available replica, for 5m: the train-domain sweeps it owns are not running."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestwriterdown
+  # The pod is gone (no target at all) and the Deployment has no available
+  # replica: fires from kube-state-metrics alone. A 3-minute restart does
+  # not fire; another Deployment with none available is ignored.
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-ingest-writer"}'
+        values: '1x2 0x3 1x5 0x15'
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-notifier"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DistantSignalIngestWriterDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalIngestWriterDown
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: the ingest-writer is down
+              description: "Not scraped, or no available replica, for 5m: the train-domain sweeps it owns are not running."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestwriterdown

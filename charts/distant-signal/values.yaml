@@ -334,6 +334,21 @@ postgresql:
         existingSecretPasswordKey: postgres-notifier-password
         # -- CONNECTION LIMIT. Empty: its pool (5) plus 1.
         connectionLimit: ""
+      writer:
+        # -- Connect the ingest-writer (`ingestWriter`, which must be
+        # enabled) as `distant_signal_writer` (plan 1B.9). The role is
+        # created with the others whenever `enabled` is on, unused until
+        # then.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-writer-password
+        # -- CONNECTION LIMIT. Empty: its pool
+        # (`ingestWriter.database.maxConnections`, 5) plus 1.
+        connectionLimit: ""
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
     # succeeds, so crash recovery (WAL redo after a node reboot) is never
@@ -1154,8 +1169,17 @@ api:
   # `strategy: type: Recreate` (see its own comment there for why -- the same
   # in-process migration run is why), so every replica is terminated before
   # any new one starts, whatever this is set to. Raise it for read throughput
-  # and node-failure tolerance, not for rollout availability.
+  # and node-failure tolerance, not for rollout availability (that is
+  # `strategy.type` below).
   replicaCount: 1
+  strategy:
+    # -- The Deployment's rollout: Recreate (the default; a ~40 s outage per
+    # deploy) or RollingUpdate (maxSurge 1, maxUnavailable 0; ingest plan
+    # 1B.10). RollingUpdate is refused unless `migrate.job.enabled` and
+    # `api.migrateOnStartup` is false. The surge pod's pool counts in the
+    # connection budget (api pods x `database.maxConnections`), so lower
+    # that first (or use `postgresql.roles.perService.api`).
+    type: Recreate
   service:
     type: ClusterIP
     port: 8080
@@ -1492,10 +1516,20 @@ api:
     # fails to render when the pools can exceed max_connections - 3
     # (templates/api-deployment.yaml, INF-7).
     maxConnections: 50
+  # -- Migrate at startup (API_MIGRATE_ON_STARTUP), as today. false (ingest
+  # plan 1B.3/1B.4) needs `migrate.job.enabled`: the hook Job migrates, and
+  # the api gets no MIGRATION_DATABASE_URL (no owner credentials) and waits
+  # for the schema instead. The chart only renders
+  # `API_MIGRATE_ON_STARTUP=false`; the api reads it from task 1B.3 on.
+  # Until the api image has 1B.3 it ignores the variable and still migrates,
+  # with DATABASE_URL (the app role when `postgresql.roles.enabled`, which
+  # cannot run DDL), so leave this true until then.
+  migrateOnStartup: true
   # Settings for the dedicated connection api migrates on at startup,
   # before it binds (crates/api/src/migrate.rs). It first drops any INVALID
   # index a failed CREATE INDEX CONCURRENTLY left behind, so a retry
   # rebuilds it instead of crash-looping on "relation already exists".
+  # The migrate hook Job (`migrate.job`) uses the same two settings.
   migrations:
     # -- lock_timeout: a DDL statement that cannot get its lock within this
     # fails (and the pod restarts and retries) instead of queueing behind a
@@ -1630,6 +1664,154 @@ api:
   podAnnotations: {}
   # -- Merged over the chart-wide pod securityContext defaults
   # (runAsNonRoot: true, seccompProfile: RuntimeDefault).
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# migrate -- the schema migrations as a Helm hook Job (ingest spec §12.1,
+# plan 1B.4), instead of in the api's startup. Off by default.
+# ---------------------------------------------------------------------------
+# NEEDS the `ds-migrate` binary (plan 1B.1) in the api image: until that
+# image is deployed, enabling the Job fails the release (the command does
+# not exist). Rollout (spec §13): enable the Job, then set
+# `api.migrateOnStartup: false` in the same release (the hook runs first).
+# Rollback: `api.migrateOnStartup: true`, then the Job off.
+#
+# The Job is a `pre-upgrade,post-install` hook (weight -5, so before the
+# role setup Job's post-install weight 0): on an upgrade it migrates before
+# any new pod starts, and a failure fails the release while the old pods
+# keep serving. Raise the HelmRelease `timeout` to cover
+# `activeDeadlineSeconds` (Ranma: 20 minutes). It is the only pod with the
+# schema owner's credentials (MIGRATION_DATABASE_URL: the owner role with
+# `postgresql.roles.enabled`, else `postgresql.auth.username`, or the
+# external database's URL). It waits for Postgres with `pg_isready` in an
+# init container from the Postgres image (the api image has no libpq
+# tools). With `networkPolicy.enabled`, hook NetworkPolicies (created
+# before the Job, weight -10) admit it to Postgres and, with egress
+# policies on, let it reach Postgres and DNS.
+migrate:
+  job:
+    # -- Run the migrations in a hook Job.
+    enabled: false
+    # -- Command, in the api image (`api.image`). The default is
+    # `ds-migrate run` (plan 1B.1). It reads MIGRATION_DATABASE_URL,
+    # MIGRATION_LOCK_TIMEOUT_SECS and MIGRATION_STATEMENT_TIMEOUT_SECS
+    # (`api.migrations`) and RUST_LOG.
+    command:
+      - /usr/local/bin/ds-migrate
+    # -- Arguments to `command`.
+    args:
+      - run
+    # -- Retries after a failed run (spec: 1).
+    backoffLimit: 1
+    # -- Deadline for the whole Job, the Postgres wait included (spec: 900).
+    # Keep `api.migrations.statementTimeoutSecs` well below it.
+    activeDeadlineSeconds: 900
+    # -- tracing-subscriber EnvFilter (RUST_LOG).
+    logLevel: info
+    # -- The migrate container's resources (the wait container gets none).
+    resources: {}
+    # -- Merged over the chart-wide pod securityContext defaults.
+    podSecurityContext: {}
+    nodeSelector: {}
+    tolerations: []
+
+# ---------------------------------------------------------------------------
+# apiMaintenance -- the api's user-data sweeps (session cleanup, dead
+# share/invite links, personal-data retention) as an hourly CronJob (ingest
+# spec §12.3, plan 1B.8). Off by default.
+# ---------------------------------------------------------------------------
+# NEEDS the `maintenance` binary (plan 1B.8, crates/api/src/bin/maintenance.rs)
+# in the api image at `command`: until then every run fails. Rollout
+# (release N+2): enable this together with API_BACKGROUND_LOOPS=false
+# (plan 1B.7); both sweeps are idempotent, so running both for a while is
+# harmless. It connects as the api does (its own role with
+# `postgresql.roles.perService.api.connect`), and its pool counts in the
+# connection budgets.
+apiMaintenance:
+  # -- Run the CronJob.
+  enabled: false
+  # -- Cron schedule (hourly, as the api's loop).
+  schedule: "17 * * * *"
+  # -- The schedule's time zone (CI requires every CronJob to set one).
+  timeZone: Etc/UTC
+  # -- Command, in the api image (`api.image`): one pass, then exit. It
+  # reads DATABASE_URL, DATABASE_MAX_CONNECTIONS, the api's three retention
+  # settings (PAST_TRAVEL_RETENTION_DAYS, STALE_PUSH_SUBSCRIPTION_DAYS,
+  # INACTIVE_ACCOUNT_RETENTION_DAYS, from `api.*`) and RUST_LOG.
+  command:
+    - /usr/local/bin/maintenance
+  # -- Arguments to `command`.
+  args: []
+  database:
+    # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS).
+    maxConnections: 2
+  # -- A run missed by more than this is skipped.
+  startingDeadlineSeconds: 600
+  # -- Retries after a failed run.
+  backoffLimit: 1
+  # -- Deadline per run. The retention prune allows itself 600 s per
+  # statement.
+  activeDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  # -- tracing-subscriber EnvFilter (RUST_LOG).
+  logLevel: info
+  resources: {}
+  # -- Merged over the chart-wide pod securityContext defaults.
+  podSecurityContext: {}
+  nodeSelector: {}
+  tolerations: []
+
+# ---------------------------------------------------------------------------
+# ingestWriter -- the ingest-writer (ingest spec §10, plan 1B.6/1B.9): the
+# train-domain background loops now, the Redis ingest streams from phase 3.
+# Off by default.
+# ---------------------------------------------------------------------------
+# NEEDS the ingest-writer image (plan 1B.6: crates/ingest-writer and
+# docker/ingest-writer.Dockerfile). One replica, Recreate. Rollout (release
+# N+1): `enabled` and `loops.enabled`; then, a release later,
+# API_BACKGROUND_LOOPS=false on the api (plan 1B.7). Every loop takes a
+# Postgres advisory lock, so the writer and the api never run the same
+# sweep at once. It connects as the app role (or the bootstrap user), or as
+# `distant_signal_writer` with `postgresql.roles.perService.writer.connect`;
+# its pool counts in the connection budgets. NetworkPolicy: the monitoring
+# namespace to its metrics port, the health port as for every worker,
+# egress to Postgres (Redis joins in phase 3). Alert:
+# DistantSignalIngestWriterDown (metrics.prometheusRule.ingestWriterDown).
+ingestWriter:
+  # -- Deploy the ingest-writer.
+  enabled: false
+  image:
+    repository: ghcr.io/fasterspeeding/distant-signal/ingest-writer
+    tag: ""
+    # -- Content digest override. See api.image.digest's own comment above
+    # for the full rationale; same shape here.
+    digest: ""
+    pullPolicy: IfNotPresent
+  loops:
+    # -- Run the train-domain loops (INGEST_WRITER_LOOPS): schedule-match,
+    # reconciliation, backlog-match, and the CORPUS crosswalk rebuild with
+    # its freshness gauge. Their intervals are the api's
+    # (`api.reconciliationSweepIntervalSecs`,
+    # `api.backlogMatchSweepIntervalSecs`,
+    # `api.scheduleEnrichmentGraceMinutes`), so the two cannot drift.
+    enabled: false
+  database:
+    # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS).
+    maxConnections: 5
+  # -- /livez stall window (PROGRESS_STALL_SECS; see workerHealth).
+  progressStallSecs: 900
+  # -- tracing-subscriber EnvFilter (RUST_LOG).
+  logLevel: info
+  # -- Extra env entries; one with the same name as a chart entry replaces
+  # it.
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # -- Merged over the chart-wide pod securityContext defaults.
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
@@ -4011,6 +4193,14 @@ metrics:
       for: 3m
       severity: critical
       pgUpSelector: ""
+    # DistantSignalIngestWriterDown (critical; ingest spec §14.2): the
+    # ingest-writer's scrape target is down, or its Deployment has no
+    # available replica (kube-state-metrics), for `for`. Renders only with
+    # ingestWriter.enabled. Runbook: docs/alerts.md.
+    ingestWriterDown:
+      enabled: true
+      for: 5m
+      severity: critical
     # DistantSignalApiDatabaseDown (critical): api's own `SELECT 1` probe
     # through its request pool (distant_signal_api_db_up, every 15s) has
     # failed on some replica for `for`. Covers what pg_up cannot see: a

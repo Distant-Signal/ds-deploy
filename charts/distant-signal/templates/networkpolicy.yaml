@@ -52,6 +52,14 @@ spec:
                   # postgresql.roles.setupJob (templates/postgres-roles.yaml).
                   - postgres-roles
                   {{- end }}
+                  {{- if .Values.apiMaintenance.enabled }}
+                  # The api-maintenance CronJob (api-maintenance-cronjob.yaml).
+                  - api-maintenance
+                  {{- end }}
+                  {{- if .Values.ingestWriter.enabled }}
+                  # The ingest-writer (ingest-writer-deployment.yaml).
+                  - ingest-writer
+                  {{- end }}
         {{- with .Values.networkPolicy.postgresClients }}
         # networkPolicy.postgresClients: workloads outside this chart, e.g.
         # a postgres-exporter or a pg_dump backup CronJob.
@@ -386,6 +394,10 @@ rule is IP-based, so this only opens their ports, not their hosts. */}}
   (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $queueWorker "urls" $token)
   (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $queueWorker "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
 }}
+{{- if .Values.ingestWriter.enabled }}
+{{- /* Phase 1B: Postgres only; Redis joins with the streams in phase 3. */}}
+{{- $workers = append $workers (dict "component" "ingest-writer" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true) "internet" false) }}
+{{- end }}
 {{- if .Values.movementRelay.enabled }}
 {{- $workers = append $workers (dict "component" "movement-relay" "metricsPort" .Values.movementRelay.metricsPort "healthPorts" (list .Values.movementRelay.healthPort) "egress" (dict "redis" true) "brokers" (include "distant-signal.movementRelayKafkaBrokers" .)) }}
 {{- end }}
@@ -404,6 +416,25 @@ rule is IP-based, so this only opens their ports, not their hosts. */}}
 {{- range $workers }}
 ---
 {{ include "distant-signal.workerNetworkPolicy" (merge (dict "root" $root) .) }}
+{{- end }}
+{{- /*
+The role setup Job (postgres-roles.yaml, a post-install/post-upgrade hook,
+so this policy is applied before it runs) and the api-maintenance CronJob:
+with egress policies on, they may reach Postgres and DNS. Its admission into Postgres is in the postgres
+policy above. The migrate hook Job's policies are hooks themselves
+(migrate-job.yaml).
+*/}}
+{{- if include "distant-signal.postgresRolesSetupJob" . }}
+{{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" $root "component" "postgres-roles" "deps" (dict "postgres" true)) }}
+---
+{{ . }}
+{{- end }}
+{{- end }}
+{{- if .Values.apiMaintenance.enabled }}
+{{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" $root "component" "api-maintenance" "deps" (dict "postgres" true)) }}
+---
+{{ . }}
+{{- end }}
 {{- end }}
 {{- if .Values.scheduleFeed.enabled }}
 ---

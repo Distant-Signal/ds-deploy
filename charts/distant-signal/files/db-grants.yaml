@@ -98,7 +98,9 @@ roles:
     used_by: the notifier
   writer:
     name: distant_signal_writer
-    status: planned
+    # Created (a member of app) from 1B.9 on, used once the chart's
+    # ingestWriter connects as it (postgresql.roles.perService.writer.connect).
+    status: observed
     phase: 1B
     groups: [read_shared, schema_gate]
     connection_limit: 7
