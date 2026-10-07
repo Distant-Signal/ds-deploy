@@ -147,7 +147,7 @@ This container's own env entries. distant-signal.mergeEnv renders them
 with enricher.extraEnv, which replaces an entry of the same name.
 */ -}}
 {{- define "distant-signal.enricherEnv" }}
-            {{- include "distant-signal.databaseEnv" . | nindent 12 }}
+            {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "enricher") | nindent 12 }}
             # Always rendered, unlike the port env var below: this is
             # the Rust-side toggle that actually stops the binary from
             # starting its /metrics listener (`metrics_enabled` in
@@ -162,7 +162,7 @@ with enricher.extraEnv, which replaces an entry of the same name.
             {{- end }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
-            {{- include "distant-signal.redisPasswordEnv" . }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "enricher" "user" "enricher") }}
             - name: LLM_BASE_URL
               value: {{ .Values.enricher.llm.baseUrl | quote }}
             - name: LLM_MODEL

@@ -2,7 +2,10 @@
 {{- /* redis.auth (INF-3): the server only requires a password in step 2
      of the enable sequence (values.yaml redis.auth); in step 1 this pod
      is left untouched so that only the clients roll. */}}
-{{- $requirePass := and .Values.redis.auth.enabled .Values.redis.auth.requirePass }}
+{{- /* redis.acl (docs/redis-acl.md): per-client ACL users from an
+     --aclfile instead of --requirepass. */}}
+{{- $acl := include "distant-signal.redisAclEnabled" . }}
+{{- $requirePass := and .Values.redis.auth.enabled .Values.redis.auth.requirePass (not $acl) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -63,9 +66,16 @@ spec:
     metadata:
       labels:
         {{- include "distant-signal.labels" (dict "root" . "component" "redis") | nindent 8 }}
-      {{- with .Values.redis.podAnnotations }}
+      {{- if or .Values.redis.podAnnotations $acl }}
       annotations:
+        {{- with .Values.redis.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $acl }}
+        # A stage or user change rewrites the ACL ConfigMap; restart Redis
+        # so the initContainer renders the new users.acl.
+        checksum/redis-acl: {{ include "distant-signal.redisAclFile" . | trim | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
@@ -90,6 +100,95 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if $acl }}
+        - name: acl-template
+          configMap:
+            name: {{ printf "%s-acl" (include "distant-signal.redisFullname" .) | trunc 63 | trimSuffix "-" }}
+        # The rendered users.acl holds the passwords: memory only, never
+        # on the node's disk.
+        - name: acl
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- end }}
+      {{- if $acl }}
+      initContainers:
+        # redis.acl: fill the per-user passwords into users.acl. Each
+        # `>${VAR}` becomes `>password`; an empty *_PREVIOUS (no rotation in
+        # progress) is dropped, any other empty password or one containing
+        # whitespace fails the pod rather than starting Redis with a broken
+        # file. Uses the Redis image's own sh and awk.
+        - name: redis-acl
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.redis.image) | quote }}
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              umask 077
+              awk '
+              {
+                out = ""
+                n = split($0, field, " ")
+                for (i = 1; i <= n; i++) {
+                  t = field[i]
+                  if (t ~ /^>[$][{][A-Z0-9_]+[}]$/) {
+                    name = substr(t, 4, length(t) - 4)
+                    v = ENVIRON[name]
+                    if (v == "") {
+                      if (name ~ /_PREVIOUS$/) continue
+                      print "redis-acl: " name " is empty" > "/dev/stderr"
+                      exit 1
+                    }
+                    if (v ~ /[ \t]/) {
+                      print "redis-acl: " name " contains whitespace" > "/dev/stderr"
+                      exit 1
+                    }
+                    t = ">" v
+                  }
+                  out = (out == "") ? t : out " " t
+                }
+                print out
+              }' /etc/redis-acl-template/users.acl.tpl > /etc/redis-acl/users.acl
+          env:
+            {{- if and (include "distant-signal.redisAclDefaultUserOn" .) .Values.redis.auth.enabled }}
+            - name: REDIS_ACL_PASSWORD_DEFAULT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.redisAuthSecretName" . }}
+                  key: {{ include "distant-signal.redisAuthSecretKey" . }}
+            {{- end }}
+            {{- range $line := include "distant-signal.redisAclUserLines" . | trim | splitList "\n" }}
+            {{- $user := index (regexSplit "\\s+" $line 2) 0 }}
+            {{- $var := include "distant-signal.redisAclPasswordVar" $user }}
+            - name: {{ $var }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.redis.acl.existingSecret }}
+                  key: {{ printf "%s-password" $user }}
+            - name: {{ printf "%s_PREVIOUS" $var }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.redis.acl.existingSecret }}
+                  key: {{ printf "%s-password-previous" $user }}
+                  optional: true
+            {{- end }}
+          volumeMounts:
+            - name: acl-template
+              mountPath: /etc/redis-acl-template
+              readOnly: true
+            - name: acl
+              mountPath: /etc/redis-acl
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+      {{- end }}
       containers:
         - name: redis
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.redis.image) | quote }}
@@ -149,12 +248,27 @@ spec:
             - --requirepass
             - "$(REDIS_PASSWORD)"
             {{- end }}
+            {{- if $acl }}
+            # redis.acl: the users rendered by the redis-acl initContainer.
+            - --aclfile
+            - /etc/redis-acl/users.acl
+            {{- end }}
           {{- if $requirePass }}
           env:
             {{- include "distant-signal.redisPasswordEnv" . }}
             # redis-cli (the probes below) reads its password from here.
             - name: REDISCLI_AUTH
               value: "$(REDIS_PASSWORD)"
+          {{- end }}
+          {{- if $acl }}
+          env:
+            # redis-cli (the probes below, and humans: `redis-cli --user
+            # ds-admin`) authenticates as ds-admin; `default` may be off.
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.acl.existingSecret }}
+                  key: ds-admin-password
           {{- end }}
           volumeMounts:
             - name: data
@@ -166,6 +280,11 @@ spec:
               # the same path the image already treats as its data
               # directory.
               mountPath: /data
+            {{- if $acl }}
+            - name: acl
+              mountPath: /etc/redis-acl
+              readOnly: true
+            {{- end }}
           # AOF replay on startup is proportional to the AOF's size. Both
           # streams here are actively consumed/trimmed (not accumulated
           # indefinitely), so replay should stay fast, but the probe
@@ -176,13 +295,21 @@ spec:
           # use for its (much slower) startup path.
           readinessProbe:
             exec:
+              {{- if $acl }}
+              command: ["redis-cli", "--user", "ds-admin", "ping"]
+              {{- else }}
               command: ["redis-cli", "ping"]
+              {{- end }}
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 6
           livenessProbe:
             exec:
+              {{- if $acl }}
+              command: ["redis-cli", "--user", "ds-admin", "ping"]
+              {{- else }}
               command: ["redis-cli", "ping"]
+              {{- end }}
             initialDelaySeconds: 15
             periodSeconds: 10
             failureThreshold: 6

@@ -664,6 +664,40 @@ upgrade with `requirePass=false` (Redis restarts without a password),
 update the Secret and `kubectl rollout restart` the six client
 Deployments, then upgrade with `requirePass=true`.
 
+## Redis ACL users (optional)
+
+Off by default (`redis.acl.enabled: false`); with it off nothing below
+renders. It builds on `redis.auth`: each client gets its own Redis user
+with only the commands and keys it needs, and the shared `default` user can
+then be turned off. The users and their rights are in
+`files/redis-users.acl.tpl`; `crates/common/tests/redis_acl.rs` checks
+them against a real Redis.
+
+With `redis.acl.enabled` (and the bundled Redis), an initContainer renders
+`users.acl` into a memory-backed emptyDir from one password per user in
+`redis.acl.existingSecret` (`<user>-password`, required), and Redis starts
+with `--aclfile` instead of `--requirepass`. Its probes authenticate as
+`ds-admin`. `redis.acl.clients.<client>` gives that client `REDIS_USERNAME`
+and its own `REDIS_PASSWORD`.
+
+The four-step, no-downtime rollout (`stage: open`, then the clients one by
+one, then `stage: narrow`, then `defaultUser: "off"`), its checks and its
+rollback are in `docs/redis-acl.md`.
+
+## Per-service Postgres roles (optional)
+
+Off by default (`postgresql.roles.perService.enabled: false`). Stage 0b of
+`docs/postgres-app-role.md`: on top of `postgresql.roles`, each DB service
+(api, aggregator, enricher, notifier) can connect as its own role, a member
+of `distant_signal_app` with no grants of its own, so `pg_stat_statements`
+and `pg_stat_activity` attribute every query to its service. The roles and
+the grants they will later be narrowed to are in `files/db-grants.yaml`;
+`scripts/gen-db-grants.py` renders them into `files/postgres-grants.sql`,
+which the role setup Job runs. `perService.<service>.connect` moves one
+service at a time; with the api on its own role its pool is
+`perService.api.maxConnections` (16). The render fails if the connection
+limits of every role in use exceed `max_connections` minus 3.
+
 ## Password encoding caveat
 
 `DATABASE_URL` is a URL. A password containing any of `@ : / ? # [ ] %` must
@@ -1213,6 +1247,28 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.roles.backup.existingSecretPasswordKey` | `postgres-backup-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.backup.connectionLimit` | `4` | CONNECTION LIMIT. |
 | `postgresql.roles.backup.database` | `postgres` | Database pgBackRest connects to (its pg1-database default); the function grants are made there and in `auth.database`. |
+| `postgresql.roles.perService.enabled` | `false` | Create the per-service roles: the setup Job (and, on a new cluster, `initScript`) also runs files/postgres-grants.sql. |
+| `postgresql.roles.perService.api.connect` | `false` | Connect the api pools as `distant_signal_api` instead of `app` (needs `enabled` here and `roles.enabled`). |
+| `postgresql.roles.perService.api.maxConnections` | `16` | The api pool size (DATABASE_MAX_CONNECTIONS) while `connect` is on, instead of `api.database.maxConnections` (spec §6.6: 16; the observed peak is 6). |
+| `postgresql.roles.perService.api.password` | `""` | Password. |
+| `postgresql.roles.perService.api.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.perService.api.existingSecretPasswordKey` | `postgres-api-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.perService.api.connectionLimit` | `""` | CONNECTION LIMIT. |
+| `postgresql.roles.perService.aggregator.connect` | `false` | Connect the aggregator as `distant_signal_aggregator`. |
+| `postgresql.roles.perService.aggregator.password` | `""` | Password. |
+| `postgresql.roles.perService.aggregator.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.perService.aggregator.existingSecretPasswordKey` | `postgres-aggregator-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.perService.aggregator.connectionLimit` | `""` | CONNECTION LIMIT. |
+| `postgresql.roles.perService.enricher.connect` | `false` | Connect the enricher as `distant_signal_enricher`. |
+| `postgresql.roles.perService.enricher.password` | `""` | Password. |
+| `postgresql.roles.perService.enricher.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.perService.enricher.existingSecretPasswordKey` | `postgres-enricher-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.perService.enricher.connectionLimit` | `""` | CONNECTION LIMIT. |
+| `postgresql.roles.perService.notifier.connect` | `false` | Connect the notifier as `distant_signal_notifier`. |
+| `postgresql.roles.perService.notifier.password` | `""` | Password. |
+| `postgresql.roles.perService.notifier.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.perService.notifier.existingSecretPasswordKey` | `postgres-notifier-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.perService.notifier.connectionLimit` | `""` | CONNECTION LIMIT. |
 | `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
 | `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |
@@ -1480,6 +1536,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.tripPlanGraphCache.maxAgeSecs` | `600` | Rebuild a cached graph after this long, or after a new schedule publish. |
 | `api.tripPlanMaxWaypoints` | `20` | Most `?waypoints=` one `/Trips/plan` request may name (clamped to 1-20). |
 | `api.tripPlanRoadWaterChangeMinutes` | `5` | Extra minutes `/Trips/plan` adds to a change on each bus or ferry side of it (clamped to 0-30): bus-to-train +N, bus-to-bus +2N, never at the start or end of the journey. |
+| `api.tripPlanMaxOptionsSearchSize` | `252` | Largest `results=options` `/Trips/plan` search: `(waypoints + 1) * (2 * vias + 1) * (maxChanges + 2)` (a 400 above it; clamped to 8-504). |
 | `api.tripPlanLive.enabled` | `true` | Apply TRUST and Darwin data to `/Trips/plan` for today's and yesterday's service dates: cancelled trains and calls are withdrawn, known delays applied, and the plan re-run. `false` is the kill-switch: every plan is timetable-only, as with `?live=false`. |
 | `api.tripPlanLive.maxReplans` | `3` | Extra planning passes per `results=fastest` request when newly read live data changes the plan. |
 | `api.tripPlanLive.maxReplansOptions` | `1` | The same for `results=options` (RAPTOR, the expensive pass); 1 keeps the worst case near 1 s. |
@@ -1644,6 +1701,16 @@ used for and why persistence defaults on.
 | `redis.auth.requirePass` | `true` | With `auth.enabled` and the bundled Redis, start it with `--requirepass` and authenticate its probes. `false` is step 1 of the no-outage enable sequence. |
 | `redis.auth.existingSecret` | `""` | Secret holding the password. Empty: the chart generates `redis-password` in its own Secret (bundled Redis only; an external Redis requires this). |
 | `redis.auth.existingSecretKey` | `redis-password` | Key within `redis.auth.existingSecret`. |
+| `redis.acl.enabled` | `false` | Turn the ACL users on (needs `existingSecret`). |
+| `redis.acl.stage` | `open` | `open`: every existing client's user has `~* &* +@all` (step 1). |
+| `redis.acl.defaultUser` | `on` | `"on"`: the `default` user keeps today's password (redis.auth) and rights. |
+| `redis.acl.existingSecret` | `""` | Existing Secret (a SealedSecret in Ranma-Config) with one key per user: `<user>-password` (letters and digits only), for every user in files/redis-users.acl.tpl. |
+| `redis.acl.clients.api` | `false` | api, as user `api`. |
+| `redis.acl.clients.enricher` | `false` | enricher, as user `enricher`. |
+| `redis.acl.clients.movementRelay` | `false` | movement-relay, as user `movement-relay`. |
+| `redis.acl.clients.trustConsumer` | `false` | trust-consumer, as user `trust-consumer`. |
+| `redis.acl.clients.fullCoverageConsumer` | `false` | full-coverage-consumer, as user `full-coverage-consumer`. |
+| `redis.acl.clients.trustBacklogConsumer` | `false` | trust-backlog-consumer, as user `trust-backlog-consumer`. |
 | `redis.image.repository` | `redis` | Redis image repository (upstream image; this repo builds no Redis image). |
 | `redis.image.tag` | `7.4.11@sha256:…` | Redis 7.4, digest-pinned in the tag. |
 | `redis.image.pullPolicy` | `IfNotPresent` | Image pull policy. |

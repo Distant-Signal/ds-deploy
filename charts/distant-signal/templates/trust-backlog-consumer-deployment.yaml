@@ -103,7 +103,7 @@ with trustBacklogConsumer.extraEnv, which replaces an entry of the same name.
 {{- define "distant-signal.trustBacklogConsumerEnv" }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
-            {{- include "distant-signal.redisPasswordEnv" . }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "trustBacklogConsumer" "user" "trust-backlog-consumer") }}
             - name: REDIS_AUTOCLAIM_MIN_IDLE_SECS
               value: {{ .Values.trustBacklogConsumer.redisAutoclaimMinIdleSecs | quote }}
             - name: REDIS_GAP_CHECK_SECS

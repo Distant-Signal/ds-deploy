@@ -159,7 +159,7 @@ with movementRelay.extraEnv, which replaces an entry of the same name.
                   key: {{ include "distant-signal.movementRelaySaslPasswordKey" . }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
-            {{- include "distant-signal.redisPasswordEnv" . }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "movementRelay" "user" "movement-relay") }}
             - name: STREAM_LAG_POLL_SECS
               value: {{ .Values.movementRelay.streamLagPollSecs | quote }}
             - name: MOVEMENT_STREAM_MAXLEN

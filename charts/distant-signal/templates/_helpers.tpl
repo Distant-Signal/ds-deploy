@@ -295,6 +295,128 @@ REDIS_URL entry. Takes root.
 {{- end }}
 
 {{/*
+redis.acl (docs/redis-acl.md; ingest architecture phase 0c). Every helper
+takes root unless it says otherwise.
+
+distant-signal.redisAclEnabled: true (non-empty) when the ACL users are on.
+Validates the values.
+*/}}
+{{- define "distant-signal.redisAclEnabled" -}}
+{{- $acl := .Values.redis.acl -}}
+{{- if $acl.enabled -}}
+{{- if not $acl.existingSecret -}}
+{{- fail "redis.acl.enabled needs redis.acl.existingSecret: the Secret with one <user>-password key per user in files/redis-users.acl.tpl (docs/redis-acl.md)." -}}
+{{- end -}}
+{{- if not (has (toString $acl.stage) (list "open" "narrow")) -}}
+{{- fail (printf "redis.acl.stage must be open or narrow, not %q." (toString $acl.stage)) -}}
+{{- end -}}
+{{- if not (include "distant-signal.redisAclDefaultUserOn" .) -}}
+{{- range $client, $on := $acl.clients -}}
+{{- if not $on -}}
+{{- fail (printf "redis.acl.defaultUser off locks out redis.acl.clients.%s, which still connects as default: move it to its own user first (rollout step 2)." $client) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when the `default` user stays on. Accepts "on"/"off" and
+YAML booleans.
+*/}}
+{{- define "distant-signal.redisAclDefaultUserOn" -}}
+{{- $v := .Values.redis.acl.defaultUser -}}
+{{- if kindIs "bool" $v -}}
+{{- if $v }}true{{ end -}}
+{{- else if eq (toString $v) "on" -}}
+true
+{{- else if ne (toString $v) "off" -}}
+{{- fail (printf "redis.acl.defaultUser must be \"on\" or \"off\", not %q." (toString $v)) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The ACL users from files/redis-users.acl.tpl, one "<user> <kind> <rules>"
+per line (comments and blank lines dropped).
+*/}}
+{{- define "distant-signal.redisAclUserLines" -}}
+{{- range $line := .Files.Get "files/redis-users.acl.tpl" | splitList "\n" }}
+{{- $line = trim $line }}
+{{- if and $line (not (hasPrefix "#" $line)) }}
+{{ $line }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+The env var an ACL user's password is passed in. Takes the user name.
+*/}}
+{{- define "distant-signal.redisAclPasswordVar" -}}
+{{- printf "REDIS_ACL_PASSWORD_%s" (. | upper | replace "-" "_") -}}
+{{- end }}
+
+{{/*
+users.acl with ${REDIS_ACL_PASSWORD_*} placeholders, for the stage and
+default user in values. The Redis initContainer fills in the passwords.
+*/}}
+{{- define "distant-signal.redisAclFile" -}}
+{{- $root := . -}}
+{{- $stage := toString .Values.redis.acl.stage -}}
+{{- if include "distant-signal.redisAclDefaultUserOn" . -}}
+{{- if .Values.redis.auth.enabled }}
+user default reset on >${REDIS_ACL_PASSWORD_DEFAULT} ~* &* +@all
+{{- else }}
+user default reset on nopass ~* &* +@all
+{{- end }}
+{{- else }}
+user default reset off
+{{- end }}
+{{- range $line := include "distant-signal.redisAclUserLines" . | trim | splitList "\n" }}
+{{- $parts := regexSplit "\\s+" $line 3 }}
+{{- $user := index $parts 0 }}
+{{- $kind := index $parts 1 }}
+{{- $rules := "" }}
+{{- if eq (len $parts) 3 }}
+{{- $rules = index $parts 2 }}
+{{- end }}
+{{- $var := include "distant-signal.redisAclPasswordVar" $user }}
+{{- $rights := $rules }}
+{{- if or (eq $kind "admin") (and (eq $kind "client") (eq $stage "open")) }}
+{{- $rights = "~* &* +@all" }}
+{{- else if not (has $kind (list "client" "final")) }}
+{{- fail (printf "files/redis-users.acl.tpl: user %s has unknown kind %q" $user $kind) }}
+{{- end }}
+user {{ $user }} reset on >${{ printf "{%s}" $var }} >${{ printf "{%s_PREVIOUS}" $var }} {{ $rights }}
+{{- end }}
+{{- end }}
+
+{{/*
+REDIS_USERNAME and REDIS_PASSWORD for a Redis client. Takes (dict "root" $
+"client" <redis.acl.clients key> "user" <ACL user>). With
+redis.acl.clients.<client> on, the client's own user and password (from
+redis.acl.existingSecret); otherwise exactly distant-signal.redisPasswordEnv
+(nothing unless redis.auth.enabled). Same leading newline and indent.
+*/}}
+{{- define "distant-signal.redisClientAuthEnv" -}}
+{{- $root := .root -}}
+{{- if get $root.Values.redis.acl.clients .client -}}
+{{- if not (include "distant-signal.redisAclEnabled" $root) -}}
+{{- fail (printf "redis.acl.clients.%s needs redis.acl.enabled (rollout step 1 first)." .client) -}}
+{{- end }}
+            - name: REDIS_USERNAME
+              value: {{ .user | quote }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.redis.acl.existingSecret }}
+                  key: {{ printf "%s-password" .user }}
+{{- else -}}
+{{- include "distant-signal.redisPasswordEnv" $root -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 In-cluster base URL of the api Service. Consumed by the frontend
 (API_BASE_URL), by every poller (API_INGEST_URL / API_SAMPLE_STATIONS_URL)
 and by the helm test pod. Takes root.
@@ -729,6 +851,19 @@ percent-encoded by the operator. Generated passwords use randAlphaNum, so
 the default path is never affected.
 */}}
 {{- define "distant-signal.databaseEnv" -}}
+{{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "") -}}
+{{- end }}
+
+{{/*
+distant-signal.databaseEnv for one service: takes (dict "root" $ "service"
+"api"|"aggregator"|"enricher"|"notifier"). With
+postgresql.roles.perService.<service>.connect (Stage 0b) the service
+connects as its own role from files/db-grants.yaml; otherwise exactly as
+distant-signal.databaseEnv.
+*/}}
+{{- define "distant-signal.databaseEnvFor" -}}
+{{- $service := .service -}}
+{{- with .root -}}
 {{- if .Values.postgresql.enabled -}}
 {{- /* With postgresql.roles.enabled, the non-superuser app role. */}}
 {{- $user := .Values.postgresql.auth.username -}}
@@ -738,6 +873,12 @@ the default path is never affected.
 {{- $user = .Values.postgresql.roles.app.username -}}
 {{- $secretName = include "distant-signal.postgresRoleSecretName" (dict "root" . "role" "app") -}}
 {{- $secretKey = include "distant-signal.postgresRoleSecretKey" (dict "root" . "role" "app") -}}
+{{- end -}}
+{{- if and $service (include "distant-signal.perServiceConnects" (dict "root" . "service" $service)) -}}
+{{- /* Stage 0b: the service's own role (a member of app). */}}
+{{- $user = include "distant-signal.perServiceRoleName" (dict "root" . "service" $service) -}}
+{{- $secretName = include "distant-signal.perServiceSecretName" (dict "root" . "service" $service) -}}
+{{- $secretKey = include "distant-signal.perServiceSecretKey" (dict "root" . "service" $service) -}}
 {{- end -}}
 - name: PGPASSWORD
   valueFrom:
@@ -765,6 +906,7 @@ the default path is never affected.
   value: {{ .Values.databasePool.idleInTransactionTimeoutSecs | int | quote }}
 - name: DATABASE_ACQUIRE_TIMEOUT_SECS
   value: {{ .Values.databasePool.acquireTimeoutSecs | int | quote }}
+{{- end -}}
 {{- end }}
 
 {{/*
@@ -845,9 +987,15 @@ app.connectionLimitSlack.
 {{- else if eq .role "owner" -}}
 {{- add (int $root.Values.api.replicaCount) 2 -}}
 {{- else if eq .role "app" -}}
-{{- $apiPool := mul (int $root.Values.api.replicaCount) (int $root.Values.api.database.maxConnections) -}}
-{{- $pools := add 10 5 5 (ternary 2 0 ($root.Values.archive.enabled | default false)) -}}
-{{- add $apiPool $pools (int $role.connectionLimitSlack) -}}
+{{- /* Stage 0b: a service connecting as its own role no longer counts
+     against app. */ -}}
+{{- $total := int $role.connectionLimitSlack -}}
+{{- range $service := list "api" "aggregator" "enricher" "notifier" -}}
+{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" $service)) -}}
+{{- $total = add $total (include "distant-signal.servicePool" (dict "root" $root "service" $service)) -}}
+{{- end -}}
+{{- end -}}
+{{- $total -}}
 {{- else -}}
 {{- fail (printf "postgresql.roles.%s.connectionLimit must be set." .role) -}}
 {{- end -}}
@@ -866,6 +1014,15 @@ psql's \getenv.
       name: {{ include "distant-signal.postgresRoleSecretName" (dict "root" $root "role" $role) }}
       key: {{ include "distant-signal.postgresRoleSecretKey" (dict "root" $root "role" $role) }}
 {{- end }}
+{{- if include "distant-signal.perServiceEnabled" $root }}
+{{- range $service := include "distant-signal.perServiceKeys" $root | splitList " " }}
+- name: {{ printf "DS_PG_%s_PASSWORD" (upper $service) }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "distant-signal.perServiceSecretName" (dict "root" $root "service" $service) }}
+      key: {{ include "distant-signal.perServiceSecretKey" (dict "root" $root "service" $service) }}
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{/*
@@ -881,6 +1038,168 @@ objects move to the owner role.
 --variable={{ $role }}_connection_limit={{ include "distant-signal.postgresRoleConnectionLimit" (dict "root" $ "role" $role) }}
 {{- end }}
 --variable=backup_database={{ $roles.backup.database }}
+{{- end }}
+
+{{/*
+Stage 0b, postgresql.roles.perService (docs/postgres-app-role.md). The
+roles themselves are defined in files/db-grants.yaml (names, groups);
+files/postgres-grants.sql is generated from it by scripts/gen-db-grants.py.
+Every helper takes root unless it says otherwise.
+
+distant-signal.perServiceKeys: the services this chart can move to their
+own role, space-separated. Each must be a created (not `planned`) role in
+db-grants.yaml.
+*/}}
+{{- define "distant-signal.perServiceKeys" -}}
+api aggregator enricher notifier
+{{- end }}
+
+{{- define "distant-signal.perServiceEnabled" -}}
+{{- if .Values.postgresql.roles.perService.enabled -}}
+{{- if not (include "distant-signal.postgresRolesSetupJob" .) -}}
+{{- fail "postgresql.roles.perService.enabled needs postgresql.roles.setupJob.enabled: the setup Job creates the per-service roles (files/postgres-grants.sql)." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when the service connects as its own role. Takes (dict
+"root" $ "service" "api"|...).
+*/}}
+{{- define "distant-signal.perServiceConnects" -}}
+{{- $cfg := get .root.Values.postgresql.roles.perService .service -}}
+{{- if $cfg.connect -}}
+{{- if not (include "distant-signal.perServiceEnabled" .root) -}}
+{{- fail (printf "postgresql.roles.perService.%s.connect needs postgresql.roles.perService.enabled (which creates the role) first." .service) -}}
+{{- end -}}
+{{- if not (include "distant-signal.postgresRolesEnabled" .root) -}}
+{{- fail (printf "postgresql.roles.perService.%s.connect needs postgresql.roles.enabled: the per-service roles are members of the app role." .service) -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+The role name from files/db-grants.yaml. Takes (dict "root" $ "service" ...).
+*/}}
+{{- define "distant-signal.perServiceRoleName" -}}
+{{- $grants := .root.Files.Get "files/db-grants.yaml" | fromYaml -}}
+{{- $role := get $grants.roles .service -}}
+{{- if or (not $role) (eq (toString $role.status) "planned") -}}
+{{- fail (printf "files/db-grants.yaml has no created role %q (status observed or narrow)." .service) -}}
+{{- end -}}
+{{- $role.name -}}
+{{- end }}
+
+{{- define "distant-signal.perServiceSecretName" -}}
+{{- $cfg := get .root.Values.postgresql.roles.perService .service -}}
+{{- default (include "distant-signal.secretName" .root) $cfg.existingSecret -}}
+{{- end }}
+
+{{- define "distant-signal.perServiceSecretKey" -}}
+{{- $cfg := get .root.Values.postgresql.roles.perService .service -}}
+{{- required (printf "postgresql.roles.perService.%s.existingSecretPasswordKey must not be empty" .service) $cfg.existingSecretPasswordKey -}}
+{{- end }}
+
+{{/*
+A service's Postgres pool as the chart runs it: the api's DATABASE_MAX_CONNECTIONS
+times its replicas, the workers' crate defaults (common::pg), the
+aggregator's archive pool. Takes (dict "root" $ "service" ...).
+*/}}
+{{- define "distant-signal.servicePool" -}}
+{{- $root := .root -}}
+{{- if eq .service "api" -}}
+{{- mul (int $root.Values.api.replicaCount) (int (include "distant-signal.apiMaxConnections" $root)) -}}
+{{- else if eq .service "aggregator" -}}
+{{- add 10 (ternary 2 0 ($root.Values.archive.enabled | default false)) -}}
+{{- else -}}
+5
+{{- end -}}
+{{- end }}
+
+{{/*
+The api's DATABASE_MAX_CONNECTIONS: perService.api.maxConnections while the
+api connects as its own role, else api.database.maxConnections.
+*/}}
+{{- define "distant-signal.apiMaxConnections" -}}
+{{- if include "distant-signal.perServiceConnects" (dict "root" . "service" "api") -}}
+{{- int .Values.postgresql.roles.perService.api.maxConnections -}}
+{{- else -}}
+{{- int .Values.api.database.maxConnections -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+A per-service role's CONNECTION LIMIT: the explicit value, else computed
+from its pool. Takes (dict "root" $ "service" ...).
+*/}}
+{{- define "distant-signal.perServiceConnectionLimit" -}}
+{{- $root := .root -}}
+{{- $cfg := get $root.Values.postgresql.roles.perService .service -}}
+{{- $limit := toString (default "" $cfg.connectionLimit) -}}
+{{- if ne $limit "" -}}
+{{- if not (regexMatch "^[0-9]+$" $limit) -}}
+{{- fail (printf "postgresql.roles.perService.%s.connectionLimit must be a whole number, or empty to compute it." .service) -}}
+{{- end -}}
+{{- $limit -}}
+{{- else if eq .service "api" -}}
+{{- $pool := int $cfg.maxConnections -}}
+{{- add (mul (add (int $root.Values.api.replicaCount) 1) $pool) 2 -}}
+{{- else -}}
+{{- add (include "distant-signal.servicePool" .) 1 -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+psql --variable arguments for files/postgres-grants.sql, one per line: the
+app role's name and each per-service role's CONNECTION LIMIT. (The role
+names are db-grants.yaml's own defaults.)
+*/}}
+{{- define "distant-signal.postgresGrantsPsqlVariables" -}}
+--variable=app={{ .Values.postgresql.roles.app.username }}
+{{- range $service := include "distant-signal.perServiceKeys" $ | splitList " " }}
+{{- $_ := include "distant-signal.perServiceRoleName" (dict "root" $ "service" $service) }}
+--variable={{ $service }}_connection_limit={{ include "distant-signal.perServiceConnectionLimit" (dict "root" $ "service" $service) }}
+{{- end }}
+{{- end }}
+
+{{/*
+Stage 0b connection budget (spec §6.6; extends INF-7 in
+api-deployment.yaml): with postgresql.roles.perService.enabled, the
+CONNECTION LIMITs of every role a client can actually use -- owner, app,
+exporter, dump, backup and each per-service role a service connects as --
+must fit max_connections minus the 3 superuser_reserved_connections. A
+per-service role nothing connects as yet is not counted. Renders nothing;
+fails the render instead. Takes root.
+*/}}
+{{- define "distant-signal.postgresRoleBudgetCheck" -}}
+{{- if and .Values.postgresql.enabled (include "distant-signal.perServiceEnabled" .) -}}
+{{- $maxConn := 100 -}}
+{{- with .Values.postgresql.config -}}
+{{- if hasKey . "max_connections" -}}
+{{- $maxConn = int (get . "max_connections") -}}
+{{- end -}}
+{{- end -}}
+{{- $total := 0 -}}
+{{- $parts := list -}}
+{{- range $role := list "owner" "app" "exporter" "dump" "backup" -}}
+{{- $limit := int (include "distant-signal.postgresRoleConnectionLimit" (dict "root" $ "role" $role)) -}}
+{{- $total = add $total $limit -}}
+{{- $parts = append $parts (printf "%s %d" $role $limit) -}}
+{{- end -}}
+{{- range $service := include "distant-signal.perServiceKeys" $ | splitList " " -}}
+{{- if include "distant-signal.perServiceConnects" (dict "root" $ "service" $service) -}}
+{{- $limit := int (include "distant-signal.perServiceConnectionLimit" (dict "root" $ "service" $service)) -}}
+{{- $total = add $total $limit -}}
+{{- $parts = append $parts (printf "%s %d" $service $limit) -}}
+{{- end -}}
+{{- end -}}
+{{- $available := sub $maxConn 3 -}}
+{{- if gt $total $available -}}
+{{- fail (printf "Postgres role connection limits sum to %d (%s), more than max_connections (%d) minus 3 superuser-reserved = %d. Lower a postgresql.roles.*.connectionLimit or postgresql.roles.perService.*.connectionLimit, or raise postgresql.config.max_connections. Spec §6.6." $total (join ", " $parts) $maxConn $available) -}}
+{{- end -}}
+{{- end -}}
 {{- end }}
 
 {{- define "distant-signal.postgresRolesConfigMapName" -}}

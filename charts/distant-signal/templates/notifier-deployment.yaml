@@ -82,7 +82,7 @@ This container's own env entries. distant-signal.mergeEnv renders them
 with notifier.extraEnv, which replaces an entry of the same name.
 */ -}}
 {{- define "distant-signal.notifierEnv" }}
-            {{- include "distant-signal.databaseEnv" . | nindent 12 }}
+            {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "notifier") | nindent 12 }}
             # Always rendered, "false" included: this is what stops the
             # binary starting its listener (see enricher-deployment.yaml).
             - name: METRICS_ENABLED

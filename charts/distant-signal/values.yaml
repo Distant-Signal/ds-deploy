@@ -270,6 +270,70 @@ postgresql:
       # -- Database pgBackRest connects to (its pg1-database default); the
       # function grants are made there and in `auth.database`.
       database: postgres
+    # Stage 0b (docs/postgres-app-role.md; ingest architecture phase 0b):
+    # one Postgres role per service, so pg_stat_statements and
+    # pg_stat_activity attribute every query to its service. OFF by
+    # default: nothing below renders and the chart output is unchanged.
+    # The roles and their grants are defined in files/db-grants.yaml (the
+    # role names come from there); for now each is a member of `app` with
+    # no grants of its own, so nothing changes functionally.
+    perService:
+      # -- Create the per-service roles: the setup Job (and, on a new
+      # cluster, `initScript`) also runs files/postgres-grants.sql. Needs
+      # `setupJob.enabled`. No service changes until its `connect` below.
+      enabled: false
+      api:
+        # -- Connect the api pools as `distant_signal_api` instead of `app`
+        # (needs `enabled` here and `roles.enabled`). The api's migrations
+        # stay on `owner`.
+        connect: false
+        # -- The api pool size (DATABASE_MAX_CONNECTIONS) while `connect` is
+        # on, instead of `api.database.maxConnections` (spec §6.6: 16; the
+        # observed peak is 6).
+        maxConnections: 16
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-api-password
+        # -- CONNECTION LIMIT. Empty: (api.replicaCount + 1) x
+        # `maxConnections` + 2 (a RollingUpdate surge pod and two spare).
+        connectionLimit: ""
+      aggregator:
+        # -- Connect the aggregator as `distant_signal_aggregator`.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-aggregator-password
+        # -- CONNECTION LIMIT. Empty: its pool (10), plus 2 for the archive
+        # pool when `archive.enabled`, plus 1.
+        connectionLimit: ""
+      enricher:
+        # -- Connect the enricher as `distant_signal_enricher`.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-enricher-password
+        # -- CONNECTION LIMIT. Empty: its pool (5) plus 1.
+        connectionLimit: ""
+      notifier:
+        # -- Connect the notifier as `distant_signal_notifier`.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-notifier-password
+        # -- CONNECTION LIMIT. Empty: its pool (5) plus 1.
+        connectionLimit: ""
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
     # succeeds, so crash recovery (WAL redo after a node reboot) is never
@@ -1369,6 +1433,11 @@ api:
   # berth is further from the platforms than the station's own minimum
   # change time assumes.
   tripPlanRoadWaterChangeMinutes: 5
+  # -- Largest `results=options` /Trips/plan search allowed:
+  # (waypoints + 1) * (2 * vias + 1) * (maxChanges + 2) must not exceed it
+  # (a 400 otherwise). 252 is twice what 20 waypoints at maxChanges=4 cost;
+  # values outside 8-504 are clamped. `fastest` is not limited by it.
+  tripPlanMaxOptionsSearchSize: 252
   # -- /Trips/plan live overlay
   # (docs/superpowers/specs/2026-09-28-trips-plan-live-overlay-design.md):
   # for today's and yesterday's service dates, TRUST and Darwin facts are
@@ -2103,6 +2172,59 @@ redis:
     existingSecret: ""
     # -- Key within `existingSecret` holding the password.
     existingSecretKey: redis-password
+  # Per-client Redis ACL users (ingest architecture phase 0c; runbook:
+  # docs/redis-acl.md). OFF by default: with `enabled: false` nothing
+  # below renders and the chart output is unchanged.
+  #
+  # The users and their rights are in files/redis-users.acl.tpl. With
+  # `enabled` (and the bundled Redis) an initContainer renders users.acl
+  # into a memory-backed emptyDir from per-user passwords, and Redis starts
+  # with `--aclfile` instead of `--requirepass`. Its probes then
+  # authenticate as `ds-admin`.
+  #
+  # NO-DOWNTIME ROLLOUT from `redis.auth` (each step is its own release;
+  # each Redis change is one restart, about 4 s of AOF load):
+  #   1. `enabled: true`, `stage: open`, `defaultUser: "on"`: every user
+  #      exists with today's rights; `default` keeps the redis.auth
+  #      password; no client changes.
+  #   2. `clients.<client>: true`, one client at a time (plus Ranma's
+  #      exporter, to the `exporter` user).
+  #   3. `stage: narrow`: each user gets its spec §8.2 rights.
+  #   4. `defaultUser: "off"` (needs every client in `clients` on).
+  # Rollback: the previous step's values.
+  acl:
+    # -- Turn the ACL users on (needs `existingSecret`).
+    enabled: false
+    # -- `open`: every existing client's user has `~* &* +@all` (step 1).
+    # `narrow`: the rights in files/redis-users.acl.tpl (step 3). Users
+    # for future clients (the phase 3 stream producers, ingest-writer)
+    # get their final rights in both.
+    stage: open
+    # -- `"on"`: the `default` user keeps today's password (redis.auth)
+    # and rights. `"off"`: it is disabled (step 4). Quote it: a bare on/off
+    # is a YAML boolean (which is also accepted).
+    defaultUser: "on"
+    # -- Existing Secret (a SealedSecret in Ranma-Config) with one key per
+    # user: `<user>-password` (letters and digits only), for every user in
+    # files/redis-users.acl.tpl. An optional `<user>-password-previous`
+    # keeps the old password valid during a rotation. Required.
+    existingSecret: ""
+    # -- Which clients connect as their own user (`REDIS_USERNAME` and
+    # their own `REDIS_PASSWORD` from `existingSecret`) instead of
+    # `default` (step 2). Needs `enabled`.
+    clients:
+      # -- api, as user `api`.
+      api: false
+      # -- enricher, as user `enricher`.
+      enricher: false
+      # -- movement-relay, as user `movement-relay`.
+      movementRelay: false
+      # -- trust-consumer, as user `trust-consumer`.
+      trustConsumer: false
+      # -- full-coverage-consumer, as user `full-coverage-consumer`.
+      fullCoverageConsumer: false
+      # -- trust-backlog-consumer, as user `trust-backlog-consumer`.
+      trustBacklogConsumer: false
   image:
     repository: redis
     # -- Pinned to an exact 7.4 patch release and content digest (INF-11);

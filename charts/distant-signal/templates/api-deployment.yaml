@@ -60,7 +60,8 @@ limit is unknown here.
 {{- $maxConn = int (get . "max_connections") }}
 {{- end }}
 {{- end }}
-{{- $apiPool := mul (int .Values.api.replicaCount) (int .Values.api.database.maxConnections) }}
+{{- $apiPool := mul (int .Values.api.replicaCount) (int (include "distant-signal.apiMaxConnections" .)) }}
+{{- include "distant-signal.postgresRoleBudgetCheck" . }}
 {{- $pools := add 10 5 5 1 (ternary 2 0 (.Values.archive.enabled | default false)) }}
 {{- $budget := .Values.postgresql.connectionBudget | default dict }}
 {{- $pgbackrest := ternary 2 0 (dig "pgbackrest" "enabled" false .Values.postgresql) }}
@@ -231,14 +232,14 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ printf "0.0.0.0:%d" (int .Values.api.service.port) | quote }}
             # PGPASSWORD must stay immediately before DATABASE_URL -- the
             # kubelet only expands $(VAR) from EARLIER entries in this list.
-            {{- include "distant-signal.databaseEnv" . | nindent 12 }}
+            {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "api") | nindent 12 }}
             {{- with include "distant-signal.migrationDatabaseEnv" . }}
             # postgresql.roles.enabled: the migrations connect as the schema
             # owner, the pools above as the DML-only app role.
             {{- . | nindent 12 }}
             {{- end }}
             - name: DATABASE_MAX_CONNECTIONS
-              value: {{ .Values.api.database.maxConnections | int | quote }}
+              value: {{ include "distant-signal.apiMaxConnections" . | quote }}
             # The dedicated startup migration connection; see
             # api.migrations in values.yaml and crates/api/src/migrate.rs.
             - name: MIGRATION_LOCK_TIMEOUT_SECS
@@ -354,6 +355,8 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.tripPlanMaxWaypoints | quote }}
             - name: TRIP_PLAN_ROAD_WATER_CHANGE_MINUTES
               value: {{ .Values.api.tripPlanRoadWaterChangeMinutes | quote }}
+            - name: TRIP_PLAN_MAX_OPTIONS_SEARCH_SIZE
+              value: {{ .Values.api.tripPlanMaxOptionsSearchSize | quote }}
             # The /Trips/plan live overlay -- see api.tripPlanLive in
             # values.yaml.
             - name: TRIP_PLAN_LIVE_ENABLED
@@ -381,7 +384,7 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.fullCoverageEnabledDefault | quote }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
-            {{- include "distant-signal.redisPasswordEnv" . }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "api" "user" "api") }}
             # Always rendered, so it reflects the real value either way.
             # Decides whether requests are counted at all AND whether the
             # internal-only /metrics listener below is started

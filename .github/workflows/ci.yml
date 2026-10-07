@@ -310,6 +310,28 @@ jobs:
         working-directory: crates/api
         run: sqlx migrate run
 
+      # The Python tooling below (gen-db-grants.py, test-postgres-roles.py
+      # --mode per-service) needs the pinned PyYAML: same uv setup as the
+      # scripts-lint job.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # renovate: datasource=pypi depName=uv
+          version: "0.12.21"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install the pinned script tools
+        run: uv sync --locked --group lint
+
+      # Ingest architecture phase 0b: every table, view, sequence and
+      # function the migrations create must be classified in
+      # charts/distant-signal/files/db-grants.yaml (a new table without a
+      # classification fails here, not in production), and
+      # postgres-grants.sql must be what that file renders to.
+      - name: every public table, view and sequence is classified (db-grants.yaml)
+        run: uv run --no-sync scripts/gen-db-grants.py check --database-url "${DATABASE_URL}"
+
       - name: cargo test -p api -p aggregator -p notifier -- --ignored (DB-backed tests)
         run: cargo test -p api -p aggregator -p notifier -- --ignored --test-threads=1
 
@@ -328,6 +350,13 @@ jobs:
 
       - name: cargo test -p movement-feed -- --ignored (Redis-backed tests)
         run: cargo test -p movement-feed -- --ignored --test-threads=1
+
+      # Ingest architecture phase 0c: every Redis ACL user in
+      # charts/distant-signal/files/redis-users.acl.tpl, with its narrow
+      # rights, runs its client's command sequence and is refused the
+      # commands it must not have (crates/common/tests/redis_acl.rs).
+      - name: cargo test -p common --test redis_acl -- --ignored (Redis ACL users)
+        run: cargo test -p common --test redis_acl -- --ignored --test-threads=1
 
       # The Postgres role split (docs/postgres-app-role.md): proves no runtime
       # path needs a superuser. scripts/test-postgres-roles.py makes a fresh
@@ -353,6 +382,20 @@ jobs:
           scripts/test-postgres-roles.py --mode new --
           cargo test -p api -- --ignored --test-threads=1
           migrate::tests schedule_publish
+
+      # Stage 0b (postgresql.roles.perService): the same suites, each as its
+      # own service's role from files/postgres-grants.sql. The roles are
+      # still members of the app role, so this passes today; it is the
+      # harness each later narrowing (phases 2-5) runs against.
+      - name: DB-backed tests as each service's own role (Stage 0b)
+        run: |
+          # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
+          uv run --no-sync scripts/test-postgres-roles.py --mode per-service -- sh -c '
+            skip="--skip corpus::db_tests --skip corpus_crosswalk::db_tests --skip freshness::db_tests"
+            DATABASE_URL="$DATABASE_URL_API" cargo test -p api -- --ignored --test-threads=1 $skip &&
+            DATABASE_URL="$DATABASE_URL_AGGREGATOR" cargo test -p aggregator -- --ignored --test-threads=1 $skip &&
+            DATABASE_URL="$DATABASE_URL_NOTIFIER" cargo test -p notifier -- --ignored --test-threads=1 $skip &&
+            DATABASE_URL="$DATABASE_URL_ENRICHER" cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1'
 
   # Custom: no reusable Piped workflow covers Node/npm at all (its
   # ecosystem coverage is Python + Rust). frontend/package.json now has a
@@ -724,6 +767,13 @@ jobs:
       # the reader key mount, alerts, and bad values refusing to render.
       - name: schedulefeed chart sources
         run: uv run --no-sync scripts/check-schedulefeed-chart.py
+
+      # Ingest architecture phase 0 (postgresql.roles.perService and
+      # redis.acl): both off by default and rendering nothing then; each
+      # switch changes only what it should; the role-limit budget; the
+      # Redis ACL ConfigMap equals scripts/render-redis-acl.py's.
+      - name: ingest phase 0 chart switches
+        run: uv run --no-sync scripts/check-ingest-phase0-chart.py
 
   # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
   # `helm lint` + `helm template` against both the chart's own defaults and

@@ -80,7 +80,7 @@ This container's own env entries. distant-signal.mergeEnv renders them
 with aggregator.extraEnv, which replaces an entry of the same name.
 */ -}}
 {{- define "distant-signal.aggregatorEnv" }}
-            {{- include "distant-signal.databaseEnv" . | nindent 12 }}
+            {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "aggregator") | nindent 12 }}
             # Always rendered, unlike the port env var below: this is
             # the Rust-side toggle that actually stops the binary from
             # starting its /metrics listener (`metrics_enabled` in

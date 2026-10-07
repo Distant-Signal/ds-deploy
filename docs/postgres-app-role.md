@@ -254,6 +254,164 @@ dump by hand and check its size against last night's.
             distant_signal_backup, distant_signal_owner;
   ```
 
+## Stage 0b: one role per service (ingest architecture phase 0b)
+
+Status: **implemented, off by default** (`postgresql.roles.perService`;
+spec `docs/superpowers/specs/2026-10-06-ingest-architecture-design.md`
+§6, plan phase 0b). Comes after Stages A–C above.
+
+### What it is
+
+Every DB service still has exactly the app role's rights, but connects as
+its own role, so `pg_stat_statements` and `pg_stat_activity` say which
+service ran what. That evidence (7 days of it) is what each later phase
+narrows the roles from.
+
+| Role | Used by | Privileges (Stage 0b) | Connection limit (default) |
+|---|---|---|---|
+| `distant_signal_api` | api pools | member of `distant_signal_app`; `read_shared`, `schema_gate` | (api.replicaCount + 1) × 16 + 2 = 34 |
+| `distant_signal_aggregator` | aggregator (and its archive pool) | member of `app`; `read_shared`, `schema_gate` | 10 (+ 2 archive) + 1 = 11 |
+| `distant_signal_enricher` | enricher | member of `app`; `schema_gate` | 5 + 1 = 6 |
+| `distant_signal_notifier` | notifier | member of `app`; `read_shared`, `schema_gate` | 5 + 1 = 6 |
+| `distant_signal_read_shared` (NOLOGIN) | group | `SELECT` on every shared-train, ingest, derived and reference table | – |
+| `distant_signal_schema_gate` (NOLOGIN) | group | `SELECT` on `_sqlx_migrations` (the phase 1B schema gate) | – |
+
+- **The source of truth is `charts/distant-signal/files/db-grants.yaml`.**
+  It classifies every table, sequence, function and (later) view in
+  `public`, with each role's target grants. `scripts/gen-db-grants.py
+  render` turns it into `files/postgres-grants.sql`; CI fails when a
+  migration adds an object the YAML does not classify, or when the SQL is
+  stale.
+- **The setup Job runs `postgres-grants.sql` after `postgres-roles.sql`**
+  (and so does the initdb script on a new cluster). It is idempotent:
+  roles, limits, passwords, memberships and grants are re-applied on every
+  upgrade, and a grant removed from the YAML is revoked.
+- **The app role's computed limit shrinks** by the pool of each service
+  that connects as its own role (all four on: 5, its slack). The render
+  fails when the limits of every role in use (owner, app, exporter, dump,
+  backup and each connected service role) exceed `max_connections` − 3.
+- **The api's pool drops from 50 to 16** while it connects as its own role
+  (`perService.api.maxConnections`). Production's peak is 6 (2026-10-06).
+  Its migrations still connect as the owner.
+
+### pg_stat_statements
+
+Checked in production (read-only, 2026-10-06): the extension is installed
+(1.10), `shared_preload_libraries = pg_stat_statements` (chart
+`postgresql.config`), `pg_stat_statements.max` 5000, `track` top,
+`track_utility` on, `save` on, `dealloc` 0 since the 2026-10-03 reset, 706
+statements, all under `distant_signal`. **Nothing has to be enabled.**
+Ranma, for the observation window:
+
+- After the last service has moved, reset the counters so the 7 days are
+  clean: `SELECT pg_stat_statements_reset();` (as `distant_signal`).
+- Watch `SELECT dealloc FROM pg_stat_statements_info;`. Each statement is
+  now tracked once per role (about 4 × 700 entries); if `dealloc` rises,
+  raise `postgresql.config."pg_stat_statements.max"` to 10000 (a Postgres
+  restart) and reset again.
+- `track: top` hides statements inside functions (`analyze_publish_keys`'s
+  `ANALYZE`); that function's grants are in the YAML explicitly.
+
+### Rollout runbook (Ranma)
+
+Prerequisites: Stage B is done (every service connects as
+`distant_signal_app`), and the setup Job is on.
+
+**1. The passwords.** Add four keys to the roles Secret (or a Secret per
+service, Q12's default; letters and digits only):
+`postgres-api-password`, `postgres-aggregator-password`,
+`postgres-enricher-password`, `postgres-notifier-password`. Then:
+
+```yaml
+postgresql:
+  roles:
+    perService:
+      enabled: true
+      api: {existingSecret: distant-signal-postgres-roles}
+      aggregator: {existingSecret: distant-signal-postgres-roles}
+      enricher: {existingSecret: distant-signal-postgres-roles}
+      notifier: {existingSecret: distant-signal-postgres-roles}
+```
+
+Reconcile. Only the setup Job changes; no Deployment restarts. Verify:
+
+```sql
+SELECT r.rolname, r.rolcanlogin, r.rolconnlimit,
+       pg_has_role(r.rolname, 'distant_signal_app', 'MEMBER') AS in_app
+FROM pg_roles r WHERE r.rolname LIKE 'distant\_signal\_%' ORDER BY 1;
+--   api 34, aggregator 11, enricher 6, notifier 6, all in_app;
+--   read_shared and schema_gate with rolcanlogin false
+```
+
+**2. Move one service per release**, lowest risk first: enricher, then
+notifier, aggregator, api:
+
+```yaml
+postgresql:
+  roles:
+    perService:
+      enricher: {connect: true, existingSecret: distant-signal-postgres-roles}
+```
+
+Only that Deployment restarts (and the setup Job re-runs, lowering the app
+role's limit). Verify, then wait a day before the next:
+
+```sql
+SELECT usename, application_name, count(*) FROM pg_stat_activity
+WHERE datname = 'distant_signal' GROUP BY 1, 2 ORDER BY 1, 2;
+--   distant-signal-enricher as distant_signal_enricher, nothing else moved
+```
+
+and no `permission denied` (42501) or `too many connections for role` in
+the service's logs. For the api, also watch its request latency and
+`acquire` timeouts: its pool is now 16.
+
+**3. Observe.** Reset `pg_stat_statements` (above), wait 7 days, then
+produce the report (agents may run this; it is read-only):
+
+```sh
+kubectl -n distant-signal exec -i distant-signal-postgres-0 -- \
+  psql -U distant_signal -d distant_signal -X -q -A -t -z -0 \
+    -c "SET default_transaction_read_only = on" \
+    -c "$(uv run scripts/observe-role-usage.py --print-query)" > statements.bin
+uv run scripts/observe-role-usage.py --from-file statements.bin --output role-usage.md
+```
+
+Attach `role-usage.md` to the plan's tracking issue. Each "used, not
+granted" row is fixed in `db-grants.yaml` (or explained) before that role
+is narrowed in phases 2–5.
+
+### Rollback
+
+- **One service:** `perService.<service>.connect: false`. It goes back to
+  the app role. The app role's limit grows back by that pool, but only when
+  the post-upgrade setup Job runs, after the pod restarted, so for that
+  window the service has the app role's old (smaller) limit. With every
+  other service on its own role that is still the slack plus any pools
+  still on app, enough to start. To avoid even that, set
+  `postgresql.roles.app.connectionLimit` to the full value one release
+  earlier.
+- **All of it:** `perService.enabled: false` after every `connect` is off.
+  The roles stay (harmless: members of app, nothing uses them); drop them
+  by hand if wanted: `DROP ROLE distant_signal_api, ...` after
+  `REVOKE ALL ON ALL TABLES IN SCHEMA public FROM distant_signal_read_shared,
+  distant_signal_schema_gate; DROP ROLE distant_signal_read_shared,
+  distant_signal_schema_gate;`.
+
+### How it was tested
+
+- `scripts/tests/test_gen_db_grants.py`: classification gaps, stale SQL,
+  limits over the budget, narrow rendering.
+- `scripts/test-postgres-roles.py --mode per-service` (CI's rust-test job):
+  the api, aggregator, notifier and enricher DB suites, each as its own
+  role, on a database set up exactly as the chart does it.
+- A narrowed role on a migrated database (by hand, 2026-10-06): exactly its
+  YAML grants, column grants, its sequences and functions, no app
+  membership; running the SQL twice is a no-op.
+- `scripts/check-ingest-phase0-chart.py` (CI's scripts-lint job): every
+  switch, the budget at 98 (fails) and 92 (passes), and with `--baseline`
+  the default render unchanged.
+
 ## A new cluster
 
 `postgresql.roles.enabled: true` with `initScript: true` (the default) and

@@ -10,6 +10,9 @@ grants the app role DML only.
 */}}
 {{- $initScript := include "distant-signal.postgresRolesInitScript" . }}
 {{- $setupJob := include "distant-signal.postgresRolesSetupJob" . }}
+{{- /* Stage 0b (postgresql.roles.perService): files/postgres-grants.sql,
+     generated from files/db-grants.yaml, runs after postgres-roles.sql. */}}
+{{- $perService := include "distant-signal.perServiceEnabled" . }}
 {{- if or $initScript $setupJob }}
 {{- $root := . }}
 apiVersion: v1
@@ -21,6 +24,10 @@ metadata:
 data:
   postgres-roles.sql: |
     {{- .Files.Get "files/postgres-roles.sql" | nindent 4 }}
+  {{- if $perService }}
+  postgres-grants.sql: |
+    {{- .Files.Get "files/postgres-grants.sql" | nindent 4 }}
+  {{- end }}
   {{- /*
   Run by the official image's entrypoint from /docker-entrypoint-initdb.d,
   on an EMPTY data directory only, against the temporary socket-only server
@@ -35,11 +42,23 @@ data:
     # (charts/distant-signal/files/postgres-roles.sql). Passwords come from
     # the DS_PG_*_PASSWORD env.
     set -eu
+    {{- if $perService }}
+    psql -X --quiet --no-password --username "${POSTGRES_USER:?}" --dbname "${POSTGRES_DB:?}" \
+    {{- else }}
     exec psql -X --quiet --no-password --username "${POSTGRES_USER:?}" --dbname "${POSTGRES_DB:?}" \
+    {{- end }}
       {{- range splitList "\n" (include "distant-signal.postgresRolesPsqlVariables" .) }}
       {{ . | squote }} \
       {{- end }}
       --file=/etc/distant-signal/postgres-roles/postgres-roles.sql
+    {{- if $perService }}
+    # postgresql.roles.perService: the per-service roles (Stage 0b).
+    exec psql -X --quiet --no-password --username "${POSTGRES_USER:?}" --dbname "${POSTGRES_DB:?}" \
+      {{- range splitList "\n" (include "distant-signal.postgresGrantsPsqlVariables" .) }}
+      {{ . | squote }} \
+      {{- end }}
+      --file=/etc/distant-signal/postgres-roles/postgres-grants.sql
+    {{- end }}
 {{- end }}
 {{- if $setupJob }}
 ---
@@ -89,11 +108,23 @@ spec:
               set -eu
               # On a fresh install this runs while Postgres is still starting.
               until pg_isready --quiet; do sleep 2; done
+              {{- if $perService }}
+              psql -X --quiet --no-password \
+              {{- else }}
               exec psql -X --quiet --no-password \
+              {{- end }}
               {{- range splitList "\n" (include "distant-signal.postgresRolesPsqlVariables" .) }}
                 {{ . | squote }} \
               {{- end }}
                 --file=/etc/distant-signal/postgres-roles/postgres-roles.sql
+              {{- if $perService }}
+              # postgresql.roles.perService: the per-service roles (Stage 0b).
+              exec psql -X --quiet --no-password \
+              {{- range splitList "\n" (include "distant-signal.postgresGrantsPsqlVariables" .) }}
+                {{ . | squote }} \
+              {{- end }}
+                --file=/etc/distant-signal/postgres-roles/postgres-grants.sql
+              {{- end }}
           env:
             # libpq's own variables: the superuser, over the Service.
             - name: PGHOST
@@ -136,6 +167,10 @@ spec:
             items:
               - key: postgres-roles.sql
                 path: postgres-roles.sql
+              {{- if $perService }}
+              - key: postgres-grants.sql
+                path: postgres-grants.sql
+              {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 16Mi

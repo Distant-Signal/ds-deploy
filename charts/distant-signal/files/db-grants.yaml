@@ -1,0 +1,290 @@
+# Postgres grants for Distant Signal: the single source of truth (ingest
+# architecture spec §6.2–6.6; docs/postgres-app-role.md, "Stage 0b").
+#
+# scripts/gen-db-grants.py renders this file into postgres-grants.sql, which
+# the chart's role setup Job runs after postgres-roles.sql when
+# `postgresql.roles.perService.enabled` is on. Edit this file, then run
+#
+#   uv run scripts/gen-db-grants.py render
+#
+# and commit both. CI (`gen-db-grants.py check`, in the rust-test job, on a
+# freshly migrated database) fails when:
+#   - a table, view, sequence or function in schema public is missing here,
+#     or listed here but absent from the migrated schema;
+#   - postgres-grants.sql is not what this file renders to;
+#   - the roles' connection limits plus the other roles' (`other_roles`)
+#     exceed max_connections minus superuser_reserved_connections;
+#   - a grant names an unknown role or privilege.
+#
+# So a migration that adds a table must classify it here in the same
+# change.
+#
+# Roles (spec §6.3). `status`:
+#   planned   not created yet; its grants below are the design target.
+#   observed  phase 0b: a LOGIN role that is a member of the shared app role
+#             (distant_signal_app) and has no grants of its own. Nothing
+#             changes functionally; pg_stat_statements and pg_stat_activity
+#             now attribute each service's queries to it.
+#   narrow    no longer a member of the app role: exactly the grants below
+#             (phases 2 to 5, each starting from the observe-role-usage.py
+#             report).
+# `connection_limit` is the spec §6.6 target. The chart passes the limit it
+# computes from the service's real pool instead (values.yaml
+# postgresql.roles.perService), and its render-time budget check sums those.
+#
+# Grants: S = SELECT, I = INSERT, U = UPDATE, D = DELETE. A role in the
+# `read_shared` group also gets SELECT on every table whose class is
+# shared-train, ingest, derived or reference (the group's own grant), so
+# its S there is implied. `columns` limits a privilege to some columns.
+# Sequences go to every narrow role with I on the owning table (USAGE,
+# SELECT). Nobody but the owner gets TRUNCATE, REFERENCES, TRIGGER or
+# CREATE, and foreign-key cascades need no grant.
+#
+# The grants of the four observed roles come from reading the code
+# (2026-10-06: crates/{aggregator,enricher,notifier}/src, non-test SQL,
+# including common::public_delay). They are confirmed or corrected by the
+# 7-day observe-role-usage.py report before any role is narrowed.
+
+version: 1
+
+budget:
+  max_connections: 100
+  superuser_reserved_connections: 3
+
+# Roles postgres-roles.sql manages (docs/postgres-app-role.md), counted in
+# the budget only. The app role is retired in phase 5.
+other_roles:
+  owner: {name: distant_signal_owner, connection_limit: 2}
+  exporter: {name: distant_signal_exporter, connection_limit: 3}
+  dump: {name: distant_signal_dump, connection_limit: 2}
+  backup: {name: distant_signal_backup, connection_limit: 4}
+
+groups:
+  read_shared:
+    name: distant_signal_read_shared
+    doc: SELECT on every shared-train, ingest, derived and reference table.
+  schema_gate:
+    name: distant_signal_schema_gate
+    doc: SELECT on _sqlx_migrations, for the schema gate (spec §12.2). Every login role.
+
+roles:
+  api:
+    name: distant_signal_api
+    status: observed
+    phase: 0b
+    groups: [read_shared, schema_gate]
+    connection_limit: 34
+    used_by: the api pools (16 per replica, plus a RollingUpdate surge pod); the api-maintenance CronJob (1B)
+  aggregator:
+    name: distant_signal_aggregator
+    status: observed
+    phase: 0b
+    groups: [read_shared, schema_gate]
+    connection_limit: 9
+    used_by: the aggregator (main pool and the archive pool)
+  enricher:
+    name: distant_signal_enricher
+    status: observed
+    phase: 0b
+    groups: [schema_gate]
+    connection_limit: 4
+    used_by: the enricher
+  notifier:
+    name: distant_signal_notifier
+    status: observed
+    phase: 0b
+    groups: [read_shared, schema_gate]
+    connection_limit: 5
+    used_by: the notifier
+  writer:
+    name: distant_signal_writer
+    status: planned
+    phase: 1B
+    groups: [read_shared, schema_gate]
+    connection_limit: 7
+    used_by: ingest-writer
+  schedule_reference:
+    name: distant_signal_schedule_reference
+    status: planned
+    phase: 2a
+    groups: [schema_gate]
+    connection_limit: 4
+    used_by: schedule-reference
+  stations:
+    name: distant_signal_stations
+    status: planned
+    phase: 2b
+    groups: [schema_gate]
+    connection_limit: 2
+    used_by: poller-stations
+  incidents:
+    name: distant_signal_incidents
+    status: planned
+    phase: 2c
+    groups: [schema_gate]
+    connection_limit: 3
+    used_by: poller-incidents
+  schedule_ingest:
+    name: distant_signal_schedule_ingest
+    status: planned
+    phase: 2d
+    groups: [schema_gate]
+    connection_limit: 2
+    used_by: schedule-ingest (CORPUS and feed markers)
+  trust_backlog:
+    name: distant_signal_trust_backlog
+    status: planned
+    phase: 3b
+    groups: [schema_gate]
+    connection_limit: 4
+    used_by: trust-backlog-consumer
+  trust_consumer:
+    name: distant_signal_trust_consumer
+    status: planned
+    phase: 3b
+    groups: [schema_gate]
+    connection_limit: 3
+    used_by: trust-consumer (train events and forward signals, direct by decision D1; its reads from phase 4)
+  full_coverage_ro:
+    name: distant_signal_full_coverage_ro
+    status: planned
+    phase: "4"
+    groups: [schema_gate]
+    connection_limit: 3
+    used_by: full-coverage-consumer (reads)
+  ldbws_ro:
+    name: distant_signal_ldbws_ro
+    status: planned
+    phase: "4"
+    groups: [schema_gate]
+    connection_limit: 2
+    used_by: poller-ldbws (reads)
+
+# Every table in schema public. Classes: personal, shared-train, ingest,
+# derived, reference, internal, migrations.
+tables:
+  # --- personal: user data. Never in read_shared.
+  users: {class: personal, grants: {api: SIUD}}
+  sessions: {class: personal, grants: {api: SIUD}}
+  oidc_login_state: {class: personal, grants: {api: SIUD}}
+  pinned_lines: {class: personal, grants: {api: SIUD, notifier: S}}
+  pinned_operators: {class: personal, grants: {api: SIUD}}
+  pinned_stations: {class: personal, grants: {api: SIUD}}
+  custom_lines: {class: personal, grants: {api: SIUD, aggregator: S}}
+  custom_line_group_grants: {class: personal, grants: {api: SIUD}}
+  groups: {class: personal, grants: {api: SIUD}}
+  group_invite_links: {class: personal, grants: {api: SIUD}}
+  group_journeys: {class: personal, grants: {api: SIUD}}
+  group_members: {class: personal, grants: {api: SIUD}}
+  group_trains: {class: personal, grants: {api: SIUD}}
+  journeys: {class: personal, grants: {api: SIUD, notifier: SI}}
+  journey_legs: {class: personal, grants: {api: SIUD, notifier: SIU}}
+  # notifier: SELECT ... FOR UPDATE needs UPDATE.
+  journey_templates: {class: personal, grants: {api: SIUD, notifier: SU}}
+  journey_template_legs: {class: personal, grants: {api: SIUD, notifier: S}}
+  journey_template_skipped_dates: {class: personal, grants: {api: SIUD, notifier: S}}
+  push_subscriptions: {class: personal, grants: {api: SIUD, notifier: SD}}
+  tracked_train_tickets: {class: personal, grants: {api: SIUD}}
+  unlisted_links: {class: personal, grants: {api: SIUD}}
+
+  # --- shared-train: trains and their movements, shared by users.
+  # aggregator: SELECT ... FOR UPDATE OF t needs U or D (it has D).
+  trains: {class: shared-train, grants: {api: SIUD, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: SD, notifier: SIU}}
+  train_subscriptions: {class: shared-train, grants: {api: SIUD, writer: SU, trust_backlog: SU, trust_consumer: S, aggregator: S, notifier: SIU}}
+  train_movement_events: {class: shared-train, grants: {api: S, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: S, notifier: S}}
+  train_current_state: {class: shared-train, grants: {api: S, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: S, notifier: S}}
+  trust_event_backlog: {class: shared-train, grants: {api: S, writer: SU, trust_backlog: SI, aggregator: SD}}
+  train_reasons: {class: shared-train, grants: {api: S, trust_backlog: SIU}}
+  notifier_forward_queue: {class: shared-train, grants: {api: S, writer: SI, trust_consumer: SI, notifier: S}}
+
+  # --- internal: one component's own state.
+  notifier_cursor: {class: internal, grants: {notifier: SIU, api: S}}
+  train_notification_state: {class: internal, grants: {notifier: SIU, api: S}}
+  line_notification_state: {class: internal, grants: {notifier: SIU, api: S}}
+  journey_leg_notification_state: {class: internal, grants: {notifier: SIU, api: S}}
+  # The publish staging keys (UNLOGGED). The api publishes until phase 2a.
+  schedule_calling_points_full_publish_keys: {class: internal, grants: {schedule_reference: SID}}
+  schedule_destination_departures_publish_keys: {class: internal, grants: {schedule_reference: SID}}
+
+  # --- ingest: snapshots and feeds the producers write.
+  station_samples: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD, notifier: S}}
+  station_full_coverage_samples: {class: ingest, grants: {api: S, writer: SIU}}
+  full_coverage_line_stats: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
+  full_coverage_line_window_stats: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
+  island_of_ireland_lines: {class: ingest, grants: {api: S, writer: SIU}}
+  island_of_ireland_stations: {class: ingest, grants: {api: S, writer: SIU}}
+  island_of_ireland_station_samples: {class: ingest, grants: {api: S, writer: SIU}}
+  line_status: {class: ingest, grants: {api: S, writer: SIU, aggregator: SIUD}}
+  line_status_history: {class: ingest, grants: {api: S, writer: SI, aggregator: SID, notifier: S}}
+  # enricher: UPDATE only on its extraction columns once narrowed (phase 5;
+  # the column list comes from the 0b report).
+  incidents: {class: ingest, grants: {api: S, incidents: SIU, enricher: SU, aggregator: S}}
+  incident_history: {class: ingest, grants: {api: S, incidents: SI, enricher: S}}
+  incident_feed_state: {class: ingest, grants: {api: S, incidents: SIU}}
+  ingest_freshness: {class: ingest, grants: {api: S, writer: SIU, stations: SIU, incidents: SIU}}
+
+  # --- derived: computed from other tables.
+  line_status_daily_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
+  line_status_half_hourly_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
+  line_status_daily_coverage_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
+  line_status_half_hourly_coverage_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
+  full_coverage_window_verdicts: {class: derived, grants: {api: S, aggregator: SIUD}}
+  corpus_crosswalk_build: {class: derived, grants: {api: S, writer: SIUD}}
+  corpus_stanox_crs: {class: derived, grants: {api: S, writer: SIUD}}
+  # notifier: named in common::public_delay's SQL (corpus fallback off), so
+  # Postgres checks SELECT even when the branch is unused.
+  corpus_tiploc_crs: {class: derived, grants: {api: S, writer: SIUD, notifier: S}}
+
+  # --- reference: stations, codes and schedule products.
+  stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S}}
+  tocs: {class: reference, grants: {api: S, writer: SIU}}
+  stanox_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, trust_backlog: S, trust_consumer: S, full_coverage_ro: S, notifier: S}}
+  tiploc_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, notifier: S}}
+  fixed_links: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD}}
+  corpus_locations: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIUD}}
+  corpus_deliveries: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIUD}}
+  schedule_calling_points_full: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
+  schedule_destination_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
+  schedule_network_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
+  schedule_line_population: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, full_coverage_ro: S}}
+  # Each schedule's vehicle (train, bus, ferry) per service date, published
+  # by schedule-reference (through the api's ingest endpoint until phase
+  # 2a); the aggregator prunes old dates; the notifier skips live alerts for
+  # a bus or ferry.
+  schedule_services: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
+  # Every TIPLOC's display name, location type and parent station, published
+  # by schedule-reference (as schedule_services); read by the api only.
+  tiploc_locations: {class: reference, grants: {api: S, schedule_reference: SIUD}}
+  schedule_reference_publishes: {class: reference, grants: {api: S, schedule_reference: SI}}
+  schedule_feed_ingests: {class: reference, grants: {api: S, schedule_ingest: SI}}
+
+  # --- migrations: the owner's; everyone reads it through schema_gate.
+  _sqlx_migrations: {class: migrations, grants: {}}
+
+# Views (phase 4 adds ingest_active_tracked_trains,
+# ingest_sample_station_pins and ingest_custom_line_stations).
+views: {}
+
+# Every sequence, with the table that owns it.
+sequences:
+  corpus_locations_id_seq: {table: corpus_locations}
+  fixed_links_id_seq: {table: fixed_links}
+  incident_history_id_seq: {table: incident_history}
+  journey_legs_id_seq: {table: journey_legs}
+  journey_template_legs_id_seq: {table: journey_template_legs}
+  journey_templates_id_seq: {table: journey_templates}
+  journeys_id_seq: {table: journeys}
+  line_status_history_id_seq: {table: line_status_history}
+  notifier_forward_queue_id_seq: {table: notifier_forward_queue}
+  push_subscriptions_id_seq: {table: push_subscriptions}
+  tracked_train_tickets_id_seq: {table: tracked_train_tickets}
+  # Still named after the table's old name (tracked_trains).
+  tracked_trains_id_seq: {table: train_subscriptions}
+  train_current_state_id_seq: {table: train_current_state}
+  train_movement_events_id_seq: {table: train_movement_events}
+  trains_id_seq: {table: trains}
+  trust_event_backlog_id_seq: {table: trust_event_backlog}
+
+# Functions in schema public (extension members excluded), by signature.
+functions:
+  "analyze_publish_keys(text)": {grants: [schedule_reference]}

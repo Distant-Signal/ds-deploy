@@ -210,6 +210,10 @@ spec:
             items:
               - key: postgres-roles.sql
                 path: postgres-roles.sql
+              {{- if include "distant-signal.perServiceEnabled" . }}
+              - key: postgres-grants.sql
+                path: postgres-grants.sql
+              {{- end }}
         {{- end }}
       {{- end }}
   {{- if and .Values.postgresql.persistence.enabled (not .Values.postgresql.persistence.existingClaim) }}

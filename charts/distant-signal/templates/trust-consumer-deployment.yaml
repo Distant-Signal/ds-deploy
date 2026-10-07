@@ -131,7 +131,7 @@ with trustConsumer.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.trustConsumer.progressStallSecs | quote }}
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
-            {{- include "distant-signal.redisPasswordEnv" . }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "trustConsumer" "user" "trust-consumer") }}
             - name: REDIS_AUTOCLAIM_MIN_IDLE_SECS
               value: {{ .Values.trustConsumer.redisAutoclaimMinIdleSecs | quote }}
             - name: REDIS_GAP_CHECK_SECS

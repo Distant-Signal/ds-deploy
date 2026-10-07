@@ -1,0 +1,19 @@
+{{- /*
+redis.acl (docs/redis-acl.md; ingest architecture phase 0c): the bundled
+Redis's users.acl, with ${REDIS_ACL_PASSWORD_<USER>} placeholders that the
+Redis pod's initContainer fills in from the per-user Secret. Renders
+nothing unless redis.acl.enabled and redis.enabled. The users and rights
+come from files/redis-users.acl.tpl; scripts/render-redis-acl.py renders
+the same file outside Helm (CI checks the two agree).
+*/}}
+{{- if and .Values.redis.enabled (include "distant-signal.redisAclEnabled" .) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-acl" (include "distant-signal.redisFullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "redis") | nindent 4 }}
+data:
+  users.acl.tpl: |
+    {{- include "distant-signal.redisAclFile" . | trim | nindent 4 }}
+{{- end }}
