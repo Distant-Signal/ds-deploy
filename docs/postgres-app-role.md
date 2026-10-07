@@ -406,7 +406,7 @@ is narrowed in phases 2–5.
 
 - `scripts/tests/test_gen_db_grants.py`: classification gaps, stale SQL,
   limits over the budget, narrow rendering.
-- `scripts/test-postgres-roles.py --mode per-service` (CI's rust-test job):
+- `scripts/test-postgres-roles.py --mode per-service` (CI's rust-db-test job):
   the api, aggregator, notifier and enricher DB suites, each as its own
   role, on a database set up exactly as the chart does it.
 - A narrowed role on a migrated database (by hand, 2026-10-06): exactly its
@@ -429,7 +429,7 @@ default privileges granted when the migrator created it.
 
 ## How it was tested
 
-- `scripts/test-postgres-roles.py` (CI's `rust-test` job runs it): a fresh
+- `scripts/test-postgres-roles.py` (CI's `rust-db-test` job runs it): a fresh
   database, the roles from the chart's own script, then the DB suites with
   `DATABASE_URL` as the app role and `MIGRATION_DATABASE_URL` as the owner.
   `--mode existing` migrates as the superuser and converts (this runbook);

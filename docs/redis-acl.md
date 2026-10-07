@@ -42,7 +42,7 @@ explains the format). The kinds:
 Every user also has the connection handshake (`PING`, `HELLO`, `AUTH`,
 `CLIENT SETNAME`, `CLIENT SETINFO`, `CLIENT ID`).
 
-`crates/common/tests/redis_acl.rs` (CI's rust-test job, against a real
+`crates/common/tests/redis_acl.rs` (CI's rust-db-test job, against a real
 Redis) creates every user with its narrow rights and runs its client's
 real command sequence, then checks with `ACL DRYRUN` that commands it must
 not have (`FLUSHALL`, another client's stream, `XGROUP DESTROY`, ...) are
