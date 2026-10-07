@@ -411,6 +411,12 @@ jobs:
       - name: cargo test -p common --test redis_acl -- --ignored (Redis ACL users)
         run: cargo test -p common --test redis_acl -- --ignored --test-threads=1
 
+      # Ingest architecture phase 3a: the stream runtime (produce/consume,
+      # reclaim, dead letters, retries, MAXLEN, the producer policies while
+      # Redis is down, and the poller-ldbws / ingest-writer ACL users).
+      - name: cargo test -p ingest-stream --test redis_stream -- --ignored (Redis-backed tests)
+        run: cargo test -p ingest-stream --test redis_stream -- --ignored --test-threads=1
+
       # The Postgres role split (docs/postgres-app-role.md): proves no runtime
       # path needs a superuser. scripts/test-postgres-roles.py makes a fresh
       # database and roles with the chart's own setup script
