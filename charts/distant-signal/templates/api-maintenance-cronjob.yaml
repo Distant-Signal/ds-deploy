@@ -5,8 +5,7 @@ apiMaintenance.enabled.
 
 Runs the api image's `maintenance` binary (plan 1B.8,
 crates/api/src/bin/maintenance.rs): one pass of prune_expired_sessions,
-prune_dead_links and prune_personal_data, then exit. Until the api image
-carries it, enabling this fails every run. The api's own
+prune_dead_links and prune_personal_data, then exit. The api's own
 session_cleanup_sweep_loop keeps running until API_BACKGROUND_LOOPS=false
 (plan 1B.7, rollout release N+2); both are idempotent, so the overlap is
 harmless.

@@ -2260,13 +2260,13 @@ jobs:
           roles=(--set postgresql.roles.enabled=true --set postgresql.roles.setupJob.enabled=true
             --set postgresql.roles.perService.enabled=true)
           ps=$(render "${roles[@]}")
-          grep -q "'--variable=writer_connection_limit=6'" <<<"${ps}" || fail "the writer role's limit must be its pool + 1"
+          grep -q "'--variable=writer_connection_limit=7'" <<<"${ps}" || fail "the writer role's limit must be its pool (6) + the lock session"
           grep -q 'name: DS_PG_WRITER_PASSWORD$' <<<"${ps}" || fail "the setup Job must get the writer's password"
           ps=$(render "${roles[@]}" --set ingestWriter.enabled=true)
           dep=$(doc Deployment distant-signal-ingest-writer <<<"${ps}")
           # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
           grep -q 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${dep}" || fail "without connect the ingest-writer connects as app"
-          grep -q "'--variable=app_connection_limit=80'" <<<"${ps}" || fail "the writer's pool (5) must count in app's limit (75)"
+          grep -q "'--variable=app_connection_limit=82'" <<<"${ps}" || fail "the writer's pool (6) and lock session must count in app's limit (75)"
           ps=$(render "${roles[@]}" --set ingestWriter.enabled=true --set postgresql.roles.perService.writer.connect=true)
           dep=$(doc Deployment distant-signal-ingest-writer <<<"${ps}")
           # shellcheck disable=SC2016 # as above

@@ -1126,19 +1126,21 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 {{- else if eq .service "aggregator" -}}
 {{- add 10 (ternary 2 0 ($root.Values.archive.enabled | default false)) -}}
 {{- else if eq .service "writer" -}}
-{{- int $root.Values.ingestWriter.database.maxConnections -}}
+{{- /* Its pool plus the loop-lock session (crates/ingest-writer). */ -}}
+{{- add1 (int $root.Values.ingestWriter.database.maxConnections) -}}
 {{- else -}}
 5
 {{- end -}}
 {{- end }}
 
 {{/*
-The ingest-writer's pool (ingestWriter.database.maxConnections) when
-ingestWriter.enabled, else 0. Takes root.
+The ingest-writer's connections when ingestWriter.enabled, else 0: its
+pool (ingestWriter.database.maxConnections) plus the one dedicated
+loop-lock session (crates/ingest-writer's LockSession). Takes root.
 */}}
 {{- define "distant-signal.ingestWriterPool" -}}
 {{- if .Values.ingestWriter.enabled -}}
-{{- int .Values.ingestWriter.database.maxConnections -}}
+{{- add1 (int .Values.ingestWriter.database.maxConnections) -}}
 {{- else -}}
 0
 {{- end -}}
@@ -1184,6 +1186,9 @@ from its pool. Takes (dict "root" $ "service" ...).
 {{- else if eq .service "api" -}}
 {{- $pool := int $cfg.maxConnections -}}
 {{- add (mul (add (int $root.Values.api.replicaCount) 1) $pool) 2 (include "distant-signal.apiMaintenancePool" $root) -}}
+{{- else if eq .service "writer" -}}
+{{- /* Its servicePool already counts the lock session: pool + 1 (spec §6.6). */ -}}
+{{- include "distant-signal.servicePool" . -}}
 {{- else -}}
 {{- add (include "distant-signal.servicePool" .) 1 -}}
 {{- end -}}

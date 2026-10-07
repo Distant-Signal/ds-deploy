@@ -701,8 +701,10 @@ limits of every role in use exceed `max_connections` minus 3.
 ## Migrations, maintenance and the ingest-writer (optional)
 
 Ingest architecture phase 1B (`docs/superpowers/plans/2026-10-06-ingest-architecture-plan.md`).
-Every switch is off by default and renders nothing until turned on; each
-needs a binary that later 1B tasks add.
+Every switch is off by default and renders nothing until turned on. The api
+image's `maintenance` binary and the `ingest-writer` image exist; the migrate
+Job's `ds-migrate` (1B.1) and the api's `API_MIGRATE_ON_STARTUP` (1B.3) are
+still to come.
 
 **The migrate hook Job** (`migrate.job.enabled`, `templates/migrate-job.yaml`)
 runs `ds-migrate run` (plan 1B.1) from the api image as a
@@ -744,14 +746,15 @@ Postgres admits it, and with egress policies on it may reach Postgres and
 DNS.
 
 **The ingest-writer** (`ingestWriter.enabled`,
-`templates/ingest-writer-deployment.yaml`; its image is plan 1B.6) is one
+`templates/ingest-writer-deployment.yaml`; image `ingestWriter.image`, plan 1B.6) is one
 `Recreate` replica with the standard worker probes and metrics port. In
 phase 1B it runs the train-domain loops (`ingestWriter.loops.enabled`, i.e.
 `INGEST_WRITER_LOOPS`) under advisory locks, so it can overlap with the
 api's own loops until `API_BACKGROUND_LOOPS=false`. It connects as the app
 role, or as `distant_signal_writer` (a member of app, created by the role
 setup Job with `postgresql.roles.perService.enabled`) with
-`perService.writer.connect`; its pool counts in the connection budgets. Its
+`perService.writer.connect`; its pool and its loop-lock session count in the
+connection budgets. Its
 NetworkPolicy admits the monitoring namespace (metrics) and the health port,
 with egress to Postgres (Redis joins in phase 3); Postgres admits it; the
 PodMonitor scrapes it; `DistantSignalIngestWriterDown` fires when it is down
@@ -1332,7 +1335,7 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.roles.perService.writer.password` | `""` | Password. |
 | `postgresql.roles.perService.writer.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.writer.existingSecretPasswordKey` | `postgres-writer-password` | Key within `existingSecret` (and in the chart's Secret). |
-| `postgresql.roles.perService.writer.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `ingestWriter.database.maxConnections` + 1. |
+| `postgresql.roles.perService.writer.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `ingestWriter.database.maxConnections` + 1 (the loop-lock session). |
 | `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
 | `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |
@@ -1670,7 +1673,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.enabled` | `false` | Deploy the ingest-writer (one replica, `Recreate`). Needs its image (plan 1B.6). |
 | `ingestWriter.image` | `ghcr.io/fasterspeeding/distant-signal/ingest-writer`, tag `""` (appVersion), digest `""`, `IfNotPresent` | Image; same shape as `api.image`. |
 | `ingestWriter.loops.enabled` | `false` | Run the train-domain loops (`INGEST_WRITER_LOOPS`) with the api's intervals. |
-| `ingestWriter.database.maxConnections` | `5` | Its Postgres pool; counted in the connection budgets. |
+| `ingestWriter.database.maxConnections` | `6` | Its Postgres pool; counted, plus its one loop-lock session, in the connection budgets. |
 | `ingestWriter.progressStallSecs` | `900` | `/livez` stall window (`PROGRESS_STALL_SECS`). |
 | `ingestWriter.logLevel` | `info` | `RUST_LOG`. |
 | `ingestWriter.extraEnv` | `[]` | Extra env entries; one with a chart entry's name replaces it. |

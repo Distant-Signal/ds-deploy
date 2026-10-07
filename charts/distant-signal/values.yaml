@@ -347,7 +347,8 @@ postgresql:
         # -- Key within `existingSecret` (and in the chart's Secret).
         existingSecretPasswordKey: postgres-writer-password
         # -- CONNECTION LIMIT. Empty: its pool
-        # (`ingestWriter.database.maxConnections`, 5) plus 1.
+        # (`ingestWriter.database.maxConnections`, 6) plus 1, the
+        # loop-lock session (spec §6.6: pool 6, limit 7).
         connectionLimit: ""
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
@@ -1797,8 +1798,10 @@ ingestWriter:
     # `api.scheduleEnrichmentGraceMinutes`), so the two cannot drift.
     enabled: false
   database:
-    # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS).
-    maxConnections: 5
+    # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; the crate's default
+    # and spec §6.6's). The binary also holds one more connection, the
+    # loop-lock session, so the budgets count this plus 1.
+    maxConnections: 6
   # -- /livez stall window (PROGRESS_STALL_SECS; see workerHealth).
   progressStallSecs: 900
   # -- tracing-subscriber EnvFilter (RUST_LOG).
