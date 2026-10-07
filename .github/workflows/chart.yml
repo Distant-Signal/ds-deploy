@@ -135,8 +135,9 @@ jobs:
 
     strategy:
       fail-fast: false
-      # 19 legs at once took 19 of the account's 20 hosted runners, so CI's
-      # jobs queued behind them for 1.5-4 min on every push. 10 leaves
+      # All legs at once (19 then; 20 with ingest-writer) took 19 of the
+      # account's 20 hosted runners, so CI's jobs queued behind them for
+      # 1.5-4 min on every push. 10 leaves
       # room for ci.yml; with the registry build cache a leg is ~1-3 min,
       # so the matrix still finishes in a few minutes.
       max-parallel: 10
@@ -195,6 +196,9 @@ jobs:
             target: ""
           - service: schedule-reference
             dockerfile: docker/schedule-reference.Dockerfile
+            target: ""
+          - service: ingest-writer
+            dockerfile: docker/ingest-writer.Dockerfile
             target: ""
           # The only image needing an explicit target: frontend/Dockerfile's
           # last stage is `runtime-dev`; the image this repo wants published
@@ -601,6 +605,7 @@ jobs:
             [movement-relay]=".movementRelay"
             [schedule-ingest]=".scheduleFeed.ingest"
             [schedule-reference]=".scheduleFeed.reference"
+            [ingest-writer]=".ingestWriter"
             [frontend]=".frontend"
           )
 
