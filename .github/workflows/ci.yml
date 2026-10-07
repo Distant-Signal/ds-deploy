@@ -359,8 +359,8 @@ jobs:
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
 
-      - name: Run api migrations
-        working-directory: crates/api
+      - name: Run the migrations (crates/ds-store/migrations)
+        working-directory: crates/ds-store
         run: sqlx migrate run
 
       # The Python tooling below (gen-db-grants.py, test-postgres-roles.py
@@ -386,9 +386,10 @@ jobs:
         run: uv run --no-sync scripts/gen-db-grants.py check --database-url "${DATABASE_URL}"
 
       # ds-store: the api's data access as it moves out (ingest architecture
-      # plan phase 1A); its DB tests run everywhere the api's do.
-      - name: cargo test -p api -p ds-store -p aggregator -p notifier -- --ignored (DB-backed tests)
-        run: cargo test -p api -p ds-store -p aggregator -p notifier -- --ignored --test-threads=1
+      # plan phase 1A); its DB tests run everywhere the api's do. ds-migrate
+      # (plan 1B.1): `run` against the migrated database.
+      - name: cargo test -p api -p ds-store -p ds-migrate -p aggregator -p notifier -- --ignored (DB-backed tests)
+        run: cargo test -p api -p ds-store -p ds-migrate -p aggregator -p notifier -- --ignored --test-threads=1
 
       # common::pg's pool-settings tests (statement/idle timeouts actually
       # applied, a timed-out statement cancelled without leaking, acquire
@@ -639,8 +640,8 @@ jobs:
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
 
-      - name: Run api migrations
-        working-directory: crates/api
+      - name: Run the migrations (crates/ds-store/migrations)
+        working-directory: crates/ds-store
         run: sqlx migrate run
 
       - name: Seed e2e fixtures
@@ -854,13 +855,14 @@ jobs:
       - name: ingest phase 0 chart switches
         run: uv run --no-sync scripts/check-ingest-phase0-chart.py
 
-      # Ingest architecture spec §5.1: ds-store's normal dependency closure
-      # holds no axum, tower, hyper, redis, reqwest, oauth2, openidconnect
-      # or api. `cargo tree` only (no build), so no rdkafka packages.
+      # Ingest architecture spec §5.1: ds-store's (and ds-migrate's) normal
+      # dependency closure holds no axum, tower, hyper, redis, reqwest,
+      # oauth2, openidconnect or api. `cargo tree` only (no build), so no
+      # rdkafka packages.
       - name: Install Rust 1.88.0
         uses: dtolnay/rust-toolchain@688313b0823df1393bcebb1b4add0438a6d36884 # 1.88.0
 
-      - name: ds-store dependency boundary
+      - name: ds-store and ds-migrate dependency boundary
         run: uv run --no-sync scripts/check-crate-deps.py
 
   # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.

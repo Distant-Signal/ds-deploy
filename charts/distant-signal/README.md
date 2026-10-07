@@ -702,8 +702,8 @@ limits of every role in use exceed `max_connections` minus 3.
 
 Ingest architecture phase 1B (`docs/superpowers/plans/2026-10-06-ingest-architecture-plan.md`).
 Every switch is off by default and renders nothing until turned on. The api
-image's `maintenance` binary and the `ingest-writer` image exist; the migrate
-Job's `ds-migrate` (1B.1) and the api's `API_MIGRATE_ON_STARTUP` (1B.3) are
+image's `maintenance` and `ds-migrate` (1B.1) binaries and the
+`ingest-writer` image exist; the api's `API_MIGRATE_ON_STARTUP` (1B.3) is
 still to come.
 
 **The migrate hook Job** (`migrate.job.enabled`, `templates/migrate-job.yaml`)

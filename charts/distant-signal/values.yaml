@@ -1527,8 +1527,8 @@ api:
   # cannot run DDL), so leave this true until then.
   migrateOnStartup: true
   # Settings for the dedicated connection api migrates on at startup,
-  # before it binds (crates/api/src/migrate.rs). It first drops any INVALID
-  # index a failed CREATE INDEX CONCURRENTLY left behind, so a retry
+  # before it binds (crates/ds-store/src/migrate.rs). It first drops any
+  # INVALID index a failed CREATE INDEX CONCURRENTLY left behind, so a retry
   # rebuilds it instead of crash-looping on "relation already exists".
   # The migrate hook Job (`migrate.job`) uses the same two settings.
   migrations:

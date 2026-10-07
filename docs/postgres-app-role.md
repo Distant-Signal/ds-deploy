@@ -85,8 +85,8 @@ cannot do:
 | Advisory locks (`pg_advisory_xact_lock`, `pg_try_advisory_xact_lock`) | publish, corpus load, subscriptions | Allowed for any role | None. |
 | `SET LOCAL statement_timeout`, `idle_in_transaction_session_timeout`, `enable_*`; the startup options `client_connection_check_interval`, `tcp_keepalives_*` | `common::pg`, publish, aggregator | All user-settable | None. |
 | `pg_stat_statements` | no runtime reads | n/a | The migration `20260927070000` `CREATE EXTENSION` needs a superuser; as the owner it only warns. The setup script creates the extension, so a new cluster has it. Read it as the exporter role (`pg_monitor` sees every query). |
-| Migrations, `_sqlx_migrations` | `api::migrate` | n/a | The owner connection (`MIGRATION_DATABASE_URL`). |
-| Heal of INVALID indexes: `DROP INDEX CONCURRENTLY`, reading `pg_stat_progress_create_index` | `api::migrate` | n/a | Owner connection. The owner owns the indexes; `pg_read_all_stats` lets it see another role's in-flight build, which would otherwise show NULL `relid`s and look abandoned. |
+| Migrations, `_sqlx_migrations` | `ds_store::migrate` (api startup, `ds-migrate run`) | n/a | The owner connection (`MIGRATION_DATABASE_URL`). |
+| Heal of INVALID indexes: `DROP INDEX CONCURRENTLY`, reading `pg_stat_progress_create_index` | `ds_store::migrate` (api startup, `ds-migrate run`) | n/a | Owner connection. The owner owns the indexes; `pg_read_all_stats` lets it see another role's in-flight build, which would otherwise show NULL `relid`s and look abandoned. |
 | `_sqlx_migrations` read before migrating (`ensure_ready_for_contract_migration`) | api pool | `SELECT` granted | None. |
 
 Nothing at runtime goes through the owner connection except the

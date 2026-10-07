@@ -2,9 +2,10 @@
 The schema migrations as a Helm hook Job (ingest spec §12.1, plan 1B.4;
 migrate.job in values.yaml). Renders nothing unless migrate.job.enabled.
 
-`ds-migrate run` (plan 1B.1, in the api image) is today's
-api::migrate::run: the advisory lock, lock_timeout and statement_timeout
-(api.migrations), the INVALID-index heal, then every pending migration.
+`ds-migrate run` (plan 1B.1, in the api image) is the api's startup
+migration (ds_store::migrate): the contract-migration check, the advisory
+lock, lock_timeout and statement_timeout (api.migrations), the
+INVALID-index heal, then every pending migration.
 
 Hook order: on an upgrade this runs before any of the release's resources
 change (pre-upgrade), so a failure fails the release and the old pods keep

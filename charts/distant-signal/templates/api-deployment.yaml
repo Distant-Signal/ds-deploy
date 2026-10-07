@@ -267,7 +267,7 @@ with api.extraEnv, which replaces an entry of the same name.
             - name: DATABASE_MAX_CONNECTIONS
               value: {{ include "distant-signal.apiMaxConnections" . | quote }}
             # The dedicated startup migration connection; see
-            # api.migrations in values.yaml and crates/api/src/migrate.rs.
+            # api.migrations in values.yaml and crates/ds-store/src/migrate.rs.
             - name: MIGRATION_LOCK_TIMEOUT_SECS
               value: {{ .Values.api.migrations.lockTimeoutSecs | int | quote }}
             - name: MIGRATION_STATEMENT_TIMEOUT_SECS
