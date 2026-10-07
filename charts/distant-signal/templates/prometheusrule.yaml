@@ -58,7 +58,8 @@ so that clause fired on every rollout.
 {{- $cyclesOn := ($rule.cycleStalled).enabled }}
 {{- $api5xxOn := ($rule.api5xx).enabled }}
 {{- $schemaGateOn := ($rule.schemaGateWaiting).enabled }}
-{{- $healthOn := or $postgresDownOn $apiDbDownOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn }}
+{{- $imagePullOn := and ($rule.statefulImagePull).enabled (or .Values.postgresql.enabled .Values.redis.enabled) }}
+{{- $healthOn := or $postgresDownOn $apiDbDownOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
 {{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn }}
@@ -111,6 +112,49 @@ spec:
             summary: "the Distant Signal database is down"
             description: "pg_up is 0, or the bundled Postgres has no ready replica. api, the consumers and the aggregator cannot read or write."
             runbook_url: {{ printf "%s#distantsignalpostgresdown" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.statefulImagePull }}
+        {{- if .enabled }}
+        {{- /*
+        2026-10-01: postgres-0 was recreated on an image from a new private
+        registry and sat in ImagePullBackOff/ErrImagePull for ~6h with DS
+        down; the cluster's KubeContainerWaiting only reached pending. Both
+        singletons delete their one pod before starting its replacement
+        (StatefulSet; Recreate Deployment), so a pull that never succeeds is
+        an outage, not a stalled rollout. Reads kube-state-metrics' waiting
+        reason for containers and init containers (one selector via a
+        __name__ regex, which keeps the expr short; Redis's ACL
+        initContainer pulls an image too). `reason` is aggregated away: it
+        flips between ErrImagePull and ImagePullBackOff on every retry,
+        which would restart `for`. Pod names: the StatefulSet's
+        <fullname>-postgres-<ordinal>, the Deployment's
+        <fullname>-redis-<pod-template-hash>-<suffix>.
+        */}}
+        {{- $cfg := . }}
+        {{- $pods := list }}
+        {{- if $.Values.postgresql.enabled }}
+        {{- $pods = append $pods (list "postgres" (printf "%s-[0-9]+" (include "distant-signal.postgresFullname" $)) $cfg.postgresSeverity "DS is down") }}
+        {{- end }}
+        {{- if $.Values.redis.enabled }}
+        {{- $pods = append $pods (list "redis" (printf "%s-[a-z0-9]+-[a-z0-9]+" (include "distant-signal.redisFullname" $)) $cfg.redisSeverity "live movements stop") }}
+        {{- end }}
+        {{- range $p := $pods }}
+        - alert: DistantSignalStatefulImagePullFailing
+          expr: |
+            max by (namespace, pod, container) ({__name__=~"kube_pod_(init_)?container_status_waiting_reason", namespace="{{ $ns }}", pod=~"{{ index $p 1 }}", reason=~"ImagePullBackOff|ErrImagePull|InvalidImageName"}) > 0
+          for: {{ $cfg.for }}
+          labels:
+            severity: {{ index $p 2 }}
+            component: {{ index $p 0 }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ index $p 0 }} pod {{ "{{ $labels.pod }}" }} cannot pull its image"
+            description: "{{ "{{ $labels.container }}" }}: no image for {{ $cfg.for }}, {{ index $p 3 }}. Check the pull secret and image."
+            runbook_url: {{ printf "%s#distantsignalstatefulimagepullfailing" $runbook | quote }}
+        {{- end }}
         {{- end }}
         {{- end }}
         {{- with $rule.apiDatabaseDown }}

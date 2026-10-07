@@ -1,0 +1,65 @@
+# promtool unit tests for DistantSignalStatefulImagePullFailing (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered).
+# kube-state-metrics exports only the current waiting reason, and a failing
+# pull flips between ErrImagePull and ImagePullBackOff on each retry: the
+# series below alternate with stale markers, as KSM's do.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # postgres-0's postgres container fails to pull from 2m, flipping reason
+  # every minute: still one alert, firing once `for: 5m` has passed.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{namespace="distant-signal", pod="distant-signal-postgres-0", container="postgres", reason="ErrImagePull"}'
+        values: '_x2 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale'
+      - series: 'kube_pod_container_status_waiting_reason{namespace="distant-signal", pod="distant-signal-postgres-0", container="postgres", reason="ImagePullBackOff"}'
+        values: '_x3 1 stale 1 stale 1 stale 1 stale 1 stale 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DistantSignalStatefulImagePullFailing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: DistantSignalStatefulImagePullFailing
+        exp_alerts:
+          - exp_labels: {severity: critical, component: postgres, namespace: distant-signal, pod: distant-signal-postgres-0, container: postgres}
+            exp_annotations:
+              summary: postgres pod distant-signal-postgres-0 cannot pull its image
+              description: "postgres: no image for 5m, DS is down. Check the pull secret and image."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalstatefulimagepullfailing
+  # Redis's init container has an invalid image name: the init-container
+  # metric counts too.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_init_container_status_waiting_reason{namespace="distant-signal", pod="distant-signal-redis-6b7c9d8f5-abcde", container="acl", reason="InvalidImageName"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DistantSignalStatefulImagePullFailing
+        exp_alerts:
+          - exp_labels: {severity: critical, component: redis, namespace: distant-signal, pod: distant-signal-redis-6b7c9d8f5-abcde, container: acl}
+            exp_annotations:
+              summary: redis pod distant-signal-redis-6b7c9d8f5-abcde cannot pull its image
+              description: "acl: no image for 5m, live movements stop. Check the pull secret and image."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalstatefulimagepullfailing
+  # Not firing: a pull that recovers within `for`; another waiting reason;
+  # another namespace's postgres-0; the migrate Job's pod and api's pod
+  # (not the stateful singletons).
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{namespace="distant-signal", pod="distant-signal-postgres-0", container="postgres", reason="ImagePullBackOff"}'
+        values: '_x2 1x3 stale'
+      - series: 'kube_pod_container_status_waiting_reason{namespace="distant-signal", pod="distant-signal-postgres-0", container="postgres", reason="CrashLoopBackOff"}'
+        values: '_x6 1x14'
+      - series: 'kube_pod_container_status_waiting_reason{namespace="elsewhere", pod="distant-signal-postgres-0", container="postgres", reason="ImagePullBackOff"}'
+        values: '1x20'
+      - series: 'kube_pod_container_status_waiting_reason{namespace="distant-signal", pod="distant-signal-postgres-from-migrate-x7k2p", container="migrate", reason="ImagePullBackOff"}'
+        values: '1x20'
+      - series: 'kube_pod_container_status_waiting_reason{namespace="distant-signal", pod="distant-signal-api-6b7c9d8f5-abcde", container="api", reason="ErrImagePull"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalStatefulImagePullFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalStatefulImagePullFailing
+        exp_alerts: []

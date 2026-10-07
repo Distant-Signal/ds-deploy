@@ -55,6 +55,36 @@ notifier cycles fail, and movement-events lag grows.
    error counters stop rising. Kafka and the Redis stream hold the TRUST
    backlog only up to their retention and MAXLEN.
 
+### DistantSignalStatefulImagePullFailing
+
+A container or init container of the bundled Postgres (`<release>-postgres-0`)
+or Redis (`<release>-redis-<hash>-<suffix>`) pod has been waiting in
+`ImagePullBackOff`, `ErrImagePull` or `InvalidImageName` for 5m
+(kube-state-metrics' `kube_pod_[init_]container_status_waiting_reason`). Both
+are single pods replaced without overlap, so nothing is serving: for Postgres
+DS is down (see [DistantSignalPostgresDown](#distantsignalpostgresdown)), for
+Redis the movement-events stream and live TRUST movements stop. On 2026-10-01
+`postgres-0` was recreated on an image from a new private registry and sat in
+`ImagePullBackOff` for about six hours. A pull never succeeds on its own.
+
+1. `kubectl -n distant-signal describe pod <pod>`: the Events name the image
+   and the registry's answer (`unauthorized`, `not found`, `manifest unknown`,
+   a DNS or TLS error).
+2. Pull secrets: the pod's `imagePullSecrets` (chart value `imagePullSecrets`)
+   must name a Secret that exists in the namespace and holds credentials for
+   that registry (`kubectl -n distant-signal get secret <name>`; check which
+   registry its `.dockerconfigjson` covers without printing it). Check the
+   image reference itself (`postgresql.image`, `postgresql.pgbackrest.image`,
+   `redis.image`): repository, tag and digest.
+3. Pre-pull to confirm the fix before the pod retries: on the node,
+   `crictl pull <image>` (with the same credentials), or run a throwaway pod
+   with the same image and pull secret. Once the image is on the node, delete
+   the stuck pod (or wait for the back-off) and it starts.
+4. Roll back if it cannot be fixed quickly: `helm rollback` (or revert the
+   image change in the Flux/Git values) to the last image that ran. Kafka and
+   the Redis stream hold the TRUST backlog only up to their retention and
+   MAXLEN, so restore service first and debug the new image after.
+
 ### DistantSignalApiDatabaseDown
 
 api's own probe has failed for `apiDatabaseDown.for`:

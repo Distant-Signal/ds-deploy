@@ -4208,6 +4208,19 @@ metrics:
       for: 3m
       severity: critical
       pgUpSelector: ""
+    # DistantSignalStatefulImagePullFailing: a container (or init
+    # container) of the bundled Postgres or Redis pod has waited in
+    # ImagePullBackOff, ErrImagePull or InvalidImageName for `for`
+    # (kube-state-metrics). Each runs one pod that is deleted before its
+    # replacement starts, so a failed pull is an outage. Postgres: critical,
+    # DS is down. Redis: critical too, it is the only path for live TRUST
+    # movements (movement-events). Renders per component only with
+    # postgresql.enabled / redis.enabled. Runbook: docs/alerts.md.
+    statefulImagePull:
+      enabled: true
+      for: 5m
+      postgresSeverity: critical
+      redisSeverity: critical
     # DistantSignalIngestWriterDown (critical; ingest spec §14.2): the
     # ingest-writer's scrape target is down, or its Deployment has no
     # available replica (kube-state-metrics), for `for`. Renders only with
