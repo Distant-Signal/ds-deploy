@@ -385,8 +385,10 @@ jobs:
       - name: every public table, view and sequence is classified (db-grants.yaml)
         run: uv run --no-sync scripts/gen-db-grants.py check --database-url "${DATABASE_URL}"
 
-      - name: cargo test -p api -p aggregator -p notifier -- --ignored (DB-backed tests)
-        run: cargo test -p api -p aggregator -p notifier -- --ignored --test-threads=1
+      # ds-store: the api's data access as it moves out (ingest architecture
+      # plan phase 1A); its DB tests run everywhere the api's do.
+      - name: cargo test -p api -p ds-store -p aggregator -p notifier -- --ignored (DB-backed tests)
+        run: cargo test -p api -p ds-store -p aggregator -p notifier -- --ignored --test-threads=1
 
       # common::pg's pool-settings tests (statement/idle timeouts actually
       # applied, a timed-out statement cancelled without leaking, acquire
@@ -436,7 +438,7 @@ jobs:
       - name: DB-backed tests as the non-superuser app role (existing cluster)
         run: >-
           scripts/test-postgres-roles.py --mode existing -- sh -c '
-          cargo test -p api -p aggregator -p notifier -- --ignored --test-threads=1
+          cargo test -p api -p ds-store -p aggregator -p notifier -- --ignored --test-threads=1
           --skip corpus::db_tests --skip corpus_crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests
           && cargo test -p common --features postgres pg::tests -- --ignored --test-threads=1
           && cargo test -p ingest-writer -- --ignored --test-threads=1
@@ -445,19 +447,22 @@ jobs:
       - name: DB-backed tests as the non-superuser app role (new cluster)
         run: >-
           scripts/test-postgres-roles.py --mode new --
-          cargo test -p api -- --ignored --test-threads=1
+          cargo test -p api -p ds-store -- --ignored --test-threads=1
           migrate::tests schedule_publish
 
       # Stage 0b (postgresql.roles.perService): the same suites, each as its
       # own service's role from files/postgres-grants.sql. The roles are
       # still members of the app role, so this passes today; it is the
-      # harness each later narrowing (phases 2-5) runs against.
+      # harness each later narrowing (phases 2-5) runs against. ds-store's
+      # tests run as the api role: in phase 1A they are the api's moved
+      # tests; spec §6.5 runs them per narrowed role later.
       - name: DB-backed tests as each service's own role (Stage 0b)
         run: |
           # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
           uv run --no-sync scripts/test-postgres-roles.py --mode per-service -- sh -c '
             skip="--skip corpus::db_tests --skip corpus_crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests"
             DATABASE_URL="$DATABASE_URL_API" cargo test -p api -- --ignored --test-threads=1 $skip &&
+            DATABASE_URL="$DATABASE_URL_API" cargo test -p ds-store -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_AGGREGATOR" cargo test -p aggregator -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_NOTIFIER" cargo test -p notifier -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_ENRICHER" cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1'
@@ -848,6 +853,15 @@ jobs:
       # Redis ACL ConfigMap equals scripts/render-redis-acl.py's.
       - name: ingest phase 0 chart switches
         run: uv run --no-sync scripts/check-ingest-phase0-chart.py
+
+      # Ingest architecture spec §5.1: ds-store's normal dependency closure
+      # holds no axum, tower, hyper, redis, reqwest, oauth2, openidconnect
+      # or api. `cargo tree` only (no build), so no rdkafka packages.
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@688313b0823df1393bcebb1b4add0438a6d36884 # 1.88.0
+
+      - name: ds-store dependency boundary
+        run: uv run --no-sync scripts/check-crate-deps.py
 
   # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
   # `helm lint` + `helm template` against both the chart's own defaults and
