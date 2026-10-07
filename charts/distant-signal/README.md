@@ -702,9 +702,18 @@ limits of every role in use exceed `max_connections` minus 3.
 
 Ingest architecture phase 1B (`docs/superpowers/plans/2026-10-06-ingest-architecture-plan.md`).
 Every switch is off by default and renders nothing until turned on. The api
-image's `maintenance` and `ds-migrate` (1B.1) binaries and the
-`ingest-writer` image exist; the api's `API_MIGRATE_ON_STARTUP` (1B.3) is
-still to come.
+image's `maintenance` and `ds-migrate` (1B.1) binaries, the `ingest-writer`
+image and the api's `API_MIGRATE_ON_STARTUP` (1B.3) exist.
+
+**The schema gate** (spec §12.2, plan 1B.2). The aggregator, enricher,
+notifier and ingest-writer, and the api when `api.migrateOnStartup` is
+`false`, wait before their loops, readiness and listener until the database
+has the newest migration built into the image and their role holds the
+grants `files/db-grants.yaml` gives it (one `has_table_privilege` per
+table). They poll every 5 s and exit after 15 minutes. While they wait,
+`distant_signal_db_schema_ready` is 0, and liveness stays up. On a database
+that is already migrated (every deploy today, where the api migrates first)
+the gate passes at its first check.
 
 **The migrate hook Job** (`migrate.job.enabled`, `templates/migrate-job.yaml`)
 runs `ds-migrate run` (plan 1B.1) from the api image as a
@@ -720,9 +729,9 @@ too. Raise the HelmRelease `timeout` to cover the deadline (20 minutes).
 
 Rollout: enable the Job and set `api.migrateOnStartup: false` in the same
 release; the api then has no `MIGRATION_DATABASE_URL` and gets
-`API_MIGRATE_ON_STARTUP=false`, which it reads from plan task 1B.3 on (until
-then it ignores it and still migrates, so keep `true` until the image has
-1B.3). Rollback: `api.migrateOnStartup: true`, then the Job off. The hook
+`API_MIGRATE_ON_STARTUP=false`, so it waits at the schema gate instead of
+migrating (an image older than 1B.3 ignores the variable and still migrates,
+so keep `true` until the image has 1B.3). Rollback: `api.migrateOnStartup: true`, then the Job off. The hook
 NetworkPolicies outlive the Job; delete them by hand
 (`kubectl delete networkpolicy -l app.kubernetes.io/component=migrate`).
 
@@ -1622,7 +1631,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.affinity` | `{}` | Pod affinity rules. |
 | `api.podAnnotations` | `{}` | Pod annotations. |
 | `api.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
-| `api.migrateOnStartup` | `true` | Migrate at startup, as today. `false` needs `migrate.job.enabled`: the api then gets no `MIGRATION_DATABASE_URL` and `API_MIGRATE_ON_STARTUP=false`, which the api reads from plan task 1B.3 on. Keep `true` until the api image has 1B.3. See [Migrations, maintenance and the ingest-writer](#migrations-maintenance-and-the-ingest-writer-optional). |
+| `api.migrateOnStartup` | `true` | Migrate at startup, as today. `false` needs `migrate.job.enabled`: the api then gets no `MIGRATION_DATABASE_URL` and `API_MIGRATE_ON_STARTUP=false`, and waits at the schema gate (up to 15 minutes) instead of migrating. Keep `true` until the api image has 1B.3. See [Migrations, maintenance and the ingest-writer](#migrations-maintenance-and-the-ingest-writer-optional). |
 
 ### migrate
 

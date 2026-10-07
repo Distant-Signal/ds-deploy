@@ -260,7 +260,7 @@ with api.extraEnv, which replaces an entry of the same name.
             {{- else }}
             # api.migrateOnStartup false: the migrate hook Job
             # (migrate-job.yaml) migrates and holds the owner credentials;
-            # the api waits for the schema (read from plan task 1B.3 on).
+            # the api waits at the schema gate instead (plan task 1B.3).
             - name: API_MIGRATE_ON_STARTUP
               value: "false"
             {{- end }}

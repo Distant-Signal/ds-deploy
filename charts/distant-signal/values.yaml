@@ -1520,11 +1520,13 @@ api:
   # -- Migrate at startup (API_MIGRATE_ON_STARTUP), as today. false (ingest
   # plan 1B.3/1B.4) needs `migrate.job.enabled`: the hook Job migrates, and
   # the api gets no MIGRATION_DATABASE_URL (no owner credentials) and waits
-  # for the schema instead. The chart only renders
-  # `API_MIGRATE_ON_STARTUP=false`; the api reads it from task 1B.3 on.
-  # Until the api image has 1B.3 it ignores the variable and still migrates,
-  # with DATABASE_URL (the app role when `postgresql.roles.enabled`, which
-  # cannot run DDL), so leave this true until then.
+  # at the schema gate instead (up to 15 minutes, then it exits) for the
+  # migration and the grants it was built for. The chart only renders
+  # `API_MIGRATE_ON_STARTUP=false`. An api image older than 1B.3 ignores
+  # the variable and still migrates, with DATABASE_URL (the app role when
+  # `postgresql.roles.enabled`, which cannot run DDL), so set false only
+  # with an image that has 1B.3 and an image that has `ds-migrate` (1B.1)
+  # for the Job.
   migrateOnStartup: true
   # Settings for the dedicated connection api migrates on at startup,
   # before it binds (crates/ds-store/src/migrate.rs). It first drops any
