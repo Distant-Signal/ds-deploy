@@ -2250,7 +2250,7 @@ jobs:
           grep -q 'path: /livez' <<<"${dep}" || fail "the ingest-writer needs the worker liveness probe"
           env_is "${dep}" INGEST_WRITER_LOOPS false
           env_is "${dep}" RECONCILIATION_SWEEP_INTERVAL_SECS 300
-          env_is "${dep}" DATABASE_MAX_CONNECTIONS 5
+          env_is "${dep}" DATABASE_MAX_CONNECTIONS 6
           loops=$(render --set ingestWriter.enabled=true --set ingestWriter.loops.enabled=true \
             --show-only templates/ingest-writer-deployment.yaml)
           env_is "${loops}" INGEST_WRITER_LOOPS true
