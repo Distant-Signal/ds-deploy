@@ -310,6 +310,7 @@ BEGIN
         ('schedule_destination_departures'),
         ('schedule_network_departures'),
         ('schedule_line_population'),
+        ('line_train_summaries'),
         ('schedule_services'),
         ('tiploc_locations'),
         ('schedule_reference_publishes'),

@@ -247,6 +247,13 @@ tables:
   schedule_destination_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
   schedule_network_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
   schedule_line_population: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, full_coverage_ro: S}}
+  # Each line population's slim per-train summary (2026-10-08), written in
+  # the same transaction as schedule_line_population (the api's ingest
+  # endpoint until phase 2a), read by the api's line pages; the aggregator
+  # prunes old dates. The one-off backfill_line_train_summaries binary runs
+  # in the api pod and writes with its credentials: run it before the api
+  # role is narrowed, or move it with the writer.
+  line_train_summaries: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
   # Each schedule's vehicle (train, bus, ferry) per service date, published
   # by schedule-reference (through the api's ingest endpoint until phase
   # 2a); the aggregator prunes old dates; the notifier skips live alerts for
