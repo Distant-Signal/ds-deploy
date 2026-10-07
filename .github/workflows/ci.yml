@@ -440,7 +440,7 @@ jobs:
         run: >-
           scripts/test-postgres-roles.py --mode existing -- sh -c '
           cargo test -p api -p ds-store -p aggregator -p notifier -- --ignored --test-threads=1
-          --skip corpus::db_tests --skip corpus_crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests
+          --skip corpus::db_tests --skip crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests
           && cargo test -p common --features postgres pg::tests -- --ignored --test-threads=1
           && cargo test -p ingest-writer -- --ignored --test-threads=1
           && cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1'
@@ -461,7 +461,7 @@ jobs:
         run: |
           # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
           uv run --no-sync scripts/test-postgres-roles.py --mode per-service -- sh -c '
-            skip="--skip corpus::db_tests --skip corpus_crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests"
+            skip="--skip corpus::db_tests --skip crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests"
             DATABASE_URL="$DATABASE_URL_API" cargo test -p api -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_API" cargo test -p ds-store -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_AGGREGATOR" cargo test -p aggregator -- --ignored --test-threads=1 $skip &&
