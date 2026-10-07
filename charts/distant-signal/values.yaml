@@ -1256,6 +1256,16 @@ api:
   # -- see config.rs's own session_cleanup_interval_secs doc. Same
   # "declared but never wired" gap as the three tunables above.
   sessionCleanupIntervalSecs: 3600
+  # -- Run the api's background loops (API_BACKGROUND_LOOPS, ingest plan
+  # 1B.7), as today: the schedule-match, reconciliation and backlog-match
+  # sweeps, the CORPUS crosswalk check at startup and the session-cleanup
+  # sweep. The first four take the same Postgres advisory locks as the
+  # ingest-writer's loops, so with both on each sweep runs in one process
+  # at a time; their locks hold one of the api pool's own connections
+  # (`database.maxConnections`), so no budget changes. Set false a release after
+  # `ingestWriter.loops.enabled`, together with `apiMaintenance.enabled`
+  # (spec §12.3). The chart only renders `API_BACKGROUND_LOOPS=false`.
+  backgroundLoops: true
   # -- Personal-data retention (UK legal audit LEG-5), applied hourly by
   # the session-cleanup sweep -- see docs/personal-data-retention.md and
   # config.rs. 0 disables each limit.

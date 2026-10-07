@@ -750,7 +750,8 @@ binary (plan 1B.8) hourly (`concurrencyPolicy: Forbid`, `timeZone: Etc/UTC`):
 one pass of the session cleanup, dead share/invite link prune and
 personal-data retention that the api's own loop runs today, with the api's
 retention values and the api's database role. Turn it on in the release
-that sets `API_BACKGROUND_LOOPS=false` (plan 1B.7); both are idempotent.
+that sets `API_BACKGROUND_LOOPS=false` (`api.backgroundLoops: false`, plan
+1B.7); both are idempotent.
 Postgres admits it, and with egress policies on it may reach Postgres and
 DNS.
 
@@ -759,7 +760,13 @@ DNS.
 `Recreate` replica with the standard worker probes and metrics port. In
 phase 1B it runs the train-domain loops (`ingestWriter.loops.enabled`, i.e.
 `INGEST_WRITER_LOOPS`) under advisory locks, so it can overlap with the
-api's own loops until `API_BACKGROUND_LOOPS=false`. It connects as the app
+api's own loops until `API_BACKGROUND_LOOPS=false`: the api's loops take
+the same locks (plan 1B.7), so each sweep runs in one process at a time.
+Cutover: `ingestWriter.loops.enabled: true` in one release, then
+`api.backgroundLoops: false` with `apiMaintenance.enabled: true` in the
+next. The loops' metrics are `distant_signal_loop_*` from either process
+(`sum by (loop) (distant_signal_loop_lock_held)` is 1 while exactly one
+process runs a loop). It connects as the app
 role, or as `distant_signal_writer` (a member of app, created by the role
 setup Job with `postgresql.roles.perService.enabled`) with
 `perService.writer.connect`; its pool and its loop-lock session count in the
@@ -1598,6 +1605,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.scheduleEnrichmentGraceMinutes` | `30` | How long past a train's origin departure the reconciliation sweep waits before trying a schedule-only match. |
 | `api.backlogMatchSweepIntervalSecs` | `300` | How often still-pending pins are matched against the TRUST event backlog. |
 | `api.sessionCleanupIntervalSecs` | `3600` | How often expired sessions are deleted; the personal-data retention limits below run on the same sweep. |
+| `api.backgroundLoops` | `true` | Run the api's background loops, as today: the schedule-match, reconciliation and backlog-match sweeps, the CORPUS crosswalk check at startup, and the session cleanup. The first four take the ingest-writer's advisory locks, on one of the api pool's own connections. `false` renders `API_BACKGROUND_LOOPS=false`: set it a release after `ingestWriter.loops.enabled`, with `apiMaintenance.enabled`. See [Migrations, maintenance and the ingest-writer](#migrations-maintenance-and-the-ingest-writer-optional). |
 | `api.pastTravelRetentionDays` | `548` | Days after the travel date that tracked trains, tickets, journeys and template skip markers are kept (18 months). `0` disables. See `docs/personal-data-retention.md`. |
 | `api.stalePushSubscriptionDays` | `365` | Drop push subscriptions whose user has not logged in (and that were not renewed) for this many days. `0` disables. |
 | `api.inactiveAccountRetentionDays` | `0` | Delete accounts with no login and no live session for this many days. Off by default: the app holds no email addresses, so users cannot be warned first, and enabling it is an operator decision the privacy notice must state. |

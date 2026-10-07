@@ -471,6 +471,14 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.backlogMatchSweepIntervalSecs | quote }}
             - name: SESSION_CLEANUP_INTERVAL_SECS
               value: {{ .Values.api.sessionCleanupIntervalSecs | quote }}
+            {{- if not .Values.api.backgroundLoops }}
+            # api.backgroundLoops false (ingest plan 1B.7): the
+            # ingest-writer's loops and the api-maintenance CronJob run the
+            # sweeps; the api runs none. Rendered only when false, so the
+            # default render is unchanged.
+            - name: API_BACKGROUND_LOOPS
+              value: "false"
+            {{- end }}
             - name: PAST_TRAVEL_RETENTION_DAYS
               value: {{ .Values.api.pastTravelRetentionDays | quote }}
             - name: STALE_PUSH_SUBSCRIPTION_DAYS
