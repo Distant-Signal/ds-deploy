@@ -85,8 +85,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
 
+      # Shared with the msrv job (same toolchain, same dependency builds:
+      # clippy-driver only wraps the workspace crates). See rust-test's
+      # cache step for why only main saves.
       - name: Cache cargo registry/target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: check-all-features
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo clippy (all features)
         run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
@@ -115,8 +121,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
 
+      # Shared with the clippy job; see there.
       - name: Cache cargo registry/target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: check-all-features
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo +1.88.0 check
         run: cargo +1.88.0 check --workspace --locked --all-features --all-targets
@@ -176,11 +186,88 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
-  # Custom: cargo build/test across the whole workspace, plus the
-  # DATABASE_URL-gated `#[ignore]`d integration tests in `api`, `aggregator`
-  # and `notifier` (confirmed by grepping every `#[ignore = "..."]` reason
-  # in the workspace to need only a live Postgres). `notifier` joined this
-  # list here: it already had several DATABASE_URL-gated `#[ignore]`d tests
+  # Custom: cargo build/test across the whole workspace (the tests that need
+  # no database). The DATABASE_URL/REDIS_URL-gated `#[ignore]`d tests run in
+  # `rust-db-test` below, in parallel: they are serial (--test-threads=1)
+  # and took ~10 of this job's ~19-23 minutes when both lived here.
+  rust-test:
+    name: cargo build & test
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@688313b0823df1393bcebb1b4add0438a6d36884 # 1.88.0
+
+      # trust-consumer's `rdkafka` dependency needs a real, dynamically
+      # linked libsasl2 to build+run (see docker/trust-consumer.Dockerfile,
+      # which installs the same packages for the same reason): its `sasl`
+      # feature pulls in the `sasl2-sys` crate, whose build script panics
+      # with "Unable to find libsasl2 on your system" without
+      # libsasl2-dev. `rdkafka` was deliberately left on dynamic linking
+      # (no `vendored`/`gssapi-vendored` feature enabled in
+      # crates/trust-consumer/Cargo.toml) rather than switched to a
+      # vendored/bundled libsasl2, so this needs to match the Dockerfile's
+      # system-package approach rather than diverge from it: this app does
+      # real SASL/SCRAM auth against a live Kafka broker in production (see
+      # charts/distant-signal's trustConsumer.kafka.saslMechanism), so CI
+      # should build against the same kind of libsasl2 production actually
+      # links, not a bundled stand-in that could behave differently.
+      # cmake/libssl-dev/pkg-config are for rdkafka's `cmake-build`/`ssl`
+      # features (vendored librdkafka C library), libcurl4-openssl-dev
+      # because librdkafka's vendored C source unconditionally `#include`s
+      # <curl/curl.h> at build time (not linked at runtime).
+      - name: Install rdkafka build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
+
+      # save-if: only main writes caches (every job's rust-cache step does
+      # the same). A PR's save could only ever be restored by later runs
+      # of that same PR, and the repo's 10 GB Actions cache was over its
+      # cap and evicting main's entries for them. PRs still restore main's.
+      - name: Cache cargo registry/target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo build --workspace
+        run: cargo build --workspace
+
+      - name: cargo test --workspace (ignored tests skipped)
+        run: cargo test --workspace
+
+      # Fast, no-secrets tier of the lines/*.toml external-identifier
+      # validator (crates/line-catalogue-validator): checks every `crs`,
+      # `tiploc` and `operators` value against the vendored snapshot in
+      # reference-data/crs-tiploc.csv and reference-data/toc-codes.csv --
+      # deterministic, no network access, no rate limits, runs in well
+      # under a second. Added as a step here rather than a separate job:
+      # it's already covered by this job's own `cargo build --workspace`
+      # above (no extra toolchain/deps needed) and is fast enough that a
+      # dedicated job with its own checkout/toolchain-install overhead
+      # would cost more than it saves. See
+      # crates/line-catalogue-validator/src/main.rs's module doc for the
+      # thorough, live-external-source counterpart to this check, which
+      # runs on its own weekly schedule instead (see
+      # .github/workflows/validate-line-catalogue.yml, currently disabled
+      # pending credentials).
+      - name: Validate lines/*.toml external identifiers (fast tier)
+        run: cargo run -p line-catalogue-validator
+
+  # Custom: the DATABASE_URL-gated `#[ignore]`d integration tests in `api`,
+  # `aggregator` and `notifier` (confirmed by grepping every
+  # `#[ignore = "..."]` reason in the workspace to need only a live
+  # Postgres), plus the Postgres/Redis-backed ones in `common`, `enricher`
+  # and `movement-feed`. Split out of `rust-test` (same commands, same
+  # services) so the two run in parallel; it has its own rust-cache entry
+  # (the default key includes the job id), since it builds only these
+  # packages' test binaries.
+  #
+  # `notifier` joined this list here: it already had several
+  # DATABASE_URL-gated `#[ignore]`d tests
   # of its own (`queries.rs`'s poll/push-subscription round trips,
   # `main.rs`'s `run_cycle` transition test) that CI simply never ran, plus
   # two more this plan's own Tasks 8/9 added --
@@ -210,8 +297,8 @@ jobs:
   # addition to the step above, because without the skips the LLM-gated
   # tests get pulled in and fail with "LLM_BASE_URL must be set for live
   # eval" (and the replay harness with "REPLAY_HISTORY_JSONL must be set").
-  rust-test:
-    name: cargo build & test
+  rust-db-test:
+    name: cargo test -- --ignored (DB/Redis-backed)
     runs-on: ubuntu-24.04
 
     services:
@@ -253,55 +340,21 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@688313b0823df1393bcebb1b4add0438a6d36884 # 1.88.0
 
-      # trust-consumer's `rdkafka` dependency needs a real, dynamically
-      # linked libsasl2 to build+run (see docker/trust-consumer.Dockerfile,
-      # which installs the same packages for the same reason): its `sasl`
-      # feature pulls in the `sasl2-sys` crate, whose build script panics
-      # with "Unable to find libsasl2 on your system" without
-      # libsasl2-dev. `rdkafka` was deliberately left on dynamic linking
-      # (no `vendored`/`gssapi-vendored` feature enabled in
-      # crates/trust-consumer/Cargo.toml) rather than switched to a
-      # vendored/bundled libsasl2, so this needs to match the Dockerfile's
-      # system-package approach rather than diverge from it: this app does
-      # real SASL/SCRAM auth against a live Kafka broker in production (see
-      # charts/distant-signal's trustConsumer.kafka.saslMechanism), so CI
-      # should build against the same kind of libsasl2 production actually
-      # links, not a bundled stand-in that could behave differently.
-      # cmake/libssl-dev/pkg-config are for rdkafka's `cmake-build`/`ssl`
-      # features (vendored librdkafka C library), libcurl4-openssl-dev
-      # because librdkafka's vendored C source unconditionally `#include`s
-      # <curl/curl.h> at build time (not linked at runtime).
+      # The same packages as rust-test (see there for each one's reason).
+      # Only libssl-dev/pkg-config (openssl-sys, via native-tls) matter to
+      # the packages tested here today; the rest keeps the two jobs' build
+      # environments identical, so a package gaining an rdkafka dependency
+      # can't fail only here.
       - name: Install rdkafka build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
 
+      # See rust-test's cache step for save-if.
       - name: Cache cargo registry/target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: cargo build --workspace
-        run: cargo build --workspace
-
-      - name: cargo test --workspace (ignored tests skipped)
-        run: cargo test --workspace
-
-      # Fast, no-secrets tier of the lines/*.toml external-identifier
-      # validator (crates/line-catalogue-validator): checks every `crs`,
-      # `tiploc` and `operators` value against the vendored snapshot in
-      # reference-data/crs-tiploc.csv and reference-data/toc-codes.csv --
-      # deterministic, no network access, no rate limits, runs in well
-      # under a second. Added as a step here rather than a separate job:
-      # it's already covered by this job's own `cargo build --workspace`
-      # above (no extra toolchain/deps needed) and is fast enough that a
-      # dedicated job with its own checkout/toolchain-install overhead
-      # would cost more than it saves. See
-      # crates/line-catalogue-validator/src/main.rs's module doc for the
-      # thorough, live-external-source counterpart to this check, which
-      # runs on its own weekly schedule instead (see
-      # .github/workflows/validate-line-catalogue.yml, currently disabled
-      # pending credentials).
-      - name: Validate lines/*.toml external identifiers (fast tier)
-        run: cargo run -p line-catalogue-validator
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
@@ -459,14 +512,17 @@ jobs:
   # say was deliberately deferred until e2e specs existed; they now do.
   #
   # Needs a real, reachable `api` (Postgres + Redis behind it) to render
-  # anything beyond a skeleton/error state -- extends `rust-test`'s own
+  # anything beyond a skeleton/error state -- extends `rust-db-test`'s own
   # `services:` pattern (same images, same health-check options) rather
   # than `docker-compose.yml`: that file needs dummy values for ~20+
   # unrelated service credentials (Kafka, RDM/TfL/LDBWS pollers, five
   # services' worth of internal-OAuth pairs) just to resolve config, and its
   # `api`/`frontend` images would rebuild from scratch in-container with no
-  # cache reuse, unlike this job's `Swatinem/rust-cache` (shared with
-  # `rust-test`) and `actions/setup-node`'s npm cache.
+  # cache reuse, unlike this job's `Swatinem/rust-cache` and
+  # `actions/setup-node`'s npm cache. (That rust-cache entry is this job's
+  # own: rust-cache's default key includes the job id, so it is not shared
+  # with `rust-test`'s, and it only holds `cargo build -p api`'s debug
+  # artifacts.)
   #
   # The `INTERNAL_OAUTH_*`/`SSO_*` values below are dummy-but-syntactically-
   # valid, matching local dev's own `.devdata/api.env` pattern: `api` only
@@ -479,9 +535,9 @@ jobs:
     runs-on: ubuntu-24.04
 
     # Same two services, same images, same health-check options as
-    # `rust-test` above -- copied rather than factored out into a reusable
-    # block, matching this file's existing per-job `services:` duplication
-    # (there is no third job that would justify extracting one).
+    # `rust-db-test` above -- copied rather than factored out into a
+    # reusable block, matching this file's existing per-job `services:`
+    # duplication.
     services:
       postgres:
         image: postgres:16
@@ -554,8 +610,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@688313b0823df1393bcebb1b4add0438a6d36884 # 1.88.0
 
+      # See rust-test's cache step for save-if.
       - name: Cache cargo registry/target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo build -p api
         run: cargo build -p api

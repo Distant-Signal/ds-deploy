@@ -135,6 +135,11 @@ jobs:
 
     strategy:
       fail-fast: false
+      # 19 legs at once took 19 of the account's 20 hosted runners, so CI's
+      # jobs queued behind them for 1.5-4 min on every push. 10 leaves
+      # room for ci.yml; with the registry build cache a leg is ~1-3 min,
+      # so the matrix still finishes in a few minutes.
+      max-parallel: 10
       matrix:
         include:
           - service: api
@@ -207,11 +212,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
 
-      # Skipped on pull_request: forked/external PRs don't get a
-      # packages:write GITHUB_TOKEN, and there's nothing to push anyway
-      # since this run only builds as a sanity check.
+      # On every event, PRs included: the build reads its layer cache from
+      # ${IMAGE_BASE}/buildcache (see the build step). A PR's token can
+      # still only read (a fork's gets no packages:write), and only pushes
+      # write the cache or images. The buildcache package must be public
+      # (set once after its first push) so fork PRs, whose GITHUB_TOKEN
+      # can't read this repo's private packages, still get cache hits;
+      # while it is private they build uncached, which is slower, not
+      # broken.
       - name: Log into ${{ env.REGISTRY }}
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -236,9 +245,24 @@ jobs:
             type=sha
 
       # Build on every trigger (including PRs, as a build-sanity check);
-      # push+cache only outside pull_request. Mirrors Piped's own
+      # push only outside pull_request. Mirrors Piped's own
       # build-container.yml push gating and Reinhard's hand-rolled
       # docker-publish.yml.
+      #
+      # Layer cache: a registry cache per service,
+      # ${IMAGE_BASE}/buildcache:<service>, not `type=gha`. The GHA cache
+      # is 10 GB per repo and these images' mode=max layers alone
+      # overflowed it (evicting rust-cache's entries too), and restoring
+      # them took longer than the build saved. Every run reads it; only
+      # pushes to main/master write it (`cache-to` is empty otherwise), so
+      # a PR can never poison the cache main builds from. The Rust
+      # Dockerfiles' cargo-chef stages (scripts/gen-rust-dockerfiles.py)
+      # make the dependency build one layer, so a source-only change
+      # imports it and compiles only the workspace crates; a Cargo.lock
+      # change rebuilds it. image-manifest=true + oci-mediatypes=true store
+      # the cache as an OCI image manifest rather than BuildKit's default
+      # cache index, which some registries refuse. Each write untags the
+      # previous cache manifest; prune-buildcache.yml deletes those weekly.
       - name: Build${{ github.event_name != 'pull_request' && ' and push' || '' }} image
         id: build
         uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
@@ -249,8 +273,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/buildcache:${{ matrix.service }}
+          cache-to: ${{ github.event_name == 'push' && format('type=registry,ref={0}/buildcache:{1},mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_BASE, matrix.service) || '' }}
 
       - name: Install cosign
         if: github.event_name != 'pull_request'
