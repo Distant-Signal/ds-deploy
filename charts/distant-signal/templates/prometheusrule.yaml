@@ -57,7 +57,8 @@ so that clause fired on every rollout.
 {{- $consumerApiOn := ($rule.consumerApiErrors).enabled }}
 {{- $cyclesOn := ($rule.cycleStalled).enabled }}
 {{- $api5xxOn := ($rule.api5xx).enabled }}
-{{- $healthOn := or $postgresDownOn $apiDbDownOn $consumerApiOn $cyclesOn $api5xxOn }}
+{{- $schemaGateOn := ($rule.schemaGateWaiting).enabled }}
+{{- $healthOn := or $postgresDownOn $apiDbDownOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
 {{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn }}
@@ -134,6 +135,33 @@ spec:
             summary: "api cannot query its database"
             description: "api's SELECT 1 probe has failed for {{ .for }}: ingest and most pages fail. See DistantSignalPostgresDown and api's log."
             runbook_url: {{ printf "%s#distantsignalapidatabasedown" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.schemaGateWaiting }}
+        {{- if .enabled }}
+        {{- /*
+        Ingest spec §14.2 (plan 1B.2): the schema gate
+        (crates/ds-store/src/schema.rs). The aggregator, enricher, notifier,
+        ingest-writer and (with api.migrateOnStartup false) the api wait at
+        startup until the database has the newest migration built into
+        their image and their role has its db-grants.yaml grants; the gauge
+        is 0 while one waits, 1 once it passes (absent where no gate runs).
+        A gate gives up after 15 minutes and the pod restarts into it
+        again. `min`: any pod of the component still waiting counts.
+        */}}
+        - alert: DistantSignalSchemaGateWaiting
+          expr: |
+            min by (namespace, app_kubernetes_io_component) (distant_signal_db_schema_ready{namespace="{{ $ns }}"}) == 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.app_kubernetes_io_component }}" }} is waiting for its database schema"
+            description: "Its schema gate has not passed for {{ .for }}: the migrations have not run, or its role lacks grants. It serves nothing until then."
+            runbook_url: {{ printf "%s#distantsignalschemagatewaiting" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.consumerApiErrors }}

@@ -82,6 +82,37 @@ Severity is critical because api is the only writer for every ingest path:
 while it cannot query, nothing lands, and the queues in front of it (Kafka
 retention, the Redis stream's MAXLEN) are finite.
 
+### DistantSignalSchemaGateWaiting
+
+A service has been waiting at its schema gate for `schemaGateWaiting.for`:
+`distant_signal_db_schema_ready` is 0 on some pod of the component named in
+the alert. At startup the aggregator, enricher, notifier and ingest-writer
+(and the api, when `api.migrateOnStartup` is false) wait, before their
+loops, readiness and listener, until the database has the newest migration
+built into their image and their own role holds every grant
+`charts/distant-signal/files/db-grants.yaml` gives it (spec §12.2). They
+poll every 5s and exit after 15 minutes, so the pod restarts into the gate
+again. Liveness stays up while they wait; readiness does not, so a rollout
+stalls on the new pods and the old ones keep serving.
+
+The service logs each poll as "schema gate: waiting for the schema" with
+`applied_migration`, `required_migration` and `missing` (the grants it
+lacks, as `PRIVILEGE on table[.column]`).
+
+1. `applied_migration` below `required_migration`: the migrations have not
+   run. With `migrate.job.enabled`, check the migrate hook Job
+   (`kubectl -n distant-signal get jobs` and its pod's log); a Helm upgrade that timed out before
+   the Job finished needs the HelmRelease `timeout` raised (about 20
+   minutes). Without the Job, the api migrates at startup: check the api's
+   log.
+2. `missing` is not empty: the role lacks grants. The chart's
+   postgres-setup Job applies `files/postgres-grants.sql`; check it ran
+   for this release, and that `db-grants.yaml` lists the table for this
+   service (a new table needs a grant there, `scripts/gen-db-grants.py`).
+3. `ds-migrate wait --role <role>` (in the api image), run with that
+   service's `DATABASE_URL`, makes the same check from outside the service
+   and exits once it passes.
+
 ### DistantSignalConsumerApiCallsFailing
 
 A TRUST consumer keeps failing its calls to api: at least

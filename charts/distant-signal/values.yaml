@@ -4228,6 +4228,15 @@ metrics:
       enabled: true
       for: 2m
       severity: critical
+    # DistantSignalSchemaGateWaiting (critical; ingest spec §14.2): a
+    # service's schema gate (distant_signal_db_schema_ready) has been 0 for
+    # `for`: the database lacks the newest migration in its image, or its
+    # role lacks a db-grants.yaml grant. One alert per component.
+    # Runbook: docs/alerts.md.
+    schemaGateWaiting:
+      enabled: true
+      for: 10m
+      severity: critical
     # DistantSignalConsumerApiCallsFailing: trust-consumer,
     # trust-backlog-consumer or full-coverage-consumer failed at least
     # minErrors calls to api (POSTs, the tracked-trains / population /

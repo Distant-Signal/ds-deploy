@@ -1,0 +1,33 @@
+# promtool unit tests for DistantSignalSchemaGateWaiting (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered). Default:
+# for 10m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # A new notifier pod waits at its gate from 2m while the old one, past
+  # its gate, keeps reporting 1: fires after `for: 10m`, for the notifier
+  # only. An aggregator that waits 5m and then passes (a rollout that
+  # migrates in time) does not fire; neither does another namespace's
+  # gauge.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_db_schema_ready{namespace="distant-signal", app_kubernetes_io_component="notifier", pod="distant-signal-notifier-old"}'
+        values: '1x20'
+      - series: 'distant_signal_db_schema_ready{namespace="distant-signal", app_kubernetes_io_component="notifier", pod="distant-signal-notifier-new"}'
+        values: '_x2 0x18'
+      - series: 'distant_signal_db_schema_ready{namespace="distant-signal", app_kubernetes_io_component="aggregator", pod="distant-signal-aggregator-new"}'
+        values: '0x5 1x15'
+      - series: 'distant_signal_db_schema_ready{namespace="elsewhere", app_kubernetes_io_component="notifier", pod="notifier"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: DistantSignalSchemaGateWaiting
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: DistantSignalSchemaGateWaiting
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal, app_kubernetes_io_component: notifier}
+            exp_annotations:
+              summary: notifier is waiting for its database schema
+              description: "Its schema gate has not passed for 10m: the migrations have not run, or its role lacks grants. It serves nothing until then."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschemagatewaiting
