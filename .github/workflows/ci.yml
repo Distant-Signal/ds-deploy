@@ -411,6 +411,11 @@ jobs:
       - name: cargo test -p common --test redis_acl -- --ignored (Redis ACL users)
         run: cargo test -p common --test redis_acl -- --ignored --test-threads=1
 
+      # Ingest architecture plan 1B.6: the ingest-writer's loop runner under
+      # Postgres advisory locks (crates/ingest-writer/tests/loop_locks.rs).
+      - name: cargo test -p ingest-writer -- --ignored (DB-backed tests)
+        run: cargo test -p ingest-writer -- --ignored --test-threads=1
+
       # Ingest architecture phase 3a: the stream runtime (produce/consume,
       # reclaim, dead letters, retries, MAXLEN, the producer policies while
       # Redis is down, and the poller-ldbws / ingest-writer ACL users).
@@ -434,6 +439,7 @@ jobs:
           cargo test -p api -p aggregator -p notifier -- --ignored --test-threads=1
           --skip corpus::db_tests --skip corpus_crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests
           && cargo test -p common --features postgres pg::tests -- --ignored --test-threads=1
+          && cargo test -p ingest-writer -- --ignored --test-threads=1
           && cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1'
 
       - name: DB-backed tests as the non-superuser app role (new cluster)
