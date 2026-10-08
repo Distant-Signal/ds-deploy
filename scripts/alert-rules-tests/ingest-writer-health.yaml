@@ -1,0 +1,195 @@
+# promtool unit tests for the ingest-writer health alerts and the backlog
+# alert's severities (see recorded-alerts.yaml's header for how rules.yaml
+# is rendered, with ingestWriter.enabled and ingestWriter.loops.enabled).
+# Defaults: loop stale over 1800s (ingest_dedup_prune 9000s, canary left
+# out) for 10m; loop unowned for 15m (ingest_dedup_prune 75m); apply
+# writes nothing over 15m for 5m (not ds:ingest:reference); source stale
+# per source for 10m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Nothing exists (the writer is off, or has none of these series yet):
+  # nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="distant-signal", app_kubernetes_io_component="ingest-writer", pod="w"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: DistantSignalWriterLoopStale, exp_alerts: []}
+      - {eval_time: 50m, alertname: DistantSignalWriterLoopUnowned, exp_alerts: []}
+      - {eval_time: 50m, alertname: DistantSignalIngestApplyWritesNothing, exp_alerts: []}
+      - {eval_time: 50m, alertname: DistantSignalIngestSourceStale, exp_alerts: []}
+
+  # Loop stale. schedule_match last succeeded at 0 (its gauge stays):
+  # over 1800s from 31m, firing from 41m. A standby replica's older gauge
+  # does not matter (max). The canary is left out; ingest_dedup_prune has
+  # 9000s.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_loop_last_success_timestamp_seconds{namespace="distant-signal", pod="w1", cycle="schedule_match"}'
+        values: '0x60'
+      - series: 'distant_signal_loop_last_success_timestamp_seconds{namespace="distant-signal", pod="w2", cycle="schedule_match"}'
+        values: '-500x60'
+      - series: 'distant_signal_loop_last_success_timestamp_seconds{namespace="distant-signal", pod="w1", cycle="reconciliation"}'
+        values: '0+60x60'
+      - series: 'distant_signal_loop_last_success_timestamp_seconds{namespace="distant-signal", pod="w1", cycle="canary"}'
+        values: '0x60'
+      - series: 'distant_signal_loop_last_success_timestamp_seconds{namespace="distant-signal", pod="w1", cycle="ingest_dedup_prune"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 38m
+        alertname: DistantSignalWriterLoopStale
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: DistantSignalWriterLoopStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cycle: schedule_match}
+            exp_annotations:
+              summary: "loop schedule_match: no successful run for 45m 0s"
+              description: "Over 1800s: its body fails every tick, or no process runs it. Check the ingest-writer's log for the loop."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalwriterloopstale
+
+  # The hourly prune, last run 2h 45m before the start: over its own 9000s.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_loop_last_success_timestamp_seconds{namespace="distant-signal", pod="w1", cycle="ingest_dedup_prune"}'
+        values: '-9900x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DistantSignalWriterLoopStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cycle: ingest_dedup_prune}
+            exp_annotations:
+              summary: "loop ingest_dedup_prune: no successful run for 3h 0m 0s"
+              description: "Over 9000s: its body fails every tick, or no process runs it. Check the ingest-writer's log for the loop."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalwriterloopstale
+
+  # Loop unowned. reconciliation: w1 held it until 5m, then nobody: fires
+  # 15m later. schedule_match: held by w2 (w1 standby). The prune unowned
+  # for 30m: within its 75m.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_loop_lock_held{namespace="distant-signal", pod="w1", loop="reconciliation"}'
+        values: '1x5 0x30'
+      - series: 'distant_signal_loop_lock_held{namespace="distant-signal", pod="w2", loop="reconciliation"}'
+        values: '0x35'
+      - series: 'distant_signal_loop_lock_held{namespace="distant-signal", pod="w1", loop="schedule_match"}'
+        values: '0x35'
+      - series: 'distant_signal_loop_lock_held{namespace="distant-signal", pod="w2", loop="schedule_match"}'
+        values: '1x35'
+      - series: 'distant_signal_loop_lock_held{namespace="distant-signal", pod="w1", loop="ingest_dedup_prune"}'
+        values: '0x35'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: DistantSignalWriterLoopUnowned
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: DistantSignalWriterLoopUnowned
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, loop: reconciliation}
+            exp_annotations:
+              summary: "no process holds loop reconciliation's lock"
+              description: "For 15m: the loop runs nowhere. Check the ingest-writer's lock session (pg_locks) and its log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalwriterloopunowned
+
+  # Apply writes nothing. station-samples: applied every minute, rows
+  # written until 10m, then none: 0 written over 15m from 25m, firing from
+  # 30m. tfl: written every apply. reference: nothing written (the daily
+  # TOC list unchanged) but excluded. A stream in shadow (outcome skipped,
+  # no row_writes) never fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples", schema="station-samples", outcome="applied"}'
+        values: '0+1x40'
+      - series: 'distant_signal_ingest_stream_row_writes_total{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples", schema="station-samples", outcome="written"}'
+        values: '0+10x10 100x30'
+      - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:tfl", schema="tfl-line-status", outcome="applied"}'
+        values: '0+1x40'
+      - series: 'distant_signal_ingest_stream_row_writes_total{namespace="distant-signal", pod="w", stream="ds:ingest:tfl", schema="tfl-line-status", outcome="written"}'
+        values: '0+20x40'
+      - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:reference", schema="tocs", outcome="applied"}'
+        values: '0+1x40'
+      - series: 'distant_signal_ingest_stream_row_writes_total{namespace="distant-signal", pod="w", stream="ds:ingest:reference", schema="tocs", outcome="written"}'
+        values: '0x40'
+      - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:full-coverage", schema="full-coverage-stats", outcome="skipped"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 27m
+        alertname: DistantSignalIngestApplyWritesNothing
+        exp_alerts: []
+      - eval_time: 32m
+        alertname: DistantSignalIngestApplyWritesNothing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:station-samples"}
+            exp_annotations:
+              summary: "ds:ingest:station-samples: entries applied, no row written"
+              description: "For 15m: every row unchanged or refused as older than the stored one. Check the producers' clocks."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestapplywritesnothing
+
+  # Source stale. incidents last landed at 0: over 900s from 16m, firing
+  # from 26m. tfl lands every minute. station-samples (stream-only) last
+  # landed at 0 and its stream is in apply: over 1800s from 31m, firing
+  # from 41m. full-coverage-stats is as old, but its stream is in shadow
+  # (after a rollback its row ages for good): silent. An unlisted source
+  # is not checked.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="incidents"}'
+        values: '0x60'
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="tfl"}'
+        values: '0+60x60'
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="station-samples"}'
+        values: '0x60'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples", mode="apply"}'
+        values: '1x60'
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="full-coverage-stats"}'
+        values: '0x60'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:full-coverage", mode="shadow"}'
+        values: '1x60'
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="something-else"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 24m
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, source: incidents}
+            exp_annotations:
+              summary: "incidents data last landed 45m 0s ago"
+              description: "Its ingest_freshness row is over 900s old: its producer is down or failing, or writes nowhere."
+              runbook_url: &source_runbook https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestsourcestale
+          - exp_labels: {severity: warning, namespace: distant-signal, source: station-samples}
+            exp_annotations:
+              summary: "station-samples data last landed 45m 0s ago"
+              description: "Its ingest_freshness row is over 1800s old: its producer is down or failing, or writes nowhere."
+              runbook_url: *source_runbook
+
+  # Backlog severities. station-samples at 400 of 720 (0.56): warning from
+  # 10m. At 16m it jumps to 648 (0.9): the critical pends, the warning
+  # keeps firing (no gap), and once the critical fires (26m) the warning is
+  # left out.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_lag{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples"}'
+        values: '400x15 648x30'
+      - series: 'distant_signal_ingest_stream_pending{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples"}'
+        values: '0x45'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DistantSignalIngestStreamBacklog
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:station-samples"}
+            exp_annotations:
+              summary: ds:ingest:station-samples is backing up in front of the ingest-writer
+              description: "An entry pending over 600s, or unread plus un-ACKed entries over 0.5 of MAXLEN. At the cap they are trimmed unapplied."
+              runbook_url: &backlog_runbook https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingeststreambacklog
+      - eval_time: 30m
+        alertname: DistantSignalIngestStreamBacklog
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal, stream: "ds:ingest:station-samples"}
+            exp_annotations:
+              summary: ds:ingest:station-samples is 90% of its MAXLEN behind
+              description: "Over 0.8 of MAXLEN: entries are about to be trimmed unapplied. Fix the ingest-writer."
+              runbook_url: *backlog_runbook

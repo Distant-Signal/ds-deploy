@@ -1,0 +1,111 @@
+# promtool unit tests for DistantSignalDbPoolAcquireTimeouts,
+# DistantSignalDirectWritesFailing, DistantSignalScheduleFeedMarkerStale
+# and DistantSignalIncidentSnapshotsMissing (see recorded-alerts.yaml's
+# header for how rules.yaml is rendered). Defaults: pool timeouts over 10m;
+# direct writes over 15m for 30m; feed marker over 108000s for 15m;
+# incident snapshots over 2h for 15m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Nothing exists: nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="distant-signal", app_kubernetes_io_component="api", pod="a"}'
+        values: '1x200'
+    alert_rule_test:
+      - {eval_time: 170m, alertname: DistantSignalDbPoolAcquireTimeouts, exp_alerts: []}
+      - {eval_time: 170m, alertname: DistantSignalDirectWritesFailing, exp_alerts: []}
+      - {eval_time: 170m, alertname: DistantSignalScheduleFeedMarkerStale, exp_alerts: []}
+      - {eval_time: 170m, alertname: DistantSignalIncidentSnapshotsMissing, exp_alerts: []}
+
+  # Pool timeouts: one at 6m fires at once (registered at 0) and clears
+  # 10m later; another component's zero series stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_db_pool_acquire_timeouts_total{namespace="distant-signal", pod="w", app_kubernetes_io_component="ingest-writer"}'
+        values: '0x5 1x20'
+      - series: 'distant_signal_db_pool_acquire_timeouts_total{namespace="distant-signal", pod="a", app_kubernetes_io_component="aggregator"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalDbPoolAcquireTimeouts
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DistantSignalDbPoolAcquireTimeouts
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, app_kubernetes_io_component: ingest-writer}
+            exp_annotations:
+              summary: "ingest-writer: 1 DB pool acquire timeouts"
+              description: "Over 10m, no free pool connection within acquire_timeout. Check its pool size, slow queries, max_connections."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaldbpoolacquiretimeouts
+      - eval_time: 20m
+        alertname: DistantSignalDbPoolAcquireTimeouts
+        exp_alerts: []
+
+  # Direct writes: trust-consumer's train_events fail every minute with no
+  # ok: firing 30m after the first failure. trust-backlog-consumer's fail
+  # now and then but also succeed. busy alone is not a failure.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_db_writes_total{namespace="distant-signal", pod="t", app_kubernetes_io_component="trust-consumer", operation="train_events", outcome="transient"}'
+        values: '0+1x60'
+      - series: 'distant_signal_db_writes_total{namespace="distant-signal", pod="t", app_kubernetes_io_component="trust-consumer", operation="train_events", outcome="ok"}'
+        values: '5x60'
+      - series: 'distant_signal_db_writes_total{namespace="distant-signal", pod="b", app_kubernetes_io_component="trust-backlog-consumer", operation="trust_event_backlog", outcome="timeout"}'
+        values: '0+1x60'
+      - series: 'distant_signal_db_writes_total{namespace="distant-signal", pod="b", app_kubernetes_io_component="trust-backlog-consumer", operation="trust_event_backlog", outcome="ok"}'
+        values: '0+2x60'
+      - series: 'distant_signal_db_writes_total{namespace="distant-signal", pod="r", app_kubernetes_io_component="schedule-reference", operation="publish_part", outcome="busy"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DistantSignalDirectWritesFailing
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DistantSignalDirectWritesFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, app_kubernetes_io_component: trust-consumer, operation: train_events}
+            exp_annotations:
+              summary: "every train_events write from trust-consumer fails"
+              description: "No direct write of it succeeded in 15m, for 30m. The runbook covers each failure class."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaldirectwritesfailing
+
+  # Feed marker: the last recorded delivery is 200000s old at the start
+  # (over 108000s): firing after `for: 15m`.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_last_ingest_delivered_at_seconds{namespace="distant-signal", pod="s"}'
+        values: '-200000x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalScheduleFeedMarkerStale
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalScheduleFeedMarkerStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: "the last recorded CIF delivery is 2d 7h 53m 20s old"
+              description: "Over 108000s: no delivery arrived, or its feed marker did not land. Check SFTP, the bucket and schedule-ingest."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulefeedmarkerstale
+
+  # Incident snapshots: one a minute (any outcome) until 30m, then none.
+  # Every count has left the 2h window by 150m: firing from 165m.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="applied"}'
+        values: '0+1x20 20x200'
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="too_soon"}'
+        values: '0x20 0+1x10 10x190'
+    alert_rule_test:
+      - eval_time: 155m
+        alertname: DistantSignalIncidentSnapshotsMissing
+        exp_alerts: []
+      - eval_time: 170m
+        alertname: DistantSignalIncidentSnapshotsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: "no incidents snapshot reached the database in 2h"
+              description: "Neither the api (http sink) nor poller-incidents (db sink) handled one. Check poller-incidents, its upstream and its sink."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalincidentsnapshotsmissing

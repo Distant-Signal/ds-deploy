@@ -64,7 +64,16 @@ so that clause fired on every rollout.
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
 {{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled ($rule.ingestShadowMismatch).enabled) }}
 {{- $outboxOn := and ($rule.trainEventOutbox).enabled .Values.ingestWriter.enabled }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn $outboxOn }}
+{{- $writerLoopsOn := and .Values.ingestWriter.enabled (.Values.ingestWriter.loops).enabled }}
+{{- $loopStaleOn := and ($rule.writerLoopStale).enabled $writerLoopsOn }}
+{{- $loopUnownedOn := and ($rule.writerLoopUnowned).enabled $writerLoopsOn }}
+{{- $writesNothingOn := and ($rule.ingestApplyWritesNothing).enabled .Values.ingestWriter.enabled }}
+{{- $sourceStaleOn := and ($rule.ingestSourceStale).enabled .Values.ingestWriter.enabled }}
+{{- $writerHealthOn := or $loopStaleOn $loopUnownedOn $writesNothingOn $sourceStaleOn }}
+{{- $poolTimeoutsOn := ($rule.dbPoolAcquireTimeouts).enabled }}
+{{- $directWritesOn := ($rule.directWritesFailing).enabled }}
+{{- $feedMarkerOn := and ($rule.scheduleFeedMarkerStale).enabled .Values.scheduleFeed.enabled }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -974,10 +983,22 @@ spec:
           labels:
             stream: {{ $stream | quote }}
         {{- end }}
-        - alert: DistantSignalIngestStreamBacklog
+        {{- /*
+        One alert name, two severities. The warning is left out for a
+        stream whose critical is firing (the critical's ALERTS series,
+        from the previous evaluation), so a stream past criticalRatio
+        notifies once, as critical; until the critical has fired (its
+        `for`), the warning stays.
+        */}}
+        - record: distant_signal:ingest_stream_backlog:warning
           expr: |
             distant_signal:ingest_stream_behind:ratio{namespace="{{ $ns }}"} > {{ .warningRatio }}
             or max by (namespace, stream) (distant_signal_ingest_stream_oldest_pending_age_seconds{namespace="{{ $ns }}"}) > {{ .oldestPendingAgeSecs }}
+        - alert: DistantSignalIngestStreamBacklog
+          expr: |
+            distant_signal:ingest_stream_backlog:warning{namespace="{{ $ns }}"}
+            unless on (namespace, stream)
+            ALERTS{alertname="DistantSignalIngestStreamBacklog", alertstate="firing", severity="critical", namespace="{{ $ns }}"}
           for: {{ .for }}
           labels:
             severity: warning
@@ -1204,6 +1225,258 @@ spec:
             runbook_url: {{ printf "%s#distantsignalingestshadowmismatch" $runbook | quote }}
         {{- end }}
         {{- end }}
+    {{- end }}
+    {{- if $writerHealthOn }}
+    - name: distant-signal.ingest-writer-health
+      rules:
+        {{- /*
+        The ingest rollout's exit checks (plan 1B, 3a-3c) as alerts. Every
+        series here comes from the ingest-writer (the loop runner, the
+        stream handlers, the ingest_freshness reader) and is a plain
+        comparison on it: no absent(), so nothing fires on a series that
+        does not exist.
+        */}}
+        {{- if $loopStaleOn }}
+        {{- with $rule.writerLoopStale }}
+        {{- /*
+        distant_signal_loop_last_success_timestamp_seconds{cycle} is the
+        process start until the loop's body succeeds, and a standby
+        replica's stays at its start: max by cycle is the newest success
+        anywhere (api or writer). excludeCycles: the canary (its failures
+        are the database's, which other alerts own). A loop whose interval
+        is near maxAgeSeconds gets its own age in maxAgeSecondsByCycle.
+        */}}
+        {{- $stale := . }}
+        {{- $skip := concat (.excludeCycles | default list) (keys (.maxAgeSecondsByCycle | default dict) | sortAlpha) }}
+        - alert: DistantSignalWriterLoopStale
+          expr: |
+            time() - max by (namespace, cycle) (distant_signal_loop_last_success_timestamp_seconds{namespace="{{ $ns }}"{{ if $skip }}, cycle!~"{{ join "|" $skip }}"{{ end }}}) > {{ .maxAgeSeconds }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "loop {{ "{{ $labels.cycle }}" }}: no successful run for {{ "{{ $value | humanizeDuration }}" }}"
+            description: "Over {{ .maxAgeSeconds }}s: its body fails every tick, or no process runs it. Check the ingest-writer's log for the loop."
+            runbook_url: {{ printf "%s#distantsignalwriterloopstale" $runbook | quote }}
+        {{- range $cycle, $maxAge := .maxAgeSecondsByCycle }}
+        - alert: DistantSignalWriterLoopStale
+          expr: |
+            time() - max by (namespace, cycle) (distant_signal_loop_last_success_timestamp_seconds{namespace="{{ $ns }}", cycle="{{ $cycle }}"}) > {{ $maxAge }}
+          for: {{ $stale.for }}
+          labels:
+            severity: {{ $stale.severity }}
+            cycle: {{ $cycle | quote }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "loop {{ "{{ $labels.cycle }}" }}: no successful run for {{ "{{ $value | humanizeDuration }}" }}"
+            description: "Over {{ $maxAge }}s: its body fails every tick, or no process runs it. Check the ingest-writer's log for the loop."
+            runbook_url: {{ printf "%s#distantsignalwriterloopstale" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- if $loopUnownedOn }}
+        {{- with $rule.writerLoopUnowned }}
+        {{- /*
+        distant_signal_loop_lock_held{loop} is 1 on the process holding the
+        loop's advisory lock, registered at 0 on every process that runs
+        the loop: the sum is 1 while exactly one runs it. A replica takes a
+        free lock only on its next tick, so after a rollout a loop is
+        unowned for up to its interval: forByLoop gives a slow loop (the
+        hourly dedup prune) a longer `for`.
+        */}}
+        {{- $unowned := . }}
+        {{- $slow := keys (.forByLoop | default dict) | sortAlpha }}
+        - alert: DistantSignalWriterLoopUnowned
+          expr: |
+            sum by (namespace, loop) (distant_signal_loop_lock_held{namespace="{{ $ns }}"{{ if $slow }}, loop!~"{{ join "|" $slow }}"{{ end }}}) < 1
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no process holds loop {{ "{{ $labels.loop }}" }}'s lock"
+            description: "For {{ .for }}: the loop runs nowhere. Check the ingest-writer's lock session (pg_locks) and its log."
+            runbook_url: {{ printf "%s#distantsignalwriterloopunowned" $runbook | quote }}
+        {{- range $loop, $for := .forByLoop }}
+        - alert: DistantSignalWriterLoopUnowned
+          expr: |
+            sum by (namespace, loop) (distant_signal_loop_lock_held{namespace="{{ $ns }}", loop="{{ $loop }}"}) < 1
+          for: {{ $for }}
+          labels:
+            severity: {{ $unowned.severity }}
+            loop: {{ $loop | quote }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no process holds loop {{ "{{ $labels.loop }}" }}'s lock"
+            description: "For {{ $for }}: the loop runs nowhere. Check the ingest-writer's lock session (pg_locks) and its log."
+            runbook_url: {{ printf "%s#distantsignalwriterloopunowned" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- if $writesNothingOn }}
+        {{- with $rule.ingestApplyWritesNothing }}
+        {{- /*
+        Entries applied (consumed_total outcome applied, or rejected: applied
+        with some rows dead-lettered) while the handlers wrote no row
+        (row_writes_total{outcome="written"}): every row unchanged or
+        refused by the ordering guard as older (a producer clock behind,
+        a replay). Both per stream. row_writes_total exists only on a
+        handler that records it, so a stream without it never fires.
+        excludeStreams: streams whose snapshots legitimately change nothing
+        (the daily TOC list).
+        */}}
+        - record: distant_signal:ingest_stream_applied_entries:increase
+          expr: |
+            sum by (namespace, stream) (increase(distant_signal_ingest_stream_consumed_total{namespace="{{ $ns }}", outcome=~"applied|rejected"}[{{ .window }}]))
+        - record: distant_signal:ingest_stream_rows_written:increase
+          expr: |
+            sum by (namespace, stream) (increase(distant_signal_ingest_stream_row_writes_total{namespace="{{ $ns }}", outcome="written"}[{{ .window }}]))
+        - alert: DistantSignalIngestApplyWritesNothing
+          expr: |
+            distant_signal:ingest_stream_rows_written:increase{namespace="{{ $ns }}"{{ with .excludeStreams }}, stream!~"{{ join "|" . }}"{{ end }}} == 0
+            and on (namespace, stream)
+            distant_signal:ingest_stream_applied_entries:increase{namespace="{{ $ns }}"} > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.stream }}" }}: entries applied, no row written"
+            description: "For {{ .window }}: every row unchanged or refused as older than the stored one. Check the producers' clocks."
+            runbook_url: {{ printf "%s#distantsignalingestapplywritesnothing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if $sourceStaleOn }}
+        {{- with $rule.ingestSourceStale }}
+        {{- /*
+        distant_signal_ingest_freshness_timestamp_seconds{source}: the
+        writer reads ingest_freshness every 60s (every replica, hence max).
+        A source with no row has no series. One alert per source in
+        maxAgeSeconds; a source in whileStreamApplies is checked only
+        while the writer applies that stream (its row is written only on
+        the stream path, so after a rollback to http it ages for good).
+        */}}
+        {{- $stale := . }}
+        - record: distant_signal:ingest_freshness_age:seconds
+          expr: |
+            time() - max by (namespace, source) (distant_signal_ingest_freshness_timestamp_seconds{namespace="{{ $ns }}"})
+        - record: distant_signal:ingest_stream_applying:info
+          expr: |
+            max by (namespace, stream) (distant_signal_ingest_stream_mode_info{namespace="{{ $ns }}", mode="apply"}) == 1
+        {{- range $source, $maxAge := .maxAgeSeconds }}
+        - alert: DistantSignalIngestSourceStale
+          expr: |
+            distant_signal:ingest_freshness_age:seconds{namespace="{{ $ns }}", source="{{ $source }}"} > {{ $maxAge }}
+            {{- with get ($stale.whileStreamApplies | default dict) $source }}
+            and on (namespace) distant_signal:ingest_stream_applying:info{namespace="{{ $ns }}", stream="{{ . }}"}
+            {{- end }}
+          for: {{ $stale.for }}
+          labels:
+            severity: {{ $stale.severity }}
+            source: {{ $source | quote }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.source }}" }} data last landed {{ "{{ $value | humanizeDuration }}" }} ago"
+            description: "Its ingest_freshness row is over {{ $maxAge }}s old: its producer is down or failing, or writes nowhere."
+            runbook_url: {{ printf "%s#distantsignalingestsourcestale" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+    {{- end }}
+    {{- if or $poolTimeoutsOn $directWritesOn }}
+    - name: distant-signal.database
+      rules:
+        {{- if $poolTimeoutsOn }}
+        {{- with $rule.dbPoolAcquireTimeouts }}
+        {{- /*
+        ds_store::pool counts an acquire or begin that hit acquire_timeout
+        (registered at 0 by every service whose pool records db_pool_*).
+        Queries run straight on a pool are not timed, so this undercounts.
+        */}}
+        - alert: DistantSignalDbPoolAcquireTimeouts
+          expr: |
+            sum by (namespace, app_kubernetes_io_component) (increase(distant_signal_db_pool_acquire_timeouts_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.app_kubernetes_io_component }}" }}: {{ "{{ $value | humanize }}" }} DB pool acquire timeouts"
+            description: "Over {{ .window }}, no free pool connection within acquire_timeout. Check its pool size, slow queries, max_connections."
+            runbook_url: {{ printf "%s#distantsignaldbpoolacquiretimeouts" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if $directWritesOn }}
+        {{- with $rule.directWritesFailing }}
+        {{- /*
+        ds_store::writes: a direct writer (INGEST_SINK=db) counts each
+        write in db_writes_total{operation, outcome}, every outcome
+        registered at 0. Failing: timeouts, transient errors or rejected
+        data, and no `ok`, over `window`, per component and operation.
+        `busy` (another publisher holds the work) is not a failure.
+        */}}
+        {{- $by := "namespace, app_kubernetes_io_component, operation" }}
+        - record: distant_signal:db_writes_failing:increase
+          expr: |
+            sum by ({{ $by }}) (increase(distant_signal_db_writes_total{namespace="{{ $ns }}", outcome=~"timeout|transient|rejected"}[{{ .window }}])) > 0
+            and on ({{ $by }})
+            sum by ({{ $by }}) (increase(distant_signal_db_writes_total{namespace="{{ $ns }}", outcome="ok"}[{{ .window }}])) == 0
+        - alert: DistantSignalDirectWritesFailing
+          expr: |
+            distant_signal:db_writes_failing:increase{namespace="{{ $ns }}"}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "every {{ "{{ $labels.operation }}" }} write from {{ "{{ $labels.app_kubernetes_io_component }}" }} fails"
+            description: "No direct write of it succeeded in {{ .window }}, for {{ .for }}. The runbook covers each failure class."
+            runbook_url: {{ printf "%s#distantsignaldirectwritesfailing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+    {{- end }}
+    {{- if $feedMarkerOn }}
+    {{- with $rule.scheduleFeedMarkerStale }}
+    - name: distant-signal.schedule-feed-marker
+      rules:
+        {{- /*
+        schedule-ingest's distant_signal_schedule_feed_last_ingest_delivered_at_seconds:
+        the delivery time of the last CIF delivery whose record (the feed
+        marker) landed, through api or (INGEST_SINK=db) directly. Set on
+        each recorded delivery and when a restart recognises one, so it is
+        absent (and silent) until the first.
+        */}}
+        - alert: DistantSignalScheduleFeedMarkerStale
+          expr: |
+            time() - max by (namespace) (distant_signal_schedule_feed_last_ingest_delivered_at_seconds{namespace="{{ $ns }}"}) > {{ .maxAgeSeconds }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "the last recorded CIF delivery is {{ "{{ $value | humanizeDuration }}" }} old"
+            description: "Over {{ .maxAgeSeconds }}s: no delivery arrived, or its feed marker did not land. Check SFTP, the bucket and schedule-ingest."
+            runbook_url: {{ printf "%s#distantsignalschedulefeedmarkerstale" $runbook | quote }}
+    {{- end }}
     {{- end }}
     {{- if $signupSpikeOn }}
     {{- with $rule.userSignupSpike }}
@@ -1713,7 +1986,8 @@ scoping as above.
 {{- $ldbwsOn := and ($rule.ldbwsStalestStation).enabled (.Values.pollers.ldbws).enabled }}
 {{- $ldbwsInvalidCrsOn := and ($rule.ldbwsInvalidCrs).enabled (.Values.pollers.ldbws).enabled }}
 {{- $incidentRemovalOn := and ($rule.incidentRemovalStalled).enabled (.Values.pollers.incidents).enabled }}
-{{- if or $pollerFailuresOn $pollerStaleOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn }}
+{{- $incidentSnapshotsOn := and ($rule.incidentSnapshotsMissing).enabled (.Values.pollers.incidents).enabled }}
+{{- if or $pollerFailuresOn $pollerStaleOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn $incidentSnapshotsOn }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -1881,6 +2155,33 @@ spec:
             summary: "no incident snapshot fit to infer ended incidents in {{ .window }}"
             description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents and api logs."
             runbook_url: {{ printf "%s#distantsignalincidentremovalstalled" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.incidentSnapshotsMissing }}
+        {{- if $incidentSnapshotsOn }}
+        {{- /*
+        Every incidents snapshot that reaches the database counts once in
+        api_incident_removal_inference_total{outcome} (each outcome,
+        too_soon and no_baseline included): in the api under
+        pollers.incidents.ingest.sink http, in poller-incidents under db.
+        Both register every outcome at 0 at startup (the api always, with
+        metrics on), so with the poller on the sum is a real 0 when no
+        snapshot lands; with neither process scraped there is no series
+        and nothing fires.
+        */}}
+        - alert: DistantSignalIncidentSnapshotsMissing
+          expr: |
+            sum by (namespace) (increase(distant_signal_api_incident_removal_inference_total{namespace="{{ $ns }}"}[{{ .window }}])) == 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no incidents snapshot reached the database in {{ .window }}"
+            description: "Neither the api (http sink) nor poller-incidents (db sink) handled one. Check poller-incidents, its upstream and its sink."
+            runbook_url: {{ printf "%s#distantsignalincidentsnapshotsmissing" $runbook | quote }}
         {{- end }}
         {{- end }}
 {{- end }}

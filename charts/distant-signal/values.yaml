@@ -4700,7 +4700,8 @@ metrics:
     # DistantSignalIngestStreamBacklog: a stream's oldest pending entry is
     # older than oldestPendingAgeSecs, or its unread plus un-ACKed entries
     # are over warningRatio of its MAXLEN (warning) or over criticalRatio
-    # (critical), for `for`. `maxlen` is each stream's MAXLEN ~ cap: keep
+    # (critical), for `for`. A stream whose critical is firing does not also
+    # get the warning. `maxlen` is each stream's MAXLEN ~ cap: keep
     # it in step with crates/ingest-stream/src/budget.rs (spec §7.1).
     ingestStreamBacklog:
       enabled: true
@@ -4804,6 +4805,91 @@ metrics:
       enabled: true
       window: 1h
       ratio: 0.02
+      for: 30m
+      severity: warning
+    # The ingest-writer's health (`distant-signal.ingest-writer-health`),
+    # all rendered only with ingestWriter.enabled and silent on an absent
+    # series. Runbooks: docs/alerts.md.
+    #
+    # DistantSignalWriterLoopStale: a loop's newest successful run
+    # (distant_signal_loop_last_success_timestamp_seconds{cycle}, the
+    # process start until one succeeds; api or writer) is older than
+    # maxAgeSeconds, for `for`. excludeCycles are left out (the canary);
+    # maxAgeSecondsByCycle gives a loop with a long interval its own age
+    # (the hourly ingest_dedup_prune: 2.5 intervals). Needs
+    # ingestWriter.loops.enabled too.
+    writerLoopStale:
+      enabled: true
+      maxAgeSeconds: 1800
+      excludeCycles: [canary]
+      maxAgeSecondsByCycle:
+        ingest_dedup_prune: 9000
+      for: 10m
+      severity: warning
+    # DistantSignalWriterLoopUnowned: no process holds a loop's advisory
+    # lock (sum by loop of distant_signal_loop_lock_held < 1) for `for`. A
+    # replica takes a free lock only on its next tick, so after a rollout a
+    # loop is unowned for up to its interval: forByLoop gives a slow loop a
+    # longer `for`. Needs ingestWriter.loops.enabled too.
+    writerLoopUnowned:
+      enabled: true
+      for: 15m
+      forByLoop:
+        ingest_dedup_prune: 75m
+      severity: warning
+    # DistantSignalIngestApplyWritesNothing: over `window`, the writer
+    # applied entries of a stream but its handlers wrote no row (every row
+    # unchanged, or refused by the ordering guard as older), for `for`.
+    # excludeStreams: streams whose snapshots legitimately change nothing
+    # (the daily TOC list on ds:ingest:reference).
+    ingestApplyWritesNothing:
+      enabled: true
+      window: 15m
+      excludeStreams: ["ds:ingest:reference"]
+      for: 5m
+      severity: warning
+    # DistantSignalIngestSourceStale: an ingest_freshness row
+    # (distant_signal_ingest_freshness_timestamp_seconds{source}, read by
+    # the writer every 60s) is older than its maxAgeSeconds, for `for`. One
+    # alert per listed source; an unlisted source is not checked. A source
+    # in whileStreamApplies is checked only while the writer applies that
+    # stream (ingestWriter.streams.*: apply): only the stream path writes
+    # its row, so after a rollback to http it would age for good. The http
+    # paths today: incidents and tfl every 5 min, stations and tocs daily.
+    ingestSourceStale:
+      enabled: true
+      maxAgeSeconds:
+        incidents: 900
+        tfl: 900
+        stations: 172800
+        tocs: 172800
+        station-samples: 1800
+        full-coverage-stats: 1800
+        full-coverage-window-stats: 1800
+        station-full-coverage-samples: 1800
+      whileStreamApplies:
+        station-samples: "ds:ingest:station-samples"
+        full-coverage-stats: "ds:ingest:full-coverage"
+        full-coverage-window-stats: "ds:ingest:full-coverage"
+        station-full-coverage-samples: "ds:ingest:full-coverage"
+      for: 10m
+      severity: warning
+    # DistantSignalDbPoolAcquireTimeouts: a component's Postgres pool timed
+    # out handing out a connection (distant_signal_db_pool_acquire_timeouts_total,
+    # ds_store::pool) within `window`. Counted only for acquires through
+    # ds_store::pool's wrappers. Runbook: docs/alerts.md.
+    dbPoolAcquireTimeouts:
+      enabled: true
+      window: 10m
+      for: 0m
+      severity: warning
+    # DistantSignalDirectWritesFailing: a direct writer's (INGEST_SINK=db)
+    # writes of one operation all failed over `window`
+    # (distant_signal_db_writes_total: timeout, transient or rejected, and
+    # no ok), for `for`. Runbook: docs/alerts.md.
+    directWritesFailing:
+      enabled: true
+      window: 15m
       for: 30m
       severity: warning
     # DistantSignalApiDatabaseDown (critical): api's own `SELECT 1` probe
@@ -5095,6 +5181,15 @@ metrics:
       window: 2h
       for: 15m
       severity: warning
+    # DistantSignalIncidentSnapshotsMissing: no incidents snapshot reached
+    # the database within `window` (distant_signal_api_incident_removal_inference_total,
+    # every outcome: counted by api under the http sink, by poller-incidents
+    # under db), for `for`. Only when pollers.incidents.enabled.
+    incidentSnapshotsMissing:
+      enabled: true
+      window: 2h
+      for: 15m
+      severity: warning
     # DistantSignalNotifierPushDropped: at least minDrops decided push
     # notifications ended undelivered (queue full, every endpoint failed,
     # or the job errored) within `window`, per reason. Notifier delivery is
@@ -5181,6 +5276,17 @@ metrics:
       mismatchWindow: 6h
       rejectedWindow: 6h
       populationMissingFor: 15m
+      severity: warning
+    # DistantSignalScheduleFeedMarkerStale: the newest CIF delivery whose
+    # record (feed marker) schedule-ingest landed
+    # (distant_signal_schedule_feed_last_ingest_delivered_at_seconds) is
+    # older than maxAgeSeconds (30h: one late daily delivery), for `for`.
+    # Absent, so silent, until schedule-ingest records or recognises its
+    # first delivery. Only with scheduleFeed.enabled.
+    scheduleFeedMarkerStale:
+      enabled: true
+      maxAgeSeconds: 108000
+      for: 15m
       severity: warning
     # -- The schedulefeed SFTP server's own alerts
     # (distant-signal.schedule-sftp), from SFTPGo's telemetry counters.

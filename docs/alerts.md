@@ -601,6 +601,133 @@ reopening, and the queued trains' movements do not land. Critical.
    http`: the api then applies everything inline again; the rows already
    queued are applied once the loop runs.
 
+### DistantSignalWriterLoopStale
+
+A background loop's newest successful run
+(`distant_signal_loop_last_success_timestamp_seconds{cycle}`, max over the
+api and writer replicas) is older than `writerLoopStale.maxAgeSeconds`
+(1800 s; `maxAgeSecondsByCycle` for the hourly `ingest_dedup_prune`), for
+`for`. The gauge is the process start until the loop's body succeeds, so a
+loop that fails every tick ages from the start. The canary is left out
+(`excludeCycles`): its failures are the database's. Renders with
+`ingestWriter.loops.enabled`.
+
+1. `distant_signal_loop_ticks_total{loop="<cycle>"}` by `outcome`: `failed`
+   (the body errors: the writer's log names the loop and the error),
+   `skipped` (another process holds the lock: is that process healthy?) or
+   `lock_error` (the lock session cannot reach Postgres).
+2. No ticks at all: [DistantSignalWriterLoopUnowned](#distantsignalwriterloopunowned)
+   or [DistantSignalIngestWriterDown](#distantsignalingestwriterdown).
+3. A sweep that fails on a data error keeps failing on the same rows: fix
+   the row (the log has its key) rather than restarting.
+
+### DistantSignalWriterLoopUnowned
+
+No process holds a loop's advisory lock
+(`sum by (loop) (distant_signal_loop_lock_held) < 1`) for
+`writerLoopUnowned.for` (15m; `forByLoop` for the hourly
+`ingest_dedup_prune`, which a new replica only takes on its next hourly
+tick). The gauge is 1 on the holder and registered at 0 on every process
+that runs the loop, so the loop is running nowhere. Renders with
+`ingestWriter.loops.enabled`.
+
+1. The writer's lock session: `SELECT pid, application_name, state FROM
+   pg_stat_activity WHERE application_name =
+   'distant-signal-ingest-writer-locks';` and `SELECT * FROM pg_locks WHERE
+   locktype = 'advisory';`. A session another process opened and left
+   idle-in-transaction can hold the lock without running the loop.
+2. `distant_signal_loop_ticks_total{loop, outcome="lock_error"}` rising:
+   the lock session cannot reach Postgres.
+3. Every replica is skipping (`outcome="skipped"`) while none holds: a
+   stale session outside the writer holds the key; terminate it
+   (`pg_terminate_backend(pid)`).
+
+### DistantSignalIngestApplyWritesNothing
+
+Over `ingestApplyWritesNothing.window` (15m) the writer applied entries of a
+stream (`ingest_stream_consumed_total{outcome=~"applied|rejected"}`) but its
+handlers wrote no row (`ingest_stream_row_writes_total{outcome="written"}`
+did not move), for `for`. Every row was unchanged or refused by the ordering
+guard as older than the stored one, so the stream is acknowledged but
+Postgres is not changing. `ds:ingest:reference` (the daily TOC list, which
+usually changes nothing) is excluded (`excludeStreams`). A stream whose
+handlers do not record `row_writes` never fires.
+
+1. `ingest_stream_row_writes_total{stream, outcome="skipped"}` rising: the
+   guard refuses the rows. A producer's clock behind the stored rows' times
+   (compare `produced_at` in `XREVRANGE <stream> + - COUNT 1` with the
+   rows' `polled_at` / `computed_at`), or a replay of old entries (a
+   re-injection, a restored stream).
+2. The rows are identical every time: the producer is sending a frozen
+   snapshot (its upstream stopped changing); check the poller's log.
+3. `INGEST_WRITER_CHANGED_ROWS_ONLY` only affects
+   `station-full-coverage-samples`; the stream's other schemas still write.
+
+### DistantSignalIngestSourceStale
+
+An `ingest_freshness` row (`distant_signal_ingest_freshness_timestamp_seconds{source}`,
+which the writer reads every 60 s; recorded as
+`distant_signal:ingest_freshness_age:seconds`) is older than its
+`ingestSourceStale.maxAgeSeconds` entry, for `for`. Whichever path records
+it (an api route, a direct writer, a stream handler), the source's data has
+not landed for that long. Defaults: `incidents` and `tfl` 15 min (polled
+every 5 min), `stations` and `tocs` 2 days (daily), the stream-only sources
+(`station-samples`, `full-coverage-*`, `station-full-coverage-samples`) 30
+min, and those only while the writer applies their stream
+(`whileStreamApplies`): their rows are written only on the stream path.
+
+1. The source's poller: [DistantSignalPollerFailing](#distantsignalpollerfailing)
+   / [DistantSignalPollerStale](#distantsignalpollerstale), its log.
+2. Its sink: under `http`, api's ingest route (5xx, 401); under `db`, the
+   poller's `db_writes_total`; under `stream`, the stream's alerts
+   ([DistantSignalIngestStreamStalled](#distantsignalingeststreamstalled)).
+3. A stream source whose stream was rolled back to `http`: its row stops
+   moving for good; drop its `whileStreamApplies` entry only if the stream
+   stays in `apply`.
+
+## database
+
+### DistantSignalDbPoolAcquireTimeouts
+
+A component's Postgres pool timed out handing out a connection within
+`dbPoolAcquireTimeouts.window` (10m)
+(`distant_signal_db_pool_acquire_timeouts_total`, `ds_store::pool`'s
+`acquire`/`begin`; registered at 0 by every service whose pool records
+`db_pool_*`). Every connection was in use for the whole `acquire_timeout`
+(5 s by default), so that request, write or loop tick failed.
+
+1. `distant_signal_db_pool_connections{state="in_use"}` against
+   `distant_signal_db_pool_max_connections` for the component: pinned at the
+   maximum means slow queries or a leak; `pg_stat_activity` filtered on its
+   `application_name` shows what they run.
+2. Long-running statements (a sweep, a publish) holding connections: the
+   component's log, `pg_stat_activity.query_start`.
+3. Raising the pool (`*.database.maxConnections`) needs its role's
+   connection limit and Postgres's `max_connections` to allow it (spec §6.6).
+
+### DistantSignalDirectWritesFailing
+
+A direct writer (`INGEST_SINK=db`) has failed every write of one operation
+over `directWritesFailing.window` (15m), for `for` (30m):
+`distant_signal_db_writes_total{operation, outcome}` rose for `timeout`,
+`transient` or `rejected` and not for `ok`. `busy` (another publisher holds
+the work) is not a failure. Recorded as
+`distant_signal:db_writes_failing:increase`.
+
+- `timeout`: a statement hit its `statement_timeout`; the batch is too big
+  or the database too slow. Check `pg_stat_activity` and the component's
+  `db_write_seconds`.
+- `transient`: lost connections, pool timeouts, deadlocks. See
+  [DistantSignalPostgresDown](#distantsignalpostgresdown) and
+  [DistantSignalDbPoolAcquireTimeouts](#distantsignaldbpoolacquiretimeouts).
+- `rejected`: the data itself is refused (SQLSTATE 22/23), and retrying
+  the same data fails the same way. The log has the constraint; a
+  `permission denied` (42501) counts as transient and means a missing grant
+  (`files/db-grants.yaml`).
+
+If it cannot be fixed quickly, set the component's `ingest.sink` back to
+`http`: the api writes again.
+
 ## ingest streams
 
 The `ds:ingest:*` Redis streams (ingest spec §7, §14.2; plan 3a.4): the
@@ -627,7 +754,10 @@ entries are over `warningRatio` (0.5) of its `MAXLEN ~` cap (warning) or
 over `criticalRatio` (0.8) (critical), for `for`. Recorded as
 `distant_signal:ingest_stream_behind:ratio`, with each stream's cap from
 `ingestStreamBacklog.maxlen` (keep in step with
-`crates/ingest-stream/src/budget.rs`).
+`crates/ingest-stream/src/budget.rs`). One alert name, two severities: the
+warning (recorded as `distant_signal:ingest_stream_backlog:warning`) is
+left out for a stream whose critical is firing (its `ALERTS` series), so a
+stream past `criticalRatio` reports as critical only.
 
 At the cap, the oldest entries are trimmed before they are applied
 (`ingest_stream_consumed_total{outcome="trimmed"}` counts the pending ones).
@@ -887,6 +1017,26 @@ delivery failed to provide it. Check
 [DistantSignalScheduleReferencePublishStale](#distantsignalschedulereferencepublishstale)
 and the consumer's population reload errors.
 
+### DistantSignalScheduleFeedMarkerStale
+
+The newest CIF delivery whose record (the feed marker,
+`schedule_feed_ingests`) schedule-ingest landed is older than
+`scheduleFeedMarkerStale.maxAgeSeconds` (30h: one late daily delivery), for
+`for` (`time() - distant_signal_schedule_feed_last_ingest_delivered_at_seconds`).
+The gauge is set on each recorded delivery and when a restart recognises one
+already recorded, so it is absent (and silent) until the first. Unlike
+[DistantSignalScheduleReferencePublishStale](#distantsignalschedulereferencepublishstale),
+this stops at schedule-ingest: a delivery that arrived but whose marker did
+not land fires here, not only there.
+
+1. Did a delivery arrive? [DistantSignalSftpNoUpload](#distantsignalsftpnoupload),
+   [DistantSignalScheduleBucketNoNewObject](#distantsignalschedulebucketnonewobject).
+2. schedule-ingest's log: a rejected zip
+   ([DistantSignalScheduleFeedZipRejected](#distantsignalschedulefeedziprejected)),
+   or a marker write that failed (`http`: api's answer; `db`: its
+   `db_writes_total` and grants).
+3. `SELECT max(delivered_at) FROM schedule_feed_ingests;`
+
 ## schedule SFTP
 
 These read SFTPGo's own telemetry (`scheduleFeed.sftp.telemetry`), so they
@@ -1062,6 +1212,27 @@ fix. See
 Nothing is lost while it fires: once a snapshot passes the guard, rows that
 are still missing are counted again, and two complete polls later they show
 as ended.
+
+### DistantSignalIncidentSnapshotsMissing
+
+No incidents snapshot reached the database within
+`incidentSnapshotsMissing.window` (2h): the sum of
+`api_incident_removal_inference_total` over every outcome did not move, for
+`for`. Each snapshot counts once there, whatever the inference decided:
+in the api under `pollers.incidents.ingest.sink: http`, in poller-incidents
+under `db`. Both register the series at 0 at startup, so this is a real
+0, not a missing series. Incidents shown as active may be stale, and none
+leaving the feed are marked ended.
+
+1. [DistantSignalPollerFailing](#distantsignalpollerfailing) /
+   [DistantSignalPollerStale](#distantsignalpollerstale) for `incidents`:
+   the poller's fetch or its delivery is failing (its log).
+2. `http`: api's `/private/incidents` answers (5xx, 401, 413). `db`: the
+   poller's `db_writes_total` and `permission denied` in its log.
+3. `SELECT fetched_at FROM ingest_freshness WHERE source = 'incidents';`
+   should be within 5 minutes.
+
+## pgBackRest
 
 ## pgBackRest
 
