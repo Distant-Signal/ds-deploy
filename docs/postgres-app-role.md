@@ -294,6 +294,22 @@ narrows the roles from.
   (`perService.api.maxConnections`). Production's peak is 6 (2026-10-06).
   Its migrations still connect as the owner.
 
+### The first narrow role: `distant_signal_schedule_reference` (phase 2a)
+
+schedule-reference's db sink (`scheduleFeed.reference.ingest.sink: db`)
+connects as `distant_signal_schedule_reference` with
+`perService.schedule_reference.connect`. Its status in `db-grants.yaml` is
+`narrow` from the start: **not** a member of `distant_signal_app`, only
+`schema_gate`, and exactly its YAML grants (spec §6.4, plus `U` on
+`schedule_reference_publishes` for the marker's `ON CONFLICT ... DO UPDATE`
+and `S` on `corpus_tiploc_crs` for the summaries' CORPUS fallback), with
+connection limit pool 3 + 1 = 4. The setup Job creates it whenever
+`perService.enabled`; without `perService.schedule_reference.existingSecret`
+its password, `postgres-schedule-reference-password`, is generated into the
+chart's Secret. Nothing connects as it until both switches are on, and
+`connect` refuses to render without the db sink. CI runs schedule-reference's
+DB suite as this role.
+
 ### pg_stat_statements
 
 Checked in production (read-only, 2026-10-06): the extension is installed

@@ -107,7 +107,11 @@ roles:
     used_by: ingest-writer
   schedule_reference:
     name: distant_signal_schedule_reference
-    status: planned
+    # Narrow from the start (plan 2a.6): nothing connects as it until
+    # schedule-reference's db sink (scheduleFeed.reference.ingest.sink: db
+    # with perService.schedule_reference.connect), and the flip should run
+    # on the final grants.
+    status: narrow
     phase: 2a
     groups: [schema_gate]
     connection_limit: 4
@@ -213,7 +217,8 @@ tables:
   # The ingest-writer's stream idempotency keys (plan 3a.3, spec §7.4):
   # inserted with each applied entry, pruned hourly after 48 h.
   ingest_dedup: {class: internal, grants: {writer: SID}}
-  # The publish staging keys (UNLOGGED). The api publishes until phase 2a.
+  # The publish staging keys (UNLOGGED). The api publishes until
+  # schedule-reference's db sink is on (phase 2a); then schedule_reference.
   schedule_calling_points_full_publish_keys: {class: internal, grants: {schedule_reference: SID}}
   schedule_destination_departures_publish_keys: {class: internal, grants: {schedule_reference: SID}}
 
@@ -244,7 +249,10 @@ tables:
   corpus_stanox_crs: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD}}
   # notifier: named in common::public_delay's SQL (corpus fallback off), so
   # Postgres checks SELECT even when the branch is unused.
-  corpus_tiploc_crs: {class: derived, grants: {api: S, writer: SIUD, notifier: S, schedule_ingest: SIUD}}
+  # schedule_reference: the line population's train summaries read it
+  # (crs_for_tiplocs_batch) when the CORPUS fallback is on, as the api's
+  # route does; not in spec §6.4's table, which predates the summaries.
+  corpus_tiploc_crs: {class: derived, grants: {api: S, writer: SIUD, notifier: S, schedule_ingest: SIUD, schedule_reference: S}}
 
   # --- reference: stations, codes and schedule products.
   stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S, schedule_ingest: S}}
@@ -273,7 +281,10 @@ tables:
   # Every TIPLOC's display name, location type and parent station, published
   # by schedule-reference (as schedule_services); read by the api only.
   tiploc_locations: {class: reference, grants: {api: S, schedule_reference: SIUD}}
-  schedule_reference_publishes: {class: reference, grants: {api: S, schedule_reference: SI}}
+  # schedule_reference: U too (spec §6.4 says SI): the marker's insert is
+  # ON CONFLICT (delivery) DO UPDATE SET completed_at, which Postgres checks
+  # UPDATE for even when nothing conflicts.
+  schedule_reference_publishes: {class: reference, grants: {api: S, schedule_reference: SIU}}
   schedule_feed_ingests: {class: reference, grants: {api: S, schedule_ingest: SI}}
 
   # --- migrations: the owner's; everyone reads it through schema_gate.

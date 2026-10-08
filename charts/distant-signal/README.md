@@ -789,6 +789,21 @@ Redis admits it. It refuses to start a stream it has no handlers for yet:
 station-samples and full-coverage get theirs in plan 3a.6, the others in
 3c.
 
+### schedule-reference's db sink (ingest plan 2a)
+
+`scheduleFeed.reference.ingest.sink: db` makes schedule-reference write its
+products to Postgres directly through `ds_store` instead of the api's
+`/private` routes (off by default: `http`). Only the `reference` container
+gets `DATABASE_URL`; it connects as `distant_signal_schedule_reference` with
+`postgresql.roles.perService.schedule_reference.connect`, else as the app
+role, with a pool of `scheduleFeed.reference.ingest.database.maxConnections`
+(3), counted in the connection budgets, and waits for the schema gate before
+its first poll. The schedulefeed NetworkPolicy gains Postgres egress and the
+postgres policy admits `schedulefeed`. It counts
+`distant_signal_db_writes_total{operation, outcome}` and
+`distant_signal_store_schedule_publish_staged_mismatch_total`, which the
+staged-mismatch alert reads alongside the api's name. Rollback: `http`.
+
 ## Password encoding caveat
 
 `DATABASE_URL` is a URL. A password containing any of `@ : / ? # [ ] %` must
@@ -1370,6 +1385,11 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.roles.perService.schedule_ingest.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.schedule_ingest.existingSecretPasswordKey` | `postgres-schedule-ingest-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.schedule_ingest.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `scheduleFeed.ingest.database.maxConnections` + 1. |
+| `postgresql.roles.perService.schedule_reference.connect` | `false` | Connect schedule-reference's db sink (`scheduleFeed.reference.ingest.sink: db` required) as `distant_signal_schedule_reference`, a narrow role (not a member of app; exactly its `files/db-grants.yaml` grants). Created with the others whenever `perService.enabled`, unused until then. |
+| `postgresql.roles.perService.schedule_reference.password` | `""` | Password. |
+| `postgresql.roles.perService.schedule_reference.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.perService.schedule_reference.existingSecretPasswordKey` | `postgres-schedule-reference-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.perService.schedule_reference.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `scheduleFeed.reference.ingest.database.maxConnections` + 1. |
 | `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
 | `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |
@@ -2497,6 +2517,8 @@ can run at once, deduplicated by content; with neither the render fails.
 | `scheduleFeed.reference.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `scheduleFeed.reference.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `scheduleFeed.reference.pollIntervalSecs` | `1800` | How often the storage folder is checked for a new complete delivery. |
+| `scheduleFeed.reference.ingest.sink` | `http` | Where the products go (`INGEST_SINK`, ingest plan 2a): `http`, the api's `/private` routes; `db`, Postgres directly (the container gets `DATABASE_URL`, the pod Postgres egress, and the schema gate runs before the first poll). Rollback is `http`. |
+| `scheduleFeed.reference.ingest.database.maxConnections` | `3` | The `db` sink's pool (`DATABASE_MAX_CONNECTIONS`). |
 | `scheduleFeed.reference.healthPort` | `8091` | Health port. Must differ from `workerHealth.port`, which the ingest container in the same pod uses. |
 | `scheduleFeed.reference.progressStallSecs` | `7200` | `/livez` stall window: one cycle publishes every derived product of a full timetable. |
 | `scheduleFeed.reference.metricsPort` | `9092` | Prometheus `/metrics` port. Must differ from `metrics.port`, which the ingest container uses. |
@@ -2658,7 +2680,7 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalCorpusRejected` | warning | schedule-ingest refused a CORPUS extract (`schedule_feed_corpus_rejected_total`) within the last 6h. The series exists only while `scheduleFeed.corpus.enabled`. |
 | `DistantSignalCorpusStale` | warning | The newest loaded CORPUS delivery (`api_corpus_last_delivered_at_seconds`, set by api from `corpus_deliveries` at startup and after each load) is over 45 days old (`schedulePipeline.corpusStaleAfterDays`), for 1h. CORPUS is published monthly: 45 days is one cycle plus two weeks' grace. Rendered only when `scheduleFeed.corpus.enabled`, and silent before the first load. |
 | `DistantSignalScheduleReferencePublishStale` | warning | No CIF delivery fully published for over 30h (`schedule_reference_last_published_delivery_timestamp_seconds`), for 15m. |
-| `DistantSignalSchedulePublishStagedMismatch` | warning | api skipped a final chunk's delete because the staged key count did not match (`api_schedule_publish_staged_mismatch_total{product}`) within the last 6h. |
+| `DistantSignalSchedulePublishStagedMismatch` | warning | api, or schedule-reference's db sink, skipped a final chunk's delete because the staged key count did not match (`api_` or `store_schedule_publish_staged_mismatch_total{product}`) within the last 6h. |
 | `DistantSignalScheduleReferencePublishRejected` | warning | api answered 400/413/422 to a schedule-reference product (`schedule_reference_publishes_total{outcome="rejected"}`) within the last 6h. |
 | `DistantSignalLinePopulationMissing` | warning | After 06:00 London, some line still has no schedule population for today (`full_coverage_consumer_population_missing_past_deadline_lines` above 0) for 15m. |
 | `DistantSignalSftpNoUpload` | warning | SFTPGo received no upload (`sftpgo_uploads_total`) in 30h (`scheduleSftp.noUploadWindow`), for 30m: DTD's daily push did not arrive. Quiet until the counter has a full window of history. Uploads are not per file type, so `DistantSignalScheduleReferencePublishStale` stays authoritative for the CIF. Group `distant-signal.schedule-sftp`, rendered with `scheduleFeed.enabled` and `scheduleFeed.sftp.telemetry.enabled`. Runbook: `docs/schedule-feed-sftp.md`. |

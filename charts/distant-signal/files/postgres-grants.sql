@@ -11,7 +11,7 @@
 --     -f postgres-grants.sql
 --
 -- Passwords come from the environment (psql's \getenv), one per created
--- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD.
+-- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_REFERENCE_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD.
 --
 -- In ONE transaction:
 --   1. the group roles (NOLOGIN) and every role whose status is not
@@ -78,6 +78,14 @@
 \else
 \set writer_connection_limit 7
 \endif
+\if :{?schedule_reference}
+\else
+\set schedule_reference distant_signal_schedule_reference
+\endif
+\if :{?schedule_reference_connection_limit}
+\else
+\set schedule_reference_connection_limit 4
+\endif
 \if :{?schedule_ingest}
 \else
 \set schedule_ingest distant_signal_schedule_ingest
@@ -111,6 +119,11 @@
 \else
 \set writer_password ''
 \endif
+\getenv schedule_reference_password DS_PG_SCHEDULE_REFERENCE_PASSWORD
+\if :{?schedule_reference_password}
+\else
+\set schedule_reference_password ''
+\endif
 \getenv schedule_ingest_password DS_PG_SCHEDULE_INGEST_PASSWORD
 \if :{?schedule_ingest_password}
 \else
@@ -139,6 +152,9 @@ SELECT
     set_config('ds_grants.writer', :'writer', true),
     set_config('ds_grants.writer_password', :'writer_password', true),
     set_config('ds_grants.writer_connection_limit', :'writer_connection_limit', true),
+    set_config('ds_grants.schedule_reference', :'schedule_reference', true),
+    set_config('ds_grants.schedule_reference_password', :'schedule_reference_password', true),
+    set_config('ds_grants.schedule_reference_connection_limit', :'schedule_reference_connection_limit', true),
     set_config('ds_grants.schedule_ingest', :'schedule_ingest', true),
     set_config('ds_grants.schedule_ingest_password', :'schedule_ingest_password', true),
     set_config('ds_grants.schedule_ingest_connection_limit', :'schedule_ingest_connection_limit', true)
@@ -192,6 +208,7 @@ BEGIN
         ('enricher', 'observed'),
         ('notifier', 'observed'),
         ('writer', 'observed'),
+        ('schedule_reference', 'narrow'),
         ('schedule_ingest', 'narrow')) AS v(kind, status)
     LOOP
         IF r.name = app OR r.name = current_user OR r.name = ANY (seen) THEN
@@ -238,6 +255,7 @@ BEGIN
         ('enricher', 'observed'),
         ('notifier', 'observed'),
         ('writer', 'observed'),
+        ('schedule_reference', 'narrow'),
         ('schedule_ingest', 'narrow')) AS v(kind, status)
     LOOP
         member_oid := (SELECT oid FROM pg_roles WHERE rolname = r.name);
@@ -267,6 +285,7 @@ BEGIN
         ('notifier', 'schema_gate'),
         ('writer', 'read_shared'),
         ('writer', 'schema_gate'),
+        ('schedule_reference', 'schema_gate'),
         ('schedule_ingest', 'schema_gate')) AS v(kind, grp)
     LOOP
         IF NOT EXISTS (
@@ -298,6 +317,7 @@ BEGIN
         ('enricher'),
         ('notifier'),
         ('writer'),
+        ('schedule_reference'),
         ('schedule_ingest')) AS v(kind)
     LOOP
         EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', grantee);
@@ -367,6 +387,12 @@ BEGIN
         SELECT v.tbl, current_setting('ds_grants.' || v.kind) AS grantee,
                v.priv, v.cols
         FROM (VALUES
+        ('schedule_calling_points_full_publish_keys', 'schedule_reference', 'SELECT', ''),
+        ('schedule_calling_points_full_publish_keys', 'schedule_reference', 'INSERT', ''),
+        ('schedule_calling_points_full_publish_keys', 'schedule_reference', 'DELETE', ''),
+        ('schedule_destination_departures_publish_keys', 'schedule_reference', 'SELECT', ''),
+        ('schedule_destination_departures_publish_keys', 'schedule_reference', 'INSERT', ''),
+        ('schedule_destination_departures_publish_keys', 'schedule_reference', 'DELETE', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'SELECT', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'INSERT', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'UPDATE', ''),
@@ -379,7 +405,20 @@ BEGIN
         ('corpus_tiploc_crs', 'schedule_ingest', 'INSERT', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'UPDATE', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'DELETE', ''),
+        ('corpus_tiploc_crs', 'schedule_reference', 'SELECT', ''),
         ('stations', 'schedule_ingest', 'SELECT', ''),
+        ('stanox_crs', 'schedule_reference', 'SELECT', ''),
+        ('stanox_crs', 'schedule_reference', 'INSERT', ''),
+        ('stanox_crs', 'schedule_reference', 'UPDATE', ''),
+        ('stanox_crs', 'schedule_reference', 'DELETE', ''),
+        ('tiploc_crs', 'schedule_reference', 'SELECT', ''),
+        ('tiploc_crs', 'schedule_reference', 'INSERT', ''),
+        ('tiploc_crs', 'schedule_reference', 'UPDATE', ''),
+        ('tiploc_crs', 'schedule_reference', 'DELETE', ''),
+        ('fixed_links', 'schedule_reference', 'SELECT', ''),
+        ('fixed_links', 'schedule_reference', 'INSERT', ''),
+        ('fixed_links', 'schedule_reference', 'UPDATE', ''),
+        ('fixed_links', 'schedule_reference', 'DELETE', ''),
         ('corpus_locations', 'schedule_ingest', 'SELECT', ''),
         ('corpus_locations', 'schedule_ingest', 'INSERT', ''),
         ('corpus_locations', 'schedule_ingest', 'UPDATE', ''),
@@ -388,6 +427,37 @@ BEGIN
         ('corpus_deliveries', 'schedule_ingest', 'INSERT', ''),
         ('corpus_deliveries', 'schedule_ingest', 'UPDATE', ''),
         ('corpus_deliveries', 'schedule_ingest', 'DELETE', ''),
+        ('schedule_calling_points_full', 'schedule_reference', 'SELECT', ''),
+        ('schedule_calling_points_full', 'schedule_reference', 'INSERT', ''),
+        ('schedule_calling_points_full', 'schedule_reference', 'UPDATE', ''),
+        ('schedule_calling_points_full', 'schedule_reference', 'DELETE', ''),
+        ('schedule_destination_departures', 'schedule_reference', 'SELECT', ''),
+        ('schedule_destination_departures', 'schedule_reference', 'INSERT', ''),
+        ('schedule_destination_departures', 'schedule_reference', 'UPDATE', ''),
+        ('schedule_destination_departures', 'schedule_reference', 'DELETE', ''),
+        ('schedule_network_departures', 'schedule_reference', 'SELECT', ''),
+        ('schedule_network_departures', 'schedule_reference', 'INSERT', ''),
+        ('schedule_network_departures', 'schedule_reference', 'UPDATE', ''),
+        ('schedule_network_departures', 'schedule_reference', 'DELETE', ''),
+        ('schedule_line_population', 'schedule_reference', 'SELECT', ''),
+        ('schedule_line_population', 'schedule_reference', 'INSERT', ''),
+        ('schedule_line_population', 'schedule_reference', 'UPDATE', ''),
+        ('schedule_line_population', 'schedule_reference', 'DELETE', ''),
+        ('line_train_summaries', 'schedule_reference', 'SELECT', ''),
+        ('line_train_summaries', 'schedule_reference', 'INSERT', ''),
+        ('line_train_summaries', 'schedule_reference', 'UPDATE', ''),
+        ('line_train_summaries', 'schedule_reference', 'DELETE', ''),
+        ('schedule_services', 'schedule_reference', 'SELECT', ''),
+        ('schedule_services', 'schedule_reference', 'INSERT', ''),
+        ('schedule_services', 'schedule_reference', 'UPDATE', ''),
+        ('schedule_services', 'schedule_reference', 'DELETE', ''),
+        ('tiploc_locations', 'schedule_reference', 'SELECT', ''),
+        ('tiploc_locations', 'schedule_reference', 'INSERT', ''),
+        ('tiploc_locations', 'schedule_reference', 'UPDATE', ''),
+        ('tiploc_locations', 'schedule_reference', 'DELETE', ''),
+        ('schedule_reference_publishes', 'schedule_reference', 'SELECT', ''),
+        ('schedule_reference_publishes', 'schedule_reference', 'INSERT', ''),
+        ('schedule_reference_publishes', 'schedule_reference', 'UPDATE', ''),
         ('schedule_feed_ingests', 'schedule_ingest', 'SELECT', ''),
         ('schedule_feed_ingests', 'schedule_ingest', 'INSERT', '')) AS v(tbl, kind, priv, cols)
         WHERE to_regclass(format('public.%I', v.tbl)) IS NOT NULL
@@ -404,6 +474,7 @@ BEGIN
     FOR r IN
         SELECT v.seq, current_setting('ds_grants.' || v.kind) AS grantee
         FROM (VALUES
+        ('fixed_links_id_seq', 'schedule_reference'),
         ('corpus_locations_id_seq', 'schedule_ingest')) AS v(seq, kind)
         WHERE to_regclass(format('public.%I', v.seq)) IS NOT NULL
     LOOP
@@ -412,7 +483,8 @@ BEGIN
     END LOOP;
     FOR r IN
         SELECT v.sig, current_setting('ds_grants.' || v.kind) AS grantee
-        FROM (SELECT NULL::text, NULL::text WHERE false) AS v(sig, kind)
+        FROM (VALUES
+        ('analyze_publish_keys(text)', 'schedule_reference')) AS v(sig, kind)
         WHERE to_regprocedure('public.' || v.sig) IS NOT NULL
     LOOP
         EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I',

@@ -392,6 +392,25 @@ spec:
               value: {{ printf "%s/private/tiploc-locations" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: LINES_DIR
               value: /app/lines
+            {{- if include "distant-signal.scheduleReferenceDbSink" . }}
+            # Where the products go (scheduleFeed.reference.ingest.sink;
+            # ingest architecture plan 2a): `db` writes Postgres directly
+            # with the env below. Unset, the binary's default is `http`
+            # (the api's routes above), so the default render is unchanged.
+            - name: INGEST_SINK
+              value: {{ .Values.scheduleFeed.reference.ingest.sink | quote }}
+            # The db sink's connection: distant_signal_schedule_reference
+            # with postgresql.roles.perService.schedule_reference.connect,
+            # else the shared app role (or the bundled database's user).
+            # Only this container gets it (spec §9.2); the CORPUS fallback
+            # flag is the api's, so the line population's train summaries
+            # derive exactly as the api's route derives them.
+            {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "schedule_reference") | nindent 12 }}
+            - name: DATABASE_MAX_CONNECTIONS
+              value: {{ .Values.scheduleFeed.reference.ingest.database.maxConnections | int | quote }}
+            - name: CORPUS_FALLBACK_ENABLED
+              value: {{ .Values.api.corpusFallback.enabled | toString | quote }}
+            {{- end }}
             - name: INTERNAL_OAUTH_TOKEN_URL
               value: {{ .Values.internalOauth.tokenUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID

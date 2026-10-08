@@ -1,0 +1,73 @@
+# promtool unit tests for DistantSignalSchedulePublishStagedMismatch (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered): the api's
+# counter, or schedule-reference's db sink's `store_` one (ingest plan
+# 2a.5). Both processes register their series at 0, so a bare `or` that
+# picks the api's series would miss the db sink's.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # The api counts a mismatch: fires at once (`for: 0m`).
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_schedule_publish_staged_mismatch_total{namespace="distant-signal", pod="api", product="schedule_calling_points_full"}'
+        values: '0x5 1x10'
+      - series: 'distant_signal_store_schedule_publish_staged_mismatch_total{namespace="distant-signal", pod="sf", product="schedule_calling_points_full"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DistantSignalSchedulePublishStagedMismatch
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DistantSignalSchedulePublishStagedMismatch
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, product: schedule_calling_points_full}
+            exp_annotations:
+              summary: schedule_calling_points_full publish kept stale rows
+              description: "Its staged key count did not match the publisher's total, so rows it left out stay until the next complete publish."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
+  # The db sink counts one while the api's series sits at 0: still fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_schedule_publish_staged_mismatch_total{namespace="distant-signal", pod="api", product="schedule_destination_departures"}'
+        values: '0x15'
+      - series: 'distant_signal_store_schedule_publish_staged_mismatch_total{namespace="distant-signal", pod="sf", product="schedule_destination_departures"}'
+        values: '0x5 1x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DistantSignalSchedulePublishStagedMismatch
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DistantSignalSchedulePublishStagedMismatch
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, product: schedule_destination_departures}
+            exp_annotations:
+              summary: schedule_destination_departures publish kept stale rows
+              description: "Its staged key count did not match the publisher's total, so rows it left out stay until the next complete publish."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
+  # Only the db sink runs (no api series at all): fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_store_schedule_publish_staged_mismatch_total{namespace="distant-signal", pod="sf", product="schedule_destination_departures"}'
+        values: '0x5 2x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalSchedulePublishStagedMismatch
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, product: schedule_destination_departures}
+            exp_annotations:
+              summary: schedule_destination_departures publish kept stale rows
+              description: "Its staged key count did not match the publisher's total, so rows it left out stay until the next complete publish."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
+  # Both at 0, or another namespace's mismatch: never fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_schedule_publish_staged_mismatch_total{namespace="distant-signal", pod="api", product="schedule_calling_points_full"}'
+        values: '0x15'
+      - series: 'distant_signal_store_schedule_publish_staged_mismatch_total{namespace="distant-signal", pod="sf", product="schedule_calling_points_full"}'
+        values: '0x15'
+      - series: 'distant_signal_store_schedule_publish_staged_mismatch_total{namespace="other", pod="sf", product="schedule_calling_points_full"}'
+        values: '0x5 1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalSchedulePublishStagedMismatch
+        exp_alerts: []

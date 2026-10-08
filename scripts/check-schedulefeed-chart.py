@@ -52,7 +52,15 @@ checks:
   - alerts: no distant-signal.schedule-bucket group with the bucket off or
     metrics.prometheusRule.scheduleBucket.enabled=false; six alerts with
     both sources; five (no SourcesDisagree) and no schedule-sftp group with
-    the bucket only.
+    the bucket only;
+  - schedule-reference's sink (`scheduleFeed.reference.ingest.sink`,
+    ingest architecture plan 2a): `http` (the default) gives `reference` no
+    INGEST_SINK or database env and the pod no Postgres egress or postgres
+    ingress; `db` gives `reference` (only) INGEST_SINK=db, DATABASE_URL
+    (after PGPASSWORD), DATABASE_MAX_CONNECTIONS and the api's
+    CORPUS_FALLBACK_ENABLED, the schedulefeed policy Postgres egress and the
+    postgres policy `schedulefeed` ingress; an unknown sink refuses to
+    render.
 
 --baseline DIR renders DIR (a copy of charts/distant-signal from another
 commit, e.g. the merge base) and this chart with the same flags, for the
@@ -533,6 +541,104 @@ def check_network_policy(c: Checker) -> None:
     )
 
 
+def postgres_clients(docs: Sequence[Doc]) -> set[str]:
+    """Return the components the postgres NetworkPolicy admits."""
+    for doc in docs:
+        if doc.get("kind") == "NetworkPolicy" and name_of(doc).endswith("-postgres"):
+            spec = cast("dict[str, list[dict[str, object]]]", doc["spec"])
+            found: set[str] = set()
+            for rule in spec.get("ingress") or []:
+                for peer in cast("list[dict[str, object]]", rule.get("from") or []):
+                    selector = cast("dict[str, object]", peer.get("podSelector") or {})
+                    for expr in cast(
+                        "list[dict[str, object]]",
+                        selector.get("matchExpressions") or [],
+                    ):
+                        if expr.get("key") == "app.kubernetes.io/component":
+                            found |= set(cast("list[str]", expr.get("values") or []))
+            return found
+    return set()
+
+
+def postgres_egress(policy: Doc) -> bool:
+    """Whether a NetworkPolicy has an egress rule to the postgres pods."""
+    spec = cast("dict[str, list[dict[str, object]]]", policy.get("spec") or {})
+    for rule in spec.get("egress") or []:
+        for peer in cast("list[dict[str, object]]", rule.get("to") or []):
+            selector = cast("dict[str, dict[str, str]]", peer.get("podSelector") or {})
+            labels = selector.get("matchLabels") or {}
+            if labels.get("app.kubernetes.io/component") == "postgres":
+                return True
+    return False
+
+
+DB_ENV = {"INGEST_SINK", "PGPASSWORD", "DATABASE_URL", "DATABASE_MAX_CONNECTIONS"}
+
+
+def check_reference_sink(c: Checker) -> None:
+    """schedule-reference's sink: http renders nothing new; db wires Postgres."""
+    docs = c.docs(*ON, *NETPOL)
+    reference = env(container(docs, "reference"))
+    c.check(
+        ok=not (DB_ENV | {"CORPUS_FALLBACK_ENABLED"}) & set(reference),
+        message=f"sink http: reference has {sorted(DB_ENV & set(reference))}",
+    )
+    c.check(
+        ok=not postgres_egress(schedulefeed_policy(docs)),
+        message="sink http: schedulefeed may reach postgres",
+    )
+    c.check(
+        ok="schedulefeed" not in postgres_clients(docs),
+        message="sink http: postgres admits schedulefeed",
+    )
+
+    db = ("--set", "scheduleFeed.reference.ingest.sink=db")
+    docs = c.docs(*ON, *NETPOL, *db)
+    check_no_duplicate_env(c, "sink db", docs)
+    entries = env_list(container(docs, "reference"))
+    names = [str(e["name"]) for e in entries]
+    reference = env(container(docs, "reference"))
+    c.check(
+        ok=set(reference) >= DB_ENV,
+        message=f"sink db: reference lacks {sorted(DB_ENV - set(reference))}",
+    )
+    c.check(
+        ok=reference.get("INGEST_SINK", {}).get("value") == "db",
+        message=f"sink db: INGEST_SINK={reference.get('INGEST_SINK')}",
+    )
+    c.check(
+        ok=reference.get("DATABASE_MAX_CONNECTIONS", {}).get("value") == "3",
+        message="sink db: DATABASE_MAX_CONNECTIONS is not the default 3",
+    )
+    c.check(
+        ok=reference.get("CORPUS_FALLBACK_ENABLED", {}).get("value") == "false",
+        message="sink db: CORPUS_FALLBACK_ENABLED is not the api's (false)",
+    )
+    c.check(
+        ok="PGPASSWORD" in names
+        and "DATABASE_URL" in names
+        and names.index("PGPASSWORD") < names.index("DATABASE_URL"),
+        message=f"sink db: PGPASSWORD must precede DATABASE_URL: {names}",
+    )
+    for other in ("ingest", "sftp"):
+        leaked = DB_ENV & set(env(container(docs, other)))
+        c.check(ok=not leaked, message=f"sink db: {other} has {sorted(leaked)}")
+    c.check(
+        ok=postgres_egress(schedulefeed_policy(docs)),
+        message="sink db: schedulefeed has no postgres egress",
+    )
+    c.check(
+        ok="schedulefeed" in postgres_clients(docs),
+        message="sink db: postgres does not admit schedulefeed",
+    )
+
+    code, out = c.render(*ON, "--set", "scheduleFeed.reference.ingest.sink=redis")
+    c.check(
+        ok=code != 0 and "scheduleFeed.reference.ingest.sink" in out,
+        message="sink redis: rendered, or failed without naming the value",
+    )
+
+
 def check_audit_and_override(c: Checker) -> None:
     """Audit-log shipping adds its vars; extraEnv overrides a BUCKET_* var."""
     ingest = env(container(c.docs(*ON, *BUCKET, *AUDIT), "ingest"))
@@ -941,6 +1047,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_failures(c)
     check_workload_identity(c)
     check_alerts(c)
+    check_reference_sink(c)
     for label, values in (
         ("both", (*ON, *BUCKET)),
         ("bucket only", (*ON, *BUCKET, *SFTP_OFF, *AUDIT)),

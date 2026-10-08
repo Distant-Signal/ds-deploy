@@ -1367,13 +1367,19 @@ spec:
             description: "No new delivery arrived, or one keeps failing to publish. Check schedule-ingest, the SFTP upload and the reference log."
             runbook_url: {{ printf "%s#distantsignalschedulereferencepublishstale" $runbook | quote }}
         {{- /*
-        SCHED-2: api skipped a final chunk's delete because the staged key
+        SCHED-2: a final chunk's delete was skipped because the staged key
         count did not match the publisher's total, so rows missing from that
-        publish stay until the next complete one.
+        publish stay until the next complete one. Counted by the api (api_)
+        or, with schedule-reference's db sink, by schedule-reference itself
+        (store_, ingest plan 2a.5): the alert is the `or` of the two, written
+        as one sum over both names (counters, so the sum is above 0 exactly
+        when either increased). A bare `A or B` would be wrong: both
+        processes register their series at 0, so it would always pick the
+        api's and miss the db sink's. The api_ name goes in phase 5.
         */}}
         - alert: DistantSignalSchedulePublishStagedMismatch
           expr: |
-            sum by (namespace, product) (increase(distant_signal_api_schedule_publish_staged_mismatch_total{namespace="{{ $ns }}"}[{{ .mismatchWindow }}])) > 0
+            sum by (namespace, product) (increase({__name__=~"distant_signal_(api|store)_schedule_publish_staged_mismatch_total", namespace="{{ $ns }}"}[{{ .mismatchWindow }}])) > 0
           for: 0m
           labels:
             severity: {{ .severity }}

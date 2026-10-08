@@ -791,10 +791,13 @@ and the reference container's error log).
 
 ### DistantSignalSchedulePublishStagedMismatch
 
-api finished a publish whose staged key count did not match the publisher's
-total (`api_schedule_publish_staged_mismatch_total{product}`), so it did not
-delete the rows that publish left out. They stay until the next complete
-publish. api's warn log has the `publish_id` and both counts.
+A publish finished with a staged key count that did not match the
+publisher's total, so the rows that publish left out were not deleted. They
+stay until the next complete publish. Counted by api
+(`api_schedule_publish_staged_mismatch_total{product}`) or, with
+schedule-reference's db sink (`scheduleFeed.reference.ingest.sink: db`), by
+schedule-reference (`store_schedule_publish_staged_mismatch_total{product}`);
+the warn log of whichever counted it has the `publish_id` and both counts.
 
 ### DistantSignalScheduleReferencePublishRejected
 

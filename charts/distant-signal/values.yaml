@@ -367,6 +367,24 @@ postgresql:
         # (`scheduleFeed.ingest.database.maxConnections`, 1) plus 1 (spec
         # §6.6: pool 1, limit 2).
         connectionLimit: ""
+      schedule_reference:
+        # -- Connect schedule-reference's `db` sink
+        # (`scheduleFeed.reference.ingest.sink: db`, which this needs) as
+        # `distant_signal_schedule_reference` (plan 2a). That role is
+        # narrow (files/db-grants.yaml): not a member of the app role,
+        # exactly the spec §6.4 grants. Created with the others whenever
+        # `enabled` is on, unused until then.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-schedule-reference-password
+        # -- CONNECTION LIMIT. Empty: its pool
+        # (`scheduleFeed.reference.ingest.database.maxConnections`, 3) plus
+        # 1 (spec §6.6: pool 3, limit 4).
+        connectionLimit: ""
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
     # succeeds, so crash recovery (WAL redo after a node reboot) is never
@@ -3805,6 +3823,20 @@ scheduleFeed:
       digest: ""
       pullPolicy: IfNotPresent
     pollIntervalSecs: 1800
+    ingest:
+      # -- Where the products go (`INGEST_SINK`; ingest architecture plan
+      # 2a): `http`, the api's `/private` ingest routes (today's path), or
+      # `db`, Postgres directly through `ds_store`. With `db` the container
+      # gets `DATABASE_URL` (as `distant_signal_schedule_reference` once
+      # `postgresql.roles.perService.schedule_reference.connect` is on, else
+      # the shared app role), the schedulefeed pod may reach Postgres
+      # (NetworkPolicy), and it waits for the schema gate before its first
+      # poll. Rollback is `http`: the api routes still exist.
+      sink: http
+      database:
+        # -- The `db` sink's pool size (`DATABASE_MAX_CONNECTIONS`; spec
+        # §6.6: publishes are sequential, the final chunk holds one).
+        maxConnections: 3
     # -- MUST differ from metrics.port: this container shares the
     # schedulefeed Pod's network namespace with `ingest`, which already
     # binds metrics.port for its own listener -- see
@@ -4708,8 +4740,9 @@ metrics:
     # one does not.
     # DistantSignalScheduleReferencePublishStale: the last fully published
     # delivery is older than `staleAfterHours` (deliveries land nightly).
-    # DistantSignalSchedulePublishStagedMismatch: api skipped a publish's
-    # delete (staged key count mismatch) within `mismatchWindow`.
+    # DistantSignalSchedulePublishStagedMismatch: api (or schedule-reference's
+    # db sink) skipped a publish's delete (staged key count mismatch) within
+    # `mismatchWindow`.
     # DistantSignalScheduleReferencePublishRejected: api answered 400/413/422
     # to a product within `rejectedWindow` (permanent for that delivery).
     # DistantSignalScheduleFeedIngestRejected: api answered 400/413/422 to
