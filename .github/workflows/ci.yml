@@ -133,8 +133,9 @@ jobs:
 
   # cargo-deny with deny.toml: licences, bans (wildcards; duplicate versions
   # are warnings), sources (crates.io only) and advisories (RustSec, plus
-  # yanked crates). Advisories overlap dependency-scan.yml's OSV scan on
-  # purpose -- see deny.toml. The binary comes from taiki-e/install-action,
+  # yanked crates). bans/licenses/sources and the advisory-DB fetch block;
+  # the advisories check only warns (see its step). Advisories overlap
+  # dependency-scan.yml's OSV scan on purpose -- see deny.toml. The binary comes from taiki-e/install-action,
   # which verifies the release checksum; the version is pinned exactly.
   cargo-deny:
     name: cargo deny check
@@ -151,8 +152,28 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
 
-      - name: cargo deny check
-        run: cargo deny --locked check
+      - name: cargo deny check (bans, licenses, sources)
+        run: cargo deny --locked check bans licenses sources
+
+      # Advisories are split out: a crate advisory is a security finding,
+      # not a build break. Fetching the advisory DB is still a hard error
+      # (CI couldn't check); the check itself only warns, because
+      # dependency-scan.yml's OSV scan already blocks on critical + fixable
+      # RustSec advisories, and cargo-deny 0.20 (advisories v2) has no
+      # severity threshold to block on. On GitHub a continue-on-error step
+      # that fails still looks green, so the ::warning:: annotation below
+      # (shown on the run summary) is the visible signal.
+      - name: Fetch the RustSec advisory DB
+        run: cargo deny --locked fetch
+
+      - name: cargo deny check advisories (non-blocking)
+        id: advisories
+        continue-on-error: true
+        run: cargo deny --frozen check advisories
+
+      - name: Report advisory findings
+        if: steps.advisories.outcome == 'failure'
+        run: echo "::warning title=cargo deny advisories (non-blocking)::cargo deny found advisories or yanked crates; see the 'cargo deny check advisories' step."
 
   # Reusable workflow_call from FasterSpeeding/Piped: runs actionlint over
   # this repo's own .github/workflows/*.yml via reviewdog. Self-contained
