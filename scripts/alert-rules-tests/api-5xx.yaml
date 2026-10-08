@@ -6,9 +6,10 @@ rule_files: [rules.yaml]
 evaluation_interval: 1m
 tests:
   # 2026-10-01 shape: from 5m one public request a minute answers 503 (20%
-  # of public traffic), /public/health answers 503 at a far higher rate,
-  # and the ingest routes are a 5xx storm. The public alert fires on the
-  # public share alone; health is not counted (it would make it 100%).
+  # of public traffic), /public/health and /public/ready answer 503 at a
+  # far higher rate, and the ingest routes are a 5xx storm. The public
+  # alert fires on the public share alone; the probes are not counted
+  # (they would make it 100%).
   - interval: 1m
     input_series:
       - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/public/freshness", method="GET", status="200"}'
@@ -16,6 +17,8 @@ tests:
       - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/Trips/plan", method="GET", status="503"}'
         values: '0x5 0+1x35'
       - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/public/health", method="GET", status="503"}'
+        values: '0x5 0+100x35'
+      - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/public/ready", method="GET", status="503"}'
         values: '0x5 0+100x35'
       - series: 'distant_signal_http_requests_total{namespace="distant-signal", pod="api-a", endpoint="metrics", exported_endpoint="/private/stations", method="POST", status="503"}'
         values: '0x5 0+1000x35'

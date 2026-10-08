@@ -1991,6 +1991,39 @@ jobs:
             fi
           }
 
+          # Graceful shutdown (1B.10's prerequisite): readiness on the
+          # DB-aware /public/ready, startup and liveness still on
+          # /public/health, a preStop sleep before SIGTERM, a grace period
+          # covering sleep + drain, and minReadySeconds only with
+          # RollingUpdate.
+          out=$(render)
+          grep -A2 'readinessProbe:' <<<"${out}" | grep -q 'path: /public/ready$' || fail "readiness must probe /public/ready"
+          grep -A2 'livenessProbe:' <<<"${out}" | grep -q 'path: /public/health$' || fail "liveness must stay on /public/health"
+          grep -A2 'startupProbe:' <<<"${out}" | grep -q 'path: /public/health$' || fail "startup must stay on /public/health"
+          grep -A3 'preStop:' <<<"${out}" | grep -q 'command: \["sleep", "5"\]' || fail "preStop must sleep 5 s"
+          grep -q '^      terminationGracePeriodSeconds: 35$' <<<"${out}" || fail "terminationGracePeriodSeconds must be 35"
+          grep -A1 'name: API_SHUTDOWN_DRAIN_SECS$' <<<"${out}" | grep -q 'value: "20"' || fail "API_SHUTDOWN_DRAIN_SECS must be 20"
+          if grep -q 'minReadySeconds:' <<<"${out}"; then fail "Recreate must render no minReadySeconds"; fi
+          out=$(render "${job[@]}" --set api.strategy.type=RollingUpdate --set api.database.maxConnections=35)
+          grep -q '^  minReadySeconds: 10$' <<<"${out}" || fail "RollingUpdate must render minReadySeconds 10"
+          out=$(render --set api.shutdown.preStopSleepSecs=0)
+          if grep -q 'preStop:' <<<"${out}"; then fail "preStopSleepSecs 0 must drop the hook"; fi
+          # The readiness DB check is opt-in (off by default) and only for
+          # 2+ replicas: with one, NotReady on a DB blip empties the Service.
+          out=$(render)
+          grep -A1 'name: API_READINESS_CHECKS_DB$' <<<"${out}" | grep -q 'value: "false"' || fail "API_READINESS_CHECKS_DB must default to false"
+          out=$(render --set api.readiness.checkDatabase=true --set api.replicaCount=2 --set api.database.maxConnections=35)
+          grep -A1 'name: API_READINESS_CHECKS_DB$' <<<"${out}" | grep -q 'value: "true"' || fail "checkDatabase must render API_READINESS_CHECKS_DB true"
+          # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
+          {
+            if render --set api.shutdown.drainSecs=40 >/dev/null 2>&1; then
+              fail "a drain longer than the grace period allows must fail the render"
+            fi
+            if render --set api.readiness.checkDatabase=true >/dev/null 2>&1; then
+              fail "the readiness DB check with one replica must fail the render"
+            fi
+          }
+
       # Reboot resilience: redis must roll with Recreate (single RWO AOF
       # volume, INF-1); postgres needs a startupProbe so WAL redo is never
       # killed by liveness (INF-4); the frontend probes must hit the

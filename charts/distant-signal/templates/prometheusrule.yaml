@@ -260,7 +260,7 @@ spec:
         */}}
         {{- $label := .routeLabel }}
         {{- $scopes := list
-          (list "public" (printf "%s!~\"/private/.*|/metrics|/public/health|/[{]unmatched[}]\"" $label))
+          (list "public" (printf "%s!~\"/private/.*|/metrics|/public/health|/public/ready|/[{]unmatched[}]\"" $label))
           (list "ingest" (printf "%s=~\"/private/.*\"" $label)) }}
         {{- range $m := list (list "requests:rate" "rate" "") (list "5xx:rate" "rate" ", status=~\"5..\"") (list "5xx:increase" "increase" ", status=~\"5..\"") }}
         - record: distant_signal:api_{{ index $m 0 }}

@@ -1286,6 +1286,37 @@ api:
     # connection budget (api pods x `database.maxConnections`), so lower
     # that first (or use `postgresql.roles.perService.api`).
     type: Recreate
+  # -- Seconds a new pod must stay Ready before a RollingUpdate counts it
+  # available and stops an old one (rendered only with RollingUpdate), so
+  # a pod that passes one readiness probe and then fails is caught before
+  # the old pod is gone.
+  minReadySeconds: 10
+  # Graceful shutdown (crates/api/src/shutdown.rs). On pod deletion the
+  # kubelet runs the preStop sleep first (endpoints are removed from the
+  # Service meanwhile, so no new request is routed here), then sends
+  # SIGTERM: the api stops accepting, finishes in-flight requests and
+  # stops its background loops (releasing their advisory locks), for up
+  # to drainSecs. The render fails unless preStopSleepSecs + drainSecs + 5
+  # fits in terminationGracePeriodSeconds.
+  shutdown:
+    # -- `API_SHUTDOWN_DRAIN_SECS`: how long in-flight requests get after
+    # SIGTERM. A /private publish chunk still running then is cut off and
+    # retried by its producer, as before.
+    drainSecs: 20
+    # -- The preStop `sleep` (seconds) before SIGTERM. 0 drops the hook.
+    preStopSleepSecs: 5
+  # -- The pod's terminationGracePeriodSeconds (Kubernetes' default is 30):
+  # preStop sleep + drain + a margin, after which the kubelet SIGKILLs.
+  terminationGracePeriodSeconds: 35
+  readiness:
+    # -- `API_READINESS_CHECKS_DB`: also answer 503 on /public/ready while
+    # the request pool cannot run SELECT 1 within 2 s (checked at most once
+    # per 5 s). Explicit opt-in, and the render refuses it below 2 replicas:
+    # with one replica NotReady empties the Service, turning a short
+    # database blip into a full outage where callers get connection errors
+    # instead of the api's 503 + Retry-After. Off, readiness fails only
+    # while the pod drains.
+    checkDatabase: false
   service:
     type: ClusterIP
     port: 8080
@@ -1668,8 +1699,14 @@ api:
     statementTimeoutSecs: 240
   probes:
     # -- Path served by crates/api/src/routes/health.rs, nested under /public
-    # by main.rs. Changing this must be matched in tests/test-api-health.yaml.
+    # by main.rs: the startup and liveness probes and the `helm test` pod.
+    # Answers 200 whenever the process is listening, so a database blip
+    # never restarts the pod.
     path: /public/health
+    # -- The readiness probe's path (crates/api/src/readiness.rs): 503 while
+    # the pod is shutting down, and (only with api.readiness.checkDatabase)
+    # while the database is unreachable.
+    readinessPath: /public/ready
     startup:
       # 450 x 2s = 900s (15 minutes) of headroom, matching the Postgres
       # startupProbe (`postgresql.probes.startup`, 90 x 10s): after a node
@@ -4507,8 +4544,8 @@ metrics:
     # DistantSignalApiPublic5xx / DistantSignalApiIngest5xx: the share of
     # api's requests answered 5xx (a dependency-unavailable 503 included)
     # over `window`, split by route: `public` is every route except
-    # /private/*, /public/health and unmatched paths (scanner noise);
-    # `ingest` is /private/*. Fires when the ratio is above `ratio` AND at
+    # /private/*, /public/health, /public/ready and unmatched paths (scanner
+    # noise); `ingest` is /private/*. Fires when the ratio is above `ratio` AND at
     # least `minErrors` 5xx happened in the window (public traffic is a few
     # requests a minute, so one 500 would otherwise be 100%), for `for`.
     # `for` is longer than `window`, so a burst shorter than for - window

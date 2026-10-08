@@ -756,6 +756,22 @@ counts the surge pod's pool in the Postgres connection budget (INF-7): with
 the default 50-connection pool lower `api.database.maxConnections` first, or
 move the api to its own role (16).
 
+**Graceful shutdown and readiness** (`api.shutdown`,
+`api.terminationGracePeriodSeconds`, `api.probes.readinessPath`). A deleted
+api pod first runs its `preStop` sleep (5 s; the Service drops its endpoint
+meanwhile), then on SIGTERM stops accepting connections, lets in-flight
+requests finish (idle keep-alive connections are closed, HTTP/2 gets a
+GOAWAY) and stops its background loops, releasing their advisory locks, for
+up to `drainSecs` (20 s), all inside the 35 s grace period. Readiness is
+`/public/ready`: 503 while the pod is draining. Together these let a
+`RollingUpdate` deploy finish with no failed requests (plan 1B.10).
+Liveness stays on `/public/health`. By default readiness does not check the
+database: with one replica, NotReady would empty the Service, and callers
+would get connection errors instead of the api's 503 + `Retry-After`. With
+two or more replicas, `api.readiness.checkDatabase: true` also takes a pod
+that cannot reach the database (bounded 2 s `SELECT 1`, cached 5 s) out of
+the Service while the others serve; the render refuses it with fewer.
+
 **The api-maintenance CronJob** (`apiMaintenance.enabled`,
 `templates/api-maintenance-cronjob.yaml`) runs the api image's `maintenance`
 binary (plan 1B.8) hourly (`concurrencyPolicy: Forbid`, `timeZone: Etc/UTC`):
@@ -1619,6 +1635,11 @@ Used only when `postgresql.enabled` is `false`.
 | `api.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `api.replicaCount` | `1` | Replicas. >1 is safe for migrations — sqlx's Migrator takes a Postgres advisory lock — but each replica adds `api.database.maxConnections` (50) connections: see that row before scaling. |
 | `api.strategy.type` | `Recreate` | Rollout strategy: `Recreate` (a short outage per deploy) or `RollingUpdate` (`maxSurge: 1`, `maxUnavailable: 0`), which the render refuses unless `migrate.job.enabled` and `api.migrateOnStartup` is `false`. The surge pod's pool counts in the connection budget. |
+| `api.minReadySeconds` | `10` | Seconds a new pod must stay Ready before a `RollingUpdate` counts it available and stops an old one. Rendered only with `RollingUpdate`. |
+| `api.shutdown.drainSecs` | `20` | `API_SHUTDOWN_DRAIN_SECS` (1-3600): after SIGTERM the api stops accepting, lets in-flight requests finish and stops its background loops (releasing their advisory locks) for up to this long, then exits. |
+| `api.shutdown.preStopSleepSecs` | `5` | The `preStop` `sleep` before SIGTERM, so the pod leaves the Service's endpoints before it stops accepting. `0` drops the hook. |
+| `api.terminationGracePeriodSeconds` | `35` | The pod's grace period. The render fails unless it is at least `preStopSleepSecs` + `drainSecs` + 5. |
+| `api.readiness.checkDatabase` | `false` | `API_READINESS_CHECKS_DB`: `/public/ready` also answers 503 while the request pool cannot run `SELECT 1` within 2 s (checked at most every 5 s). Opt-in, and refused below `api.replicaCount: 2`: with one replica NotReady empties the Service, so a database blip would become a full outage. |
 | `api.service.type` | `ClusterIP` | Service type. |
 | `api.service.port` | `8080` | Service and container port; also sets `BIND_URL`. |
 | `api.logLevel` | `info` | `RUST_LOG` value (tracing-subscriber EnvFilter syntax). |
@@ -1656,7 +1677,8 @@ Used only when `postgresql.enabled` is `false`.
 | `api.rateLimit.mcp.tripPlan.perMinute` / `.burst` | `100` / `30` | The MCP's own `/Trips/plan` budget: one bucket for the whole service (`svc:mcp`), 5x public. |
 | `api.rateLimit.mcp.trainByUid.perMinute` / `.burst` | `600` / `200` | The MCP's own `/Train/by-uid/*` budget. |
 | `api.rateLimit.mcp.publicWrite.perMinute` / `.burst` | `600` / `200` | The MCP's own public-write budget. Login has no MCP budget: the bearer is ignored there. |
-| `api.probes.path` | `/public/health` | Path all three probes and the `helm test` pod hit. |
+| `api.probes.path` | `/public/health` | Path the startup and liveness probes and the `helm test` pod hit: 200 whenever the process listens, so a database blip never restarts the pod. |
+| `api.probes.readinessPath` | `/public/ready` | Path the readiness probe hits: 503 while the pod is draining, and with `api.readiness.checkDatabase` while the database is unreachable. |
 | `api.probes.startup.periodSeconds` | `2` | Startup probe period. |
 | `api.probes.startup.failureThreshold` | `450` | Startup probe failures allowed (450 x 2s = 900s for in-process migrations, matching the Postgres startupProbe's 15 minutes). |
 | `api.probes.startup.timeoutSeconds` | `3` | Startup probe timeout. |
@@ -2674,7 +2696,7 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalApiDatabaseDown` | critical | api's own `SELECT 1` probe through its request pool (`api_db_up`, every 15s) is 0 on some replica for 2m: a rotated password, an exhausted pool, `max_connections`, a NetworkPolicy, or the database itself. |
 | `DistantSignalSchemaGateWaiting` | critical | A service's schema gate (`db_schema_ready`) is 0 on some pod for 10m: the database lacks the newest migration in its image, or its role lacks a `files/db-grants.yaml` grant. One alert per component. |
 | `DistantSignalConsumerApiCallsFailing` | warning | trust-consumer, trust-backlog-consumer or full-coverage-consumer failed at least 3 calls to api within 5m, continuously for 10m (`*_errors_total` for the operations that call api: trust-consumer `reload_tracked_trains`, `post_train_events`, `reload_stanox_crs`, `startup_reference_load`; trust-backlog-consumer `post_batch`, `post_train_reasons`, `reload_stanox_crs`; full-coverage-consumer `reload_line_population_fetch`, `post_line_stats`, `post_station_samples`, `reload_stanox_crs`). One alert per consumer. |
-| `DistantSignalApiPublic5xx` | warning | More than 5% of api's public requests (every route but `/private/*`, `/public/health` and unmatched paths) answered 5xx over 5m, with at least 3 of them, for 10m (`http_requests_total` by `exported_endpoint`). A dependency-unavailable 503 counts. |
+| `DistantSignalApiPublic5xx` | warning | More than 5% of api's public requests (every route but `/private/*`, `/public/health`, `/public/ready` and unmatched paths) answered 5xx over 5m, with at least 3 of them, for 10m (`http_requests_total` by `exported_endpoint`). A dependency-unavailable 503 counts. |
 | `DistantSignalApiIngest5xx` | warning | The same for the `/private/*` ingest routes, with at least 30 5xx in 5m. |
 | `DistantSignalAggregatorCycleFailing` | warning | No successful aggregation cycle for 15m (`aggregator_last_success_timestamp_seconds{cycle}`, the process start until the first success; `aggregator_cycles_total{cycle,result}` counts both outcomes). |
 | `DistantSignalNotifierCycleFailing` | warning | No successful run of a notifier loop (`line_status`, `forward_queue`, `skip_check`; not the hourly `template_sweep`) for 15m (`notifier_last_success_timestamp_seconds{cycle}`). |

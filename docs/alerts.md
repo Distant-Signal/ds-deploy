@@ -181,7 +181,7 @@ isolated by the dead-letter path. full-coverage-consumer's
 
 More than `api5xx.public.ratio` (5%) of api's public requests answered 5xx
 over `api5xx.window` (5m), with at least `minErrors` (3) of them, for `for`
-(10m). Public means every route except `/private/*`, `/public/health` and
+(10m). Public means every route except `/private/*`, `/public/health`, `/public/ready` and
 unmatched paths (`/{unmatched}`, scanner noise): what the frontend, the MCP
 and anyone else calling the API sees. The recording rules
 `distant_signal:api_requests:rate`, `distant_signal:api_5xx:rate` and

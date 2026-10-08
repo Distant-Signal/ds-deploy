@@ -85,6 +85,32 @@ metadata:
   name: {{ include "distant-signal.apiFullname" . }}
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "api") | nindent 4 }}
+{{- /*
+Graceful shutdown budget: the preStop sleep, then up to drainSecs of
+draining after SIGTERM, must end before the kubelet's SIGKILL at
+terminationGracePeriodSeconds, with 5 s to spare for the loops' lock
+release and process exit.
+*/}}
+{{- $shutdown := .Values.api.shutdown | default dict }}
+{{- $drainSecs := int (dig "drainSecs" 20 $shutdown) }}
+{{- $preStopSleepSecs := int (dig "preStopSleepSecs" 5 $shutdown) }}
+{{- $graceSecs := int (.Values.api.terminationGracePeriodSeconds | default 35) }}
+{{- if or (lt $drainSecs 1) (gt $drainSecs 3600) }}
+{{- fail (printf "api.shutdown.drainSecs must be 1-3600, got %d." $drainSecs) }}
+{{- end }}
+{{- if lt $preStopSleepSecs 0 }}
+{{- fail (printf "api.shutdown.preStopSleepSecs must not be negative, got %d." $preStopSleepSecs) }}
+{{- end }}
+{{- if gt (add $preStopSleepSecs $drainSecs 5) $graceSecs }}
+{{- fail (printf "api.terminationGracePeriodSeconds (%d) must be at least api.shutdown.preStopSleepSecs (%d) + api.shutdown.drainSecs (%d) + 5, or the kubelet kills the api mid-drain." $graceSecs $preStopSleepSecs $drainSecs) }}
+{{- end }}
+{{- /*
+The readiness DB check is for 2+ replicas only (user decision, 2026-10-08):
+with one, NotReady on a database blip empties the Service.
+*/}}
+{{- if and (dig "readiness" "checkDatabase" false .Values.api) (lt (int .Values.api.replicaCount) 2) }}
+{{- fail "api.readiness.checkDatabase needs api.replicaCount 2 or more: with one replica a database blip would make the only pod NotReady and empty the Service." }}
+{{- end }}
 spec:
   replicas: {{ .Values.api.replicaCount }}
   strategy:
@@ -129,6 +155,10 @@ spec:
       maxSurge: 1
       maxUnavailable: 0
     {{- end }}
+  {{- if and (eq $strategy "RollingUpdate") .Values.api.minReadySeconds }}
+  # The new pod must stay Ready this long before the old one is stopped.
+  minReadySeconds: {{ int .Values.api.minReadySeconds }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
@@ -175,6 +205,8 @@ spec:
       {{- end }}
       securityContext:
         {{- include "distant-signal.podSecurityContext" (dict "override" .Values.api.podSecurityContext) | nindent 8 }}
+      # preStop sleep + API_SHUTDOWN_DRAIN_SECS + margin; see api.shutdown.
+      terminationGracePeriodSeconds: {{ $graceSecs }}
       containers:
         - name: api
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) | quote }}
@@ -207,9 +239,14 @@ spec:
             periodSeconds: {{ .Values.api.probes.startup.periodSeconds }}
             failureThreshold: {{ .Values.api.probes.startup.failureThreshold }}
             timeoutSeconds: {{ .Values.api.probes.startup.timeoutSeconds }}
+          # /public/ready, not /public/health: 503 while the pod is
+          # draining, and with api.readiness.checkDatabase while the
+          # database is unreachable (crates/api/src/readiness.rs). Liveness
+          # stays on /public/health so a database blip never restarts the
+          # pod.
           readinessProbe:
             httpGet:
-              path: {{ .Values.api.probes.path }}
+              path: {{ .Values.api.probes.readinessPath | default "/public/ready" }}
               port: http
             periodSeconds: {{ .Values.api.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.api.probes.readiness.failureThreshold }}
@@ -221,6 +258,16 @@ spec:
             periodSeconds: {{ .Values.api.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.api.probes.liveness.failureThreshold }}
             timeoutSeconds: {{ .Values.api.probes.liveness.timeoutSeconds }}
+          {{- if gt $preStopSleepSecs 0 }}
+          # Before SIGTERM: lets the endpoint removal reach every kube-proxy
+          # and the frontend's connection pool, so no new request arrives
+          # once the api stops accepting. The image is debian-slim, so
+          # `sleep` exists.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", {{ $preStopSleepSecs | quote }}]
+          {{- end }}
           {{- with .Values.api.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -344,6 +391,12 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.timeouts.headerReadTimeoutSecs | quote }}
             - name: API_UNAVAILABLE_RETRY_AFTER_SECS
               value: {{ .Values.api.timeouts.unavailableRetryAfterSecs | quote }}
+            # Graceful shutdown drain; see api.shutdown.
+            - name: API_SHUTDOWN_DRAIN_SECS
+              value: {{ dig "drainSecs" 20 (.Values.api.shutdown | default dict) | quote }}
+            # Readiness also checks the database; see api.readiness.
+            - name: API_READINESS_CHECKS_DB
+              value: {{ dig "readiness" "checkDatabase" false .Values.api | toString | quote }}
             - name: API_RATE_LIMIT_ENABLED
               value: {{ .Values.api.rateLimit.enabled | quote }}
             - name: API_RATE_LIMIT_TRUST_X_REAL_IP
