@@ -1208,6 +1208,17 @@ pollers:
     baseUrl: ""
     baseUrlEnvVar: LDBWS_BASE_URL
     ingestPath: /private/station-samples
+    # Ingest architecture plan 3a.7: where the samples go.
+    ingest:
+      # -- `http` (today): POST each cycle to `ingestPath`. `http+shadow`:
+      # the same POST, plus a copy XADDed to `ds:ingest:station-samples`
+      # for `ingestWriter.streams.station-samples: shadow`. `stream`: XADD
+      # only (with `ingestWriter.streams.station-samples: apply`, in the
+      # same values change). Either stream sink renders INGEST_SINK and
+      # REDIS_URL (the `poller-ldbws` ACL user with
+      # `redis.acl.clients.pollerLdbws`) and the Redis egress and
+      # admission. Rollback: `http`.
+      sink: http
     # -- ldbws only: the api endpoint listing which stations to sample. This
     # is a SECOND api URL, separate from ingestPath -- see
     # crates/poller-ldbws/src/config.rs.
@@ -2617,6 +2628,10 @@ redis:
       # -- poller-incidents' DB sink (`pollers.incidents.ingest.sink: db`),
       # as user `poller-incidents` (`%W~incident-text-changed +xadd`).
       pollerIncidents: false
+      # -- poller-ldbws' stream sinks (`pollers.ldbws.ingest.sink:
+      # http+shadow` or `stream`), as user `poller-ldbws`
+      # (`~ds:ingest:station-samples +xadd +xrevrange`).
+      pollerLdbws: false
   image:
     repository: redis
     # -- Pinned to an exact 7.4 patch release and content digest (INF-11);
@@ -3086,6 +3101,16 @@ fullCoverageConsumer:
   # knob (see that block's comment).
   replicaCount: 1
   # (movementFeed was removed in Deploy C; see trustConsumer.)
+  # Ingest architecture plan 3a.8: where each stats write goes.
+  ingest:
+    # -- `http` (today): POST the three outputs to the api. `http+shadow`:
+    # the same POSTs, plus a copy of what the api accepted XADDed to
+    # `ds:ingest:full-coverage` for `ingestWriter.streams.full-coverage:
+    # shadow`. `stream`: XADD only (with `ingestWriter.streams.full-coverage:
+    # apply`, in the same values change). Uses this consumer's existing
+    # Redis connection and user (`redis.acl.clients.fullCoverageConsumer`,
+    # whose ACL already allows the stream). Rollback: `http`.
+    sink: http
   redisAutoclaimMinIdleSecs: 30
   redisGapCheckSecs: 60
   # -- Windowed full-coverage stats
@@ -4624,6 +4649,17 @@ metrics:
         maxAgeSeconds: 120
         for: 1m
         severity: critical
+    # DistantSignalIngestShadowMismatch: the rollout's compare step (plan
+    # 3a; spec §13.1). While a producer is on `http+shadow`, the rows the
+    # ingest-writer handled for a schema over `window` differ from the
+    # rows the api accepted by more than `ratio`, for `for`. Also records
+    # distant_signal:ingest_stream_rows_vs_http:ratio (1 when they agree).
+    ingestShadowMismatch:
+      enabled: true
+      window: 1h
+      ratio: 0.02
+      for: 30m
+      severity: warning
     # DistantSignalApiDatabaseDown (critical): api's own `SELECT 1` probe
     # through its request pool (distant_signal_api_db_up, every 15s) has
     # failed on some replica for `for`. Covers what pg_up cannot see: a

@@ -21,6 +21,7 @@ tests:
       - {eval_time: 30m, alertname: DistantSignalIngestProducerXaddFailing, exp_alerts: []}
       - {eval_time: 30m, alertname: DistantSignalIngestStreamMemoryHigh, exp_alerts: []}
       - {eval_time: 30m, alertname: DistantSignalIngestClockSkew, exp_alerts: []}
+      - {eval_time: 30m, alertname: DistantSignalIngestShadowMismatch, exp_alerts: []}
 
   # Backlog. station-samples: 300 unread + 100 pending of MAXLEN 720
   # (0.56): warning. full-coverage: 324 of 360 (0.9): warning and
@@ -260,3 +261,36 @@ tests:
       - eval_time: 34m
         alertname: DistantSignalIngestClockSkew
         exp_alerts: []
+
+  # Shadow compare (plan 3a): station-samples, the writer's shadow rows
+  # match the api's: quiet. full-coverage-stats, the producer is on
+  # http+shadow (its `stream` series registered at 0) but no copy reaches
+  # the writer: ratio 0, fires after `for: 30m`. tfl, the api takes rows
+  # but the producer is on plain `http` (no `stream` series) and the
+  # writer has nothing to read (rollout step 1): quiet.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_sink_rows_total{namespace="distant-signal", pod="ldbws", stream="ds:ingest:station-samples", schema="station-samples", sink="http"}'
+        values: '0+255x60'
+      - series: 'distant_signal_ingest_stream_sink_rows_total{namespace="distant-signal", pod="ldbws", stream="ds:ingest:station-samples", schema="station-samples", sink="stream"}'
+        values: '0+255x60'
+      - series: 'distant_signal_ingest_stream_rows_total{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples", schema="station-samples", mode="shadow"}'
+        values: '0+255x60'
+      - series: 'distant_signal_ingest_stream_sink_rows_total{namespace="distant-signal", pod="fcc", stream="ds:ingest:full-coverage", schema="full-coverage-stats", sink="http"}'
+        values: '0+250x60'
+      - series: 'distant_signal_ingest_stream_sink_rows_total{namespace="distant-signal", pod="fcc", stream="ds:ingest:full-coverage", schema="full-coverage-stats", sink="stream"}'
+        values: '0x60'
+      - series: 'distant_signal_ingest_stream_sink_rows_total{namespace="distant-signal", pod="tfl", stream="ds:ingest:tfl", schema="tfl-line-status", sink="http"}'
+        values: '0+20x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DistantSignalIngestShadowMismatch
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: DistantSignalIngestShadowMismatch
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:full-coverage", schema: full-coverage-stats}
+            exp_annotations:
+              summary: "full-coverage-stats: writer and api row counts differ by 100%"
+              description: "Over 1h, the ingest-writer handled a different number of ds:ingest:full-coverage rows than the api accepted. Do not flip to stream yet."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestshadowmismatch

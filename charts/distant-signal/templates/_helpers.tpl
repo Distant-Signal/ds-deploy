@@ -1159,8 +1159,8 @@ Takes (dict "root" $ "name" <pollers key> "poller" <its values>).
 {{- define "distant-signal.pollerSinkDb" -}}
 {{- $ingest := .poller.ingest | default dict -}}
 {{- $sink := toString ($ingest.sink | default "http") -}}
-{{- if not (has $sink (list "http" "db")) -}}
-{{- fail (printf "pollers.%s.ingest.sink must be http or db, not %q." .name $sink) -}}
+{{- if not (has $sink (list "http" "db" "http+shadow" "stream")) -}}
+{{- fail (printf "pollers.%s.ingest.sink must be http or db (or, for a stream producer, http+shadow or stream), not %q." .name $sink) -}}
 {{- end -}}
 {{- if and .poller.enabled (eq $sink "db") -}}
 {{- if and (eq .name "stations") (not (and .root.Values.ingestWriter.enabled .root.Values.ingestWriter.loops.enabled)) -}}
@@ -1199,6 +1199,51 @@ Takes (dict "root" $ "service" "trust_backlog"|"trust_consumer").
 {{- fail "trustConsumer.ingest.sink=db needs ingestWriter.enabled and ingestWriter.loops.enabled: the ingest-writer's train_event_outbox loop applies the events that change a subscription (resolutions, cancellations, reinstatements), which the trust_consumer role may not write (ingest architecture plan 3b.3)." -}}
 {{- end -}}
 true
+{{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when the poller is enabled and pollers.<name>.ingest.sink
+is `http+shadow` or `stream` (ingest architecture phase 3: it XADDs its
+snapshots to its ds:ingest:* stream, so it needs Redis). Only the stream
+producers take those sinks (plan 3a.7: ldbws; 3c adds tfl and tocs); any
+other poller fails the render. Takes (dict "root" $ "name" <pollers key>
+"poller" <its values>).
+*/}}
+{{- define "distant-signal.pollerSinkStream" -}}
+{{- $ingest := .poller.ingest | default dict -}}
+{{- $sink := toString ($ingest.sink | default "http") -}}
+{{- if has $sink (list "http+shadow" "stream") -}}
+{{- $streams := dict "ldbws" "station-samples" -}}
+{{- if not (hasKey $streams .name) -}}
+{{- fail (printf "pollers.%s.ingest.sink %s: only a stream producer (ldbws) takes http+shadow or stream." .name $sink) -}}
+{{- end -}}
+{{- if .poller.enabled -}}
+{{- $stream := get $streams .name -}}
+{{- if and (eq $sink "stream") (not (and .root.Values.ingestWriter.enabled (eq (toString (get .root.Values.ingestWriter.streams $stream)) "apply"))) -}}
+{{- fail (printf "pollers.%s.ingest.sink=stream needs ingestWriter.enabled and ingestWriter.streams.%s: apply (flip both in the same values change, spec §13.1): with no writer applying the stream, nothing would reach the database." .name $stream) -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+fullCoverageConsumer.ingest.sink (ingest architecture plan 3a.8): the value
+for INGEST_SINK when it is http+shadow or stream, empty for http (nothing
+renders). Fails on any other value, and on stream without
+ingestWriter.streams.full-coverage: apply. Takes root.
+*/}}
+{{- define "distant-signal.fullCoverageConsumerIngestSink" -}}
+{{- $sink := toString (dig "ingest" "sink" "http" .Values.fullCoverageConsumer) -}}
+{{- if not (has $sink (list "http" "http+shadow" "stream")) -}}
+{{- fail (printf "fullCoverageConsumer.ingest.sink must be http, http+shadow or stream, not %q." $sink) -}}
+{{- end -}}
+{{- if and (eq $sink "stream") (not (and .Values.ingestWriter.enabled (eq (toString (get .Values.ingestWriter.streams "full-coverage")) "apply"))) -}}
+{{- fail "fullCoverageConsumer.ingest.sink=stream needs ingestWriter.enabled and ingestWriter.streams.full-coverage: apply (flip both in the same values change, spec §13.1): with no writer applying the stream, nothing would reach the database." -}}
+{{- end -}}
+{{- if ne $sink "http" -}}
+{{- $sink -}}
 {{- end -}}
 {{- end }}
 

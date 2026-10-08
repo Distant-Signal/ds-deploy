@@ -159,6 +159,13 @@ spec:
                   # poller-incidents' DB sink XADDs incident-text-changed.
                   - poller-incidents
                   {{- end }}
+                  {{- range $name, $poller := .Values.pollers }}
+                  {{- if include "distant-signal.pollerSinkStream" (dict "root" $ "name" $name "poller" $poller) }}
+                  # pollers.{{ $name }}.ingest.sink http+shadow or stream
+                  # (plan 3a.7): XADDs its ds:ingest:* stream.
+                  - {{ printf "poller-%s" $name }}
+                  {{- end }}
+                  {{- end }}
         {{- with .Values.networkPolicy.redisClients }}
         # networkPolicy.redisClients: workloads outside this chart, e.g. a
         # redis-exporter.
@@ -459,6 +466,11 @@ poller-incidents' (plan 2c.2) also XADDs incident-text-changed to Redis. */}}
 {{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" . "poller" $poller) }}
 {{- $pollerEgress = dict "postgres" true }}
 {{- if eq . "incidents" }}{{ $_ := set $pollerEgress "redis" true }}{{ end }}
+{{- end }}
+{{- /* Phase 3 (plan 3a.7): a stream sink also XADDs to Redis; it still calls
+the api (its station list, and the POST under http+shadow). */}}
+{{- if include "distant-signal.pollerSinkStream" (dict "root" $root "name" . "poller" $poller) }}
+{{- $pollerEgress = dict "api" true "redis" true }}
 {{- end }}
 {{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $pollerEgress "urls" (list $poller.baseUrl $root.Values.internalOauth.tokenUrl)) }}
 {{- end }}

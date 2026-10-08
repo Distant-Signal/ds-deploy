@@ -124,9 +124,9 @@ CLIENTS = {
 }
 # redis.acl.clients keys whose workload renders nothing with the defaults
 # (the ingest-writer's streams, plan 3a.3; poller-incidents' db sink, plan
-# 2c): no per-client Deployment check, but defaultUser off still needs
-# each of them on.
-DORMANT_CLIENTS = ("ingestWriter", "pollerIncidents")
+# 2c; poller-ldbws' stream sinks, plan 3a.7): no per-client Deployment
+# check, but defaultUser off still needs each of them on.
+DORMANT_CLIENTS = ("ingestWriter", "pollerIncidents", "pollerLdbws")
 ALL_CLIENTS = sets(
     *(f"redis.acl.clients.{k}=true" for k in (*CLIENTS, *DORMANT_CLIENTS))
 )

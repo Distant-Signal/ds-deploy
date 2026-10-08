@@ -4,7 +4,8 @@ lives in the `.Values.pollers` map (baseUrlEnvVar, ingestPath, cadence, and
 ldbws's two extra vars), so this file never branches on a poller's name,
 except for poller-incidents' Redis and row-heartbeat settings (ingest plan
 2c), which are that poller's alone (distant-signal.pollerIncidentsIngestEnv).
-The phase 2 db sink itself (INGEST_SINK, DATABASE_URL) is the shared
+The phase 2 db sink itself (INGEST_SINK, DATABASE_URL) and the phase 3
+stream sinks (INGEST_SINK, REDIS_URL; plan 3a.7) are the shared
 pollers.<name>.ingest block.
 
 Go templates iterate maps in sorted key order, so the rendered document
@@ -159,6 +160,17 @@ with $poller.extraEnv, which replaces an entry of the same name.
             {{- include "distant-signal.databaseEnvFor" (dict "root" $root "service" (ternary $name "" (hasKey $root.Values.postgresql.roles.perService $name))) | nindent 12 }}
             - name: DATABASE_MAX_CONNECTIONS
               value: {{ $poller.ingest.database.maxConnections | int | quote }}
+            {{- end }}
+            {{- if include "distant-signal.pollerSinkStream" (dict "root" $root "name" $name "poller" $poller) }}
+            # Ingest architecture phase 3 (pollers.<name>.ingest.sink:
+            # http+shadow or stream): XADD each snapshot to the poller's
+            # ds:ingest:* stream, as its own ACL user with
+            # redis.acl.clients.poller<Name>.
+            - name: INGEST_SINK
+              value: {{ $poller.ingest.sink | quote }}
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" $root | quote }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" $root "client" (printf "poller%s" (title $name)) "user" (printf "poller-%s" $name)) }}
             {{- end }}
             {{- if $poller.sampleStationsPath }}
             # ldbws only: a SECOND api endpoint, listing which stations to

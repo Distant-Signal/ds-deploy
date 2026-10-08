@@ -62,7 +62,7 @@ so that clause fired on every rollout.
 {{- $healthOn := or $postgresDownOn $apiDbDownOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
-{{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled) }}
+{{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled ($rule.ingestShadowMismatch).enabled) }}
 {{- $outboxOn := and ($rule.trainEventOutbox).enabled .Values.ingestWriter.enabled }}
 {{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn $outboxOn }}
 apiVersion: monitoring.coreos.com/v1
@@ -1161,6 +1161,47 @@ spec:
             summary: "{{ "{{ $labels.stream }}" }} carries times over 2 min in the future"
             description: "The ingest-writer clamped observed times ({{ "{{ $labels.schema }}" }}) to its own clock: a producer's clock is ahead."
             runbook_url: {{ printf "%s#distantsignalingestclockskew" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ingestShadowMismatch }}
+        {{- if .enabled }}
+        {{- /*
+        The rollout's compare step (plan 3a, spec §13.1): per stream and
+        schema, the rows the writer handled (shadow, or apply) over the
+        rows the api accepted (ingest_stream_rows_total over
+        ingest_stream_sink_rows_total{sink="http"}; plan 3a.6-3a.8). Only
+        while the api is still taking rows (`> 0`), so not after the flip
+        to `stream`. A producer on http+shadow registers its `stream`
+        series at 0, so a shadow copy that never reaches the writer reads
+        0 rather than nothing; a producer on plain `http` has no such
+        series, so the writer's `shadow` alone (rollout step 1) reads
+        nothing.
+        */}}
+        {{- $writer := printf `distant_signal_ingest_stream_rows_total{namespace="%s", mode=~"shadow|apply"}` $ns }}
+        {{- $copied := printf `distant_signal_ingest_stream_sink_rows_total{namespace="%s", sink="stream"}` $ns }}
+        {{- $http := printf `distant_signal_ingest_stream_sink_rows_total{namespace="%s", sink="http"}` $ns }}
+        - record: distant_signal:ingest_stream_rows_vs_http:ratio
+          expr: |
+            (
+              sum by (namespace, stream, schema) (increase({{ $writer }}[{{ .window }}]))
+              or
+              sum by (namespace, stream, schema) (increase({{ $copied }}[{{ .window }}])) * 0
+            )
+            / on (namespace, stream, schema)
+            (sum by (namespace, stream, schema) (increase({{ $http }}[{{ .window }}])) > 0)
+        - alert: DistantSignalIngestShadowMismatch
+          expr: |
+            abs(distant_signal:ingest_stream_rows_vs_http:ratio{namespace="{{ $ns }}"} - 1) > {{ .ratio }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.schema }}" }}: writer and api row counts differ by {{ "{{ $value | humanizePercentage }}" }}"
+            description: "Over {{ .window }}, the ingest-writer handled a different number of {{ "{{ $labels.stream }}" }} rows than the api accepted. Do not flip to stream yet."
+            runbook_url: {{ printf "%s#distantsignalingestshadowmismatch" $runbook | quote }}
         {{- end }}
         {{- end }}
     {{- end }}

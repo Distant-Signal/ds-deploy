@@ -732,6 +732,30 @@ that producer's freshness and history times are off. Compare the clocks
 (`date -u` in the producer and writer pods; NTP on the nodes). The cluster
 is a single node today, so this should not fire.
 
+### DistantSignalIngestShadowMismatch
+
+The rollout's compare step (plan 3a, spec §13.1) disagrees: while a
+producer is on `http+shadow`, the rows the ingest-writer handled for one
+schema (`ingest_stream_rows_total`, `shadow` or `apply`) differ from the
+rows the api accepted (`ingest_stream_sink_rows_total{sink="http"}`) by
+more than `ingestShadowMismatch.ratio` over its `window`
+(`distant_signal:ingest_stream_rows_vs_http:ratio`, 1 when they agree).
+Do not flip that producer to `stream` until it is quiet again.
+
+- **0** (the copy never arrives): the producer's XADDs fail (see
+  `DistantSignalIngestProducerXaddFailing`, the producer's log, its Redis
+  ACL user and NetworkPolicy), or the writer's stream is `off`.
+- **Below 1**: copies are lost between the POST and the writer: XADD
+  failures, entries superseded while Redis was down
+  (`ingest_stream_produce_dropped_total{reason="superseded"}`), dead
+  letters (`DistantSignalIngestDeadLetters`), or an encoding failure (the
+  producer logs it; `reason="oversize"`).
+- **Above 1**: the writer saw rows the api did not count: more than one
+  producer pod, or a dead-letter re-injection during the window.
+
+A short blip around a deploy is expected (counters restart); the `for`
+covers it.
+
 ## users
 
 ### DistantSignalUserSignupSpike

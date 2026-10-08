@@ -149,6 +149,12 @@ with fullCoverageConsumer.extraEnv, which replaces an entry of the same name.
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "fullCoverageConsumer" "user" "full-coverage-consumer") }}
+            {{- with include "distant-signal.fullCoverageConsumerIngestSink" . }}
+            # fullCoverageConsumer.ingest.sink (ingest plan 3a.8): XADD each
+            # stats write to ds:ingest:full-coverage. Not rendered for http.
+            - name: INGEST_SINK
+              value: {{ . | quote }}
+            {{- end }}
             - name: REDIS_AUTOCLAIM_MIN_IDLE_SECS
               value: {{ .Values.fullCoverageConsumer.redisAutoclaimMinIdleSecs | quote }}
             - name: REDIS_GAP_CHECK_SECS
