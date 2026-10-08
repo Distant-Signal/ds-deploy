@@ -128,7 +128,13 @@ roles:
     used_by: poller-incidents
   schedule_ingest:
     name: distant_signal_schedule_ingest
-    status: planned
+    # Narrow from the start (plan 2d.2): nothing connects as it until
+    # scheduleFeed.ingest.sink=db, and that flip should exercise the final
+    # grants. The CORPUS load rewrites the derived crosswalk in its own
+    # transaction (ds_store::corpus::crosswalk::write, restricted to the
+    # current `stations`), hence its corpus_* crosswalk grants and SELECT
+    # on stations, which spec §6.4's table leaves out.
+    status: narrow
     phase: 2d
     groups: [schema_gate]
     connection_limit: 2
@@ -234,14 +240,14 @@ tables:
   line_status_daily_coverage_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
   line_status_half_hourly_coverage_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
   full_coverage_window_verdicts: {class: derived, grants: {api: S, aggregator: SIUD}}
-  corpus_crosswalk_build: {class: derived, grants: {api: S, writer: SIUD}}
-  corpus_stanox_crs: {class: derived, grants: {api: S, writer: SIUD}}
+  corpus_crosswalk_build: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD}}
+  corpus_stanox_crs: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD}}
   # notifier: named in common::public_delay's SQL (corpus fallback off), so
   # Postgres checks SELECT even when the branch is unused.
-  corpus_tiploc_crs: {class: derived, grants: {api: S, writer: SIUD, notifier: S}}
+  corpus_tiploc_crs: {class: derived, grants: {api: S, writer: SIUD, notifier: S, schedule_ingest: SIUD}}
 
   # --- reference: stations, codes and schedule products.
-  stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S}}
+  stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S, schedule_ingest: S}}
   tocs: {class: reference, grants: {api: S, writer: SIU}}
   stanox_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, trust_backlog: S, trust_consumer: S, full_coverage_ro: S, notifier: S}}
   tiploc_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, notifier: S}}

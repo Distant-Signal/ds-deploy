@@ -1002,6 +1002,9 @@ app.connectionLimitSlack.
 {{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "writer")) -}}
 {{- $total = add $total (include "distant-signal.ingestWriterPool" $root) -}}
 {{- end -}}
+{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "schedule_ingest")) -}}
+{{- $total = add $total (include "distant-signal.scheduleIngestPool" $root) -}}
+{{- end -}}
 {{- $total -}}
 {{- else -}}
 {{- fail (printf "postgresql.roles.%s.connectionLimit must be set." .role) -}}
@@ -1055,10 +1058,12 @@ Every helper takes root unless it says otherwise.
 
 distant-signal.perServiceKeys: the services this chart can move to their
 own role, space-separated. Each must be a created (not `planned`) role in
-db-grants.yaml. `writer` is the ingest-writer's (ingestWriter, plan 1B.9).
+db-grants.yaml. `writer` is the ingest-writer's (ingestWriter, plan 1B.9);
+`schedule_ingest` is schedule-ingest's under scheduleFeed.ingest.sink=db
+(plan 2d.2).
 */}}
 {{- define "distant-signal.perServiceKeys" -}}
-api aggregator enricher notifier writer
+api aggregator enricher notifier writer schedule_ingest
 {{- end }}
 
 {{- define "distant-signal.perServiceEnabled" -}}
@@ -1085,6 +1090,9 @@ True (non-empty) when the service connects as its own role. Takes (dict
 {{- end -}}
 {{- if and (eq .service "writer") (not .root.Values.ingestWriter.enabled) -}}
 {{- fail "postgresql.roles.perService.writer.connect needs ingestWriter.enabled: nothing else connects as the writer role." -}}
+{{- end -}}
+{{- if and (eq .service "schedule_ingest") (not (include "distant-signal.scheduleIngestSinkDb" .root)) -}}
+{{- fail "postgresql.roles.perService.schedule_ingest.connect needs scheduleFeed.enabled and scheduleFeed.ingest.sink=db: nothing else connects as the schedule_ingest role." -}}
 {{- end -}}
 true
 {{- end -}}
@@ -1128,6 +1136,8 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 {{- else if eq .service "writer" -}}
 {{- /* Its pool plus the loop-lock session (crates/ingest-writer). */ -}}
 {{- add1 (int $root.Values.ingestWriter.database.maxConnections) -}}
+{{- else if eq .service "schedule_ingest" -}}
+{{- int $root.Values.scheduleFeed.ingest.database.maxConnections -}}
 {{- else -}}
 5
 {{- end -}}
@@ -1159,6 +1169,33 @@ Redis credentials and the NetworkPolicy paths to Redis. Takes root.
 {{- range $name, $mode := .Values.ingestWriter.streams -}}
 {{- if ne (toString $mode) "off" }}true{{ end -}}
 {{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when the schedulefeed Deployment renders and its ingest
+container writes Postgres directly (scheduleFeed.ingest.sink=db, plan 2d);
+fails the render on an unknown sink. Takes root.
+*/}}
+{{- define "distant-signal.scheduleIngestSinkDb" -}}
+{{- $sink := toString (.Values.scheduleFeed.ingest.sink | default "http") -}}
+{{- if not (has $sink (list "http" "db")) -}}
+{{- fail (printf "scheduleFeed.ingest.sink must be http or db, got %q" $sink) -}}
+{{- end -}}
+{{- if and .Values.scheduleFeed.enabled (eq $sink "db") -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+schedule-ingest's Postgres pool (scheduleFeed.ingest.database.maxConnections)
+under scheduleFeed.ingest.sink=db, else 0. Takes root.
+*/}}
+{{- define "distant-signal.scheduleIngestPool" -}}
+{{- if include "distant-signal.scheduleIngestSinkDb" . -}}
+{{- int .Values.scheduleFeed.ingest.database.maxConnections -}}
+{{- else -}}
+0
 {{- end -}}
 {{- end }}
 

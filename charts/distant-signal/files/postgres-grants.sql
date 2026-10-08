@@ -11,7 +11,7 @@
 --     -f postgres-grants.sql
 --
 -- Passwords come from the environment (psql's \getenv), one per created
--- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD.
+-- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD.
 --
 -- In ONE transaction:
 --   1. the group roles (NOLOGIN) and every role whose status is not
@@ -78,6 +78,14 @@
 \else
 \set writer_connection_limit 7
 \endif
+\if :{?schedule_ingest}
+\else
+\set schedule_ingest distant_signal_schedule_ingest
+\endif
+\if :{?schedule_ingest_connection_limit}
+\else
+\set schedule_ingest_connection_limit 2
+\endif
 \getenv api_password DS_PG_API_PASSWORD
 \if :{?api_password}
 \else
@@ -103,6 +111,11 @@
 \else
 \set writer_password ''
 \endif
+\getenv schedule_ingest_password DS_PG_SCHEDULE_INGEST_PASSWORD
+\if :{?schedule_ingest_password}
+\else
+\set schedule_ingest_password ''
+\endif
 
 BEGIN;
 
@@ -125,7 +138,10 @@ SELECT
     set_config('ds_grants.notifier_connection_limit', :'notifier_connection_limit', true),
     set_config('ds_grants.writer', :'writer', true),
     set_config('ds_grants.writer_password', :'writer_password', true),
-    set_config('ds_grants.writer_connection_limit', :'writer_connection_limit', true)
+    set_config('ds_grants.writer_connection_limit', :'writer_connection_limit', true),
+    set_config('ds_grants.schedule_ingest', :'schedule_ingest', true),
+    set_config('ds_grants.schedule_ingest_password', :'schedule_ingest_password', true),
+    set_config('ds_grants.schedule_ingest_connection_limit', :'schedule_ingest_connection_limit', true)
 \gset ignored_
 
 -- 1. Roles.
@@ -175,7 +191,8 @@ BEGIN
         ('aggregator', 'observed'),
         ('enricher', 'observed'),
         ('notifier', 'observed'),
-        ('writer', 'observed')) AS v(kind, status)
+        ('writer', 'observed'),
+        ('schedule_ingest', 'narrow')) AS v(kind, status)
     LOOP
         IF r.name = app OR r.name = current_user OR r.name = ANY (seen) THEN
             RAISE EXCEPTION 'the % role name % must be a new, separate role',
@@ -220,7 +237,8 @@ BEGIN
         ('aggregator', 'observed'),
         ('enricher', 'observed'),
         ('notifier', 'observed'),
-        ('writer', 'observed')) AS v(kind, status)
+        ('writer', 'observed'),
+        ('schedule_ingest', 'narrow')) AS v(kind, status)
     LOOP
         member_oid := (SELECT oid FROM pg_roles WHERE rolname = r.name);
         IF r.status = 'observed' AND NOT EXISTS (
@@ -248,7 +266,8 @@ BEGIN
         ('notifier', 'read_shared'),
         ('notifier', 'schema_gate'),
         ('writer', 'read_shared'),
-        ('writer', 'schema_gate')) AS v(kind, grp)
+        ('writer', 'schema_gate'),
+        ('schedule_ingest', 'schema_gate')) AS v(kind, grp)
     LOOP
         IF NOT EXISTS (
             SELECT 1 FROM pg_auth_members
@@ -278,7 +297,8 @@ BEGIN
         ('aggregator'),
         ('enricher'),
         ('notifier'),
-        ('writer')) AS v(kind)
+        ('writer'),
+        ('schedule_ingest')) AS v(kind)
     LOOP
         EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', grantee);
         EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM %I', grantee);
@@ -346,7 +366,30 @@ BEGIN
     FOR r IN
         SELECT v.tbl, current_setting('ds_grants.' || v.kind) AS grantee,
                v.priv, v.cols
-        FROM (SELECT NULL::text, NULL::text, NULL::text, NULL::text WHERE false) AS v(tbl, kind, priv, cols)
+        FROM (VALUES
+        ('corpus_crosswalk_build', 'schedule_ingest', 'SELECT', ''),
+        ('corpus_crosswalk_build', 'schedule_ingest', 'INSERT', ''),
+        ('corpus_crosswalk_build', 'schedule_ingest', 'UPDATE', ''),
+        ('corpus_crosswalk_build', 'schedule_ingest', 'DELETE', ''),
+        ('corpus_stanox_crs', 'schedule_ingest', 'SELECT', ''),
+        ('corpus_stanox_crs', 'schedule_ingest', 'INSERT', ''),
+        ('corpus_stanox_crs', 'schedule_ingest', 'UPDATE', ''),
+        ('corpus_stanox_crs', 'schedule_ingest', 'DELETE', ''),
+        ('corpus_tiploc_crs', 'schedule_ingest', 'SELECT', ''),
+        ('corpus_tiploc_crs', 'schedule_ingest', 'INSERT', ''),
+        ('corpus_tiploc_crs', 'schedule_ingest', 'UPDATE', ''),
+        ('corpus_tiploc_crs', 'schedule_ingest', 'DELETE', ''),
+        ('stations', 'schedule_ingest', 'SELECT', ''),
+        ('corpus_locations', 'schedule_ingest', 'SELECT', ''),
+        ('corpus_locations', 'schedule_ingest', 'INSERT', ''),
+        ('corpus_locations', 'schedule_ingest', 'UPDATE', ''),
+        ('corpus_locations', 'schedule_ingest', 'DELETE', ''),
+        ('corpus_deliveries', 'schedule_ingest', 'SELECT', ''),
+        ('corpus_deliveries', 'schedule_ingest', 'INSERT', ''),
+        ('corpus_deliveries', 'schedule_ingest', 'UPDATE', ''),
+        ('corpus_deliveries', 'schedule_ingest', 'DELETE', ''),
+        ('schedule_feed_ingests', 'schedule_ingest', 'SELECT', ''),
+        ('schedule_feed_ingests', 'schedule_ingest', 'INSERT', '')) AS v(tbl, kind, priv, cols)
         WHERE to_regclass(format('public.%I', v.tbl)) IS NOT NULL
     LOOP
         IF r.cols = '' THEN
@@ -360,7 +403,8 @@ BEGIN
     END LOOP;
     FOR r IN
         SELECT v.seq, current_setting('ds_grants.' || v.kind) AS grantee
-        FROM (SELECT NULL::text, NULL::text WHERE false) AS v(seq, kind)
+        FROM (VALUES
+        ('corpus_locations_id_seq', 'schedule_ingest')) AS v(seq, kind)
         WHERE to_regclass(format('public.%I', v.seq)) IS NOT NULL
     LOOP
         EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE public.%I TO %I',

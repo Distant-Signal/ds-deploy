@@ -350,6 +350,23 @@ postgresql:
         # (`ingestWriter.database.maxConnections`, 6) plus 1, the
         # loop-lock session (spec §6.6: pool 6, limit 7).
         connectionLimit: ""
+      schedule_ingest:
+        # -- Connect schedule-ingest (`scheduleFeed.ingest.sink=db`, which
+        # must be set) as `distant_signal_schedule_ingest` (plan 2d.2): a
+        # narrow role, not a member of `app`, holding only the CORPUS and
+        # feed-marker grants (files/db-grants.yaml). Created with the others
+        # whenever `enabled` is on, unused until then.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-schedule-ingest-password
+        # -- CONNECTION LIMIT. Empty: its pool
+        # (`scheduleFeed.ingest.database.maxConnections`, 1) plus 1 (spec
+        # §6.6: pool 1, limit 2).
+        connectionLimit: ""
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
     # succeeds, so crash recovery (WAL redo after a node reboot) is never
@@ -3601,6 +3618,20 @@ scheduleFeed:
     # stability window (now 5 * 120s = 10 minutes) stays a meaningful
     # signal rather than shrinking to 4 minutes.
     stabilityCycles: 5
+    # -- Where the ingest container records each feed delivery and loads
+    # each CORPUS extract (`INGEST_SINK`, ingest architecture plan 2d):
+    # `http` (api's /private/schedule-feed-ingests and
+    # /private/corpus-locations, as before) or `db` (Postgres directly,
+    # with the same validation; adds DATABASE_URL, the NetworkPolicy
+    # Postgres egress and ingress, and this pool to the connection
+    # budgets). Under `db` the CORPUS freshness gauge and the post-load
+    # comparison come from the ingest-writer's CORPUS loop, so turn
+    # `ingestWriter` and its loops on first.
+    sink: http
+    database:
+      # -- The pool under `sink: db` (DATABASE_MAX_CONNECTIONS; spec §6.6:
+      # 1). Scans are sequential, so one connection is enough.
+      maxConnections: 1
     # -- Extra env vars for the ingest container. Same shape as a
     # container `env` list. An entry named like one the chart sets
     # replaces it (one entry per name); other entries follow the chart's.

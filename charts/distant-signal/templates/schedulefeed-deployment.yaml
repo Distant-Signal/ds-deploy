@@ -662,6 +662,18 @@ scheduleFeed.ingest.extraEnv by distant-signal.mergeEnv (an extraEnv entry repla
               value: {{ .Values.scheduleFeed.corpus.minRows | quote }}
             - name: CORPUS_RETENTION_KEEP
               value: {{ .Values.scheduleFeed.corpus.retentionKeep | quote }}
+            {{- if include "distant-signal.scheduleIngestSinkDb" . }}
+            # scheduleFeed.ingest.sink=db (ingest architecture plan 2d): the
+            # feed markers and CORPUS loads go to Postgres directly, as the
+            # schedule_ingest role with
+            # postgresql.roles.perService.schedule_ingest.connect (else as
+            # the app role). Not rendered at all under the default `http`.
+            - name: INGEST_SINK
+              value: db
+            {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "schedule_ingest") | nindent 12 }}
+            - name: DATABASE_MAX_CONNECTIONS
+              value: {{ .Values.scheduleFeed.ingest.database.maxConnections | int | quote }}
+            {{- end }}
             - name: INTERNAL_OAUTH_TOKEN_URL
               value: {{ .Values.internalOauth.tokenUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID

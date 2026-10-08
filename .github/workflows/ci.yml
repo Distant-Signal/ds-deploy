@@ -419,6 +419,12 @@ jobs:
       - name: cargo test -p ingest-writer -- --ignored (DB-backed tests)
         run: cargo test -p ingest-writer -- --ignored --test-threads=1
 
+      # Ingest architecture plan 2d: schedule-ingest's direct sink
+      # (INGEST_SINK=db). Only its DB module: the crate's other ignored test
+      # needs a real CORPUS extract.
+      - name: cargo test -p schedule-ingest sink::db_tests -- --ignored (DB-backed tests)
+        run: cargo test -p schedule-ingest sink::db_tests -- --ignored --test-threads=1
+
       # Ingest architecture phase 3a: the stream runtime (produce/consume,
       # reclaim, dead letters, retries, MAXLEN, the producer policies while
       # Redis is down, and the poller-ldbws / ingest-writer ACL users).
@@ -469,6 +475,7 @@ jobs:
             DATABASE_URL="$DATABASE_URL_AGGREGATOR" cargo test -p aggregator -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_NOTIFIER" cargo test -p notifier -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_WRITER" cargo test -p ingest-writer -- --ignored --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_SCHEDULE_INGEST" cargo test -p schedule-ingest sink::db_tests -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_ENRICHER" cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1'
 
   # Custom: no reusable Piped workflow covers Node/npm at all (its

@@ -44,8 +44,8 @@ that can exhaust max_connections. Counted: api maxConnections x
 replicaCount (plus a RollingUpdate surge pod), plus aggregator 10,
 notifier 5, enricher 5, the api's migration connection 1, the archive pool
 2 when archive.enabled, the api-maintenance CronJob's pool when
-apiMaintenance.enabled and the ingest-writer's when ingestWriter.enabled;
-plus
+apiMaintenance.enabled, the ingest-writer's when ingestWriter.enabled and
+schedule-ingest's when scheduleFeed.ingest.sink=db; plus
 postgresql.connectionBudget (clients outside this chart, such as the
 postgres-exporter and pg_dump, and admin psql sessions) and 2 for pgBackRest
 when postgresql.pgbackrest.enabled. The total must fit in max_connections
@@ -67,7 +67,7 @@ limit is unknown here.
 {{- $apiPods := int (include "distant-signal.apiPods" .) }}
 {{- $apiPool := mul $apiPods (int (include "distant-signal.apiMaxConnections" .)) }}
 {{- include "distant-signal.postgresRoleBudgetCheck" . }}
-{{- $pools := add 10 5 5 1 (ternary 2 0 (.Values.archive.enabled | default false)) (include "distant-signal.apiMaintenancePool" .) (include "distant-signal.ingestWriterPool" .) }}
+{{- $pools := add 10 5 5 1 (ternary 2 0 (.Values.archive.enabled | default false)) (include "distant-signal.apiMaintenancePool" .) (include "distant-signal.ingestWriterPool" .) (include "distant-signal.scheduleIngestPool" .) }}
 {{- $budget := .Values.postgresql.connectionBudget | default dict }}
 {{- $pgbackrest := ternary 2 0 (dig "pgbackrest" "enabled" false .Values.postgresql) }}
 {{- $reserved := add (int (dig "externalClients" 2 $budget)) (int (dig "adminSessions" 3 $budget)) $pgbackrest }}

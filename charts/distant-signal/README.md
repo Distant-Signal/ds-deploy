@@ -1365,6 +1365,11 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.roles.perService.writer.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.writer.existingSecretPasswordKey` | `postgres-writer-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.writer.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `ingestWriter.database.maxConnections` + 1 (the loop-lock session). |
+| `postgresql.roles.perService.schedule_ingest.connect` | `false` | Connect schedule-ingest (`scheduleFeed.ingest.sink: db` required) as `distant_signal_schedule_ingest`: a narrow role, not a member of app, with only the CORPUS and feed-marker grants. Created with the others whenever `perService.enabled`, unused until then. |
+| `postgresql.roles.perService.schedule_ingest.password` | `""` | Password. |
+| `postgresql.roles.perService.schedule_ingest.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.perService.schedule_ingest.existingSecretPasswordKey` | `postgres-schedule-ingest-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.perService.schedule_ingest.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `scheduleFeed.ingest.database.maxConnections` + 1. |
 | `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
 | `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |
@@ -2477,6 +2482,8 @@ can run at once, deduplicated by content; with neither the render fails.
 | `scheduleFeed.ingest.pollIntervalSecs` | `120` | Seconds between scans of the watch folder. |
 | `scheduleFeed.ingest.retentionKeepDeliveries` | `2` | Complete deliveries kept on disk (current plus fallback). |
 | `scheduleFeed.ingest.stabilityCycles` | `5` | Consecutive unchanged scans before a file is treated as complete. |
+| `scheduleFeed.ingest.sink` | `http` | Where each delivery's record and each CORPUS load go (`INGEST_SINK`, ingest architecture plan 2d): `http`, api's `/private/schedule-feed-ingests` and `/private/corpus-locations`; or `db`, Postgres directly with the same validation (adds `DATABASE_URL`, the NetworkPolicy Postgres egress and ingress, and the pool to the connection budgets). Under `db` the CORPUS freshness gauge and post-load comparison come from the ingest-writer's CORPUS loop: turn `ingestWriter` and its loops on first. |
+| `scheduleFeed.ingest.database.maxConnections` | `1` | The pool under `sink: db` (`DATABASE_MAX_CONNECTIONS`). |
 | `scheduleFeed.ingest.extraEnv` | `[]` | Extra env entries for the schedule-ingest container. One named like a chart-set var (say `RUST_LOG`) replaces it, so each name is rendered once; the rest follow the chart's own. |
 | `scheduleFeed.ingest.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`) for one scan cycle, including posting a delivery to api. |
 | `scheduleFeed.ingest.existingSecret` | `""` | Read schedule-ingest's internal OAuth2 credential from this pre-existing Secret. |
