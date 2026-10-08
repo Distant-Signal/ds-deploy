@@ -11,7 +11,7 @@
 --     -f postgres-grants.sql
 --
 -- Passwords come from the environment (psql's \getenv), one per created
--- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_REFERENCE_PASSWORD, DS_PG_STATIONS_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD.
+-- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_REFERENCE_PASSWORD, DS_PG_STATIONS_PASSWORD, DS_PG_INCIDENTS_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD.
 --
 -- In ONE transaction:
 --   1. the group roles (NOLOGIN) and every role whose status is not
@@ -94,6 +94,14 @@
 \else
 \set stations_connection_limit 2
 \endif
+\if :{?incidents}
+\else
+\set incidents distant_signal_incidents
+\endif
+\if :{?incidents_connection_limit}
+\else
+\set incidents_connection_limit 3
+\endif
 \if :{?schedule_ingest}
 \else
 \set schedule_ingest distant_signal_schedule_ingest
@@ -137,6 +145,11 @@
 \else
 \set stations_password ''
 \endif
+\getenv incidents_password DS_PG_INCIDENTS_PASSWORD
+\if :{?incidents_password}
+\else
+\set incidents_password ''
+\endif
 \getenv schedule_ingest_password DS_PG_SCHEDULE_INGEST_PASSWORD
 \if :{?schedule_ingest_password}
 \else
@@ -171,6 +184,9 @@ SELECT
     set_config('ds_grants.stations', :'stations', true),
     set_config('ds_grants.stations_password', :'stations_password', true),
     set_config('ds_grants.stations_connection_limit', :'stations_connection_limit', true),
+    set_config('ds_grants.incidents', :'incidents', true),
+    set_config('ds_grants.incidents_password', :'incidents_password', true),
+    set_config('ds_grants.incidents_connection_limit', :'incidents_connection_limit', true),
     set_config('ds_grants.schedule_ingest', :'schedule_ingest', true),
     set_config('ds_grants.schedule_ingest_password', :'schedule_ingest_password', true),
     set_config('ds_grants.schedule_ingest_connection_limit', :'schedule_ingest_connection_limit', true)
@@ -226,6 +242,7 @@ BEGIN
         ('writer', 'observed'),
         ('schedule_reference', 'narrow'),
         ('stations', 'narrow'),
+        ('incidents', 'narrow'),
         ('schedule_ingest', 'narrow')) AS v(kind, status)
     LOOP
         IF r.name = app OR r.name = current_user OR r.name = ANY (seen) THEN
@@ -274,6 +291,7 @@ BEGIN
         ('writer', 'observed'),
         ('schedule_reference', 'narrow'),
         ('stations', 'narrow'),
+        ('incidents', 'narrow'),
         ('schedule_ingest', 'narrow')) AS v(kind, status)
     LOOP
         member_oid := (SELECT oid FROM pg_roles WHERE rolname = r.name);
@@ -305,6 +323,7 @@ BEGIN
         ('writer', 'schema_gate'),
         ('schedule_reference', 'schema_gate'),
         ('stations', 'schema_gate'),
+        ('incidents', 'schema_gate'),
         ('schedule_ingest', 'schema_gate')) AS v(kind, grp)
     LOOP
         IF NOT EXISTS (
@@ -338,6 +357,7 @@ BEGIN
         ('writer'),
         ('schedule_reference'),
         ('stations'),
+        ('incidents'),
         ('schedule_ingest')) AS v(kind)
     LOOP
         EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', grantee);
@@ -413,9 +433,20 @@ BEGIN
         ('schedule_destination_departures_publish_keys', 'schedule_reference', 'SELECT', ''),
         ('schedule_destination_departures_publish_keys', 'schedule_reference', 'INSERT', ''),
         ('schedule_destination_departures_publish_keys', 'schedule_reference', 'DELETE', ''),
+        ('incidents', 'incidents', 'SELECT', ''),
+        ('incidents', 'incidents', 'INSERT', ''),
+        ('incidents', 'incidents', 'UPDATE', ''),
+        ('incident_history', 'incidents', 'SELECT', ''),
+        ('incident_history', 'incidents', 'INSERT', ''),
+        ('incident_feed_state', 'incidents', 'SELECT', ''),
+        ('incident_feed_state', 'incidents', 'INSERT', ''),
+        ('incident_feed_state', 'incidents', 'UPDATE', ''),
         ('ingest_freshness', 'stations', 'SELECT', ''),
         ('ingest_freshness', 'stations', 'INSERT', ''),
         ('ingest_freshness', 'stations', 'UPDATE', ''),
+        ('ingest_freshness', 'incidents', 'SELECT', ''),
+        ('ingest_freshness', 'incidents', 'INSERT', ''),
+        ('ingest_freshness', 'incidents', 'UPDATE', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'SELECT', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'INSERT', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'UPDATE', ''),
@@ -432,6 +463,7 @@ BEGIN
         ('stations', 'stations', 'SELECT', ''),
         ('stations', 'stations', 'INSERT', ''),
         ('stations', 'stations', 'UPDATE', ''),
+        ('stations', 'incidents', 'SELECT', ''),
         ('stations', 'schedule_ingest', 'SELECT', ''),
         ('stanox_crs', 'schedule_reference', 'SELECT', ''),
         ('stanox_crs', 'schedule_reference', 'INSERT', ''),
@@ -500,6 +532,7 @@ BEGIN
     FOR r IN
         SELECT v.seq, current_setting('ds_grants.' || v.kind) AS grantee
         FROM (VALUES
+        ('incident_history_id_seq', 'incidents'),
         ('fixed_links_id_seq', 'schedule_reference'),
         ('corpus_locations_id_seq', 'schedule_ingest')) AS v(seq, kind)
         WHERE to_regclass(format('public.%I', v.seq)) IS NOT NULL

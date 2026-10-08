@@ -1,7 +1,11 @@
 {{/*
 One template, five Deployments. Everything that differs between the pollers
 lives in the `.Values.pollers` map (baseUrlEnvVar, ingestPath, cadence, and
-ldbws's two extra vars), so this file never branches on a poller's name.
+ldbws's two extra vars), so this file never branches on a poller's name,
+except for poller-incidents' Redis and row-heartbeat settings (ingest plan
+2c), which are that poller's alone (distant-signal.pollerIncidentsIngestEnv).
+The phase 2 db sink itself (INGEST_SINK, DATABASE_URL) is the shared
+pollers.<name>.ingest block.
 
 Go templates iterate maps in sorted key order, so the rendered document
 order is stable: incidents, ldbws, stations, tfl, tocs.
@@ -204,4 +208,29 @@ with $poller.extraEnv, which replaces an entry of the same name.
               value: {{ $poller.progressStallSecs | default $root.Values.workerHealth.pollerProgressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ $poller.logLevel | quote }}
+            {{- if eq $name "incidents" }}
+            {{- include "distant-signal.pollerIncidentsIngestEnv" $root }}
+            {{- end }}
+{{- end }}
+
+{{- /*
+poller-incidents' ingest settings (pollers.incidents.ingest, ingest plan
+2c.2/2c.6). Nothing renders with the defaults (sink http, rowHeartbeat
+true), so the default render is unchanged. Takes root.
+*/ -}}
+{{- define "distant-signal.pollerIncidentsIngestEnv" }}
+{{- if include "distant-signal.pollerIncidentsDbSink" . }}
+            # pollers.incidents.ingest.sink db: INGEST_SINK, DATABASE_URL and
+            # DATABASE_MAX_CONNECTIONS come from the shared phase 2 block
+            # above. The incident-text-changed XADD, best effort.
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "pollerIncidents" "user" "poller-incidents") }}
+{{- end }}
+{{- if include "distant-signal.incidentsRowHeartbeatOff" . }}
+            # pollers.incidents.ingest.rowHeartbeat false (plan 2c.6); the
+            # api gets the same value.
+            - name: INCIDENTS_ROW_HEARTBEAT
+              value: "false"
+{{- end }}
 {{- end }}

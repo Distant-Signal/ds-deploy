@@ -1066,11 +1066,12 @@ own role, space-separated. Each must be a created (not `planned`) role in
 db-grants.yaml. `writer` is the ingest-writer's (ingestWriter, plan 1B.9);
 `schedule_ingest` is schedule-ingest's under scheduleFeed.ingest.sink=db
 (plan 2d.2); `schedule_reference` is schedule-reference's db sink's (plan
-2a); `stations` is poller-stations' (pollers.stations with ingest.sink db,
-plan 2b.3). All three are narrow roles.
+2a); `stations` and `incidents` are poller-stations' and poller-incidents'
+(pollers.<name>.ingest.sink db, plans 2b.3 and 2c.3). All four are narrow
+roles.
 */}}
 {{- define "distant-signal.perServiceKeys" -}}
-api aggregator enricher notifier writer schedule_ingest schedule_reference stations
+api aggregator enricher notifier writer schedule_ingest schedule_reference stations incidents
 {{- end }}
 
 {{- define "distant-signal.perServiceEnabled" -}}
@@ -1148,6 +1149,22 @@ against the app role. Takes root.
 {{- if not (and (hasKey $root.Values.postgresql.roles.perService $name) (include "distant-signal.perServiceConnects" (dict "root" $root "service" $name))) -}}
 {{- $total = add $total (int $poller.ingest.database.maxConnections) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $total -}}
+{{- end }}
+
+{{/*
+Every poller that writes Postgres directly (pollers.<name>.ingest.sink db),
+their pools summed whichever role they connect as: the max_connections
+budget in api-deployment.yaml. Takes root.
+*/}}
+{{- define "distant-signal.pollerDbPools" -}}
+{{- $root := . -}}
+{{- $total := 0 -}}
+{{- range $name, $poller := .Values.pollers -}}
+{{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" $name "poller" $poller) -}}
+{{- $total = add $total (int $poller.ingest.database.maxConnections) -}}
 {{- end -}}
 {{- end -}}
 {{- $total -}}
@@ -1296,6 +1313,26 @@ root.
 {{- int .Values.scheduleFeed.reference.ingest.database.maxConnections -}}
 {{- else -}}
 0
+{{- end -}}
+{{- end }}
+
+{{/*
+poller-incidents' DB sink (ingest plan 2c.2): true (non-empty) when
+pollers.incidents is enabled with ingest.sink db (distant-signal.pollerSinkDb,
+which validates the value). Takes root.
+*/}}
+{{- define "distant-signal.pollerIncidentsDbSink" -}}
+{{- include "distant-signal.pollerSinkDb" (dict "root" . "name" "incidents" "poller" (.Values.pollers.incidents | default dict)) -}}
+{{- end }}
+
+{{/*
+INCIDENTS_ROW_HEARTBEAT's value for both incident writers
+(pollers.incidents.ingest.rowHeartbeat, plan 2c.6): "false", or empty for
+the default (true). Takes root.
+*/}}
+{{- define "distant-signal.incidentsRowHeartbeatOff" -}}
+{{- if eq (toString (dig "ingest" "rowHeartbeat" true (.Values.pollers.incidents | default dict))) "false" -}}
+true
 {{- end -}}
 {{- end }}
 

@@ -401,6 +401,23 @@ postgresql:
         # -- CONNECTION LIMIT. Empty: its pool
         # (`pollers.stations.ingest.database.maxConnections`, 1) plus 1.
         connectionLimit: ""
+      incidents:
+        # -- Connect poller-incidents' DB sink as `distant_signal_incidents`
+        # (ingest plan 2c.3; a `narrow` role: exactly its grants in
+        # files/db-grants.yaml, no app membership). Needs
+        # `pollers.incidents.ingest.sink: db`. Off: the DB sink connects as
+        # the app role.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-incidents-password
+        # -- CONNECTION LIMIT. Empty: its pool
+        # (`pollers.incidents.ingest.database.maxConnections`, 2) plus 1
+        # (spec §6.6: 3).
+        connectionLimit: ""
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
     # succeeds, so crash recovery (WAL redo after a node reboot) is never
@@ -920,6 +937,28 @@ pollers:
     internalOauthPassword: ""
     existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-incidents
     existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-incidents
+    # Ingest architecture phase 2c (docs/superpowers/plans/2026-10-06-ingest-architecture-plan.md).
+    # Both OFF by default: nothing renders until a value changes.
+    ingest:
+      # -- `http`: POST each snapshot to the api (today). `db`: write it to
+      # Postgres directly (INGEST_SINK=db) and XADD incident-text-changed
+      # from the poller: renders DATABASE_URL (the incidents role with
+      # `postgresql.roles.perService.incidents.connect`, else the app
+      # role), REDIS_URL (the `poller-incidents` ACL user with
+      # `redis.acl.clients.pollerIncidents`), and Postgres and Redis
+      # egress and admission. Rollback: `http`.
+      sink: http
+      # -- INCIDENTS_ROW_HEARTBEAT, for BOTH writers (the api's
+      # `POST /private/incidents` and the `db` sink), so they cannot
+      # disagree. `true`: every listed incident's `fetched_at` is bumped on
+      # every poll (today; about 600k row updates a day). `false` (plan
+      # 2c.6): only changed rows are written, and readers show the feed's
+      # snapshot time. Rendered only when false. Rollback: `true`.
+      rowHeartbeat: true
+      database:
+        # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; the
+        # crate default, spec §6.6: pool 2, role limit 3).
+        maxConnections: 2
     logLevel: info
     extraEnv: []
     # Fetches and diffs one RDM incident feed per tick.
@@ -2505,6 +2544,9 @@ redis:
       # -- ingest-writer, as user `ingest-writer` (only once an
       # `ingestWriter.streams` entry is not `off`).
       ingestWriter: false
+      # -- poller-incidents' DB sink (`pollers.incidents.ingest.sink: db`),
+      # as user `poller-incidents` (`%W~incident-text-changed +xadd`).
+      pollerIncidents: false
   image:
     repository: redis
     # -- Pinned to an exact 7.4 patch release and content digest (INF-11);

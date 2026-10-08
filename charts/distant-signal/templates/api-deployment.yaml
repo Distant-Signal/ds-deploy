@@ -45,9 +45,10 @@ replicaCount (plus a RollingUpdate surge pod), plus aggregator 10,
 notifier 5, enricher 5, the api's migration connection 1, the archive pool
 2 when archive.enabled, the api-maintenance CronJob's pool when
 apiMaintenance.enabled, the ingest-writer's when ingestWriter.enabled and
-schedule-ingest's when scheduleFeed.ingest.sink=db and
-schedule-reference's when scheduleFeed.reference.ingest.sink=db (both
-summed when both are on); plus
+schedule-ingest's when scheduleFeed.ingest.sink=db,
+schedule-reference's when scheduleFeed.reference.ingest.sink=db, and each
+poller's with pollers.<name>.ingest.sink db (stations 1, incidents 2), all
+summed; plus
 postgresql.connectionBudget (clients outside this chart, such as the
 postgres-exporter and pg_dump, and admin psql sessions) and 2 for pgBackRest
 when postgresql.pgbackrest.enabled. The total must fit in max_connections
@@ -69,7 +70,7 @@ limit is unknown here.
 {{- $apiPods := int (include "distant-signal.apiPods" .) }}
 {{- $apiPool := mul $apiPods (int (include "distant-signal.apiMaxConnections" .)) }}
 {{- include "distant-signal.postgresRoleBudgetCheck" . }}
-{{- $pools := add 10 5 5 1 (ternary 2 0 (.Values.archive.enabled | default false)) (include "distant-signal.apiMaintenancePool" .) (include "distant-signal.ingestWriterPool" .) (include "distant-signal.scheduleIngestPool" .) (include "distant-signal.scheduleReferencePool" .) }}
+{{- $pools := add 10 5 5 1 (ternary 2 0 (.Values.archive.enabled | default false)) (include "distant-signal.apiMaintenancePool" .) (include "distant-signal.ingestWriterPool" .) (include "distant-signal.scheduleIngestPool" .) (include "distant-signal.scheduleReferencePool" .) (include "distant-signal.pollerDbPools" .) }}
 {{- $budget := .Values.postgresql.connectionBudget | default dict }}
 {{- $pgbackrest := ternary 2 0 (dig "pgbackrest" "enabled" false .Values.postgresql) }}
 {{- $reserved := add (int (dig "externalClients" 2 $budget)) (int (dig "adminSessions" 3 $budget)) $pgbackrest }}
@@ -479,6 +480,14 @@ with api.extraEnv, which replaces an entry of the same name.
             # sweeps; the api runs none. Rendered only when false, so the
             # default render is unchanged.
             - name: API_BACKGROUND_LOOPS
+              value: "false"
+            {{- end }}
+            {{- if include "distant-signal.incidentsRowHeartbeatOff" . }}
+            # pollers.incidents.ingest.rowHeartbeat false (ingest plan
+            # 2c.6): POST /private/incidents writes only changed rows. The
+            # same value as poller-incidents' DB sink. Rendered only when
+            # false, so the default render is unchanged.
+            - name: INCIDENTS_ROW_HEARTBEAT
               value: "false"
             {{- end }}
             - name: PAST_TRAVEL_RETENTION_DAYS

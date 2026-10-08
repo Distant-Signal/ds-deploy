@@ -130,7 +130,11 @@ roles:
     used_by: poller-stations
   incidents:
     name: distant_signal_incidents
-    status: planned
+    # Created narrow (never an app member): poller-incidents' DB sink
+    # (plan 2c.3), used once postgresql.roles.perService.incidents.connect.
+    # Its grants are the whole of ds_store::incidents' snapshot write:
+    # apply_snapshot, infer_removals, last_incidents_fetch and the gazetteer.
+    status: narrow
     phase: 2c
     groups: [schema_gate]
     connection_limit: 3

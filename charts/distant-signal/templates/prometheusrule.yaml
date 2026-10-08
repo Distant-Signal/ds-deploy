@@ -1733,7 +1733,8 @@ spec:
         api skipped the "Ended (no longer listed)" inference for an
         incomplete, empty or >50%-shrunken incidents snapshot, and applied it
         to none, over `window`: incidents that leave the feed stay "active"
-        again. Counters registered at 0 by api at startup. too_soon and
+        again. Counters registered at 0 by api (and by poller-incidents with
+        pollers.incidents.ingest.sink db, plan 2c.2) at startup. too_soon and
         no_baseline are benign and not counted. The per-outcome increase is
         a recording rule to keep the alert's expr (and so its webhook) short.
         */}}
