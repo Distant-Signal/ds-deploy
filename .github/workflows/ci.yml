@@ -493,7 +493,13 @@ jobs:
       # MIGRATION_DATABASE_URL (the owner) since the role has no DELETE.
       # The TRUST consumers (plan 3b) run as their narrow roles; their
       # fixtures (users, subscriptions) go through DATABASE_URL_API, and
-      # their tests delete nothing they need.
+      # their tests delete nothing they need. trust-consumer skips its
+      # reads:: tests here (#[sqlx::test]: they create databases, which no
+      # narrow role may). The phase 4 readers' read-only roles
+      # (full_coverage_ro, ldbws_ro; plan 4.7) run each crate's role_reads
+      # test: the schema gate and every db-source query as the role.
+      # ingest-writer's line_status_rls test (plan 3c.3) runs above, as the
+      # writer, reading DATABASE_URL_WRITER/_AGGREGATOR/_API itself.
       - name: DB-backed tests as each service's own role (Stage 0b)
         run: |
           # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
@@ -508,7 +514,9 @@ jobs:
             DATABASE_URL="$DATABASE_URL_SCHEDULE_REFERENCE" cargo test -p schedule-reference -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_ENRICHER" cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_TRUST_BACKLOG" cargo test -p trust-backlog-consumer -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_TRUST_CONSUMER" cargo test -p trust-consumer -- --ignored --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_TRUST_CONSUMER" cargo test -p trust-consumer -- --ignored --skip reads:: --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_FULL_COVERAGE_RO" cargo test -p full-coverage-consumer --test role_reads -- --ignored --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_LDBWS_RO" cargo test -p poller-ldbws --test role_reads -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_INCIDENTS" cargo test -p poller-incidents -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_STATIONS" cargo test -p poller-stations -- --ignored --test-threads=1'
 
