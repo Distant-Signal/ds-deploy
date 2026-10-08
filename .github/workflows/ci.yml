@@ -668,7 +668,9 @@ jobs:
         run: sqlx migrate run
 
       - name: Seed e2e fixtures
-        run: psql "${DATABASE_URL}" -f frontend/e2e/fixtures/seed.sql
+        # ON_ERROR_STOP: plain psql reports a failing statement and carries on
+        # with exit 0, which hid a broken group_invite_links insert for days.
+        run: psql -v ON_ERROR_STOP=1 "${DATABASE_URL}" -f frontend/e2e/fixtures/seed.sql
 
       - name: Start api in the background
         run: |
