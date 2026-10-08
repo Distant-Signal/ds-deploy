@@ -17,8 +17,9 @@
 --   1. the group roles (NOLOGIN) and every role whose status is not
 --      `planned` (LOGIN, NOSUPERUSER, ..., CONNECTION LIMIT, password);
 --   2. memberships: `observed` roles join the app role (they inherit all of
---      its privileges and have none of their own); `narrow` roles leave it;
---      each role joins its groups;
+--      its privileges and have none of their own, but may not SET ROLE to
+--      it: WITH INHERIT TRUE, SET FALSE, Postgres 16+); `narrow` roles leave it;
+--      each role joins its groups (also SET FALSE);
 --   3. CONNECT and USAGE on schema public for every created role;
 --   4. the groups' grants and each narrow role's grants, after revoking
 --      everything else they hold in schema public. Objects that do not
@@ -28,6 +29,15 @@
 --      RESTRICTIVE policy for its role.
 
 \set ON_ERROR_STOP on
+
+-- No statement logging in this session (security review L8): the
+-- passwords are literals in the set_config call below, so a failing
+-- statement (log_min_error_statement), a slow one
+-- (log_min_duration_statement) or log_statement = all would otherwise
+-- write them to the server log.
+SET log_min_error_statement = panic;
+SET log_min_duration_statement = -1;
+SET log_statement = none;
 
 \if :{?app}
 \else
@@ -306,7 +316,7 @@ BEGIN
         ('aggregator', 'observed'),
         ('enricher', 'observed'),
         ('notifier', 'observed'),
-        ('writer', 'observed'),
+        ('writer', 'narrow'),
         ('schedule_reference', 'narrow'),
         ('stations', 'narrow'),
         ('incidents', 'narrow'),
@@ -359,7 +369,7 @@ BEGIN
         ('aggregator', 'observed'),
         ('enricher', 'observed'),
         ('notifier', 'observed'),
-        ('writer', 'observed'),
+        ('writer', 'narrow'),
         ('schedule_reference', 'narrow'),
         ('stations', 'narrow'),
         ('incidents', 'narrow'),
@@ -370,10 +380,14 @@ BEGIN
         ('ldbws_ro', 'narrow')) AS v(kind, status)
     LOOP
         member_oid := (SELECT oid FROM pg_roles WHERE rolname = r.name);
-        IF r.status = 'observed' AND NOT EXISTS (
-            SELECT 1 FROM pg_auth_members
-            WHERE roleid = app_oid AND member = member_oid) THEN
-            EXECUTE format('GRANT %I TO %I', app, r.name);
+        IF r.status = 'observed' THEN
+            -- INHERIT TRUE: it uses the app role's privileges. SET FALSE
+            -- (Postgres 16+): it cannot SET ROLE to the app role, which
+            -- would shed the RESTRICTIVE row policies written for it
+            -- (security review M1). Re-granting updates an existing
+            -- membership's options.
+            EXECUTE format('GRANT %I TO %I WITH INHERIT TRUE, SET FALSE',
+                           app, r.name);
         ELSIF r.status = 'narrow' AND EXISTS (
             SELECT 1 FROM pg_auth_members
             WHERE roleid = app_oid AND member = member_oid) THEN
@@ -405,12 +419,9 @@ BEGIN
         ('full_coverage_ro', 'schema_gate'),
         ('ldbws_ro', 'schema_gate')) AS v(kind, grp)
     LOOP
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_auth_members
-            WHERE roleid = (SELECT oid FROM pg_roles WHERE rolname = r.grp)
-              AND member = (SELECT oid FROM pg_roles WHERE rolname = r.member)) THEN
-            EXECUTE format('GRANT %I TO %I', r.grp, r.member);
-        END IF;
+        -- SET FALSE here too: a group's grants are only ever inherited.
+        EXECUTE format('GRANT %I TO %I WITH INHERIT TRUE, SET FALSE',
+                       r.grp, r.member);
     END LOOP;
 END
 $members$;
@@ -456,7 +467,6 @@ BEGIN
         SELECT v.tbl
         FROM (VALUES
         ('trains'),
-        ('train_subscriptions'),
         ('train_movement_events'),
         ('train_current_state'),
         ('trust_event_backlog'),
@@ -510,40 +520,83 @@ BEGIN
         SELECT v.tbl, current_setting('ds_grants.' || v.kind) AS grantee,
                v.priv, v.cols
         FROM (VALUES
+        ('trains', 'writer', 'SELECT', ''),
+        ('trains', 'writer', 'INSERT', ''),
+        ('trains', 'writer', 'UPDATE', ''),
         ('trains', 'trust_backlog', 'SELECT', ''),
         ('trains', 'trust_backlog', 'INSERT', ''),
         ('trains', 'trust_backlog', 'UPDATE', ''),
-        ('trains', 'trust_consumer', 'SELECT', ''),
-        ('train_subscriptions', 'trust_backlog', 'SELECT', ''),
-        ('train_subscriptions', 'trust_backlog', 'UPDATE', ''),
-        ('train_subscriptions', 'trust_consumer', 'SELECT', ''),
+        ('train_subscriptions', 'writer', 'SELECT', 'id,trains_id,service_date,resolution_status,unresolved_from,pin_origin_crs,pin_scheduled_departure,pin_destination_crs,pin_skipped_stations,pin_platform,pin_planned_platform'),
+        ('train_subscriptions', 'writer', 'UPDATE', 'resolution_status,unresolved_from,trains_id'),
+        ('train_subscriptions', 'trust_backlog', 'SELECT', 'id,trains_id,resolution_status,unresolved_from'),
+        ('train_subscriptions', 'trust_backlog', 'UPDATE', 'resolution_status,unresolved_from'),
+        ('train_subscriptions', 'trust_consumer', 'SELECT', 'id,trains_id'),
+        ('train_movement_events', 'writer', 'SELECT', ''),
+        ('train_movement_events', 'writer', 'INSERT', ''),
         ('train_movement_events', 'trust_backlog', 'SELECT', ''),
         ('train_movement_events', 'trust_backlog', 'INSERT', ''),
-        ('train_movement_events', 'trust_backlog', 'UPDATE', ''),
-        ('train_movement_events', 'trust_consumer', 'SELECT', ''),
         ('train_movement_events', 'trust_consumer', 'INSERT', ''),
-        ('train_movement_events', 'trust_consumer', 'UPDATE', ''),
+        ('train_movement_events', 'trust_consumer', 'SELECT', 'trains_id,dedup_key'),
+        ('train_current_state', 'writer', 'SELECT', ''),
+        ('train_current_state', 'writer', 'INSERT', ''),
+        ('train_current_state', 'writer', 'UPDATE', ''),
         ('train_current_state', 'trust_backlog', 'SELECT', ''),
         ('train_current_state', 'trust_backlog', 'INSERT', ''),
         ('train_current_state', 'trust_backlog', 'UPDATE', ''),
         ('train_current_state', 'trust_consumer', 'SELECT', ''),
         ('train_current_state', 'trust_consumer', 'INSERT', ''),
         ('train_current_state', 'trust_consumer', 'UPDATE', ''),
+        ('trust_event_backlog', 'writer', 'SELECT', ''),
         ('trust_event_backlog', 'trust_backlog', 'SELECT', ''),
         ('trust_event_backlog', 'trust_backlog', 'INSERT', ''),
         ('train_reasons', 'trust_backlog', 'SELECT', ''),
         ('train_reasons', 'trust_backlog', 'INSERT', ''),
         ('train_reasons', 'trust_backlog', 'UPDATE', ''),
-        ('notifier_forward_queue', 'trust_consumer', 'SELECT', ''),
+        ('notifier_forward_queue', 'writer', 'SELECT', ''),
+        ('notifier_forward_queue', 'writer', 'INSERT', ''),
         ('notifier_forward_queue', 'trust_consumer', 'INSERT', ''),
+        ('notifier_forward_queue', 'trust_consumer', 'SELECT', 'dedup_key'),
         ('train_event_outbox', 'trust_consumer', 'SELECT', ''),
         ('train_event_outbox', 'trust_consumer', 'INSERT', ''),
+        ('train_event_outbox', 'writer', 'SELECT', ''),
+        ('train_event_outbox', 'writer', 'UPDATE', ''),
+        ('train_event_outbox', 'writer', 'DELETE', ''),
+        ('ingest_dedup', 'writer', 'SELECT', ''),
+        ('ingest_dedup', 'writer', 'INSERT', ''),
+        ('ingest_dedup', 'writer', 'DELETE', ''),
         ('schedule_calling_points_full_publish_keys', 'schedule_reference', 'SELECT', ''),
         ('schedule_calling_points_full_publish_keys', 'schedule_reference', 'INSERT', ''),
         ('schedule_calling_points_full_publish_keys', 'schedule_reference', 'DELETE', ''),
         ('schedule_destination_departures_publish_keys', 'schedule_reference', 'SELECT', ''),
         ('schedule_destination_departures_publish_keys', 'schedule_reference', 'INSERT', ''),
         ('schedule_destination_departures_publish_keys', 'schedule_reference', 'DELETE', ''),
+        ('station_samples', 'writer', 'SELECT', ''),
+        ('station_samples', 'writer', 'INSERT', ''),
+        ('station_samples', 'writer', 'UPDATE', ''),
+        ('station_full_coverage_samples', 'writer', 'SELECT', ''),
+        ('station_full_coverage_samples', 'writer', 'INSERT', ''),
+        ('station_full_coverage_samples', 'writer', 'UPDATE', ''),
+        ('full_coverage_line_stats', 'writer', 'SELECT', ''),
+        ('full_coverage_line_stats', 'writer', 'INSERT', ''),
+        ('full_coverage_line_stats', 'writer', 'UPDATE', ''),
+        ('full_coverage_line_window_stats', 'writer', 'SELECT', ''),
+        ('full_coverage_line_window_stats', 'writer', 'INSERT', ''),
+        ('full_coverage_line_window_stats', 'writer', 'UPDATE', ''),
+        ('island_of_ireland_lines', 'writer', 'SELECT', ''),
+        ('island_of_ireland_lines', 'writer', 'INSERT', ''),
+        ('island_of_ireland_lines', 'writer', 'UPDATE', ''),
+        ('island_of_ireland_stations', 'writer', 'SELECT', ''),
+        ('island_of_ireland_stations', 'writer', 'INSERT', ''),
+        ('island_of_ireland_stations', 'writer', 'UPDATE', ''),
+        ('island_of_ireland_station_samples', 'writer', 'SELECT', ''),
+        ('island_of_ireland_station_samples', 'writer', 'INSERT', ''),
+        ('island_of_ireland_station_samples', 'writer', 'UPDATE', ''),
+        ('line_status', 'writer', 'SELECT', ''),
+        ('line_status', 'writer', 'INSERT', ''),
+        ('line_status', 'writer', 'UPDATE', ''),
+        ('line_status', 'writer', 'DELETE', ''),
+        ('line_status_history', 'writer', 'SELECT', ''),
+        ('line_status_history', 'writer', 'INSERT', ''),
         ('incidents', 'incidents', 'SELECT', ''),
         ('incidents', 'incidents', 'INSERT', ''),
         ('incidents', 'incidents', 'UPDATE', ''),
@@ -552,33 +605,47 @@ BEGIN
         ('incident_feed_state', 'incidents', 'SELECT', ''),
         ('incident_feed_state', 'incidents', 'INSERT', ''),
         ('incident_feed_state', 'incidents', 'UPDATE', ''),
+        ('ingest_freshness', 'writer', 'SELECT', ''),
+        ('ingest_freshness', 'writer', 'INSERT', ''),
+        ('ingest_freshness', 'writer', 'UPDATE', ''),
         ('ingest_freshness', 'stations', 'SELECT', ''),
         ('ingest_freshness', 'stations', 'INSERT', ''),
         ('ingest_freshness', 'stations', 'UPDATE', ''),
         ('ingest_freshness', 'incidents', 'SELECT', ''),
         ('ingest_freshness', 'incidents', 'INSERT', ''),
         ('ingest_freshness', 'incidents', 'UPDATE', ''),
+        ('corpus_crosswalk_build', 'writer', 'SELECT', ''),
+        ('corpus_crosswalk_build', 'writer', 'INSERT', ''),
+        ('corpus_crosswalk_build', 'writer', 'UPDATE', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'SELECT', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'INSERT', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'UPDATE', ''),
-        ('corpus_crosswalk_build', 'schedule_ingest', 'DELETE', ''),
+        ('corpus_stanox_crs', 'writer', 'SELECT', ''),
+        ('corpus_stanox_crs', 'writer', 'INSERT', ''),
+        ('corpus_stanox_crs', 'writer', 'DELETE', ''),
         ('corpus_stanox_crs', 'schedule_ingest', 'SELECT', ''),
         ('corpus_stanox_crs', 'schedule_ingest', 'INSERT', ''),
-        ('corpus_stanox_crs', 'schedule_ingest', 'UPDATE', ''),
         ('corpus_stanox_crs', 'schedule_ingest', 'DELETE', ''),
         ('corpus_stanox_crs', 'trust_backlog', 'SELECT', ''),
         ('corpus_stanox_crs', 'full_coverage_ro', 'SELECT', ''),
         ('corpus_stanox_crs', 'trust_consumer', 'SELECT', ''),
+        ('corpus_tiploc_crs', 'writer', 'SELECT', ''),
+        ('corpus_tiploc_crs', 'writer', 'INSERT', ''),
+        ('corpus_tiploc_crs', 'writer', 'DELETE', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'SELECT', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'INSERT', ''),
-        ('corpus_tiploc_crs', 'schedule_ingest', 'UPDATE', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'DELETE', ''),
         ('corpus_tiploc_crs', 'schedule_reference', 'SELECT', ''),
+        ('stations', 'writer', 'SELECT', ''),
         ('stations', 'stations', 'SELECT', ''),
         ('stations', 'stations', 'INSERT', ''),
         ('stations', 'stations', 'UPDATE', ''),
         ('stations', 'incidents', 'SELECT', ''),
         ('stations', 'schedule_ingest', 'SELECT', ''),
+        ('tocs', 'writer', 'SELECT', ''),
+        ('tocs', 'writer', 'INSERT', ''),
+        ('tocs', 'writer', 'UPDATE', ''),
+        ('stanox_crs', 'writer', 'SELECT', ''),
         ('stanox_crs', 'schedule_reference', 'SELECT', ''),
         ('stanox_crs', 'schedule_reference', 'INSERT', ''),
         ('stanox_crs', 'schedule_reference', 'UPDATE', ''),
@@ -586,6 +653,7 @@ BEGIN
         ('stanox_crs', 'trust_backlog', 'SELECT', ''),
         ('stanox_crs', 'trust_consumer', 'SELECT', ''),
         ('stanox_crs', 'full_coverage_ro', 'SELECT', ''),
+        ('tiploc_crs', 'writer', 'SELECT', ''),
         ('tiploc_crs', 'schedule_reference', 'SELECT', ''),
         ('tiploc_crs', 'schedule_reference', 'INSERT', ''),
         ('tiploc_crs', 'schedule_reference', 'UPDATE', ''),
@@ -593,18 +661,19 @@ BEGIN
         ('tiploc_crs', 'trust_backlog', 'SELECT', ''),
         ('tiploc_crs', 'full_coverage_ro', 'SELECT', ''),
         ('tiploc_crs', 'trust_consumer', 'SELECT', ''),
+        ('fixed_links', 'writer', 'SELECT', ''),
         ('fixed_links', 'schedule_reference', 'SELECT', ''),
         ('fixed_links', 'schedule_reference', 'INSERT', ''),
         ('fixed_links', 'schedule_reference', 'UPDATE', ''),
         ('fixed_links', 'schedule_reference', 'DELETE', ''),
+        ('corpus_locations', 'writer', 'SELECT', ''),
         ('corpus_locations', 'schedule_ingest', 'SELECT', ''),
         ('corpus_locations', 'schedule_ingest', 'INSERT', ''),
-        ('corpus_locations', 'schedule_ingest', 'UPDATE', ''),
         ('corpus_locations', 'schedule_ingest', 'DELETE', ''),
+        ('corpus_deliveries', 'writer', 'SELECT', ''),
         ('corpus_deliveries', 'schedule_ingest', 'SELECT', ''),
         ('corpus_deliveries', 'schedule_ingest', 'INSERT', ''),
         ('corpus_deliveries', 'schedule_ingest', 'UPDATE', ''),
-        ('corpus_deliveries', 'schedule_ingest', 'DELETE', ''),
         ('schedule_calling_points_full', 'schedule_reference', 'SELECT', ''),
         ('schedule_calling_points_full', 'schedule_reference', 'INSERT', ''),
         ('schedule_calling_points_full', 'schedule_reference', 'UPDATE', ''),
@@ -637,8 +706,8 @@ BEGIN
         ('schedule_reference_publishes', 'schedule_reference', 'SELECT', ''),
         ('schedule_reference_publishes', 'schedule_reference', 'INSERT', ''),
         ('schedule_reference_publishes', 'schedule_reference', 'UPDATE', ''),
-        ('schedule_feed_ingests', 'schedule_ingest', 'SELECT', ''),
         ('schedule_feed_ingests', 'schedule_ingest', 'INSERT', ''),
+        ('schedule_feed_ingests', 'schedule_ingest', 'SELECT', 'delivered_at'),
         ('ingest_active_tracked_trains', 'trust_consumer', 'SELECT', ''),
         ('ingest_sample_station_pins', 'ldbws_ro', 'SELECT', ''),
         ('ingest_custom_line_stations', 'ldbws_ro', 'SELECT', '')) AS v(tbl, kind, priv, cols)
@@ -656,14 +725,19 @@ BEGIN
     FOR r IN
         SELECT v.seq, current_setting('ds_grants.' || v.kind) AS grantee
         FROM (VALUES
+        ('trains_id_seq', 'writer'),
         ('trains_id_seq', 'trust_backlog'),
+        ('train_movement_events_id_seq', 'writer'),
         ('train_movement_events_id_seq', 'trust_backlog'),
         ('train_movement_events_id_seq', 'trust_consumer'),
+        ('train_current_state_id_seq', 'writer'),
         ('train_current_state_id_seq', 'trust_backlog'),
         ('train_current_state_id_seq', 'trust_consumer'),
         ('trust_event_backlog_id_seq', 'trust_backlog'),
+        ('notifier_forward_queue_id_seq', 'writer'),
         ('notifier_forward_queue_id_seq', 'trust_consumer'),
         ('train_event_outbox_id_seq', 'trust_consumer'),
+        ('line_status_history_id_seq', 'writer'),
         ('incident_history_id_seq', 'incidents'),
         ('fixed_links_id_seq', 'schedule_reference'),
         ('corpus_locations_id_seq', 'schedule_ingest')) AS v(seq, kind)

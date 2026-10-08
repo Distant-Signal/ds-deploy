@@ -51,8 +51,23 @@
 --      otherwise).
 --   6. CREATE EXTENSION IF NOT EXISTS pg_stat_statements, best effort, so
 --      the owner role (which may not create it) finds it on a new cluster.
+--   7. The application database: no CONNECT or TEMPORARY for PUBLIC, so
+--      only roles granted CONNECT (the five here, and each per-service role
+--      in the per-service grants script) may log in to it, and none may create
+--      temporary tables (no service does); no EXECUTE for PUBLIC on the
+--      functions the owner creates later (security review L5).
+--
+-- The session first turns statement logging off (security review L8): the
+-- passwords are literals in the set_config call below, so a failing
+-- statement (log_min_error_statement), a slow one
+-- (log_min_duration_statement) or log_statement = all would otherwise
+-- write them to the server log.
 
 \set ON_ERROR_STOP on
+
+SET log_min_error_statement = panic;
+SET log_min_duration_statement = -1;
+SET log_statement = none;
 
 \if :{?old_owner}
 \else
@@ -346,9 +361,16 @@ DECLARE
     app text := current_setting('ds_roles.app');
     r record;
 BEGIN
-    EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I, %I, %I, %I',
+    -- 7. Only the roles granted CONNECT below (and each per-service role,
+    -- the per-service grants script) may connect; nobody gets TEMPORARY. The backup
+    -- role too, in case backup_database is this database. Superusers are
+    -- not affected.
+    EXECUTE format('REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC',
+        current_database());
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I, %I, %I, %I, %I',
         current_database(), owner_role, app,
-        current_setting('ds_roles.exporter'), current_setting('ds_roles.dump'));
+        current_setting('ds_roles.exporter'), current_setting('ds_roles.dump'),
+        current_setting('ds_roles.backup'));
     REVOKE CREATE ON SCHEMA public FROM PUBLIC;
     EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', app);
 
@@ -375,6 +397,12 @@ BEGIN
                    'GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I', owner_role, app);
     EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public '
                    'GRANT EXECUTE ON ROUTINES TO %I', owner_role, app);
+    -- 7. A function the owner creates is not executable by PUBLIC (the
+    -- Postgres default): only by the roles granted it (app above, a
+    -- per-service role through the per-service grants script). A SECURITY DEFINER
+    -- one runs with the owner's rights.
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I '
+                   'REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC', owner_role);
 
     EXECUTE format('GRANT EXECUTE ON FUNCTION pg_catalog.pg_backup_start(text, boolean), '
                    'pg_catalog.pg_backup_stop(boolean), pg_catalog.pg_switch_wal(), '

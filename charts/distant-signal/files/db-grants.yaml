@@ -22,9 +22,11 @@
 # Roles (spec §6.3). `status`:
 #   planned   not created yet; its grants below are the design target.
 #   observed  phase 0b: a LOGIN role that is a member of the shared app role
-#             (distant_signal_app) and has no grants of its own. Nothing
-#             changes functionally; pg_stat_statements and pg_stat_activity
-#             now attribute each service's queries to it.
+#             (distant_signal_app) and has no grants of its own. It
+#             inherits app's privileges but may not SET ROLE to it (WITH
+#             INHERIT TRUE, SET FALSE; Postgres 16+). Nothing changes
+#             functionally; pg_stat_statements and pg_stat_activity now
+#             attribute each service's queries to it.
 #   narrow    no longer a member of the app role: exactly the grants below
 #             (phases 2 to 5, each starting from the observe-role-usage.py
 #             report).
@@ -35,7 +37,9 @@
 # Grants: S = SELECT, I = INSERT, U = UPDATE, D = DELETE. A role in the
 # `read_shared` group also gets SELECT on every table whose class is
 # shared-train, ingest, derived or reference (the group's own grant), so
-# its S there is implied. `columns` limits a privilege to some columns.
+# its S there is implied. `{privileges: S, columns: [a, b]}` limits a
+# privilege to some columns; a list of such entries (or letters) gives a role
+# different columns per privilege, e.g. `[I, {privileges: S, columns: [k]}]`.
 # Sequences go to every narrow role with I on the owning table (USAGE,
 # SELECT). Nobody but the owner gets TRUNCATE, REFERENCES, TRIGGER or
 # CREATE, and foreign-key cascades need no grant.
@@ -98,9 +102,15 @@ roles:
     used_by: the notifier
   writer:
     name: distant_signal_writer
-    # Created (a member of app) from 1B.9 on, used once the chart's
-    # ingestWriter connects as it (postgresql.roles.perService.writer.connect).
-    status: observed
+    # Created from 1B.9 on, used once the chart's ingestWriter connects as
+    # it (postgresql.roles.perService.writer.connect). Narrow since the
+    # 2026-10-08 security review (M1): as an observed member of app it
+    # could `SET ROLE` to app and shed line_status's RESTRICTIVE
+    # ds_grants_writer policy. Its grants below are every table its
+    # handlers, loops (schedule-match, reconciliation, backlog-match, CORPUS
+    # crosswalk, train_event_outbox) and dedup run, minus the unused ones
+    # (L3); read_shared covers the schedule products the sweeps read.
+    status: narrow
     phase: 1B
     groups: [read_shared, schema_gate]
     connection_limit: 7
@@ -235,13 +245,35 @@ tables:
 
   # --- shared-train: trains and their movements, shared by users.
   # aggregator: SELECT ... FOR UPDATE OF t needs U or D (it has D).
-  trains: {class: shared-train, grants: {api: SIUD, writer: SIU, trust_backlog: SIU, trust_consumer: S, aggregator: SD, notifier: SIU}}
-  train_subscriptions: {class: shared-train, grants: {api: SIUD, writer: SU, trust_backlog: SU, trust_consumer: S, aggregator: S, notifier: SIU}}
-  train_movement_events: {class: shared-train, grants: {api: S, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: S, notifier: S}}
+  # trust_consumer: no grant on trains (security review L3, 2026-10-08):
+  # it reads tracked trains through the ingest_active_tracked_trains view.
+  trains: {class: shared-train, grants: {api: SIUD, writer: SIU, trust_backlog: SIU, aggregator: SD, notifier: SIU}}
+  # Each user's subscriptions (user_id, pins): class personal, so not in
+  # read_shared; every other role gets exactly the columns its code reads
+  # and writes (security review M2, 2026-10-08):
+  #   writer: the outbox applier, schedule-match, reconciliation and
+  #     backlog-match (ds_store::tracking, sweeps, backlog::matching): reads
+  #     the pins and status, sets status/unresolved_from/trains_id;
+  #   trust_backlog: reinstatement reopens (tracking.rs
+  #     reopen_subscriptions_after_reinstatement);
+  #   trust_consumer: `SELECT trains_id ... WHERE id` (upsert_train_event_on);
+  #   aggregator: `EXISTS ... WHERE trains_id` (prune, archive);
+  #   notifier: candidates and legs (id, user_id, trains_id,
+  #     notifications_enabled, pin_destination_crs) and
+  #     create_subscription_for_train's insert and re-enable.
+  train_subscriptions: {class: personal, grants: {api: SIUD, writer: [{privileges: S, columns: [id, trains_id, service_date, resolution_status, unresolved_from, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_skipped_stations, pin_platform, pin_planned_platform]}, {privileges: U, columns: [resolution_status, unresolved_from, trains_id]}], trust_backlog: [{privileges: S, columns: [id, trains_id, resolution_status, unresolved_from]}, {privileges: U, columns: [resolution_status, unresolved_from]}], trust_consumer: {privileges: S, columns: [id, trains_id]}, aggregator: {privileges: S, columns: [trains_id]}, notifier: [{privileges: S, columns: [id, user_id, trains_id, notifications_enabled, pin_destination_crs]}, {privileges: I, columns: [user_id, trains_id, service_date, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: U, columns: [notifications_enabled]}]}}
+  # No UPDATE for anyone (security review L3): every writer inserts with
+  # ON CONFLICT (trains_id, dedup_key) DO NOTHING. The conflict target
+  # needs SELECT on its columns, so trust_consumer (outside read_shared)
+  # gets just those.
+  train_movement_events: {class: shared-train, grants: {api: S, writer: SI, trust_backlog: SI, trust_consumer: [I, {privileges: S, columns: [trains_id, dedup_key]}], aggregator: S, notifier: S}}
   train_current_state: {class: shared-train, grants: {api: S, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: S, notifier: S}}
-  trust_event_backlog: {class: shared-train, grants: {api: S, writer: SU, trust_backlog: SI, aggregator: SD}}
+  # writer: S only (security review L3): backlog-match reads, never updates.
+  trust_event_backlog: {class: shared-train, grants: {api: S, writer: S, trust_backlog: SI, aggregator: SD}}
   train_reasons: {class: shared-train, grants: {api: S, trust_backlog: SIU}}
-  notifier_forward_queue: {class: shared-train, grants: {api: S, writer: SI, trust_consumer: SI, notifier: S}}
+  # trust_consumer: SELECT only on the ON CONFLICT (dedup_key) target
+  # (security review L3); the writer has it through read_shared.
+  notifier_forward_queue: {class: shared-train, grants: {api: S, writer: SI, trust_consumer: [I, {privileges: S, columns: [dedup_key]}], notifier: S}}
   # Plan 3b.3: trust-consumer's deferred subscription-changing events; the
   # writer's train_event_outbox loop applies (SELECT ... FOR UPDATE) and
   # deletes them, or marks one rejected.
@@ -286,14 +318,17 @@ tables:
   line_status_daily_coverage_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
   line_status_half_hourly_coverage_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
   full_coverage_window_verdicts: {class: derived, grants: {api: S, aggregator: SIUD}}
-  corpus_crosswalk_build: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD}}
-  corpus_stanox_crs: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD, trust_backlog: S, full_coverage_ro: S, trust_consumer: S}}
+  # No DELETE (security review L3): the rebuild upserts its singleton row.
+  corpus_crosswalk_build: {class: derived, grants: {api: S, writer: SIU, schedule_ingest: SIU}}
+  # writer, schedule_ingest: no UPDATE (security review L3): the rebuild
+  # deletes every row and inserts afresh (ds_store::corpus::crosswalk::write).
+  corpus_stanox_crs: {class: derived, grants: {api: S, writer: SID, schedule_ingest: SID, trust_backlog: S, full_coverage_ro: S, trust_consumer: S}}
   # notifier: named in common::public_delay's SQL (corpus fallback off), so
   # Postgres checks SELECT even when the branch is unused.
   # schedule_reference: the line population's train summaries read it
   # (crs_for_tiplocs_batch) when the CORPUS fallback is on, as the api's
   # route does; not in spec §6.4's table, which predates the summaries.
-  corpus_tiploc_crs: {class: derived, grants: {api: S, writer: SIUD, notifier: S, schedule_ingest: SIUD, schedule_reference: S}}
+  corpus_tiploc_crs: {class: derived, grants: {api: S, writer: SID, notifier: S, schedule_ingest: SID, schedule_reference: S}}
 
   # --- reference: stations, codes and schedule products.
   stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S, schedule_ingest: S}}
@@ -301,8 +336,12 @@ tables:
   stanox_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, trust_backlog: S, trust_consumer: S, full_coverage_ro: S, notifier: S}}
   tiploc_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, notifier: S, trust_backlog: S, full_coverage_ro: S, trust_consumer: S}}
   fixed_links: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD}}
-  corpus_locations: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIUD}}
-  corpus_deliveries: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIUD}}
+  # schedule_ingest: no UPDATE (security review L3): the load deletes every
+  # row and inserts afresh (ds_store::corpus).
+  corpus_locations: {class: reference, grants: {api: S, writer: S, schedule_ingest: SID}}
+  # schedule_ingest: no DELETE (security review L3): the marker is an
+  # ON CONFLICT (delivered_at) DO UPDATE upsert.
+  corpus_deliveries: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIU}}
   schedule_calling_points_full: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
   schedule_destination_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
   schedule_network_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
@@ -326,7 +365,9 @@ tables:
   # ON CONFLICT (delivery) DO UPDATE SET completed_at, which Postgres checks
   # UPDATE for even when nothing conflicts.
   schedule_reference_publishes: {class: reference, grants: {api: S, schedule_reference: SIU}}
-  schedule_feed_ingests: {class: reference, grants: {api: S, schedule_ingest: SI}}
+  # schedule_ingest: SELECT only on its ON CONFLICT (delivered_at) target
+  # (security review L3), which Postgres checks even for DO NOTHING.
+  schedule_feed_ingests: {class: reference, grants: {api: S, schedule_ingest: [I, {privileges: S, columns: [delivered_at]}]}}
 
   # --- migrations: the owner's; everyone reads it through schema_gate.
   _sqlx_migrations: {class: migrations, grants: {}}
@@ -369,10 +410,16 @@ functions:
 # condition}. Each becomes a RESTRICTIVE policy `ds_grants_<role>` on the
 # table for that role (if created), FOR ALL commands, with the condition as
 # both USING and WITH CHECK: the role sees and writes only those rows,
-# whatever else it is granted (including through the app role). The table's
-# migration enables RLS and adds the permissive USING (true) policy every
-# role shares; policies named ds_grants_* that are no longer listed here
-# are dropped on the next run.
+# whatever else it is granted. A policy binds the role a session runs as,
+# so a role that could `SET ROLE` to another (the app role, a group) would
+# shed it: every membership the generated SQL grants is SET FALSE, and a
+# role with a row policy should be narrow (as the writer is since the
+# 2026-10-08 security review, M1). Its connection must also be that role:
+# the chart refuses ingestWriter.streams.tfl: apply unless the writer
+# connects as distant_signal_writer (M4). The table's migration enables RLS
+# and adds the permissive USING (true) policy every role shares; policies
+# named ds_grants_* that are no longer listed here are dropped on the next
+# run.
 row_policies:
   # The ingest-writer applies the `tfl` stream (plan 3c.3); the aggregator
   # owns every other line.

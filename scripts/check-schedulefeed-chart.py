@@ -151,6 +151,17 @@ BUCKET = (
     "--set",
     "scheduleFeed.bucket.existingSecret=distant-signal-schedulefeed-bucket",
 )
+# schedule-reference's db sink as its narrow role (security review H2).
+REFERENCE_ROLE = (
+    "--set",
+    "postgresql.roles.enabled=true",
+    "--set",
+    "postgresql.roles.setupJob.enabled=true",
+    "--set",
+    "postgresql.roles.perService.enabled=true",
+    "--set",
+    "postgresql.roles.perService.schedule_reference.connect=true",
+)
 SFTP_OFF = ("--set", "scheduleFeed.sftp.enabled=false")
 ONE_POD = ("--set", "scheduleFeed.sftp.separateDeployment=false")
 METRICS = (
@@ -860,7 +871,14 @@ def check_reference_sink(c: Checker) -> None:
         message="sink http: postgres admits schedulefeed",
     )
 
-    db = ("--set", "scheduleFeed.reference.ingest.sink=db")
+    db: tuple[str, ...] = ("--set", "scheduleFeed.reference.ingest.sink=db")
+    # Security review H2: the db sink connects only as its narrow role.
+    code, out = c.render(*ON, *db)
+    c.check(
+        ok=code != 0 and "perService.schedule_reference.connect" in out,
+        message="sink db without its role: rendered, or failed without naming it",
+    )
+    db = (*db, *REFERENCE_ROLE)
     docs = c.docs(*ON, *NETPOL, *db)
     check_no_duplicate_env(c, "sink db", docs)
     entries = env_list(container(docs, "reference"))

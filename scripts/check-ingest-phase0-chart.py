@@ -39,6 +39,20 @@ Per-client Redis ACL users (`redis.acl`):
   - the ConfigMap equals scripts/render-redis-acl.py's output for every
     stage and default-user setting, with and without redis.auth.
 
+Security review render guards (2026-10-08):
+  - M3: ACL users with `default` on refuse to render without redis.auth;
+  - H3: every stream producer (ldbws/tfl `http+shadow`, full-coverage
+    `http+shadow`, an island-of-Ireland poller) and the ingest-writer with a
+    stream on refuse to render on `default`, without their own user, or at
+    stage open, and render as their own narrow user; a writer stream on
+    `apply` refuses while `default` is on;
+  - H2: every narrow-role component's db sink or db source refuses to
+    render on the superuser or the app role, and renders (connecting as its
+    own role) with its `perService.<role>.connect`; a poller with no narrow
+    role refuses `sink: db`;
+  - M4: `ingestWriter.streams.tfl: apply` refuses without
+    `perService.writer.connect`.
+
 --baseline DIR renders DIR (a copy of charts/distant-signal from before
 phase 0, e.g. the merge base) and this chart with the same values, for the
 defaults, values-example.yaml, redis.auth on, and postgresql.roles stages A
@@ -600,6 +614,9 @@ def check_redis_acl_file(c: Checker) -> None:
     for stage in ("open", "narrow"):
         for default_on in (True, False):
             for with_auth in (True, False):
+                if default_on and not with_auth:
+                    # Refused (security review M3): check_security_guards.
+                    continue
                 base = (
                     ACL
                     if with_auth
@@ -633,6 +650,197 @@ def check_redis_acl_file(c: Checker) -> None:
                 )
 
 
+NARROW_ACL = (*ACL, *sets("redis.acl.stage=narrow"))
+DEFAULT_OFF = (*NARROW_ACL, *sets("redis.acl.defaultUser=off"), *ALL_CLIENTS)
+WRITER_LOOPS = sets("ingestWriter.enabled=true", "ingestWriter.loops.enabled=true")
+# values-example.yaml (every poller on) without the island-of-Ireland
+# pollers, whose own Redis users it sets.
+EXAMPLE_NO_IOI = (
+    "-f",
+    EXAMPLE,
+    *sets(
+        "pollerIrishRailGtfs.enabled=false",
+        "pollerIrishRailLive.enabled=false",
+        "pollerNirStations.enabled=false",
+        # Its api pools leave too little of the role budget for a
+        # per-service role on top of app's computed limit.
+        "postgresql.roles.app.connectionLimit=60",
+    ),
+)
+SCHEDULE_FEED = sets(
+    "scheduleFeed.enabled=true", "scheduleFeed.sftp.authMethod=password"
+)
+
+
+def connect(service: str) -> tuple[str, ...]:
+    """Return PER_SERVICE plus `service`'s own role."""
+    return (*PER_SERVICE, *sets(f"postgresql.roles.perService.{service}.connect=true"))
+
+
+def renders(c: Checker, label: str, *args: str) -> None:
+    """Check that the render succeeds."""
+    code, out = c.render(*args)
+    c.check(ok=code == 0, message=f"{label}: must render: {out.strip()[-400:]}")
+
+
+def check_redis_user_guards(c: Checker) -> None:
+    """Security review H3 and M3: stream producers need their own users."""
+    c.refuses(
+        "M3: ACL users with default on and no redis.auth",
+        "needs redis.auth.enabled",
+        *sets("redis.acl.enabled=true", "redis.acl.existingSecret=redis-users"),
+    )
+    renders(
+        c,
+        "M3: ACL users, default off, no redis.auth",
+        *sets(
+            "redis.acl.enabled=true",
+            "redis.acl.existingSecret=redis-users",
+            "redis.acl.defaultUser=off",
+        ),
+        *ALL_CLIENTS,
+    )
+    # (label, the producer's values, its redis.acl.clients key)
+    producers: tuple[tuple[str, tuple[str, ...], str], ...] = (
+        (
+            "ldbws http+shadow",
+            (*EXAMPLE_NO_IOI, *sets("pollers.ldbws.ingest.sink=http+shadow")),
+            "pollerLdbws",
+        ),
+        (
+            "tfl http+shadow",
+            (*EXAMPLE_NO_IOI, *sets("pollers.tfl.ingest.sink=http+shadow")),
+            "pollerTfl",
+        ),
+        (
+            "fullCoverageConsumer http+shadow",
+            sets("fullCoverageConsumer.ingest.sink=http+shadow"),
+            "fullCoverageConsumer",
+        ),
+        (
+            "a writer stream on shadow",
+            sets("ingestWriter.enabled=true", "ingestWriter.streams.tfl=shadow"),
+            "ingestWriter",
+        ),
+        (
+            "pollerIrishRailLive",
+            sets("pollerIrishRailLive.enabled=true"),
+            "pollerIrishRailLive",
+        ),
+    )
+    for label, args, client in producers:
+        own = sets(f"redis.acl.clients.{client}=true")
+        needle = f"redis.acl.clients.{client}"
+        c.refuses(f"H3: {label} on default", needle, *args)
+        c.refuses(f"H3: {label} without its user", needle, *args, *ACL)
+        c.refuses(
+            f"H3: {label} at stage open",
+            needle,
+            *args,
+            *ACL,
+            *own,
+            *sets("redis.acl.stage=open"),
+        )
+        renders(c, f"H3: {label} as its own narrow user", *args, *NARROW_ACL, *own)
+    apply = sets(
+        "ingestWriter.enabled=true", "ingestWriter.streams.station-samples=apply"
+    )
+    c.refuses(
+        "H3: a writer stream on apply with default on",
+        "redis.acl.defaultUser: off",
+        *apply,
+        *NARROW_ACL,
+        *sets("redis.acl.clients.ingestWriter=true"),
+    )
+    renders(c, "H3: a writer stream on apply with default off", *apply, *DEFAULT_OFF)
+
+
+def check_narrow_role_guards(c: Checker) -> None:
+    """Security review H2 and M4: narrow components connect only as their role."""
+    # (label, the values, the perService key)
+    components: tuple[tuple[str, tuple[str, ...], str], ...] = (
+        (
+            "pollers.stations sink db",
+            (
+                *EXAMPLE_NO_IOI,
+                *WRITER_LOOPS,
+                *sets("pollers.stations.ingest.sink=db"),
+            ),
+            "stations",
+        ),
+        (
+            "pollers.incidents sink db",
+            (*EXAMPLE_NO_IOI, *sets("pollers.incidents.ingest.sink=db")),
+            "incidents",
+        ),
+        (
+            "trustBacklogConsumer sink db",
+            sets("trustBacklogConsumer.ingest.sink=db"),
+            "trust_backlog",
+        ),
+        (
+            "trustConsumer sink db",
+            (*WRITER_LOOPS, *sets("trustConsumer.ingest.sink=db")),
+            "trust_consumer",
+        ),
+        (
+            "trustConsumer reads db",
+            sets("trustConsumer.internalReads.source=db"),
+            "trust_consumer",
+        ),
+        (
+            "fullCoverageConsumer reads db",
+            sets("fullCoverageConsumer.internalReads.source=db"),
+            "full_coverage_ro",
+        ),
+        (
+            "pollers.ldbws reads db",
+            (*EXAMPLE_NO_IOI, *sets("pollers.ldbws.internalReads.source=db")),
+            "ldbws_ro",
+        ),
+        (
+            "scheduleFeed.ingest sink db",
+            (*SCHEDULE_FEED, *sets("scheduleFeed.ingest.sink=db")),
+            "schedule_ingest",
+        ),
+        (
+            "scheduleFeed.reference sink db",
+            (*SCHEDULE_FEED, *sets("scheduleFeed.reference.ingest.sink=db")),
+            "schedule_reference",
+        ),
+    )
+    for label, args, service in components:
+        needle = f"perService.{service}.connect"
+        c.refuses(f"H2: {label} on the superuser", needle, *args)
+        c.refuses(f"H2: {label} on the app role", needle, *args, *PER_SERVICE)
+        renders(c, f"H2: {label} as its own role", *args, *connect(service))
+        docs = c.docs(*args, *connect(service))
+        role = f"distant_signal_{service}"
+        urls = [
+            value(env(container).get("DATABASE_URL"))
+            for doc in docs
+            if doc.get("kind") == "Deployment"
+            for container in containers(doc)
+        ]
+        db_urls = [u for u in urls if u.startswith("postgres://")]
+        c.check(
+            ok=any(u.startswith(f"postgres://{role}:") for u in db_urls),
+            message=f"H2: {label}: no container connects as {role}",
+        )
+    c.refuses(
+        "H2: a poller with no narrow role on sink db",
+        "has no narrow Postgres role",
+        *EXAMPLE_NO_IOI,
+        *sets("pollers.tfl.ingest.sink=db"),
+    )
+    tfl_apply = (
+        *DEFAULT_OFF,
+        *sets("ingestWriter.enabled=true", "ingestWriter.streams.tfl=apply"),
+    )
+    c.refuses("M4: tfl apply as the app role", "perService.writer.connect", *tfl_apply)
+    renders(c, "M4: tfl apply as the writer role", *tfl_apply, *connect("writer"))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run every check; print failures."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
@@ -654,6 +862,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_redis_refusals(c)
     check_redis_steps(c)
     check_redis_acl_file(c)
+    check_redis_user_guards(c)
+    check_narrow_role_guards(c)
     for failure in c.failures:
         print(failure)
     if not c.failures:

@@ -321,6 +321,63 @@ chart's Secret. Nothing connects as it until both switches are on, and
 `connect` refuses to render without the db sink. CI runs schedule-reference's
 DB suite as this role.
 
+### Database CONNECT, TEMPORARY and logging (security review L5, L8, 2026-10-08)
+
+`postgres-roles.sql` revokes `CONNECT` and `TEMPORARY` on the application
+database from `PUBLIC` and grants `CONNECT` to the owner, app, exporter,
+dump and backup roles (`postgres-grants.sql` grants it to each per-service
+role). Any other login role, such as one created by hand, can no longer
+connect to the application database until it is granted `CONNECT`
+(superusers are not affected). No role may create temporary tables; no
+service does. `ALTER DEFAULT PRIVILEGES FOR ROLE <owner> REVOKE EXECUTE ON
+FUNCTIONS FROM PUBLIC` keeps a function a later migration creates from
+being executable by everyone.
+
+Both setup scripts start with `SET log_min_error_statement = panic`,
+`log_min_duration_statement = -1` and `log_statement = none`, so a failing
+or slow statement never writes the role passwords (literals in their
+`set_config` calls) to the server log.
+
+### The writer is narrow; no member may SET ROLE (security review M1, 2026-10-08)
+
+A RESTRICTIVE row policy binds the role a session *runs as*. While the
+writer was an `observed` member of `distant_signal_app` it could run
+`SET ROLE distant_signal_app` and shed `line_status`'s `ds_grants_writer`
+policy (reproduced in the review), and a writer connecting as app had no
+policy at all. So, correcting the header of migration
+`20261009131300_line_status_rls.sql` (migrations are immutable, so the
+correction lives here), "a restrictive policy ... narrows the writer
+whatever else applies" holds only for a session that is, and stays, the
+writer's own role:
+
+- the writer's role is `narrow` in `db-grants.yaml`: no longer a member of
+  app, exactly its grants (its loops, handlers and outbox applier; the
+  unused U on `train_movement_events` and `trust_event_backlog`, D on
+  `corpus_crosswalk_build` and U on the `corpus_*_crs` tables dropped);
+- every membership `postgres-grants.sql` grants is `WITH INHERIT TRUE,
+  SET FALSE` (Postgres 16+; production runs 16.15): an observed role still
+  uses app's privileges but may not `SET ROLE` to it, nor to a group;
+- the chart refuses `ingestWriter.streams.tfl: apply` unless the writer
+  connects as its own role (M4).
+
+`train_subscriptions` (each user's subscriptions) is class `personal` now,
+so out of `read_shared`; each role has column grants for exactly what it
+reads and writes (M2).
+
+### Narrow components never fall back (security review H2, 2026-10-08)
+
+Every component whose role is narrow (schedule_reference, schedule_ingest,
+stations, incidents, trust_backlog, trust_consumer, full_coverage_ro,
+ldbws_ro) fails the render on its db sink or db source unless its
+`perService.<role>.connect` is on: it connects as its own role or not at
+all, never as `distant_signal_app` or the superuser. So the Stage 0b
+switches (`roles.enabled`, `setupJob.enabled`, `perService.enabled`) and
+the role's `connect` go in the same values change as (or before) the
+sink flip. The ingest-writer may still run as app, except that
+`ingestWriter.streams.tfl: apply` needs `perService.writer.connect` (M4):
+`line_status`'s row policy binds the writer's own role only. The table is
+in the chart README ("Per-service Postgres roles").
+
 ### pg_stat_statements
 
 Checked in production (read-only, 2026-10-06): the extension is installed

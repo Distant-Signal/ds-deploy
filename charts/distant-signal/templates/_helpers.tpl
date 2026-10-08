@@ -333,6 +333,9 @@ Validates the values.
 {{- if not (has (toString $acl.stage) (list "open" "narrow")) -}}
 {{- fail (printf "redis.acl.stage must be open or narrow, not %q." (toString $acl.stage)) -}}
 {{- end -}}
+{{- if and (include "distant-signal.redisAclDefaultUserOn" .) (not .Values.redis.auth.enabled) -}}
+{{- fail "redis.acl.enabled with redis.acl.defaultUser on needs redis.auth.enabled: without it `default` stays passwordless with ~* &* +@all, and any pod that reaches Redis bypasses every ACL user (security review M3). Turn redis.auth on first (its password becomes default's), or set redis.acl.defaultUser: off." -}}
+{{- end -}}
 {{- if not (include "distant-signal.redisAclDefaultUserOn" .) -}}
 {{- range $client, $on := $acl.clients -}}
 {{- if not $on -}}
@@ -387,11 +390,9 @@ default user in values. The Redis initContainer fills in the passwords.
 {{- $root := . -}}
 {{- $stage := toString .Values.redis.acl.stage -}}
 {{- if include "distant-signal.redisAclDefaultUserOn" . -}}
-{{- if .Values.redis.auth.enabled }}
+{{- /* Never nopass: distant-signal.redisAclEnabled refuses default on
+     without redis.auth (security review M3). */}}
 user default reset on >${REDIS_ACL_PASSWORD_DEFAULT} ~* &* +@all
-{{- else }}
-user default reset on nopass ~* &* +@all
-{{- end }}
 {{- else }}
 user default reset off
 {{- end }}
@@ -437,6 +438,49 @@ redis.acl.existingSecret); otherwise exactly distant-signal.redisPasswordEnv
 {{- else -}}
 {{- include "distant-signal.redisPasswordEnv" $root -}}
 {{- end -}}
+{{- end }}
+
+{{/*
+Security review H3 (2026-10-08): an ingest stream producer or the
+ingest-writer must reach Redis as its own, narrow ACL user. As `default`
+(`~* &* +@all`), or as a `client` user in stage `open` (the same rights),
+it could XADD any schema to any stream, or trim and delete them. Renders
+nothing; fails unless redis.acl.enabled, redis.acl.stage: narrow and
+redis.acl.clients.<client>. Takes (dict "root" $ "client" <redis.acl.clients
+key> "what" <the values that need it, for the message>).
+*/}}
+{{- define "distant-signal.requireOwnRedisUser" -}}
+{{- $acl := .root.Values.redis.acl -}}
+{{- if not (and (include "distant-signal.redisAclEnabled" .root) (eq (toString $acl.stage) "narrow") (get $acl.clients .client)) -}}
+{{- fail (printf "%s needs its own Redis ACL user: redis.acl.enabled, redis.acl.stage: narrow and redis.acl.clients.%s (security review H3: as the `default` user, or a client user in stage open, it could write any ingest stream). See docs/redis-acl.md for the rollout steps." .what .client) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Security review H2 (2026-10-08): a component with a narrow Postgres role
+(files/db-grants.yaml) connects as that role or not at all, never as the
+shared app role or the superuser. Renders nothing; fails unless
+postgresql.roles.perService.<service>.connect is on (whose own checks,
+distant-signal.perServiceConnects, need postgresql.roles.enabled and
+perService.enabled). Reads the value only, so the sink helpers that
+perServiceConnects itself calls can use it. Takes (dict "root" $ "service"
+<perService key> "what" <the values that need it, for the message>).
+*/}}
+{{- define "distant-signal.requireNarrowRole" -}}
+{{- $cfg := get .root.Values.postgresql.roles.perService .service | default dict -}}
+{{- if not $cfg.connect -}}
+{{- fail (printf "%s needs postgresql.roles.perService.%s.connect (with postgresql.roles.enabled, setupJob.enabled and perService.enabled): a narrow-role component never falls back to the shared app role or the superuser (security review H2)." .what .service) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The components that have a narrow Postgres role and connect only as it
+(distant-signal.requireNarrowRole): their perService keys, space-separated.
+The writer is not here: it may still run as app until its tfl stream applies
+(distant-signal.ingestWriterStreams, security review M4).
+*/}}
+{{- define "distant-signal.narrowOnlyServices" -}}
+stations incidents schedule_ingest schedule_reference trust_backlog trust_consumer full_coverage_ro ldbws_ro
 {{- end }}
 
 {{/*
@@ -813,6 +857,9 @@ distant-signal.databaseEnv.
 */}}
 {{- define "distant-signal.databaseEnvFor" -}}
 {{- $service := .service -}}
+{{- if has $service (include "distant-signal.narrowOnlyServices" .root | splitList " ") -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" $service "what" (printf "the %s role's component" $service)) -}}
+{{- end -}}
 {{- with .root -}}
 {{- if .Values.postgresql.enabled -}}
 {{- /* With postgresql.roles.enabled, the non-superuser app role. */}}
@@ -1109,6 +1156,10 @@ Takes (dict "root" $ "name" <pollers key> "poller" <its values>).
 {{- if and (eq .name "stations") (not (and .root.Values.ingestWriter.enabled .root.Values.ingestWriter.loops.enabled)) -}}
 {{- fail "pollers.stations.ingest.sink=db needs ingestWriter.enabled and ingestWriter.loops.enabled: without the api's POST, the ingest-writer's CORPUS crosswalk loop rebuilds the crosswalk after a stations refresh (ingest architecture plan 2b.2)." -}}
 {{- end -}}
+{{- if not (has .name (include "distant-signal.narrowOnlyServices" .root | splitList " ")) -}}
+{{- fail (printf "pollers.%s.ingest.sink=db: poller-%s has no narrow Postgres role (only stations and incidents write directly), and would connect as the shared app role (security review H2)." .name .name) -}}
+{{- end -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" .name "what" (printf "pollers.%s.ingest.sink=db" .name)) -}}
 true
 {{- end -}}
 {{- end }}
@@ -1141,6 +1192,7 @@ Takes (dict "root" $ "service" "trust_backlog"|"trust_consumer").
 {{- if and (eq .service "trust_consumer") (not (and .root.Values.ingestWriter.enabled .root.Values.ingestWriter.loops.enabled)) -}}
 {{- fail "trustConsumer.ingest.sink=db needs ingestWriter.enabled and ingestWriter.loops.enabled: the ingest-writer's train_event_outbox loop applies the events that change a subscription (resolutions, cancellations, reinstatements), which the trust_consumer role may not write (ingest architecture plan 3b.3)." -}}
 {{- end -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" .service "what" (printf "%s.ingest.sink=db" $key)) -}}
 true
 {{- end -}}
 {{- end }}
@@ -1164,6 +1216,7 @@ stream. Takes (dict "root" $ "name" <pollers key> "poller" <its values>).
 {{- fail (printf "pollers.%s.ingest.sink %s: poller-%s has no stream sink (only ldbws, tfl and tocs take http+shadow or stream)." .name $sink .name) -}}
 {{- end -}}
 {{- if .poller.enabled -}}
+{{- include "distant-signal.requireOwnRedisUser" (dict "root" .root "client" (include "distant-signal.pollerRedisClient" .name) "what" (printf "pollers.%s.ingest.sink=%s" .name $sink)) -}}
 {{- $stream := get $streams .name -}}
 {{- if and (eq $sink "stream") (not (and .root.Values.ingestWriter.enabled (eq (toString (get .root.Values.ingestWriter.streams $stream)) "apply"))) -}}
 {{- fail (printf "pollers.%s.ingest.sink=stream needs ingestWriter.enabled and ingestWriter.streams.%s: apply (flip both in the same values change, spec §13.1): with no writer applying the stream, nothing would reach the database." .name $stream) -}}
@@ -1188,6 +1241,7 @@ ingestWriter.streams.full-coverage: apply. Takes root.
 {{- fail "fullCoverageConsumer.ingest.sink=stream needs ingestWriter.enabled and ingestWriter.streams.full-coverage: apply (flip both in the same values change, spec §13.1): with no writer applying the stream, nothing would reach the database." -}}
 {{- end -}}
 {{- if ne $sink "http" -}}
+{{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "fullCoverageConsumer" "what" (printf "fullCoverageConsumer.ingest.sink=%s" $sink)) -}}
 {{- $sink -}}
 {{- end -}}
 {{- end }}
@@ -1311,6 +1365,7 @@ Takes (dict "root" $ "role" "full_coverage_ro"|"ldbws_ro"|"trust_consumer").
 {{- fail (printf "%s.internalReads.source must be http or db, not %q." $key $source) -}}
 {{- end -}}
 {{- if and $enabled (eq $source "db") -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" .role "what" (printf "%s.internalReads.source=db" $key)) -}}
 true
 {{- end -}}
 {{- end }}
@@ -1459,7 +1514,18 @@ other than off/shadow/apply. Takes root.
 {{- if not (has (toString $mode) (list "off" "shadow" "apply")) -}}
 {{- fail (printf "ingestWriter.streams.%s must be off, shadow or apply, not %q." $name (toString $mode)) -}}
 {{- end -}}
+{{- if eq $name "island-of-ireland" -}}
+{{- /* Removed (security review H1): one stream per poller now. An old
+     values file's "off" is dropped, as the writer no longer knows it. */ -}}
+{{- if ne (toString $mode) "off" -}}
+{{- fail "ingestWriter.streams.island-of-ireland was split into one stream per poller (security review H1, 2026-10-08): set ingestWriter.streams.ioi-gtfs, ioi-nir and/or ioi-live instead, and leave island-of-ireland \"off\" or remove it." -}}
+{{- end -}}
+{{- else -}}
 {{- $items = append $items (printf "%s:%s" $name (toString $mode)) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq (toString (get .Values.ingestWriter.streams "tfl")) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" . "service" "writer"))) -}}
+{{- fail "ingestWriter.streams.tfl: apply needs postgresql.roles.perService.writer.connect (security review M4): line_status's row policy (source = 'tfl') applies to the writer's own role only. As the app role the writer could write the aggregator's lines too." -}}
 {{- end -}}
 {{- join "," $items -}}
 {{- end }}
@@ -1471,8 +1537,18 @@ Redis credentials and the NetworkPolicy paths to Redis. Takes root.
 */ -}}
 {{- define "distant-signal.ingestWriterStreamsOn" -}}
 {{- if .Values.ingestWriter.enabled -}}
+{{- $on := false -}}
+{{- $apply := false -}}
 {{- range $name, $mode := .Values.ingestWriter.streams -}}
-{{- if ne (toString $mode) "off" }}true{{ end -}}
+{{- if ne (toString $mode) "off" }}{{ $on = true }}{{ end -}}
+{{- if eq (toString $mode) "apply" }}{{ $apply = true }}{{ end -}}
+{{- end -}}
+{{- if $on -}}
+{{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "ingestWriter" "what" "an ingestWriter.streams entry not off") -}}
+{{- if and $apply (include "distant-signal.redisAclDefaultUserOn" .) -}}
+{{- fail "an ingestWriter.streams entry set to apply needs redis.acl.defaultUser: off (security review H3): while `default` is on, anything that can reach Redis with its password could XADD entries the writer applies. Move every client to its own user, then turn default off, before the first apply." -}}
+{{- end -}}
+true
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -1488,6 +1564,7 @@ fails the render on an unknown sink. Takes root.
 {{- fail (printf "scheduleFeed.ingest.sink must be http or db, got %q" $sink) -}}
 {{- end -}}
 {{- if and .Values.scheduleFeed.enabled (eq $sink "db") -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" . "service" "schedule_ingest" "what" "scheduleFeed.ingest.sink=db") -}}
 true
 {{- end -}}
 {{- end }}
@@ -1516,6 +1593,7 @@ Fails on a sink other than http or db. Takes root.
 {{- fail (printf "scheduleFeed.reference.ingest.sink must be http or db, not %q." $sink) -}}
 {{- end -}}
 {{- if and .Values.scheduleFeed.enabled (eq $sink "db") -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" . "service" "schedule_reference" "what" "scheduleFeed.reference.ingest.sink=db") -}}
 true
 {{- end -}}
 {{- end }}

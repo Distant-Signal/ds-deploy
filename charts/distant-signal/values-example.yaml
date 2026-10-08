@@ -70,6 +70,24 @@ aggregator:
 # an external Redis" for the incident that made persistence the default
 # here). Set `redis.enabled: false` together with `redis.externalUrl` to
 # point at a managed instance instead.
+#
+# The island-of-Ireland pollers enabled below write only to their own
+# ds:ingest:ioi-* streams, so each must connect as its own narrow ACL user
+# (security review H3; docs/redis-acl.md): redis.auth (for `default`'s
+# password while it stays on, M3), the ACL users at stage `narrow`, and the
+# three pollers' clients. Both Secrets are yours to create.
+redis:
+  auth:
+    enabled: true
+    existingSecret: distant-signal-redis-auth
+  acl:
+    enabled: true
+    existingSecret: distant-signal-redis-users
+    stage: narrow
+    clients:
+      pollerIrishRailGtfs: true
+      pollerIrishRailLive: true
+      pollerNirStations: true
 
 enricher:
   image:

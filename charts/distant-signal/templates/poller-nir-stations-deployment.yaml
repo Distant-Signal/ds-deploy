@@ -1,4 +1,6 @@
 {{- if .Values.pollerNirStations.enabled }}
+{{- /* Its only sink is its stream: its own narrow Redis user (security review H3). */}}
+{{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "pollerNirStations" "what" "pollerNirStations.enabled") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -84,8 +86,8 @@ with pollerNirStations.extraEnv, which replaces an entry of the same name.
             - name: HALTS_CSV_URL
               value: {{ .Values.pollerNirStations.haltsCsvUrl | quote }}
             # Ingest plan 3c.2 (decision D8): the only sink is the
-            # ds:ingest:island-of-ireland stream (the ingest-writer applies
-            # it with ingestWriter.streams.island-of-ireland), as the
+            # ds:ingest:ioi-nir stream (the ingest-writer applies
+            # it with ingestWriter.streams.ioi-nir), as the
             # poller-nir-stations ACL user with redis.acl.clients.pollerNirStations.
             - name: INGEST_SINK
               value: "stream"

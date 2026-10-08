@@ -1014,9 +1014,10 @@ pollers:
     ingest:
       # -- `http`: POST each snapshot to the api (today). `db`: write it to
       # Postgres directly (INGEST_SINK=db) and XADD incident-text-changed
-      # from the poller: renders DATABASE_URL (the incidents role with
-      # `postgresql.roles.perService.incidents.connect`, else the app
-      # role), REDIS_URL (the `poller-incidents` ACL user with
+      # from the poller: renders DATABASE_URL (the incidents role;
+      # `postgresql.roles.perService.incidents.connect` is required, the
+      # render fails without it: security review H2), REDIS_URL (the
+      # `poller-incidents` ACL user with
       # `redis.acl.clients.pollerIncidents`), and Postgres and Redis
       # egress and admission. Rollback: `http`.
       sink: http
@@ -1067,9 +1068,10 @@ pollers:
     ingest:
       # -- `http` (today's behaviour): POST it to `ingestPath`. `db`
       # (INGEST_SINK=db): write Postgres directly and read the startup
-      # cursor from `ingest_freshness`, as the app role or, with
-      # `postgresql.roles.perService.stations.connect`, as the narrow
-      # `distant_signal_stations`. Adds Postgres egress and admission to the
+      # cursor from `ingest_freshness`, as the narrow
+      # `distant_signal_stations` only (`postgresql.roles.perService.stations.connect`
+      # is required; the render fails without it, security review H2).
+      # Adds Postgres egress and admission to the
       # NetworkPolicies. `db` needs `ingestWriter.enabled` and
       # `ingestWriter.loops.enabled`: the writer's 10-minute CORPUS crosswalk
       # loop replaces the rebuild the api's POST triggers (plan 2b.2).
@@ -1317,9 +1319,10 @@ pollers:
       # `sampleStationsPath`. `db` (SAMPLE_STATIONS_SOURCE=db): computed by
       # the poller from the line catalogue in its image and the views
       # `ingest_custom_line_stations` and `ingest_sample_station_pins`, as
-      # the app role or, with `postgresql.roles.perService.ldbws_ro.connect`,
-      # the read-only `distant_signal_ldbws_ro`; the same list either way,
-      # the two knobs above included. Adds Postgres egress and admission to
+      # the read-only `distant_signal_ldbws_ro` only
+      # (`postgresql.roles.perService.ldbws_ro.connect` is required; the
+      # render fails without it, security review H2); the same list as the
+      # api's, the two knobs above included. Adds Postgres egress and admission to
       # the NetworkPolicies and the pool to the connection budgets.
       source: http
       database:
@@ -2081,12 +2084,25 @@ ingestWriter:
   # has no handlers for yet (station-samples and full-coverage arrive in
   # 3a.6, the rest in 3c). Rollout per producer: writer `shadow`, producer
   # `http+shadow`, then `apply` with producer `stream` (spec §13.1).
+  # Render guards (security review, 2026-10-08): any stream not `off` needs
+  # `redis.acl.enabled`, `redis.acl.stage: narrow` and
+  # `redis.acl.clients.ingestWriter`; any `apply` also needs
+  # `redis.acl.defaultUser: "off"` (H3); `tfl: apply` needs
+  # `postgresql.roles.perService.writer.connect`, as `line_status`'s row
+  # policy binds only the writer's own role (M4).
   streams:
     station-samples: "off"
     full-coverage: "off"
     tfl: "off"
     reference: "off"
-    island-of-ireland: "off"
+    # One stream per island-of-Ireland poller (security review H1,
+    # 2026-10-08): ds:ingest:ioi-gtfs (pollerIrishRailGtfs: ioi-stations,
+    # ioi-lines), ds:ingest:ioi-nir (pollerNirStations: the same two) and
+    # ds:ingest:ioi-live (pollerIrishRailLive: ioi-station-samples). The
+    # old shared `island-of-ireland` key is refused unless "off".
+    ioi-gtfs: "off"
+    ioi-nir: "off"
+    ioi-live: "off"
   # -- Changed rows only (INGEST_WRITER_CHANGED_ROWS_ONLY; plan 3a.9, spec
   # §7.8): the `station-full-coverage-samples/1` handler stops advancing
   # `resolved_at` on rows whose stats are unchanged (about 2,400 of 2,700
@@ -2684,6 +2700,12 @@ redis:
   #   3. `stage: narrow`: each user gets its spec §8.2 rights.
   #   4. `defaultUser: "off"` (needs every client in `clients` on).
   # Rollback: the previous step's values.
+  # Render guards (security review, 2026-10-08): `enabled` with
+  # `defaultUser: "on"` needs `redis.auth.enabled` (M3); every ingest stream
+  # producer (a `http+shadow`/`stream` sink, an island-of-Ireland poller)
+  # and the ingest-writer with any stream not `off` needs `enabled`,
+  # `stage: narrow` and its own `clients.<client>` (H3); and any
+  # `ingestWriter.streams` entry on `apply` needs `defaultUser: "off"` (H3).
   acl:
     # -- Turn the ACL users on (needs `existingSecret`).
     enabled: false
@@ -2734,8 +2756,8 @@ redis:
       # -- poller-tocs's stream sinks (`pollers.tocs.ingest.sink`), as user
       # `poller-tocs` (`~ds:ingest:reference`).
       pollerTocs: false
-      # -- The island-of-Ireland pollers (when enabled; they write only to
-      # `ds:ingest:island-of-ireland`, decision D8), as users
+      # -- The island-of-Ireland pollers (when enabled; each writes only to
+      # its own `ds:ingest:ioi-gtfs`, `-live` or `-nir`, decision D8), as users
       # `poller-irish-rail-gtfs`, `poller-irish-rail-live` and
       # `poller-nir-stations`.
       pollerIrishRailGtfs: false
@@ -3081,9 +3103,10 @@ trustConsumer:
     # -- `http` (today's behaviour): POST them to the api's
     # /private/train-events and /private/train-forward-signals. `db`
     # (INGEST_SINK=db): write both to Postgres directly in one transaction,
-    # XACKing movement-events after the commit, as the app role or, with
-    # `postgresql.roles.perService.trust_consumer.connect`, as the narrow
-    # `distant_signal_trust_consumer`. Adds Postgres egress and admission to
+    # XACKing movement-events after the commit, as the narrow
+    # `distant_signal_trust_consumer` only
+    # (`postgresql.roles.perService.trust_consumer.connect` is required; the
+    # render fails without it, security review H2). Adds Postgres egress and admission to
     # the NetworkPolicies and the pool to the connection budgets. The
     # reads (tracked trains, STANOX/CRS) stay on the api until phase 4.
     # `db` needs `ingestWriter.enabled` and `ingestWriter.loops.enabled`
@@ -3108,8 +3131,10 @@ trustConsumer:
     # -- `http` (today's behaviour): api's /private/tracked-trains and
     # /private/stanox-crs. `db` (TRACKED_TRAINS_SOURCE and
     # STANOX_CRS_SOURCE=db): the view `ingest_active_tracked_trains` (no
-    # user ids) and `stanox_crs`, read directly as the app role (the
-    # `trust_consumer` role comes with plan 3b), with the api's CORPUS
+    # user ids) and `stanox_crs`, read directly as the narrow
+    # `distant_signal_trust_consumer` only
+    # (`postgresql.roles.perService.trust_consumer.connect` is required; the
+    # render fails without it, security review H2), with the api's CORPUS
     # fallback passed on. Adds Postgres egress and admission to the
     # NetworkPolicies and the pool to the connection budgets.
     source: http
@@ -3217,9 +3242,10 @@ fullCoverageConsumer:
     # /private/schedule-line-population GET per (line, date), and
     # /private/stanox-crs. `db` (POPULATION_SOURCE and STANOX_CRS_SOURCE=db):
     # one version query per reload, then only the changed populations, and
-    # `stanox_crs`, read directly as the app role or, with
-    # `postgresql.roles.perService.full_coverage_ro.connect`, the read-only
-    # `distant_signal_full_coverage_ro`; the api's CORPUS fallback is passed
+    # `stanox_crs`, read directly as the read-only
+    # `distant_signal_full_coverage_ro` only
+    # (`postgresql.roles.perService.full_coverage_ro.connect` is required; the
+    # render fails without it, security review H2); the api's CORPUS fallback is passed
     # on. Adds Postgres egress and admission to the NetworkPolicies and the
     # pool to the connection budgets.
     source: http
@@ -3337,9 +3363,10 @@ trustBacklogConsumer:
     # codes to the api's /private/trust-event-backlog and
     # /private/train-reasons, and reload STANOX/CRS from
     # /private/stanox-crs. `db` (INGEST_SINK=db): write and read Postgres
-    # directly, XACKing movement-events after the commit, as the app role
-    # or, with `postgresql.roles.perService.trust_backlog.connect`, as the
-    # narrow `distant_signal_trust_backlog`. Replaces the api egress with
+    # directly, XACKing movement-events after the commit, as the narrow
+    # `distant_signal_trust_backlog` only
+    # (`postgresql.roles.perService.trust_backlog.connect` is required; the
+    # render fails without it, security review H2). Replaces the api egress with
     # Postgres egress and admission in the NetworkPolicies, adds the pool
     # to the connection budgets, and passes `api.corpusFallback.enabled`
     # on so the STANOX/CRS reload matches the api's.
@@ -3527,8 +3554,8 @@ pollerIrishRailGtfs:
   # -- /livez stall window (see workerHealth): one GTFS download plus up to 15 minutes of ingest-POST retries.
   progressStallSecs: 1800
   # -- Off by default (decision D8). Its snapshots go only to the
-  # `ds:ingest:island-of-ireland` stream (ingest plan 3c.2; no api
-  # route, no OAuth), so turn on `ingestWriter.streams.island-of-ireland`
+  # `ds:ingest:ioi-gtfs` stream (ingest plan 3c.2; no api
+  # route, no OAuth), so turn on `ingestWriter.streams.ioi-gtfs`
   # (`apply`) with it; its Redis user is
   # `redis.acl.clients.pollerIrishRailGtfs`.
   enabled: false
@@ -3587,8 +3614,8 @@ pollerIrishRailLive:
   # -- /livez stall window (see workerHealth): one sampling cycle (240s budget) plus its ingest-POST retries.
   progressStallSecs: 1800
   # -- Off by default (decision D8). Its snapshots go only to the
-  # `ds:ingest:island-of-ireland` stream (ingest plan 3c.2; no api
-  # route, no OAuth), so turn on `ingestWriter.streams.island-of-ireland`
+  # `ds:ingest:ioi-live` stream (ingest plan 3c.2; no api
+  # route, no OAuth), so turn on `ingestWriter.streams.ioi-live`
   # (`apply`) with it; its Redis user is
   # `redis.acl.clients.pollerIrishRailLive`.
   enabled: false
@@ -3642,8 +3669,8 @@ pollerNirStations:
   # -- /livez stall window (see workerHealth): one CSV download plus up to 15 minutes of ingest-POST retries.
   progressStallSecs: 1800
   # -- Off by default (decision D8). Its snapshots go only to the
-  # `ds:ingest:island-of-ireland` stream (ingest plan 3c.2; no api
-  # route, no OAuth), so turn on `ingestWriter.streams.island-of-ireland`
+  # `ds:ingest:ioi-nir` stream (ingest plan 3c.2; no api
+  # route, no OAuth), so turn on `ingestWriter.streams.ioi-nir`
   # (`apply`) with it; its Redis user is
   # `redis.acl.clients.pollerNirStations`.
   enabled: false
@@ -4007,7 +4034,10 @@ scheduleFeed:
     # each CORPUS extract (`INGEST_SINK`, ingest architecture plan 2d):
     # `http` (api's /private/schedule-feed-ingests and
     # /private/corpus-locations, as before) or `db` (Postgres directly,
-    # with the same validation; adds DATABASE_URL, the NetworkPolicy
+    # with the same validation, as the narrow
+    # `distant_signal_schedule_ingest` only:
+    # `postgresql.roles.perService.schedule_ingest.connect` is required, the
+    # render fails without it, security review H2; adds DATABASE_URL, the NetworkPolicy
     # Postgres egress and ingress, and this pool to the connection
     # budgets). Under `db` the CORPUS freshness gauge and the post-load
     # comparison come from the ingest-writer's CORPUS loop, so turn
@@ -4202,9 +4232,10 @@ scheduleFeed:
       # -- Where the products go (`INGEST_SINK`; ingest architecture plan
       # 2a): `http`, the api's `/private` ingest routes (today's path), or
       # `db`, Postgres directly through `ds_store`. With `db` the container
-      # gets `DATABASE_URL` (as `distant_signal_schedule_reference` once
-      # `postgresql.roles.perService.schedule_reference.connect` is on, else
-      # the shared app role), the schedulefeed pod may reach Postgres
+      # gets `DATABASE_URL` (as `distant_signal_schedule_reference` only:
+      # `postgresql.roles.perService.schedule_reference.connect` is
+      # required, the render fails without it, security review H2), the
+      # schedulefeed pod may reach Postgres
       # (NetworkPolicy), and it waits for the schema gate before its first
       # poll. Rollback is `http`: the api routes still exist.
       sink: http
@@ -4714,13 +4745,15 @@ metrics:
         "ds:ingest:full-coverage": 360
         "ds:ingest:tfl": 288
         "ds:ingest:reference": 30
-        "ds:ingest:island-of-ireland": 2000
+        "ds:ingest:ioi-gtfs": 500
+        "ds:ingest:ioi-nir": 500
+        "ds:ingest:ioi-live": 1000
     # DistantSignalIngestStreamStalled (critical): producers' XADDs to a
     # stream succeeded within its stallAfterSecs, but the writer has
     # applied nothing from it for longer, for `for`. stallAfterSecs is
     # about 3x each stream's cadence (at least 3 minutes, for the 30s
     # gauges): station-samples 1/min, full-coverage 3/min, tfl 1/5 min,
-    # reference daily, island-of-ireland 1/5 min.
+    # reference daily, ioi-live 1/5 min, ioi-gtfs and ioi-nir daily.
     ingestStreamStalled:
       enabled: true
       for: 5m
@@ -4730,7 +4763,9 @@ metrics:
         "ds:ingest:full-coverage": 180
         "ds:ingest:tfl": 900
         "ds:ingest:reference": 259200
-        "ds:ingest:island-of-ireland": 900
+        "ds:ingest:ioi-gtfs": 259200
+        "ds:ingest:ioi-nir": 259200
+        "ds:ingest:ioi-live": 900
     # DistantSignalIngestDeadLetters: any entry dead-lettered within
     # `window`.
     ingestDeadLetters:

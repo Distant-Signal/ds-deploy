@@ -1,4 +1,6 @@
 {{- if .Values.pollerIrishRailLive.enabled }}
+{{- /* Its only sink is its stream: its own narrow Redis user (security review H3). */}}
+{{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "pollerIrishRailLive" "what" "pollerIrishRailLive.enabled") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -82,8 +84,8 @@ with pollerIrishRailLive.extraEnv, which replaces an entry of the same name.
             - name: IRISH_RAIL_BASE_URL
               value: {{ .Values.pollerIrishRailLive.irishRailBaseUrl | quote }}
             # Ingest plan 3c.2 (decision D8): the only sink is the
-            # ds:ingest:island-of-ireland stream (the ingest-writer applies
-            # it with ingestWriter.streams.island-of-ireland), as the
+            # ds:ingest:ioi-live stream (the ingest-writer applies
+            # it with ingestWriter.streams.ioi-live), as the
             # poller-irish-rail-live ACL user with redis.acl.clients.pollerIrishRailLive.
             - name: INGEST_SINK
               value: "stream"

@@ -34,8 +34,8 @@ explains the format). The kinds:
 | `api` | client | XADD on `incident-text-changed` only (write-only) |
 | `exporter` | client | read-only metrics commands (`INFO`, `CONFIG GET`, `CLIENT LIST`, `SLOWLOG`, `LATENCY`, `XINFO`, `SCAN`, `MEMORY USAGE`, ...) |
 | `poller-incidents` | final | XADD on `incident-text-changed` (phase 2c) |
-| `poller-ldbws`, `poller-tfl`, `poller-tocs`, the three island-of-Ireland pollers | final | XADD and XREVRANGE on their own `ds:ingest:*` stream |
-| `ingest-writer` | final | consumer and dead-letter commands on `ds:ingest:*` and `ds:dlq:*` |
+| `poller-ldbws`, `poller-tfl`, `poller-tocs`, the three island-of-Ireland pollers | final | XADD and XREVRANGE on their own `ds:ingest:*` stream (one each: the island-of-Ireland pollers have `ds:ingest:ioi-gtfs`, `-live` and `-nir`) |
+| `ingest-writer` | final | consumer-group and gauge commands on `ds:ingest:*` (never XADD, XTRIM or XDEL there); XADD, XTRIM, XLEN, XRANGE and MEMORY USAGE on `ds:dlq:*` |
 | `ds-admin` | admin | everything |
 | `default` | (values) | `defaultUser: "on"`: today's password and rights; `"off"`: disabled |
 
@@ -158,6 +158,24 @@ restarts. Verify `ACL GETUSER default` shows `off`, and that a plain
 
 Exit: `ACL LIST` shows `default off`, `CLIENT LIST` no `user=default`, and
 `ACL LOG` empty for 7 days.
+
+### Ordering against the ingest streams (security review, 2026-10-08)
+
+The chart enforces where the ingest switch-ons fall in this rollout:
+
+- `redis.acl.enabled` with `defaultUser: "on"` needs `redis.auth.enabled`
+  (M3): `default` is never passwordless next to the ACL users.
+- A stream producer (`pollers.<ldbws|tfl|tocs>.ingest.sink` `http+shadow`
+  or `stream`, `fullCoverageConsumer.ingest.sink` `http+shadow` or
+  `stream`, an enabled island-of-Ireland poller) and the ingest-writer with
+  any stream not `off` need step 3 (`stage: narrow`) and their own
+  `clients.<client>` (H3). So step 3 comes before the first `shadow`.
+- Any `ingestWriter.streams` entry on `apply` needs step 4
+  (`defaultUser: "off"`, H3). So step 4 comes before the first `apply`.
+
+Rolling back step 4 (or 3) therefore means first moving those streams and
+producers back (`apply` to `shadow`, or the sinks to `http`) in the same or
+an earlier release.
 
 ### Rollback
 

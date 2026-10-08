@@ -2122,7 +2122,15 @@ jobs:
             grep -q 'name: PROGRESS_STALL_SECS' <<<"${out}" || fail "${t} needs PROGRESS_STALL_SECS"
           done
 
-          pollers=$(render -f charts/distant-signal/values-example.yaml \
+          # The island-of-Ireland pollers write only to their streams, so
+          # each needs its own narrow Redis user (security review H3).
+          ioi=(
+            --set redis.auth.enabled=true --set redis.auth.existingSecret=redis-auth
+            --set redis.acl.enabled=true --set redis.acl.existingSecret=redis-users --set redis.acl.stage=narrow
+            --set redis.acl.clients.pollerIrishRailGtfs=true --set redis.acl.clients.pollerIrishRailLive=true
+            --set redis.acl.clients.pollerNirStations=true
+          )
+          pollers=$(render -f charts/distant-signal/values-example.yaml "${ioi[@]}" \
             --set pollerIrishRailGtfs.enabled=true \
             --set pollerIrishRailLive.enabled=true \
             --set pollerNirStations.enabled=true \
@@ -2372,11 +2380,15 @@ jobs:
           if grep -q -E 'port: 6379|ipBlock' <<<"${np}"; then
             fail "with every stream off the ingest-writer gets neither Redis nor the internet"
           fi
-          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:off,island-of-ireland:off,reference:off,station-samples:off,tfl:off"
+          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:off,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:off,station-samples:off,tfl:off"
           if grep -q 'name: REDIS_URL$' <<<"${dep}"; then fail "with every stream off the ingest-writer gets no REDIS_URL"; fi
           # Plan 3a.3: a stream not off brings Redis (env, user, egress, admission).
+          # Its own narrow Redis user (security review H3; the guards
+          # themselves: scripts/check-ingest-phase0-chart.py).
           st=$(render --set ingestWriter.enabled=true --set ingestWriter.streams.station-samples=shadow \
-            --set redis.acl.enabled=true --set redis.acl.existingSecret=acl --set redis.acl.clients.ingestWriter=true)
+            --set redis.auth.enabled=true --set redis.auth.existingSecret=redis-auth \
+            --set redis.acl.enabled=true --set redis.acl.existingSecret=acl --set redis.acl.stage=narrow \
+            --set redis.acl.clients.ingestWriter=true)
           sdep=$(doc Deployment distant-signal-ingest-writer <<<"${st}")
           env_is "${sdep}" REDIS_USERNAME ingest-writer
           grep -q 'name: REDIS_URL$' <<<"${sdep}" || fail "a stream on needs REDIS_URL"
@@ -2531,7 +2543,15 @@ jobs:
 
           # INF-10: every background worker has its own policy, admitting its
           # health port (kubelet probes). Egress policies are opt-in.
-          all=$(render --set pollerIrishRailGtfs.enabled=true \
+          # The island-of-Ireland pollers write only to their streams, so
+          # each needs its own narrow Redis user (security review H3).
+          ioi=(
+            --set redis.auth.enabled=true --set redis.auth.existingSecret=redis-auth
+            --set redis.acl.enabled=true --set redis.acl.existingSecret=redis-users --set redis.acl.stage=narrow
+            --set redis.acl.clients.pollerIrishRailGtfs=true --set redis.acl.clients.pollerIrishRailLive=true
+            --set redis.acl.clients.pollerNirStations=true
+          )
+          all=$(render "${ioi[@]}" --set pollerIrishRailGtfs.enabled=true \
             --set pollerIrishRailLive.enabled=true \
             --set pollerNirStations.enabled=true \
             --set api.internalOauth.groups.irishRailGtfs=svc-poller-irish-rail-gtfs \
@@ -2635,7 +2655,7 @@ jobs:
           # component's own upstream ports: Kafka brokers, an http:// feed.
           # internet_ports_of <component> <render>: the ports after ::/0.
           internet_ports_of() { egress_of "$1" "$2" | awk '/cidr: "::\/0"/{f=1} f && /port:/{print $2}' | sort -n | tr '\n' ' '; }
-          eg=$(render --set networkPolicy.egress.enabled=true --set pollerIrishRailLive.enabled=true \
+          eg=$(render "${ioi[@]}" --set networkPolicy.egress.enabled=true --set pollerIrishRailLive.enabled=true \
             --set api.internalOauth.groups.irishRailLive=svc-poller-irish-rail-live \
             --show-only templates/networkpolicy.yaml)
           for c in 'notifier:443 ' 'api:443 ' 'trust-consumer:443 9094 ' 'full-coverage-consumer:443 9094 ' \

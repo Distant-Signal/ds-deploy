@@ -565,19 +565,27 @@ With `trustConsumer.ingest.sink: db`, trust-consumer cannot write
 `train_subscriptions`: a resolution, cancellation or reinstatement (and the
 later events of the same subscription) waits in `train_event_outbox` for the
 ingest-writer's `train_event_outbox` loop (ingest plan 3b.3). The loop
-refused one for a data error (SQLSTATE class 22/23) within
-`trainEventOutbox.rejected.window`
-(`distant_signal_store_train_event_outbox_total{outcome="rejected"}`). The
-row stays, with `rejected_at` and `rejection`; that subscription's change did
-not land, and later events of it go ahead.
+rejected one within `trainEventOutbox.rejected.window`
+(`distant_signal_store_train_event_outbox_total{outcome="rejected"}`,
+exported at 0 from the writer's start): a data error (SQLSTATE class
+22/23); its `tracked_train_id` column not matching its event's (rejected
+unapplied, `rejection` starts `tracked_train_id mismatch`: a forged or
+corrupt row, so look at what wrote it); or another error on
+`INGEST_WRITER_OUTBOX_MAX_ATTEMPTS` (5) ticks (`rejection` starts `failed N
+times`; security review L1). The row stays, with `rejected_at` and
+`rejection`, for `INGEST_WRITER_OUTBOX_REJECTED_RETENTION_DAYS` (14), then
+the loop deletes it; that subscription's change did not land, and later
+events of it go ahead.
 
-1. `SELECT id, tracked_train_id, dedup_key, rejected_at, rejection, event
-   FROM train_event_outbox WHERE rejected_at IS NOT NULL ORDER BY id;` and
-   the writer's log (`train-event outbox row refused`).
+1. `SELECT id, tracked_train_id, dedup_key, attempts, rejected_at,
+   rejection, event FROM train_event_outbox WHERE rejected_at IS NOT NULL
+   ORDER BY id;` and the writer's log (`train-event outbox row refused`,
+   `failed on every attempt`, `is not its event's`).
 2. Fix the cause (usually a migration or a constraint the event breaks),
    then re-queue the row: `UPDATE train_event_outbox SET rejected_at = NULL,
-   rejection = NULL WHERE id = ...;` (as the writer or the owner). The next
-   tick re-applies it; every write is idempotent.
+   rejection = NULL, attempts = 0 WHERE id = ...;` (as the writer or the
+   owner) before the retention deletes it. The next tick re-applies it;
+   every write is idempotent.
 3. A row that can never apply: delete it, and check the subscription by
    hand (`train_subscriptions.resolution_status`, `trains_id`).
 
@@ -593,7 +601,9 @@ reopening, and the queued trains' movements do not land. Critical.
 1. [DistantSignalIngestWriterDown](#distantsignalingestwriterdown): the writer
    must be up with `ingestWriter.loops.enabled`.
 2. The writer's log for `train-event outbox apply failed`: a transient error
-   (Postgres, a lock timeout) rolls the tick back and retries. A
+   (Postgres, a lock timeout) on one row counts an attempt on it and retries
+   next tick; at `INGEST_WRITER_OUTBOX_MAX_ATTEMPTS` (5) the row is rejected and
+   the rest go ahead. A
    `permission denied` (42501) means the writer role lacks SELECT, UPDATE
    or DELETE on `train_event_outbox` (`files/db-grants.yaml`, the role setup
    Job).
@@ -842,7 +852,7 @@ and reports readiness `stream_unavailable`.
 The ingest streams and their dead-letter streams together use over
 `ingestStreamMemoryHigh.ratio` (0.75) of `budgetBytes` (512 MiB, D5) of
 Redis (`sum(ingest_stream_bytes)`, the `MEMORY USAGE` of each stream and
-its dead-letter stream). Every stream at its cap is about 285 MB worst
+its dead-letter stream). Every stream at its cap is about 292 MB worst
 case, so a breach means a cap or an entry size is larger than budgeted
 (`crates/ingest-stream/src/budget.rs`). Look at the per-stream values, then
 fix the backlog or drain dead letters

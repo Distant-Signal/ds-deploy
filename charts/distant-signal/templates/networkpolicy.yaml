@@ -276,8 +276,8 @@ spec:
                   # both.
                   - schedulefeed
                   # Not the three island-of-Ireland pollers: since ingest
-                  # plan 3c.2 (decision D8) they write only to the
-                  # ds:ingest:island-of-ireland stream, never the api.
+                  # plan 3c.2 (decision D8) each writes only to its
+                  # own ds:ingest:ioi-* stream, never the api.
                   {{- if .Values.tests.enabled }}
                   # `helm test`'s probe Pod curls api.probes.path
                   # (templates/tests/test-api-health.yaml). Without this,
@@ -506,8 +506,8 @@ http+shadow still POSTs). */}}
 {{- end }}
 {{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $pollerEgress "urls" (list $poller.baseUrl $root.Values.internalOauth.tokenUrl)) }}
 {{- end }}
-{{- /* The island-of-Ireland pollers: their upstream and Redis (the
-ds:ingest:island-of-ireland stream, plan 3c.2, D8); no api, no token URL. */}}
+{{- /* The island-of-Ireland pollers: their upstream and Redis (each its
+own ds:ingest:ioi-* stream, plan 3c.2, D8); no api, no token URL. */}}
 {{- $ioiEgress := dict "redis" true }}
 {{- if .Values.pollerIrishRailGtfs.enabled }}
 {{- $workers = append $workers (dict "component" "poller-irish-rail-gtfs" "metricsPort" .Values.pollerIrishRailGtfs.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $ioiEgress "urls" (list .Values.pollerIrishRailGtfs.gtfsUrl)) }}

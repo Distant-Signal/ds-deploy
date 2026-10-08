@@ -27,7 +27,7 @@ tests:
   # (0.56): warning. full-coverage: 324 of 360 (0.9): critical only, once
   # the critical fires (both pend together, so at 10m both fire for one
   # evaluation). tfl: nothing unread, but an entry pending for 700s: warning.
-  # island-of-ireland: 900 of 2000 (0.45), pending 500s: nothing.
+  # ioi-live: 450 of 1000 (0.45), pending 500s: nothing.
   - interval: 1m
     input_series:
       - series: 'distant_signal_ingest_stream_lag{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples"}'
@@ -44,11 +44,11 @@ tests:
         values: '0x20'
       - series: 'distant_signal_ingest_stream_pending{namespace="distant-signal", pod="w", stream="ds:ingest:tfl"}'
         values: '1x20'
-      - series: 'distant_signal_ingest_stream_lag{namespace="distant-signal", pod="w", stream="ds:ingest:island-of-ireland"}'
-        values: '800x20'
-      - series: 'distant_signal_ingest_stream_pending{namespace="distant-signal", pod="w", stream="ds:ingest:island-of-ireland"}'
-        values: '100x20'
-      - series: 'distant_signal_ingest_stream_oldest_pending_age_seconds{namespace="distant-signal", pod="w", stream="ds:ingest:island-of-ireland"}'
+      - series: 'distant_signal_ingest_stream_lag{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-live"}'
+        values: '400x20'
+      - series: 'distant_signal_ingest_stream_pending{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-live"}'
+        values: '50x20'
+      - series: 'distant_signal_ingest_stream_oldest_pending_age_seconds{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-live"}'
         values: '500x20'
     alert_rule_test:
       - eval_time: 9m

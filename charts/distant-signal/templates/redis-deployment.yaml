@@ -116,7 +116,8 @@ spec:
         # redis.acl: fill the per-user passwords into users.acl. Each
         # `>${VAR}` becomes `>password`; an empty *_PREVIOUS (no rotation in
         # progress) is dropped, any other empty password or one containing
-        # whitespace fails the pod rather than starting Redis with a broken
+        # whitespace ([[:space:]]: a newline would start a new ACL rule line,
+        # security review L9) fails the pod rather than starting Redis with a broken
         # file. Uses the Redis image's own sh and awk.
         - name: redis-acl
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.redis.image) | quote }}
@@ -143,7 +144,7 @@ spec:
                       print "redis-acl: " name " is empty" > "/dev/stderr"
                       exit 1
                     }
-                    if (v ~ /[ \t]/) {
+                    if (v ~ /[[:space:]]/) {
                       print "redis-acl: " name " contains whitespace" > "/dev/stderr"
                       exit 1
                     }
