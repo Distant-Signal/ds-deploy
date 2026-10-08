@@ -182,14 +182,25 @@ roles:
     used_by: trust-consumer (train events and forward signals, direct by decision D1; its reads from phase 4)
   full_coverage_ro:
     name: distant_signal_full_coverage_ro
-    status: planned
+    # Plan 4.3/4.7: narrow from creation (never a member of app). Used once
+    # fullCoverageConsumer.internalReads.source is db with
+    # postgresql.roles.perService.full_coverage_ro.connect: SELECT on the
+    # line populations and STANOX/CRS only. Beyond spec §6.4: SELECT on
+    # tiploc_crs and corpus_stanox_crs, which list_stanox_crs reads with the
+    # api's CORPUS fallback on (CORPUS_FALLBACK_ENABLED), as 3b's
+    # trust_backlog does.
+    status: narrow
     phase: "4"
     groups: [schema_gate]
     connection_limit: 3
     used_by: full-coverage-consumer (reads)
   ldbws_ro:
     name: distant_signal_ldbws_ro
-    status: planned
+    # Plan 4.5/4.7: narrow from creation (never a member of app). Used once
+    # pollers.ldbws.internalReads.source is db with
+    # postgresql.roles.perService.ldbws_ro.connect: SELECT on its two views
+    # only (pin counts, custom-line stations), never the personal tables.
+    status: narrow
     phase: "4"
     groups: [schema_gate]
     connection_limit: 2
@@ -276,7 +287,7 @@ tables:
   line_status_half_hourly_coverage_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
   full_coverage_window_verdicts: {class: derived, grants: {api: S, aggregator: SIUD}}
   corpus_crosswalk_build: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD}}
-  corpus_stanox_crs: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD, trust_backlog: S}}
+  corpus_stanox_crs: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD, trust_backlog: S, full_coverage_ro: S, trust_consumer: S}}
   # notifier: named in common::public_delay's SQL (corpus fallback off), so
   # Postgres checks SELECT even when the branch is unused.
   # schedule_reference: the line population's train summaries read it
@@ -288,7 +299,7 @@ tables:
   stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S, schedule_ingest: S}}
   tocs: {class: reference, grants: {api: S, writer: SIU}}
   stanox_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, trust_backlog: S, trust_consumer: S, full_coverage_ro: S, notifier: S}}
-  tiploc_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, notifier: S, trust_backlog: S}}
+  tiploc_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, notifier: S, trust_backlog: S, full_coverage_ro: S, trust_consumer: S}}
   fixed_links: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD}}
   corpus_locations: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIUD}}
   corpus_deliveries: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIUD}}
@@ -320,9 +331,14 @@ tables:
   # --- migrations: the owner's; everyone reads it through schema_gate.
   _sqlx_migrations: {class: migrations, grants: {}}
 
-# Views (phase 4 adds ingest_active_tracked_trains,
-# ingest_sample_station_pins and ingest_custom_line_stations).
-views: {}
+# Views. Phase 4's internal-read views (plan 4.1, spec §11.2; migration
+# 20261009144000_ingest_read_views.sql) read personal tables but expose no
+# user id or owner, so each reader role gets SELECT on its view only. Plain
+# views run with the owner's privileges: the view grant is the whole grant.
+views:
+  ingest_active_tracked_trains: {class: internal, grants: {trust_consumer: S}}
+  ingest_sample_station_pins: {class: internal, grants: {ldbws_ro: S}}
+  ingest_custom_line_stations: {class: internal, grants: {ldbws_ro: S}}
 
 # Every sequence, with the table that owns it.
 sequences:

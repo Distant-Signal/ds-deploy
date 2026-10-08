@@ -960,10 +960,17 @@ app.connectionLimitSlack.
 {{- end -}}
 {{- /* Phase 2: the pollers that write directly, as the app role. */ -}}
 {{- $total = add $total (include "distant-signal.pollerAppPools" $root) -}}
-{{- /* Phase 3b: the TRUST consumers that write directly, as the app role. */ -}}
+{{- /* Phase 3b: the TRUST consumers that write directly, as the app role;
+     trust-consumer's one pool also serves its phase 4 reads. */ -}}
 {{- range $service := list "trust_backlog" "trust_consumer" -}}
 {{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" $service)) -}}
 {{- $total = add $total (include "distant-signal.trustSinkPool" (dict "root" $root "service" $service)) -}}
+{{- end -}}
+{{- end -}}
+{{- /* Phase 4: the readers on internalReads.source db, as the app role. */ -}}
+{{- range $role := list "full_coverage_ro" "ldbws_ro" -}}
+{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" $role)) -}}
+{{- $total = add $total (include "distant-signal.internalReadsPool" (dict "root" $root "role" $role)) -}}
 {{- end -}}
 {{- end -}}
 {{- $total -}}
@@ -1026,10 +1033,13 @@ db-grants.yaml. `writer` is the ingest-writer's (ingestWriter, plan 1B.9);
 (pollers.<name>.ingest.sink db, plans 2b.3 and 2c.3). All four are narrow
 roles.
 `trust_backlog` and `trust_consumer` are trust-backlog-consumer's and
-trust-consumer's under their ingest.sink db (plan 3b), narrow.
+trust-consumer's under their ingest.sink db (plan 3b; trust_consumer also
+for its internalReads.source db, plan 4.4), narrow. `full_coverage_ro` and
+`ldbws_ro` are the phase 4 readers' (<component>.internalReads.source db,
+plan 4.7), narrow and read-only.
 */}}
 {{- define "distant-signal.perServiceKeys" -}}
-api aggregator enricher notifier writer schedule_ingest schedule_reference stations incidents trust_backlog trust_consumer
+api aggregator enricher notifier writer schedule_ingest schedule_reference stations incidents trust_backlog trust_consumer full_coverage_ro ldbws_ro
 {{- end }}
 
 {{- define "distant-signal.perServiceEnabled" -}}
@@ -1063,13 +1073,19 @@ True (non-empty) when the service connects as its own role. Takes (dict
 {{- if and (eq .service "schedule_reference") (not (include "distant-signal.scheduleReferenceDbSink" .root)) -}}
 {{- fail "postgresql.roles.perService.schedule_reference.connect needs scheduleFeed.enabled and scheduleFeed.reference.ingest.sink: db: nothing else connects as the schedule_reference role." -}}
 {{- end -}}
+{{- if and (has .service (list "full_coverage_ro" "ldbws_ro")) (not (include "distant-signal.internalReadsDb" (dict "root" .root "role" .service))) -}}
+{{- fail (printf "postgresql.roles.perService.%s.connect needs %s.internalReads.source: db: nothing else connects as its role." .service (include "distant-signal.internalReadsValuesKey" .service)) -}}
+{{- end -}}
 {{- if hasKey .root.Values.pollers .service -}}
 {{- if not (include "distant-signal.pollerSinkDb" (dict "root" .root "name" .service "poller" (get .root.Values.pollers .service))) -}}
 {{- fail (printf "postgresql.roles.perService.%s.connect needs pollers.%s.enabled with pollers.%s.ingest.sink: db: nothing else connects as its role." .service .service .service) -}}
 {{- end -}}
 {{- end -}}
-{{- if and (has .service (list "trust_backlog" "trust_consumer")) (not (include "distant-signal.trustSinkDb" (dict "root" .root "service" .service))) -}}
-{{- fail (printf "postgresql.roles.perService.%s.connect needs %s.ingest.sink: db: nothing else connects as its role." .service (include "distant-signal.trustSinkValuesKey" .service)) -}}
+{{- if and (eq .service "trust_backlog") (not (include "distant-signal.trustSinkDb" (dict "root" .root "service" .service))) -}}
+{{- fail "postgresql.roles.perService.trust_backlog.connect needs trustBacklogConsumer.ingest.sink: db: nothing else connects as its role." -}}
+{{- end -}}
+{{- if and (eq .service "trust_consumer") (not (include "distant-signal.trustConsumerPool" .root | int)) -}}
+{{- fail "postgresql.roles.perService.trust_consumer.connect needs trustConsumer.ingest.sink: db or trustConsumer.internalReads.source: db: nothing else connects as its role." -}}
 {{- end -}}
 true
 {{- end -}}
@@ -1220,11 +1236,95 @@ budget in api-deployment.yaml. Takes root.
 
 {{/*
 The TRUST consumer's Postgres pool (<consumer>.ingest.database.maxConnections)
-under ingest.sink db, else 0. Takes (dict "root" $ "service" ...).
+under ingest.sink db, else 0; trust-consumer's is its one pool
+(distant-signal.trustConsumerPool). Takes (dict "root" $ "service" ...).
 */}}
 {{- define "distant-signal.trustSinkPool" -}}
-{{- if include "distant-signal.trustSinkDb" . -}}
+{{- if eq .service "trust_consumer" -}}
+{{- include "distant-signal.trustConsumerPool" .root -}}
+{{- else if include "distant-signal.trustSinkDb" . -}}
 {{- int (get .root.Values (include "distant-signal.trustSinkValuesKey" .service)).ingest.database.maxConnections -}}
+{{- else -}}
+0
+{{- end -}}
+{{- end }}
+
+{{/*
+trust-consumer's one Postgres pool (plans 3b.3 and 4.4: one DATABASE_URL
+for the sink and the readers): the larger of
+trustConsumer.ingest.database.maxConnections (with ingest.sink db) and
+trustConsumer.internalReads.database.maxConnections (with
+internalReads.source db), else 0. Takes root.
+*/}}
+{{- define "distant-signal.trustConsumerPool" -}}
+{{- $tc := .Values.trustConsumer -}}
+{{- $pool := 0 -}}
+{{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer") -}}
+{{- $pool = max $pool (int $tc.ingest.database.maxConnections) -}}
+{{- end -}}
+{{- if include "distant-signal.internalReadsDb" (dict "root" . "role" "trust_consumer") -}}
+{{- $pool = max $pool (int $tc.internalReads.database.maxConnections) -}}
+{{- end -}}
+{{- $pool -}}
+{{- end }}
+
+{{/*
+Ingest architecture phase 4 (plan 4.7): the internal readers. Each reader's
+`internalReads.source` (http, the default, or db) switches every *_SOURCE
+of that component; under db it connects to Postgres with a pool of
+`internalReads.database.maxConnections`, as the app role or, with
+postgresql.roles.perService.<role>.connect, its read-only role. The readers,
+by their db-grants.yaml role: full_coverage_ro (fullCoverageConsumer),
+ldbws_ro (pollers.ldbws), trust_consumer (trustConsumer; the role is plan
+3b's, and its reads share the sink's one pool: distant-signal.trustConsumerPool).
+
+distant-signal.internalReadsValuesKey: the values path of a reader's role.
+*/}}
+{{- define "distant-signal.internalReadsValuesKey" -}}
+{{- if eq . "full_coverage_ro" -}}fullCoverageConsumer
+{{- else if eq . "ldbws_ro" -}}pollers.ldbws
+{{- else if eq . "trust_consumer" -}}trustConsumer
+{{- else -}}{{- fail (printf "no internal reader for role %q" .) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when the reader behind the role reads Postgres directly:
+its component runs (pollers.ldbws.enabled; the two consumers always do) and
+its internalReads.source is db. Fails on a source other than http or db.
+Takes (dict "root" $ "role" "full_coverage_ro"|"ldbws_ro"|"trust_consumer").
+*/}}
+{{- define "distant-signal.internalReadsDb" -}}
+{{- $values := dict -}}
+{{- $enabled := true -}}
+{{- if eq .role "full_coverage_ro" -}}
+{{- $values = .root.Values.fullCoverageConsumer -}}
+{{- else if eq .role "ldbws_ro" -}}
+{{- $values = .root.Values.pollers.ldbws -}}
+{{- $enabled = $values.enabled -}}
+{{- else if eq .role "trust_consumer" -}}
+{{- $values = .root.Values.trustConsumer -}}
+{{- end -}}
+{{- $key := include "distant-signal.internalReadsValuesKey" .role -}}
+{{- $source := toString (dig "internalReads" "source" "http" $values) -}}
+{{- if not (has $source (list "http" "db")) -}}
+{{- fail (printf "%s.internalReads.source must be http or db, not %q." $key $source) -}}
+{{- end -}}
+{{- if and $enabled (eq $source "db") -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+A reader's Postgres pool (<component>.internalReads.database.maxConnections)
+under internalReads.source db, else 0. Takes (dict "root" $ "role" ...).
+*/}}
+{{- define "distant-signal.internalReadsPool" -}}
+{{- if include "distant-signal.internalReadsDb" . -}}
+{{- $values := .root.Values.fullCoverageConsumer -}}
+{{- if eq .role "ldbws_ro" -}}{{- $values = .root.Values.pollers.ldbws -}}{{- end -}}
+{{- if eq .role "trust_consumer" -}}{{- $values = .root.Values.trustConsumer -}}{{- end -}}
+{{- int $values.internalReads.database.maxConnections -}}
 {{- else -}}
 0
 {{- end -}}
@@ -1236,6 +1336,56 @@ INF-7 budget check). Takes root.
 */}}
 {{- define "distant-signal.trustSinkPools" -}}
 {{- add (include "distant-signal.trustSinkPool" (dict "root" . "service" "trust_backlog")) (include "distant-signal.trustSinkPool" (dict "root" . "service" "trust_consumer")) -}}
+{{- end }}
+
+{{/*
+The phase 4 readers' pools under internalReads.source db, summed (the
+api's INF-7 budget check); trust-consumer's is counted once, with its sink,
+in distant-signal.trustSinkPools. Takes root.
+*/}}
+{{- define "distant-signal.internalReadsPools" -}}
+{{- $root := . -}}
+{{- $total := 0 -}}
+{{- range $role := list "full_coverage_ro" "ldbws_ro" -}}
+{{- $total = add $total (include "distant-signal.internalReadsPool" (dict "root" $root "role" $role)) -}}
+{{- end -}}
+{{- $total -}}
+{{- end }}
+
+{{/*
+A reader's container env under internalReads.source db: the *_SOURCE
+switches (`sources`, a list of env names), DATABASE_URL as the reader's own
+role when postgresql.roles.perService.<role>.connect (else the app role),
+its pool and, with `corpus` (a reader of STANOX/CRS), the api's CORPUS
+fallback, so those reads return what GET /private/stanox-crs does. Nothing
+under http. With `database` false the caller renders DATABASE_URL itself
+(trust-consumer: one block for its sink and its reads). Takes (dict "root"
+$ "role" ... "sources" (list ...) "corpus" bool ["database" bool]).
+*/}}
+{{- define "distant-signal.internalReadsEnv" -}}
+{{- if include "distant-signal.internalReadsDb" (dict "root" .root "role" .role) }}
+{{- $root := .root }}
+# <component>.internalReads.source: db (ingest architecture plan 4.7): read
+# the reference data from Postgres directly instead of the api's /private
+# GETs.
+{{- range .sources }}
+- name: {{ . }}
+  value: "db"
+{{- end }}
+{{- if not (and (hasKey . "database") (not .database)) }}
+{{- $service := "" }}
+{{- if hasKey $root.Values.postgresql.roles.perService .role }}
+{{- $service = .role }}
+{{- end }}
+{{ include "distant-signal.databaseEnvFor" (dict "root" $root "service" $service) }}
+- name: DATABASE_MAX_CONNECTIONS
+  value: {{ include "distant-signal.internalReadsPool" (dict "root" $root "role" .role) | quote }}
+{{- end }}
+{{- if .corpus }}
+- name: CORPUS_FALLBACK_ENABLED
+  value: {{ $root.Values.api.corpusFallback.enabled | toString | quote }}
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{/*
@@ -1280,12 +1430,19 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 {{- int $root.Values.scheduleFeed.ingest.database.maxConnections -}}
 {{- else if eq .service "schedule_reference" -}}
 {{- int $root.Values.scheduleFeed.reference.ingest.database.maxConnections -}}
+{{- else if has .service (list "full_coverage_ro" "ldbws_ro") -}}
+{{- /* A phase 4 reader: <component>.internalReads.database. */ -}}
+{{- $values := ternary $root.Values.pollers.ldbws $root.Values.fullCoverageConsumer (eq .service "ldbws_ro") -}}
+{{- int $values.internalReads.database.maxConnections -}}
 {{- else if hasKey $root.Values.pollers .service -}}
 {{- /* A poller that writes directly (phase 2): pollers.<name>.ingest.database. */ -}}
 {{- int (get $root.Values.pollers .service).ingest.database.maxConnections -}}
-{{- else if has .service (list "trust_backlog" "trust_consumer") -}}
-{{- /* Phase 3b: <consumer>.ingest.database.maxConnections. */ -}}
-{{- int (get $root.Values (include "distant-signal.trustSinkValuesKey" .service)).ingest.database.maxConnections -}}
+{{- else if eq .service "trust_backlog" -}}
+{{- /* Phase 3b: trustBacklogConsumer.ingest.database.maxConnections. */ -}}
+{{- int $root.Values.trustBacklogConsumer.ingest.database.maxConnections -}}
+{{- else if eq .service "trust_consumer" -}}
+{{- /* Phase 3b and 4.4: its one pool serves the sink and the reads. */ -}}
+{{- max (int $root.Values.trustConsumer.ingest.database.maxConnections) (int $root.Values.trustConsumer.internalReads.database.maxConnections) -}}
 {{- else -}}
 5
 {{- end -}}

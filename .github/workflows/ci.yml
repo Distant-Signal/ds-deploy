@@ -422,6 +422,16 @@ jobs:
       - name: cargo test -p ingest-writer -- --ignored (DB-backed tests)
         run: cargo test -p ingest-writer -- --ignored --test-threads=1
 
+      # Ingest architecture phase 4: the readers' db sources (#[sqlx::test]
+      # databases, so as the superuser only; ds-store's reads::db_tests,
+      # in the step above, check the views as a role holding only their
+      # grants).
+      - name: cargo test the phase 4 readers' db sources -- --ignored (DB-backed tests)
+        run: |
+          cargo test -p full-coverage-consumer population_reload::db_tests -- --ignored --test-threads=1
+          cargo test -p trust-consumer reads:: -- --ignored --test-threads=1
+          cargo test -p poller-ldbws sample_source:: -- --ignored --test-threads=1
+
       # Ingest architecture plan 2d: schedule-ingest's direct sink
       # (INGEST_SINK=db). Only its DB module: the crate's other ignored test
       # needs a real CORPUS extract.
@@ -455,7 +465,7 @@ jobs:
         run: >-
           scripts/test-postgres-roles.py --mode existing -- sh -c '
           cargo test -p api -p ds-store -p aggregator -p notifier -- --ignored --test-threads=1
-          --skip corpus::db_tests --skip crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests
+          --skip corpus::db_tests --skip crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests --skip reads::db_tests
           && cargo test -p common --features postgres pg::tests -- --ignored --test-threads=1
           && cargo test -p ingest-writer -- --ignored --test-threads=1
           && cargo test -p schedule-reference -- --ignored --test-threads=1
@@ -488,7 +498,7 @@ jobs:
         run: |
           # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
           uv run --no-sync scripts/test-postgres-roles.py --mode per-service -- sh -c '
-            skip="--skip corpus::db_tests --skip crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests"
+            skip="--skip corpus::db_tests --skip crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests --skip reads::db_tests"
             DATABASE_URL="$DATABASE_URL_API" cargo test -p api -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_API" cargo test -p ds-store -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_AGGREGATOR" cargo test -p aggregator -- --ignored --test-threads=1 $skip &&

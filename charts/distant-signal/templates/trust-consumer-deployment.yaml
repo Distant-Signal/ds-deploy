@@ -104,14 +104,17 @@ with trustConsumer.extraEnv, which replaces an entry of the same name.
             {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer") }}
             # trustConsumer.ingest.sink: db (ingest architecture plan 3b.3,
             # D1): train events and forward signals go to Postgres directly
-            # instead of API_INGEST_URL and FORWARD_SIGNALS_URL, as the app
-            # role or, with postgresql.roles.perService.trust_consumer.connect,
-            # its own. The tracked-trains and STANOX/CRS reads stay on the api.
+            # instead of API_INGEST_URL and FORWARD_SIGNALS_URL.
             - name: INGEST_SINK
               value: "db"
+            {{- end }}
+            {{- if include "distant-signal.trustConsumerPool" . | int }}
+            # One DATABASE_URL and one pool for the db sink and the db reads
+            # (internalReads.source, plan 4.4), as the app role or, with
+            # postgresql.roles.perService.trust_consumer.connect, its own.
             {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "trust_consumer") | nindent 12 }}
             - name: DATABASE_MAX_CONNECTIONS
-              value: {{ .Values.trustConsumer.ingest.database.maxConnections | int | quote }}
+              value: {{ include "distant-signal.trustConsumerPool" . | quote }}
             {{- end }}
             - name: INTERNAL_OAUTH_TOKEN_URL
               value: {{ .Values.internalOauth.tokenUrl | quote }}
@@ -135,6 +138,7 @@ with trustConsumer.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.trustConsumer.stanoxCrsReloadSecs | quote }}
             - name: STANOX_CRS_URL
               value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
+            {{- with include "distant-signal.internalReadsEnv" (dict "root" . "role" "trust_consumer" "corpus" true "database" false "sources" (list "TRACKED_TRAINS_SOURCE" "STANOX_CRS_SOURCE")) | trim }}{{ . | nindent 12 }}{{- end }}
             - name: RETENTION_DAYS
               value: {{ .Values.trustConsumer.retentionDays | quote }}
             - name: HEALTH_BIND_URL

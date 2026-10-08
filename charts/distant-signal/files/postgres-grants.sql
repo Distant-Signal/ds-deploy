@@ -11,7 +11,7 @@
 --     -f postgres-grants.sql
 --
 -- Passwords come from the environment (psql's \getenv), one per created
--- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_REFERENCE_PASSWORD, DS_PG_STATIONS_PASSWORD, DS_PG_INCIDENTS_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD, DS_PG_TRUST_BACKLOG_PASSWORD, DS_PG_TRUST_CONSUMER_PASSWORD.
+-- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_REFERENCE_PASSWORD, DS_PG_STATIONS_PASSWORD, DS_PG_INCIDENTS_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD, DS_PG_TRUST_BACKLOG_PASSWORD, DS_PG_TRUST_CONSUMER_PASSWORD, DS_PG_FULL_COVERAGE_RO_PASSWORD, DS_PG_LDBWS_RO_PASSWORD.
 --
 -- In ONE transaction:
 --   1. the group roles (NOLOGIN) and every role whose status is not
@@ -129,6 +129,22 @@
 \else
 \set trust_consumer_connection_limit 3
 \endif
+\if :{?full_coverage_ro}
+\else
+\set full_coverage_ro distant_signal_full_coverage_ro
+\endif
+\if :{?full_coverage_ro_connection_limit}
+\else
+\set full_coverage_ro_connection_limit 3
+\endif
+\if :{?ldbws_ro}
+\else
+\set ldbws_ro distant_signal_ldbws_ro
+\endif
+\if :{?ldbws_ro_connection_limit}
+\else
+\set ldbws_ro_connection_limit 2
+\endif
 \getenv api_password DS_PG_API_PASSWORD
 \if :{?api_password}
 \else
@@ -184,6 +200,16 @@
 \else
 \set trust_consumer_password ''
 \endif
+\getenv full_coverage_ro_password DS_PG_FULL_COVERAGE_RO_PASSWORD
+\if :{?full_coverage_ro_password}
+\else
+\set full_coverage_ro_password ''
+\endif
+\getenv ldbws_ro_password DS_PG_LDBWS_RO_PASSWORD
+\if :{?ldbws_ro_password}
+\else
+\set ldbws_ro_password ''
+\endif
 
 BEGIN;
 
@@ -224,7 +250,13 @@ SELECT
     set_config('ds_grants.trust_backlog_connection_limit', :'trust_backlog_connection_limit', true),
     set_config('ds_grants.trust_consumer', :'trust_consumer', true),
     set_config('ds_grants.trust_consumer_password', :'trust_consumer_password', true),
-    set_config('ds_grants.trust_consumer_connection_limit', :'trust_consumer_connection_limit', true)
+    set_config('ds_grants.trust_consumer_connection_limit', :'trust_consumer_connection_limit', true),
+    set_config('ds_grants.full_coverage_ro', :'full_coverage_ro', true),
+    set_config('ds_grants.full_coverage_ro_password', :'full_coverage_ro_password', true),
+    set_config('ds_grants.full_coverage_ro_connection_limit', :'full_coverage_ro_connection_limit', true),
+    set_config('ds_grants.ldbws_ro', :'ldbws_ro', true),
+    set_config('ds_grants.ldbws_ro_password', :'ldbws_ro_password', true),
+    set_config('ds_grants.ldbws_ro_connection_limit', :'ldbws_ro_connection_limit', true)
 \gset ignored_
 
 -- 1. Roles.
@@ -280,7 +312,9 @@ BEGIN
         ('incidents', 'narrow'),
         ('schedule_ingest', 'narrow'),
         ('trust_backlog', 'narrow'),
-        ('trust_consumer', 'narrow')) AS v(kind, status)
+        ('trust_consumer', 'narrow'),
+        ('full_coverage_ro', 'narrow'),
+        ('ldbws_ro', 'narrow')) AS v(kind, status)
     LOOP
         IF r.name = app OR r.name = current_user OR r.name = ANY (seen) THEN
             RAISE EXCEPTION 'the % role name % must be a new, separate role',
@@ -331,7 +365,9 @@ BEGIN
         ('incidents', 'narrow'),
         ('schedule_ingest', 'narrow'),
         ('trust_backlog', 'narrow'),
-        ('trust_consumer', 'narrow')) AS v(kind, status)
+        ('trust_consumer', 'narrow'),
+        ('full_coverage_ro', 'narrow'),
+        ('ldbws_ro', 'narrow')) AS v(kind, status)
     LOOP
         member_oid := (SELECT oid FROM pg_roles WHERE rolname = r.name);
         IF r.status = 'observed' AND NOT EXISTS (
@@ -365,7 +401,9 @@ BEGIN
         ('incidents', 'schema_gate'),
         ('schedule_ingest', 'schema_gate'),
         ('trust_backlog', 'schema_gate'),
-        ('trust_consumer', 'schema_gate')) AS v(kind, grp)
+        ('trust_consumer', 'schema_gate'),
+        ('full_coverage_ro', 'schema_gate'),
+        ('ldbws_ro', 'schema_gate')) AS v(kind, grp)
     LOOP
         IF NOT EXISTS (
             SELECT 1 FROM pg_auth_members
@@ -401,7 +439,9 @@ BEGIN
         ('incidents'),
         ('schedule_ingest'),
         ('trust_backlog'),
-        ('trust_consumer')) AS v(kind)
+        ('trust_consumer'),
+        ('full_coverage_ro'),
+        ('ldbws_ro')) AS v(kind)
     LOOP
         EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', grantee);
         EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM %I', grantee);
@@ -527,6 +567,8 @@ BEGIN
         ('corpus_stanox_crs', 'schedule_ingest', 'UPDATE', ''),
         ('corpus_stanox_crs', 'schedule_ingest', 'DELETE', ''),
         ('corpus_stanox_crs', 'trust_backlog', 'SELECT', ''),
+        ('corpus_stanox_crs', 'full_coverage_ro', 'SELECT', ''),
+        ('corpus_stanox_crs', 'trust_consumer', 'SELECT', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'SELECT', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'INSERT', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'UPDATE', ''),
@@ -543,11 +585,14 @@ BEGIN
         ('stanox_crs', 'schedule_reference', 'DELETE', ''),
         ('stanox_crs', 'trust_backlog', 'SELECT', ''),
         ('stanox_crs', 'trust_consumer', 'SELECT', ''),
+        ('stanox_crs', 'full_coverage_ro', 'SELECT', ''),
         ('tiploc_crs', 'schedule_reference', 'SELECT', ''),
         ('tiploc_crs', 'schedule_reference', 'INSERT', ''),
         ('tiploc_crs', 'schedule_reference', 'UPDATE', ''),
         ('tiploc_crs', 'schedule_reference', 'DELETE', ''),
         ('tiploc_crs', 'trust_backlog', 'SELECT', ''),
+        ('tiploc_crs', 'full_coverage_ro', 'SELECT', ''),
+        ('tiploc_crs', 'trust_consumer', 'SELECT', ''),
         ('fixed_links', 'schedule_reference', 'SELECT', ''),
         ('fixed_links', 'schedule_reference', 'INSERT', ''),
         ('fixed_links', 'schedule_reference', 'UPDATE', ''),
@@ -576,6 +621,7 @@ BEGIN
         ('schedule_line_population', 'schedule_reference', 'INSERT', ''),
         ('schedule_line_population', 'schedule_reference', 'UPDATE', ''),
         ('schedule_line_population', 'schedule_reference', 'DELETE', ''),
+        ('schedule_line_population', 'full_coverage_ro', 'SELECT', ''),
         ('line_train_summaries', 'schedule_reference', 'SELECT', ''),
         ('line_train_summaries', 'schedule_reference', 'INSERT', ''),
         ('line_train_summaries', 'schedule_reference', 'UPDATE', ''),
@@ -592,7 +638,10 @@ BEGIN
         ('schedule_reference_publishes', 'schedule_reference', 'INSERT', ''),
         ('schedule_reference_publishes', 'schedule_reference', 'UPDATE', ''),
         ('schedule_feed_ingests', 'schedule_ingest', 'SELECT', ''),
-        ('schedule_feed_ingests', 'schedule_ingest', 'INSERT', '')) AS v(tbl, kind, priv, cols)
+        ('schedule_feed_ingests', 'schedule_ingest', 'INSERT', ''),
+        ('ingest_active_tracked_trains', 'trust_consumer', 'SELECT', ''),
+        ('ingest_sample_station_pins', 'ldbws_ro', 'SELECT', ''),
+        ('ingest_custom_line_stations', 'ldbws_ro', 'SELECT', '')) AS v(tbl, kind, priv, cols)
         WHERE to_regclass(format('public.%I', v.tbl)) IS NOT NULL
     LOOP
         IF r.cols = '' THEN

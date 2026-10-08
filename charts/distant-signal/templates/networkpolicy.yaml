@@ -35,7 +35,8 @@ spec:
     # NOT belong here: they reach the database only through the api (see the
     # api policy below, which is where they are allow-listed). A poller moved
     # to a direct write (pollers.<name>.ingest.sink: db, ingest architecture
-    # phase 2) does, and is added below while it is on `db`.
+    # phase 2) does, and is added below while it is on `db`; so does a
+    # reader on `<component>.internalReads.source: db` (phase 4).
     - from:
         - podSelector:
             matchExpressions:
@@ -81,10 +82,18 @@ spec:
                   # TRUST backlog written directly.
                   - trust-backlog-consumer
                   {{- end }}
-                  {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer") }}
-                  # trustConsumer.ingest.sink: db (plan 3b.3, D1): train
-                  # events and forward signals written directly.
+                  {{- if include "distant-signal.trustConsumerPool" . | int }}
+                  # trustConsumer.ingest.sink: db (plan 3b.3, D1: train events
+                  # and forward signals written directly) and/or
+                  # trustConsumer.internalReads.source: db (plan 4.4).
                   - trust-consumer
+                  {{- end }}
+                  {{- range $role, $component := dict "full_coverage_ro" "full-coverage-consumer" "ldbws_ro" "poller-ldbws" }}
+                  {{- if include "distant-signal.internalReadsDb" (dict "root" $root "role" $role) }}
+                  # internalReads.source: db (ingest architecture plan 4.7):
+                  # this reader reads its reference data from Postgres.
+                  - {{ $component }}
+                  {{- end }}
                   {{- end }}
         {{- with .Values.networkPolicy.postgresClients }}
         # networkPolicy.postgresClients: workloads outside this chart, e.g.
@@ -436,15 +445,23 @@ rule is IP-based, so this only opens their ports, not their hosts. */}}
 {{- end }}
 {{- /* Phase 3b: a TRUST consumer on ingest.sink db calls Postgres.
 trust-backlog-consumer then calls nothing on the api (its STANOX/CRS reload
-reads Postgres too); trust-consumer still reads tracked trains and STANOX/CRS
-from it until phase 4. */}}
+reads Postgres too). trust-consumer calls Postgres with ingest.sink db or
+internalReads.source db (phase 4) and keeps the api unless both are db
+(the reads, or the POSTs). */}}
 {{- $trustConsumerEgress := $queueWorker }}
-{{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer") }}
-{{- $trustConsumerEgress = dict "api" true "redis" true "postgres" true }}
+{{- if include "distant-signal.trustConsumerPool" . | int }}
+{{- $trustConsumerApi := not (and (include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer")) (include "distant-signal.internalReadsDb" (dict "root" . "role" "trust_consumer"))) }}
+{{- $trustConsumerEgress = ternary (dict "api" true "redis" true "postgres" true) (dict "redis" true "postgres" true) $trustConsumerApi }}
 {{- end }}
 {{- $trustBacklogEgress := $queueWorker }}
 {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_backlog") }}
 {{- $trustBacklogEgress = dict "redis" true "postgres" true }}
+{{- end }}
+{{- /* Phase 4: full-coverage-consumer on internalReads.source db also
+calls Postgres (plan 4.7); it keeps the api for its POSTs. */}}
+{{- $fullCoverageEgress := $queueWorker }}
+{{- if include "distant-signal.internalReadsDb" (dict "root" . "role" "full_coverage_ro") }}
+{{- $fullCoverageEgress = dict "api" true "redis" true "postgres" true }}
 {{- end }}
 {{- $workers := list
   (dict "component" "aggregator" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true) "internet" .Values.archive.enabled "urls" (list (.Values.archive.s3.endpoint | default "https://s3.amazonaws.com")))
@@ -452,7 +469,7 @@ from it until phase 4. */}}
   (dict "component" "notifier" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true))
   (dict "component" "trust-consumer" "metricsPort" .Values.trustConsumer.metricsPort "healthPorts" (list .Values.trustConsumer.healthPort) "egress" $trustConsumerEgress "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
   (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $trustBacklogEgress "urls" $token)
-  (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $queueWorker "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
+  (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $fullCoverageEgress "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
 }}
 {{- if .Values.ingestWriter.enabled }}
 {{- /* Postgres; Redis too once an ingestWriter.streams entry is not off (plan 3a.3). */}}
@@ -476,9 +493,16 @@ poller-incidents' (plan 2c.2) also XADDs incident-text-changed to Redis. */}}
 {{- end }}
 {{- /* Phase 3 (plans 3a.7, 3c.2): a stream sink XADDs to Redis. Under
 `stream` tfl and tocs no longer call the api at all; ldbws still reads its
-station list from it (and http+shadow still POSTs). */}}
+station list from it unless its internalReads.source is db (and
+http+shadow still POSTs). */}}
 {{- if include "distant-signal.pollerSinkStream" (dict "root" $root "name" . "poller" $poller) }}
-{{- $pollerEgress = ternary (dict "redis" true) (dict "api" true "redis" true) (and (eq (toString $poller.ingest.sink) "stream") (ne . "ldbws")) }}
+{{- $listFromDb := and (eq . "ldbws") (not (empty (include "distant-signal.internalReadsDb" (dict "root" $root "role" "ldbws_ro")))) }}
+{{- $apiFree := and (eq (toString $poller.ingest.sink) "stream") (or (ne . "ldbws") $listFromDb) }}
+{{- $pollerEgress = ternary (dict "redis" true) (dict "api" true "redis" true) $apiFree }}
+{{- end }}
+{{- /* Phase 4: poller-ldbws on internalReads.source db reads Postgres too. */}}
+{{- if and (eq . "ldbws") (include "distant-signal.internalReadsDb" (dict "root" $root "role" "ldbws_ro")) }}
+{{- $pollerEgress = merge (dict "postgres" true) $pollerEgress }}
 {{- end }}
 {{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $pollerEgress "urls" (list $poller.baseUrl $root.Values.internalOauth.tokenUrl)) }}
 {{- end }}

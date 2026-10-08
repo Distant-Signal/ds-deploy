@@ -110,6 +110,7 @@ with fullCoverageConsumer.extraEnv, which replaces an entry of the same name.
               value: {{ printf "%s/private/station-full-coverage-samples" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: STANOX_CRS_URL
               value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
+            {{- with include "distant-signal.internalReadsEnv" (dict "root" . "role" "full_coverage_ro" "corpus" true "sources" (list "POPULATION_SOURCE" "STANOX_CRS_SOURCE")) | trim }}{{ . | nindent 12 }}{{- end }}
             - name: INTERNAL_OAUTH_TOKEN_URL
               value: {{ .Values.internalOauth.tokenUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID

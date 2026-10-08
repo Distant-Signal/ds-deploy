@@ -435,11 +435,12 @@ postgresql:
         # (`trustBacklogConsumer.ingest.database.maxConnections`, 3) plus 1.
         connectionLimit: ""
       trust_consumer:
-        # -- Connect trust-consumer (`trustConsumer.ingest.sink: db`
-        # required) as `distant_signal_trust_consumer` (plan 3b.4, D1). A
+        # -- Connect trust-consumer (`trustConsumer.ingest.sink: db` or
+        # `trustConsumer.internalReads.source: db` required) as
+        # `distant_signal_trust_consumer` (plans 3b.4, D1, and 4.4). A
         # narrow role, not a member of `app`: the train-event,
         # forward-signal and outbox writes, SELECT only on
-        # train_subscriptions. Created with the others whenever
+        # train_subscriptions, and the phase 4 reads. Created with the others whenever
         # `enabled` is on, unused until then.
         connect: false
         # -- Password. Generated when empty (and no `existingSecret`).
@@ -448,8 +449,46 @@ postgresql:
         existingSecret: ""
         # -- Key within `existingSecret` (and in the chart's Secret).
         existingSecretPasswordKey: postgres-trust-consumer-password
+        # -- CONNECTION LIMIT. Empty: its one pool (the larger of
+        # `trustConsumer.ingest.database.maxConnections` and
+        # `trustConsumer.internalReads.database.maxConnections`, 2) plus 1.
+        connectionLimit: ""
+      full_coverage_ro:
+        # -- Connect full-coverage-consumer's direct reads
+        # (`fullCoverageConsumer.internalReads.source: db` required) as
+        # `distant_signal_full_coverage_ro` (ingest plan 4.7). A narrow,
+        # read-only role, not a member of `app`: SELECT on the line
+        # populations and STANOX/CRS only. Created with the others whenever
+        # `enabled` is on, unused until then.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-full-coverage-ro-password
         # -- CONNECTION LIMIT. Empty: its pool
-        # (`trustConsumer.ingest.database.maxConnections`, 2) plus 1.
+        # (`fullCoverageConsumer.internalReads.database.maxConnections`, 2)
+        # plus 1 (spec §6.6: 3).
+        connectionLimit: ""
+      ldbws_ro:
+        # -- Connect poller-ldbws's direct sample-station read
+        # (`pollers.ldbws.internalReads.source: db` required) as
+        # `distant_signal_ldbws_ro` (ingest plan 4.7). A narrow, read-only
+        # role, not a member of `app`: SELECT on the views
+        # `ingest_sample_station_pins` and `ingest_custom_line_stations`
+        # only, never the personal tables behind them. Created with the
+        # others whenever `enabled` is on, unused until then.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-ldbws-ro-password
+        # -- CONNECTION LIMIT. Empty: its pool
+        # (`pollers.ldbws.internalReads.database.maxConnections`, 1) plus 1
+        # (spec §6.6: 2).
         connectionLimit: ""
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
@@ -1272,6 +1311,21 @@ pollers:
     # line-fairly with the most-pinned lines first. 0 = no cap
     # (SAMPLE_MAX_STATIONS).
     sampleMaxStations: 0
+    # Ingest architecture plan 4.5/4.7: where the station list comes from.
+    internalReads:
+      # -- ldbws only. `http` (today's behaviour): api's
+      # `sampleStationsPath`. `db` (SAMPLE_STATIONS_SOURCE=db): computed by
+      # the poller from the line catalogue in its image and the views
+      # `ingest_custom_line_stations` and `ingest_sample_station_pins`, as
+      # the app role or, with `postgresql.roles.perService.ldbws_ro.connect`,
+      # the read-only `distant_signal_ldbws_ro`; the same list either way,
+      # the two knobs above included. Adds Postgres egress and admission to
+      # the NetworkPolicies and the pool to the connection budgets.
+      source: http
+      database:
+        # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
+        # §6.6: pool 1, role limit 2).
+        maxConnections: 1
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-ldbws-api-key
@@ -3052,6 +3106,20 @@ trustConsumer:
   # Decision 4. UNRESEARCHED starting figure (see that design's Open
   # Questions #1).
   stanoxCrsReloadSecs: 3600
+  # Ingest architecture plan 4.4/4.7: where the reference data comes from.
+  internalReads:
+    # -- `http` (today's behaviour): api's /private/tracked-trains and
+    # /private/stanox-crs. `db` (TRACKED_TRAINS_SOURCE and
+    # STANOX_CRS_SOURCE=db): the view `ingest_active_tracked_trains` (no
+    # user ids) and `stanox_crs`, read directly as the app role (the
+    # `trust_consumer` role comes with plan 3b), with the api's CORPUS
+    # fallback passed on. Adds Postgres egress and admission to the
+    # NetworkPolicies and the pool to the connection budgets.
+    source: http
+    database:
+      # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
+      # §6.6: pool 2).
+      maxConnections: 2
   retentionDays: 90
   healthPort: 8081
   # -- Liveness watchdog (PROGRESS_STALL_SECS): /healthz answers 503 "stalled"
@@ -3146,6 +3214,22 @@ fullCoverageConsumer:
   shadowLines: "*"
   populationReloadSecs: 300
   stanoxCrsReloadSecs: 3600
+  # Ingest architecture plan 4.3/4.7: where the reference data comes from.
+  internalReads:
+    # -- `http` (today's behaviour): one conditional
+    # /private/schedule-line-population GET per (line, date), and
+    # /private/stanox-crs. `db` (POPULATION_SOURCE and STANOX_CRS_SOURCE=db):
+    # one version query per reload, then only the changed populations, and
+    # `stanox_crs`, read directly as the app role or, with
+    # `postgresql.roles.perService.full_coverage_ro.connect`, the read-only
+    # `distant_signal_full_coverage_ro`; the api's CORPUS fallback is passed
+    # on. Adds Postgres egress and admission to the NetworkPolicies and the
+    # pool to the connection budgets.
+    source: http
+    database:
+      # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
+      # §6.6: pool 2, role limit 3).
+      maxConnections: 2
   statsWriteIntervalSecs: 60
   healthPort: 8082
   # -- Liveness watchdog (PROGRESS_STALL_SECS): /healthz answers 503 "stalled"

@@ -3,9 +3,11 @@ One template, five Deployments. Everything that differs between the pollers
 lives in the `.Values.pollers` map (baseUrlEnvVar, ingestPath, cadence, and
 ldbws's two extra vars), so this file never branches on a poller's name,
 except for poller-incidents' Redis and row-heartbeat settings (ingest plan
-2c), which are that poller's alone (distant-signal.pollerIncidentsIngestEnv).
+2c), which are that poller's alone (distant-signal.pollerIncidentsIngestEnv),
+and poller-ldbws's direct sample-station read (pollers.ldbws.internalReads,
+plan 4.7).
 The phase 2 db sink itself (INGEST_SINK, DATABASE_URL) and the phase 3
-stream sinks (INGEST_SINK, REDIS_URL; plan 3a.7) are the shared
+stream sinks (INGEST_SINK, REDIS_URL; plans 3a.7 and 3c.2) are the shared
 pollers.<name>.ingest block.
 
 Go templates iterate maps in sorted key order, so the rendered document
@@ -177,6 +179,9 @@ with $poller.extraEnv, which replaces an entry of the same name.
             # sample (crates/poller-ldbws/src/config.rs).
             - name: API_SAMPLE_STATIONS_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" $root) $poller.sampleStationsPath | quote }}
+            {{- end }}
+            {{- if eq $name "ldbws" }}
+            {{- with include "distant-signal.internalReadsEnv" (dict "root" $root "role" "ldbws_ro" "sources" (list "SAMPLE_STATIONS_SOURCE")) | trim }}{{ . | nindent 12 }}{{- end }}
             {{- end }}
             {{- if $poller.numRows }}
             # ldbws only: LDBWS's own `numRows` query parameter.

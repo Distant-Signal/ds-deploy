@@ -1438,11 +1438,21 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.roles.perService.trust_backlog.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.trust_backlog.existingSecretPasswordKey` | `postgres-trust-backlog-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.trust_backlog.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `trustBacklogConsumer.ingest.database.maxConnections` + 1. |
-| `postgresql.roles.perService.trust_consumer.connect` | `false` | Connect trust-consumer (`trustConsumer.ingest.sink: db` required) as `distant_signal_trust_consumer` (plan 3b.4, D1). A narrow role, not a member of `app`: the train-event, forward-signal and `train_event_outbox` writes, SELECT only on `train_subscriptions`. Created with the others whenever `perService.enabled`, unused until then. |
+| `postgresql.roles.perService.trust_consumer.connect` | `false` | Connect trust-consumer (`trustConsumer.ingest.sink: db` or `trustConsumer.internalReads.source: db` required) as `distant_signal_trust_consumer` (plans 3b.4, D1, and 4.4). A narrow role, not a member of `app`: the train-event, forward-signal and `train_event_outbox` writes, SELECT only on `train_subscriptions`, and the phase 4 reads. Created with the others whenever `perService.enabled`, unused until then. |
 | `postgresql.roles.perService.trust_consumer.password` | `""` | Password. |
 | `postgresql.roles.perService.trust_consumer.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.trust_consumer.existingSecretPasswordKey` | `postgres-trust-consumer-password` | Key within `existingSecret` (and in the chart's Secret). |
-| `postgresql.roles.perService.trust_consumer.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `trustConsumer.ingest.database.maxConnections` + 1. |
+| `postgresql.roles.perService.trust_consumer.connectionLimit` | `""` | CONNECTION LIMIT. Empty: its one pool (the larger of `trustConsumer.ingest.database.maxConnections` and `trustConsumer.internalReads.database.maxConnections`) + 1. |
+| `postgresql.roles.perService.full_coverage_ro.connect` | `false` | Connect full-coverage-consumer's direct reads (`fullCoverageConsumer.internalReads.source: db` required) as `distant_signal_full_coverage_ro` (ingest plan 4.7). A narrow, read-only role, not a member of `app`: SELECT on the line populations and STANOX/CRS only. Created with the others whenever `perService.enabled`, unused until then. |
+| `postgresql.roles.perService.full_coverage_ro.password` | `""` | Password. |
+| `postgresql.roles.perService.full_coverage_ro.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.perService.full_coverage_ro.existingSecretPasswordKey` | `postgres-full-coverage-ro-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.perService.full_coverage_ro.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `fullCoverageConsumer.internalReads.database.maxConnections` + 1. |
+| `postgresql.roles.perService.ldbws_ro.connect` | `false` | Connect poller-ldbws's direct sample-station read (`pollers.ldbws.internalReads.source: db` required) as `distant_signal_ldbws_ro` (ingest plan 4.7). A narrow, read-only role, not a member of `app`: SELECT on the views `ingest_sample_station_pins` and `ingest_custom_line_stations` only. Created with the others whenever `perService.enabled`, unused until then. |
+| `postgresql.roles.perService.ldbws_ro.password` | `""` | Password. |
+| `postgresql.roles.perService.ldbws_ro.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.perService.ldbws_ro.existingSecretPasswordKey` | `postgres-ldbws-ro-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.perService.ldbws_ro.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `pollers.ldbws.internalReads.database.maxConnections` + 1. |
 | `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
 | `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |
@@ -2174,6 +2184,8 @@ falls back to (see `movementRelay`).
 | `trustConsumer.ingest.database.maxConnections` | `2` | The pool under `sink: db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `trustConsumer.referenceReloadSecs` | `60` | How often the active-tracked-trains reference set is reloaded from api. |
 | `trustConsumer.stanoxCrsReloadSecs` | `3600` | How often the live STANOX-to-CRS table is reloaded from api's `/private/stanox-crs`. |
+| `trustConsumer.internalReads.source` | `http` | Where the tracked trains and STANOX/CRS come from (ingest plan 4.4/4.7): `http`, the api's `/private/tracked-trains` and `/private/stanox-crs`; `db` (`TRACKED_TRAINS_SOURCE` and `STANOX_CRS_SOURCE=db`), the view `ingest_active_tracked_trains` (no user ids) and `stanox_crs` directly, as the app role (the `trust_consumer` role comes with plan 3b), passing `api.corpusFallback.enabled` on. Adds the Postgres NetworkPolicy egress and admission and the pool to the connection budgets. Rollback: `http`. |
+| `trustConsumer.internalReads.database.maxConnections` | `2` | Its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `trustConsumer.retentionDays` | `90` | Days `train_movement_events` rows are kept before pruning. |
 | `trustConsumer.healthPort` | `8081` | Port for `/healthz` (readiness) and `/livez` (liveness). |
 | `trustConsumer.progressStallSecs` | `300` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
@@ -2212,6 +2224,8 @@ its own.
 | `fullCoverageConsumer.shadowLines` | `*` | Comma-separated line ids to compute, or `*` for every catalogued line with at least one TIPLOC. Does not decide whether the stats are shown; that is `api`/`aggregator.fullCoverageEnabledDefault` and each line's `full_coverage_enabled`. |
 | `fullCoverageConsumer.populationReloadSecs` | `300` | How often the per-line schedule population is reloaded from api. |
 | `fullCoverageConsumer.stanoxCrsReloadSecs` | `3600` | How often the STANOX-to-CRS table is reloaded from api. |
+| `fullCoverageConsumer.internalReads.source` | `http` | Where the line populations and STANOX/CRS come from (ingest plan 4.3/4.7): `http`, one conditional `/private/schedule-line-population` GET per (line, date) and `/private/stanox-crs`; `db` (`POPULATION_SOURCE` and `STANOX_CRS_SOURCE=db`), one version query per reload and then only the changed populations, plus `stanox_crs`, directly, as the app role or, with `postgresql.roles.perService.full_coverage_ro.connect`, `distant_signal_full_coverage_ro`, passing `api.corpusFallback.enabled` on. Adds the Postgres NetworkPolicy egress and admission and the pool to the connection budgets. Rollback: `http`. |
+| `fullCoverageConsumer.internalReads.database.maxConnections` | `2` | Its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `fullCoverageConsumer.statsWriteIntervalSecs` | `60` | How often computed stats are posted to api. |
 | `fullCoverageConsumer.healthPort` | `8082` | Port for `/healthz` (readiness) and `/livez` (liveness). |
 | `fullCoverageConsumer.progressStallSecs` | `900` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
@@ -2420,6 +2434,8 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.ldbws.hourlyRequestBudget` | `0` | ldbws only (LEG-18): max LDBWS requests per rolling hour, spread evenly over cycles; skipped stations count in `ldbws_budget_skipped_polls_total`. `0` = no budget, env not rendered. |
 | `pollers.ldbws.samplePinnedLinesOnly` | `false` | ldbws only (LEG-18): sample only stations on lines some user has pinned. |
 | `pollers.ldbws.sampleMaxStations` | `0` | ldbws only (LEG-18): cap on sample stations, chosen line-fairly by api, most-pinned lines first. `0` = no cap. |
+| `pollers.ldbws.internalReads.source` | `http` | ldbws only (ingest plan 4.5/4.7): `http` asks the api's `sampleStationsPath`; `db` (`SAMPLE_STATIONS_SOURCE=db`) computes the same list in the poller from the line catalogue in its image and the views `ingest_custom_line_stations` and `ingest_sample_station_pins`, as the app role or, with `postgresql.roles.perService.ldbws_ro.connect`, `distant_signal_ldbws_ro`. Adds the Postgres NetworkPolicy egress and admission and the pool to the connection budgets. Rollback: `http`. |
+| `pollers.ldbws.internalReads.database.maxConnections` | `1` | ldbws only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 
 ### pollerIrishRailGtfs
 
