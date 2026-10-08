@@ -65,7 +65,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "distant-signal.labels" (dict "root" . "component" "redis") | nindent 8 }}
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "redis") | nindent 8 }}
       {{- if or .Values.redis.podAnnotations $acl }}
       annotations:
         {{- with .Values.redis.podAnnotations }}

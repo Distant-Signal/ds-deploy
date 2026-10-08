@@ -18,7 +18,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "distant-signal.labels" (dict "root" . "component" "poller-nir-stations") | nindent 8 }}
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "poller-nir-stations") | nindent 8 }}
       {{- if or .Values.metrics.enabled .Values.pollerNirStations.podAnnotations }}
       annotations:
         {{- if .Values.metrics.enabled }}

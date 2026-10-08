@@ -80,8 +80,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres-roles") | nindent 8 }}
-        app.kubernetes.io/part-of: distant-signal
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "postgres-roles") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
       automountServiceAccountToken: false

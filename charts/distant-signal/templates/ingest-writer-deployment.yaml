@@ -27,7 +27,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "distant-signal.labels" (dict "root" . "component" "ingest-writer") | nindent 8 }}
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "ingest-writer") | nindent 8 }}
       {{- if or .Values.metrics.enabled .Values.ingestWriter.podAnnotations }}
       annotations:
         {{- if .Values.metrics.enabled }}

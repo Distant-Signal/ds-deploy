@@ -69,6 +69,29 @@ app.kubernetes.io/part-of: distant-signal
 {{- end }}
 
 {{/*
+Pod-template label set: the selector labels plus part-of and managed-by,
+and nothing that changes between releases. Call as:
+  {{- include "distant-signal.podLabels" (dict "root" . "component" "api") }}
+Use it in every Deployment/StatefulSet/Job/CronJob pod template; the
+objects' own metadata keeps the full `distant-signal.labels`. Any change to
+a pod template rolls its pods, and `helm.sh/chart` (the chart version, which
+CI stamps with the run number) and `app.kubernetes.io/version` (appVersion,
+`sha-<commit>`) change on every CI build, so with them every release
+restarted every workload, Redis (Recreate: an outage window) and
+schedulefeed included, even when its image and settings were unchanged.
+Without them a pod restarts only when its own spec (image digest, env,
+config checksums) changes. scripts/check-pod-labels-chart.py fails CI if a
+pod template carries either label again. The bundled Postgres StatefulSet
+keeps its older selector-labels-plus-part-of set (no managed-by), so this
+helper's introduction doesn't restart Postgres.
+*/}}
+{{- define "distant-signal.podLabels" -}}
+{{ include "distant-signal.selectorLabels" . }}
+app.kubernetes.io/managed-by: {{ .root.Release.Service }}
+app.kubernetes.io/part-of: distant-signal
+{{- end }}
+
+{{/*
 ServiceAccount name. Takes root.
 */}}
 {{- define "distant-signal.serviceAccountName" -}}

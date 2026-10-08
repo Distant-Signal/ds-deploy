@@ -18,7 +18,10 @@ spec:
       # `helm.sh/chart` and `app.kubernetes.io/version` values change on every
       # CI build, and any pod-template change rolls this StatefulSet -- i.e.
       # restarted Postgres (dropping its cache) on every deploy. Only labels
-      # that stay constant across releases belong here.
+      # that stay constant across releases belong here. Every other pod
+      # template uses `distant-signal.podLabels`, which also has managed-by;
+      # this one keeps its older set so switching to it doesn't restart
+      # Postgres. scripts/check-pod-labels-chart.py checks both.
       labels:
         {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 8 }}
         app.kubernetes.io/part-of: distant-signal

@@ -12,7 +12,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "distant-signal.labels" (dict "root" . "component" "frontend") | nindent 8 }}
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "frontend") | nindent 8 }}
       {{- with .Values.frontend.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}

@@ -123,16 +123,14 @@ spec:
   jobTemplate:
     metadata:
       labels:
-        {{- include "distant-signal.selectorLabels" (dict "root" $root "component" "pgbackrest") | nindent 8 }}
-        app.kubernetes.io/part-of: distant-signal
+        {{- include "distant-signal.podLabels" (dict "root" $root "component" "pgbackrest") | nindent 8 }}
     spec:
       backoffLimit: {{ int64 $pb.backup.backoffLimit }}
       activeDeadlineSeconds: {{ int64 $pb.backup.activeDeadlineSeconds }}
       template:
         metadata:
           labels:
-            {{- include "distant-signal.selectorLabels" (dict "root" $root "component" "pgbackrest") | nindent 12 }}
-            app.kubernetes.io/part-of: distant-signal
+            {{- include "distant-signal.podLabels" (dict "root" $root "component" "pgbackrest") | nindent 12 }}
         spec:
           serviceAccountName: {{ $name }}
           # The one exception to automountServiceAccountToken: false in this

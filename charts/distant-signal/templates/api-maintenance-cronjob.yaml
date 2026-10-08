@@ -35,16 +35,14 @@ spec:
   jobTemplate:
     metadata:
       labels:
-        {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api-maintenance") | nindent 8 }}
-        app.kubernetes.io/part-of: distant-signal
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "api-maintenance") | nindent 8 }}
     spec:
       backoffLimit: {{ int64 $m.backoffLimit }}
       activeDeadlineSeconds: {{ int64 $m.activeDeadlineSeconds }}
       template:
         metadata:
           labels:
-            {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api-maintenance") | nindent 12 }}
-            app.kubernetes.io/part-of: distant-signal
+            {{- include "distant-signal.podLabels" (dict "root" . "component" "api-maintenance") | nindent 12 }}
         spec:
           serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
           automountServiceAccountToken: false

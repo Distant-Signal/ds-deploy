@@ -38,14 +38,17 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 8 }}
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "schedulefeed") | nindent 8 }}
       {{- if or $sftp .Values.metrics.enabled .Values.scheduleFeed.podAnnotations }}
       annotations:
         {{- if $sftp }}
         # The sftp container reads its account policy (permissions, login
         # methods, limits) from the entrypoint script at start, so a change
-        # to the script must replace the Pod; env changes already do.
-        checksum/sftp-entrypoint: {{ include (print $.Template.BasePath "/schedulefeed-configmap.yaml") . | sha256sum }}
+        # to the script must replace the Pod; env changes already do. The
+        # hash is of the script alone, not the rendered ConfigMap: that
+        # carries the chart version and appVersion labels, which change on
+        # every release and would restart schedulefeed every time.
+        checksum/sftp-entrypoint: {{ .Files.Get "files/schedule-sftp-entrypoint.sh" | sha256sum }}
         {{- end }}
         {{- if .Values.metrics.enabled }}
         # NOTE: this plain-annotation scrape fallback can only advertise

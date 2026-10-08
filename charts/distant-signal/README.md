@@ -72,6 +72,18 @@ cosign verify ghcr.io/fasterspeeding/charts/distant-signal@sha256:<digest> \
 In Flux, set `verify.provider: cosign` with a `matchOIDCIdentity` entry for
 that issuer and subject on the chart's OCIRepository/HelmRepository.
 
+**Debian package updates.** Each image's runtime stage runs `apt-get upgrade`
+in the same layer as its `apt-get install`. That upgrades the base image's
+own packages (libc, openssl, ...) to whatever the Debian archive carries when
+the layer is built. Ordinary builds reuse that layer from the build cache,
+and so does a local rebuild, so they don't pick up new fixes. Only the
+workflow's weekly forced rebuild (Mondays 02:41 UTC, or a manual run with
+`no-cache`) rebuilds the runtime stage uncached and refreshes them; a
+base-image digest bump (Renovate) does too. An image's digest, and with it
+a rollout of its Deployment, therefore changes at least weekly. Images are
+reproducible otherwise: an unchanged service keeps its digest from push to
+push.
+
 | Dockerfile | Default image repository |
 |---|---|
 | `docker/api.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/api` |
@@ -1472,10 +1484,12 @@ so changing any of them rolls the StatefulSet (`RollingUpdate`, one pod).
 Postgres restarts, which `shared_buffers`, `wal_buffers` and `huge_pages`
 need anyway. Expect a short outage. Postgres stops cleanly (the image's
 SIGINT stop signal requests a fast shutdown), then starts with a cold
-buffer cache. Because the pod template carries the `helm.sh/chart` and
-`app.kubernetes.io/version` labels, **every chart upgrade restarts
-Postgres anyway**, even when these settings don't change. No config
-checksum annotation is needed.
+buffer cache. The pod template carries only labels that stay the same
+across releases (no `helm.sh/chart` or `app.kubernetes.io/version`), so a
+chart upgrade that changes none of these settings (and not the Postgres
+image or the rest of the pod spec) leaves Postgres running. Because the
+settings are in the pod template itself, no config checksum annotation is
+needed.
 
 #### Observability settings (2026-09-27)
 

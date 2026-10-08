@@ -36,7 +36,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "distant-signal.labels" (dict "root" $root "component" $component) | nindent 8 }}
+        {{- include "distant-signal.podLabels" (dict "root" $root "component" $component) | nindent 8 }}
       {{- if or $root.Values.metrics.enabled $poller.podAnnotations }}
       annotations:
         {{- if $root.Values.metrics.enabled }}

@@ -106,9 +106,15 @@ name: Containers
 # above has built and pushed successfully -- see that job's own comment
 # for the `needs:`/versioning rationale.
 
+# One run per ref at a time. Only pull requests cancel an older run: on
+# main/master a run that pushes must not be cancelled half way (some images
+# pushed, no chart), and a push must not cancel the weekly rebuild (its
+# fresh runtime layers would then never reach the cache, see `schedule`
+# below). A newer main run waits instead, and GitHub keeps only the newest
+# waiting one, so a burst of pushes still builds once more, not per push.
 concurrency:
   group: containers-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only by default; each job below asks for packages/id-token itself.
 permissions:
@@ -119,10 +125,47 @@ on:
     branches: [main, master, dev]
   push:
     branches: [main, master]
+  # Weekly forced rebuild (Mondays 02:41 UTC, off the hour, before
+  # prune-buildcache.yml's 04:17 run deletes the cache versions it untags).
+  # Every leg rebuilds its runtime stage with no cache, so its `apt-get
+  # upgrade` and `apt-get install` (one RUN, see gen-rust-dockerfiles.py's
+  # APT_UPGRADE) pick up Debian's security updates, for the base image's
+  # own packages (libc and the like) as well as the installed ones; a
+  # cached build would keep the old layer forever. The Rust and Next builds
+  # still come from the cache. It then pushes, signs, attests, writes the
+  # cache and packages the chart exactly like a push to main.
+  schedule:
+    - cron: "41 2 * * 1"
+  # By hand, from main/master (another ref builds without publishing, like
+  # a pull request). `no-cache` forces the same runtime-stage rebuild as the
+  # schedule; without it, it is an ordinary cached build and publish.
+  workflow_dispatch:
+    inputs:
+      no-cache:
+        description: Rebuild each image's runtime stage without the cache (Debian security updates)
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_BASE: ghcr.io/fasterspeeding/distant-signal
+  # Reproducible images: BuildKit (via buildx, which passes this env var on
+  # as the SOURCE_DATE_EPOCH build arg) stamps the image config's `created`
+  # and its history entries with this time instead of the build's, and
+  # `rewrite-timestamp=true` on the build's output (below) clamps every
+  # layer file's mtime to it. A constant, not the commit time: with a
+  # per-commit value every push would mint a new config, so a new digest,
+  # for byte-identical layers. With it, an image whose inputs didn't change
+  # gets the same digest as last time, and the chart's pinned digest (so
+  # the Deployment) doesn't change. 0 is the Unix epoch, which is what
+  # `docker inspect` shows as Created.
+  SOURCE_DATE_EPOCH: "0"
+  # "true" when this run publishes (pushes images and cache, signs, attests,
+  # pushes the chart): a push to main/master, the weekly rebuild, or a
+  # manual run from main/master. Never a pull request.
+  PUBLISH: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
+  # "true" for the weekly rebuild and a manual `no-cache` run.
+  REBUILD_RUNTIME: ${{ github.event_name == 'schedule' || inputs.no-cache == true }}
 
 jobs:
   build-and-push:
@@ -131,7 +174,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write # required for cosign's keyless/OIDC signing
+      id-token: write # cosign's keyless/OIDC signing, and the attestation's
+      attestations: write # the build provenance attestation (see its step)
 
     strategy:
       fail-fast: false
@@ -216,6 +260,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
 
+      # The build's `rewrite-timestamp=true` output option needs BuildKit
+      # v0.13+; an older daemon ignores it silently and the digests stop
+      # being reproducible. setup-buildx-action runs the current stable
+      # moby/buildkit (v0.2x as of 2026-10), so this only fails if that
+      # ever stops being true.
+      - name: Check BuildKit supports rewrite-timestamp
+        run: |
+          set -euo pipefail
+          version="$(docker buildx inspect | sed -n 's/^BuildKit version: *v//p' | head -n 1)"
+          oldest="$(printf '%s\n' 0.13.0 "${version}" | sort -V | head -n 1)"
+          echo "BuildKit ${version}"
+          if [[ -z "${version}" || "${oldest}" != "0.13.0" ]]; then
+            echo "::error::BuildKit '${version}' is older than v0.13 (or unknown); rewrite-timestamp needs v0.13+" >&2
+            exit 1
+          fi
+
       # On every event, PRs included: the build reads its layer cache from
       # ${IMAGE_BASE}/buildcache (see the build step). A PR's token can
       # still only read (a fork's gets no packages:write), and only pushes
@@ -235,21 +295,30 @@ jobs:
       # (schedule/branch/tag/pr -- see this file's top-of-file "Tagging"
       # comment) and adds `type=sha` on top, so every image also gets an
       # immutable `sha-<short-sha>` tag that `push-helm-chart` can pin the
-      # chart's default `appVersion`/image references to.
-      - name: Extract metadata (tags, labels)
+      # chart's default `appVersion`/image references to. Only its tags are
+      # used: its labels include `org.opencontainers.image.created` (the
+      # build time) and `.revision` (the commit), which made every push a
+      # new image config and so a new digest even for byte-identical
+      # layers. The build step sets static labels instead; the commit is in
+      # the `sha-<short>` tag and the provenance attestation.
+      #
+      # No `type=schedule`: on the weekly rebuild (a `schedule` event) it
+      # would add a `nightly` tag. That run gets the same `main` and
+      # `sha-<short>` tags as a push of the same commit (the rebuilt image
+      # replaces the earlier one under both; the chart pins the digest).
+      - name: Extract metadata (tags)
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE_BASE }}/${{ matrix.service }}
           tags: |
-            type=schedule
             type=ref,event=branch
             type=ref,event=tag
             type=ref,event=pr
             type=sha
 
       # Build on every trigger (including PRs, as a build-sanity check);
-      # push only outside pull_request. Mirrors Piped's own
+      # push only when env.PUBLISH. Mirrors Piped's own
       # build-container.yml push gating and Reinhard's hand-rolled
       # docker-publish.yml.
       #
@@ -258,37 +327,77 @@ jobs:
       # is 10 GB per repo and these images' mode=max layers alone
       # overflowed it (evicting rust-cache's entries too), and restoring
       # them took longer than the build saved. Every run reads it; only
-      # pushes to main/master write it (`cache-to` is empty otherwise), so
-      # a PR can never poison the cache main builds from. The Rust
-      # Dockerfiles' cargo-chef stages (scripts/gen-rust-dockerfiles.py)
+      # publishing runs (env.PUBLISH: pushes to main/master, the weekly
+      # rebuild, a manual run from main/master) write it (`cache-to` is
+      # empty otherwise), so a PR can never poison the cache main builds
+      # from. The weekly rebuild must write it: otherwise the next push
+      # would import the old runtime layer again and undo the update. The
+      # Rust Dockerfiles' cargo-chef stages (scripts/gen-rust-dockerfiles.py)
       # make the dependency build one layer, so a source-only change
       # imports it and compiles only the workspace crates; a Cargo.lock
       # change rebuilds it. image-manifest=true + oci-mediatypes=true store
       # the cache as an OCI image manifest rather than BuildKit's default
       # cache index, which some registries refuse. Each write untags the
       # previous cache manifest; prune-buildcache.yml deletes those weekly.
-      - name: Build${{ github.event_name != 'pull_request' && ' and push' || '' }} image
+      #
+      # Reproducible digests (an unchanged image keeps its digest, so its
+      # Deployment doesn't restart):
+      #   - static `labels:` only, none per build (see the meta step);
+      #   - `provenance: false`: build-push-action's default provenance
+      #     attestation is part of the pushed image index and records the
+      #     build's time and run, so it changed the index digest on every
+      #     push. Provenance is published as a separate attestation instead
+      #     (the next step), which leaves the image digest alone;
+      #   - `outputs:` with `rewrite-timestamp=true`, and SOURCE_DATE_EPOCH
+      #     (workflow env), so even a cold-cache rebuild of the same inputs
+      #     produces the same layers and config. `push=` in the output
+      #     replaces the action's `push:` input (which only adds an output).
+      - name: Build${{ env.PUBLISH == 'true' && ' and push' || '' }} image
         id: build
         uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target }}
-          push: ${{ github.event_name != 'pull_request' }}
+          outputs: type=image,push=${{ env.PUBLISH }},rewrite-timestamp=true
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            org.opencontainers.image.title=distant-signal/${{ matrix.service }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/buildcache:${{ matrix.service }}
-          cache-to: ${{ github.event_name == 'push' && format('type=registry,ref={0}/buildcache:{1},mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_BASE, matrix.service) || '' }}
+          cache-to: ${{ env.PUBLISH == 'true' && format('type=registry,ref={0}/buildcache:{1},mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_BASE, matrix.service) || '' }}
+          # The weekly/no-cache rebuild: the runtime stage only (`runtime`
+          # in every Rust Dockerfile, scripts/gen-rust-dockerfiles.py checks
+          # the name; frontend's is its target), so its apt layer is fresh.
+          no-cache-filters: ${{ env.REBUILD_RUNTIME == 'true' && (matrix.target || 'runtime') || '' }}
+
+      # SLSA build provenance for the pushed digest, signed keylessly
+      # (sigstore's public-good instance, the repo being public) and stored
+      # in GitHub's attestation API and, as an OCI referrer, next to the
+      # image in ghcr.io; neither changes the image's own digest. Verify
+      # with `gh attestation verify oci://<image>@<digest> --repo
+      # FasterSpeeding/Distant-Signal`. No storage record: those are for
+      # organization-owned repositories only.
+      - name: Attest build provenance
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_BASE }}/${{ matrix.service }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
 
       - name: Install cosign
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       # Keyless/OIDC signing via sigstore's public Fulcio/Rekor instances,
       # same approach Piped's build-container.yml and Reinhard's
       # docker-publish.yml both use.
       - name: Sign the published image
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -316,14 +425,14 @@ jobs:
       # unpublished PR build, and PRs don't get a `packages:write` token
       # anyway) -- same gate as the push/sign steps above.
       - name: Record image digest
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         env:
           SERVICE: ${{ matrix.service }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: echo "${SERVICE}=${DIGEST}" > "digest-${SERVICE}.txt"
 
       - name: Upload image digest artifact
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-digest-${{ matrix.service }}
@@ -484,7 +593,8 @@ jobs:
   push-helm-chart:
     name: Package and push Helm chart
     needs: build-and-push
-    if: github.event_name != 'pull_request'
+    # env.PUBLISH's condition (env isn't available in a job's `if`).
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     runs-on: ubuntu-24.04
     permissions:
       contents: read

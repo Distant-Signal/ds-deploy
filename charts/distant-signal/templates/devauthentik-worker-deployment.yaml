@@ -20,7 +20,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "distant-signal.labels" (dict "root" . "component" "devauthentik-worker") | nindent 8 }}
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "devauthentik-worker") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
       automountServiceAccountToken: false

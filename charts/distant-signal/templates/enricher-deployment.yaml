@@ -64,7 +64,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "distant-signal.labels" (dict "root" . "component" "enricher") | nindent 8 }}
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "enricher") | nindent 8 }}
       {{- if or .Values.metrics.enabled .Values.enricher.podAnnotations }}
       annotations:
         {{- if .Values.metrics.enabled }}
