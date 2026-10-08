@@ -772,9 +772,22 @@ setup Job with `postgresql.roles.perService.enabled`) with
 `perService.writer.connect`; its pool and its loop-lock session count in the
 connection budgets. Its
 NetworkPolicy admits the monitoring namespace (metrics) and the health port,
-with egress to Postgres (Redis joins in phase 3); Postgres admits it; the
+with egress to Postgres; Postgres admits it; the
 PodMonitor scrapes it; `DistantSignalIngestWriterDown` fires when it is down
 (see `docs/alerts.md`).
+
+From phase 3 it also consumes the Redis ingest streams, each with its own
+mode in `ingestWriter.streams` (`INGEST_WRITER_STREAMS`; every one `off` by
+default): `shadow` decodes, validates and acks without writing, `apply`
+writes, recording each entry's key in `ingest_dedup` in the same
+transaction (pruned hourly after 48 h) so a redelivered entry applies once.
+It trims dead-letter entries older than 7 days hourly (`XTRIM … MINID ~`).
+Once any stream is not `off` the writer gets `REDIS_URL`, its Redis user
+(`redis.acl.clients.ingestWriter`, else the shared `redis.auth` password),
+`POD_NAME` (its consumer name) and NetworkPolicy egress to Redis, and
+Redis admits it. It refuses to start a stream it has no handlers for yet:
+station-samples and full-coverage get theirs in plan 3a.6, the others in
+3c.
 
 ## Password encoding caveat
 
@@ -1693,6 +1706,11 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.enabled` | `false` | Deploy the ingest-writer (one replica, `Recreate`). Needs its image (plan 1B.6). |
 | `ingestWriter.image` | `ghcr.io/fasterspeeding/distant-signal/ingest-writer`, tag `""` (appVersion), digest `""`, `IfNotPresent` | Image; same shape as `api.image`. |
 | `ingestWriter.loops.enabled` | `false` | Run the train-domain loops (`INGEST_WRITER_LOOPS`) with the api's intervals. |
+| `ingestWriter.streams.station-samples` | `off` | Mode of `ds:ingest:station-samples` (`INGEST_WRITER_STREAMS`): `off` (not read), `shadow` (decode, validate, ack, write nothing) or `apply`. Any stream not `off` gives the writer `REDIS_URL`, its Redis user (`redis.acl.clients.ingestWriter`) and the NetworkPolicy paths to Redis. The writer refuses a stream it has no handlers for yet (plan 3a.6). |
+| `ingestWriter.streams.full-coverage` | `off` | Mode of `ds:ingest:full-coverage`, as `station-samples` (handlers: plan 3a.6). |
+| `ingestWriter.streams.tfl` | `off` | Mode of `ds:ingest:tfl`, as `station-samples` (handlers: plan 3c). |
+| `ingestWriter.streams.reference` | `off` | Mode of `ds:ingest:reference` (tocs), as `station-samples` (handlers: plan 3c). |
+| `ingestWriter.streams.island-of-ireland` | `off` | Mode of `ds:ingest:island-of-ireland`, as `station-samples` (handlers: plan 3c). |
 | `ingestWriter.database.maxConnections` | `6` | Its Postgres pool; counted, plus its one loop-lock session, in the connection budgets. |
 | `ingestWriter.progressStallSecs` | `900` | `/livez` stall window (`PROGRESS_STALL_SECS`). |
 | `ingestWriter.logLevel` | `info` | `RUST_LOG`. |
@@ -1861,6 +1879,7 @@ used for and why persistence defaults on.
 | `redis.acl.clients.trustConsumer` | `false` | trust-consumer, as user `trust-consumer`. |
 | `redis.acl.clients.fullCoverageConsumer` | `false` | full-coverage-consumer, as user `full-coverage-consumer`. |
 | `redis.acl.clients.trustBacklogConsumer` | `false` | trust-backlog-consumer, as user `trust-backlog-consumer`. |
+| `redis.acl.clients.ingestWriter` | `false` | ingest-writer, as user `ingest-writer` (only once an `ingestWriter.streams` entry is not `off`). |
 | `redis.image.repository` | `redis` | Redis image repository (upstream image; this repo builds no Redis image). |
 | `redis.image.tag` | `7.4.11@sha256:…` | Redis 7.4, digest-pinned in the tag. |
 | `redis.image.pullPolicy` | `IfNotPresent` | Image pull policy. |

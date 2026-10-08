@@ -131,6 +131,10 @@ redis:
                        # trustConsumer, movementRelay, one per release
 ```
 
+`ingestWriter` (user `ingest-writer`) connects only once an
+`ingestWriter.streams` entry is not `off` (plan 3a.3); turn it on before
+or with the writer's first stream.
+
 Only that client restarts. Verify `CLIENT LIST` shows its connections as
 `user=<its user>`, and its logs have no `NOAUTH`/`WRONGPASS`. Ranma moves
 the exporter to the `exporter` user (`REDIS_USER` plus its password) in the

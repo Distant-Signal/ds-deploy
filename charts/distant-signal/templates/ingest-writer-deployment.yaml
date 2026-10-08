@@ -3,8 +3,10 @@ The ingest-writer (ingest spec §10, plan 1B.6/1B.9; ingestWriter in
 values.yaml). Renders nothing unless ingestWriter.enabled.
 
 Phase 1B: the train-domain loops (INGEST_WRITER_LOOPS, ingestWriter.loops)
-under Postgres advisory locks. Phase 3 adds the Redis ingest streams (and
-REDIS_URL, the redis NetworkPolicy admission and egress).
+under Postgres advisory locks. Phase 3a.3: the Redis ingest streams
+(INGEST_WRITER_STREAMS, ingestWriter.streams, every one off by default);
+once any is not off, REDIS_URL and the redis NetworkPolicy admission and
+egress.
 */}}
 {{- if .Values.ingestWriter.enabled }}
 apiVersion: apps/v1
@@ -95,6 +97,21 @@ with ingestWriter.extraEnv, which replaces an entry of the same name.
             # The train-domain loops (plan 1B.6); "false" runs none.
             - name: INGEST_WRITER_LOOPS
               value: {{ .Values.ingestWriter.loops.enabled | toString | quote }}
+            # Each ingest stream's mode (plan 3a.3): off, shadow or apply.
+            - name: INGEST_WRITER_STREAMS
+              value: {{ include "distant-signal.ingestWriterStreams" . | quote }}
+            {{- if include "distant-signal.ingestWriterStreamsOn" . }}
+            # Only once a stream is not off: the streams' Redis, as the
+            # ingest-writer ACL user under redis.acl.clients.ingestWriter.
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "ingestWriter" "user" "ingest-writer") }}
+            # The consumer name in each stream's group.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
             # The loops' settings, from the api's own values so the writer
             # and the api's loops cannot drift apart during the cutover.
             - name: RECONCILIATION_SWEEP_INTERVAL_SECS

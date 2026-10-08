@@ -1133,6 +1133,35 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 {{- end -}}
 {{- end }}
 
+{{- /*
+The ingest-writer's INGEST_WRITER_STREAMS from ingestWriter.streams (plan
+3a.3): "<stream>:<mode>" joined by commas, in key order. Fails on a mode
+other than off/shadow/apply. Takes root.
+*/ -}}
+{{- define "distant-signal.ingestWriterStreams" -}}
+{{- $items := list -}}
+{{- range $name, $mode := .Values.ingestWriter.streams -}}
+{{- if not (has (toString $mode) (list "off" "shadow" "apply")) -}}
+{{- fail (printf "ingestWriter.streams.%s must be off, shadow or apply, not %q." $name (toString $mode)) -}}
+{{- end -}}
+{{- $items = append $items (printf "%s:%s" $name (toString $mode)) -}}
+{{- end -}}
+{{- join "," $items -}}
+{{- end }}
+
+{{- /*
+True (non-empty) when the ingest-writer is enabled and reads any stream
+(an ingestWriter.streams entry not "off"): it then gets REDIS_URL, its
+Redis credentials and the NetworkPolicy paths to Redis. Takes root.
+*/ -}}
+{{- define "distant-signal.ingestWriterStreamsOn" -}}
+{{- if .Values.ingestWriter.enabled -}}
+{{- range $name, $mode := .Values.ingestWriter.streams -}}
+{{- if ne (toString $mode) "off" }}true{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{/*
 The ingest-writer's connections when ingestWriter.enabled, else 0: its
 pool (ingestWriter.database.maxConnections) plus the one dedicated

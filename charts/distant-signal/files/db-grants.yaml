@@ -204,6 +204,9 @@ tables:
   train_notification_state: {class: internal, grants: {notifier: SIU, api: S}}
   line_notification_state: {class: internal, grants: {notifier: SIU, api: S}}
   journey_leg_notification_state: {class: internal, grants: {notifier: SIU, api: S}}
+  # The ingest-writer's stream idempotency keys (plan 3a.3, spec §7.4):
+  # inserted with each applied entry, pruned hourly after 48 h.
+  ingest_dedup: {class: internal, grants: {writer: SID}}
   # The publish staging keys (UNLOGGED). The api publishes until phase 2a.
   schedule_calling_points_full_publish_keys: {class: internal, grants: {schedule_reference: SID}}
   schedule_destination_departures_publish_keys: {class: internal, grants: {schedule_reference: SID}}

@@ -125,6 +125,10 @@ spec:
                   - trust-backlog-consumer
                   - full-coverage-consumer
                   - movement-relay
+                  {{- if include "distant-signal.ingestWriterStreamsOn" . }}
+                  # The ingest-writer, once it reads a stream (plan 3a.3).
+                  - ingest-writer
+                  {{- end }}
         {{- with .Values.networkPolicy.redisClients }}
         # networkPolicy.redisClients: workloads outside this chart, e.g. a
         # redis-exporter.
@@ -395,8 +399,12 @@ rule is IP-based, so this only opens their ports, not their hosts. */}}
   (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $queueWorker "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
 }}
 {{- if .Values.ingestWriter.enabled }}
-{{- /* Phase 1B: Postgres only; Redis joins with the streams in phase 3. */}}
-{{- $workers = append $workers (dict "component" "ingest-writer" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true) "internet" false) }}
+{{- /* Postgres; Redis too once an ingestWriter.streams entry is not off (plan 3a.3). */}}
+{{- $writerEgress := dict "postgres" true }}
+{{- if include "distant-signal.ingestWriterStreamsOn" . }}
+{{- $_ := set $writerEgress "redis" true }}
+{{- end }}
+{{- $workers = append $workers (dict "component" "ingest-writer" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" $writerEgress "internet" false) }}
 {{- end }}
 {{- if .Values.movementRelay.enabled }}
 {{- $workers = append $workers (dict "component" "movement-relay" "metricsPort" .Values.movementRelay.metricsPort "healthPorts" (list .Values.movementRelay.healthPort) "egress" (dict "redis" true) "brokers" (include "distant-signal.movementRelayKafkaBrokers" .)) }}

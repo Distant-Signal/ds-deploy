@@ -2277,7 +2277,23 @@ jobs:
           np=$(doc NetworkPolicy distant-signal-ingest-writer <<<"${on}")
           grep -q 'port: 5432' <<<"${np}" || fail "the ingest-writer must be allowed out to Postgres"
           if grep -q -E 'port: 6379|ipBlock' <<<"${np}"; then
-            fail "phase 1B: the ingest-writer gets neither Redis nor the internet"
+            fail "with every stream off the ingest-writer gets neither Redis nor the internet"
+          fi
+          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:off,island-of-ireland:off,reference:off,station-samples:off,tfl:off"
+          if grep -q 'name: REDIS_URL$' <<<"${dep}"; then fail "with every stream off the ingest-writer gets no REDIS_URL"; fi
+          # Plan 3a.3: a stream not off brings Redis (env, user, egress, admission).
+          st=$(render --set ingestWriter.enabled=true --set ingestWriter.streams.station-samples=shadow \
+            --set redis.acl.enabled=true --set redis.acl.existingSecret=acl --set redis.acl.clients.ingestWriter=true)
+          sdep=$(doc Deployment distant-signal-ingest-writer <<<"${st}")
+          env_is "${sdep}" REDIS_USERNAME ingest-writer
+          grep -q 'name: REDIS_URL$' <<<"${sdep}" || fail "a stream on needs REDIS_URL"
+          grep -q 'fieldPath: metadata.name' <<<"${sdep}" || fail "a stream on needs POD_NAME"
+          grep -q 'port: 6379' <<<"$(doc NetworkPolicy distant-signal-ingest-writer <<<"${st}")" \
+            || fail "a stream on needs egress to Redis"
+          grep -q -- '- ingest-writer$' <<<"$(doc NetworkPolicy distant-signal-redis <<<"${st}")" \
+            || fail "Redis must admit the ingest-writer once a stream is on"
+          if render --set ingestWriter.enabled=true --set ingestWriter.streams.tfl=on >/dev/null 2>&1; then
+            fail "an unknown stream mode must fail the render"
           fi
           pg=$(doc NetworkPolicy distant-signal-postgres <<<"${on}")
           grep -q -- '- ingest-writer$' <<<"${pg}" || fail "Postgres must admit the ingest-writer"
