@@ -1033,6 +1033,12 @@ app.connectionLimitSlack.
 {{- end -}}
 {{- /* Phase 2: the pollers that write directly, as the app role. */ -}}
 {{- $total = add $total (include "distant-signal.pollerAppPools" $root) -}}
+{{- /* Phase 3b: the TRUST consumers that write directly, as the app role. */ -}}
+{{- range $service := list "trust_backlog" "trust_consumer" -}}
+{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" $service)) -}}
+{{- $total = add $total (include "distant-signal.trustSinkPool" (dict "root" $root "service" $service)) -}}
+{{- end -}}
+{{- end -}}
 {{- $total -}}
 {{- else -}}
 {{- fail (printf "postgresql.roles.%s.connectionLimit must be set." .role) -}}
@@ -1092,9 +1098,11 @@ db-grants.yaml. `writer` is the ingest-writer's (ingestWriter, plan 1B.9);
 2a); `stations` and `incidents` are poller-stations' and poller-incidents'
 (pollers.<name>.ingest.sink db, plans 2b.3 and 2c.3). All four are narrow
 roles.
+`trust_backlog` and `trust_consumer` are trust-backlog-consumer's and
+trust-consumer's under their ingest.sink db (plan 3b), narrow.
 */}}
 {{- define "distant-signal.perServiceKeys" -}}
-api aggregator enricher notifier writer schedule_ingest schedule_reference stations incidents
+api aggregator enricher notifier writer schedule_ingest schedule_reference stations incidents trust_backlog trust_consumer
 {{- end }}
 
 {{- define "distant-signal.perServiceEnabled" -}}
@@ -1133,6 +1141,9 @@ True (non-empty) when the service connects as its own role. Takes (dict
 {{- fail (printf "postgresql.roles.perService.%s.connect needs pollers.%s.enabled with pollers.%s.ingest.sink: db: nothing else connects as its role." .service .service .service) -}}
 {{- end -}}
 {{- end -}}
+{{- if and (has .service (list "trust_backlog" "trust_consumer")) (not (include "distant-signal.trustSinkDb" (dict "root" .root "service" .service))) -}}
+{{- fail (printf "postgresql.roles.perService.%s.connect needs %s.ingest.sink: db: nothing else connects as its role." .service (include "distant-signal.trustSinkValuesKey" .service)) -}}
+{{- end -}}
 true
 {{- end -}}
 {{- end }}
@@ -1154,6 +1165,38 @@ Takes (dict "root" $ "name" <pollers key> "poller" <its values>).
 {{- if and .poller.enabled (eq $sink "db") -}}
 {{- if and (eq .name "stations") (not (and .root.Values.ingestWriter.enabled .root.Values.ingestWriter.loops.enabled)) -}}
 {{- fail "pollers.stations.ingest.sink=db needs ingestWriter.enabled and ingestWriter.loops.enabled: without the api's POST, the ingest-writer's CORPUS crosswalk loop rebuilds the crosswalk after a stations refresh (ingest architecture plan 2b.2)." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+Phase 3b: the values key of a TRUST consumer's per-service role (takes the
+role key): trust_backlog -> trustBacklogConsumer, trust_consumer ->
+trustConsumer.
+*/}}
+{{- define "distant-signal.trustSinkValuesKey" -}}
+{{- if eq . "trust_backlog" -}}trustBacklogConsumer{{- else if eq . "trust_consumer" -}}trustConsumer{{- else -}}{{- fail (printf "no TRUST consumer for role %q" .) -}}{{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when the TRUST consumer behind the role writes Postgres
+directly: <consumer>.ingest.sink is `db` (trust-backlog-consumer, plan 3b.1;
+trust-consumer, plan 3b.3). Fails on a sink other than `http` or `db`, and
+for trust-consumer's `db` without the ingest-writer's loops (its
+train_event_outbox loop applies the subscription changes).
+Takes (dict "root" $ "service" "trust_backlog"|"trust_consumer").
+*/}}
+{{- define "distant-signal.trustSinkDb" -}}
+{{- $key := include "distant-signal.trustSinkValuesKey" .service -}}
+{{- $ingest := (get .root.Values $key).ingest | default dict -}}
+{{- $sink := toString ($ingest.sink | default "http") -}}
+{{- if not (has $sink (list "http" "db")) -}}
+{{- fail (printf "%s.ingest.sink must be http or db, not %q." $key $sink) -}}
+{{- end -}}
+{{- if eq $sink "db" -}}
+{{- if and (eq .service "trust_consumer") (not (and .root.Values.ingestWriter.enabled .root.Values.ingestWriter.loops.enabled)) -}}
+{{- fail "trustConsumer.ingest.sink=db needs ingestWriter.enabled and ingestWriter.loops.enabled: the ingest-writer's train_event_outbox loop applies the events that change a subscription (resolutions, cancellations, reinstatements), which the trust_consumer role may not write (ingest architecture plan 3b.3)." -}}
 {{- end -}}
 true
 {{- end -}}
@@ -1191,6 +1234,26 @@ budget in api-deployment.yaml. Takes root.
 {{- end -}}
 {{- end -}}
 {{- $total -}}
+{{- end }}
+
+{{/*
+The TRUST consumer's Postgres pool (<consumer>.ingest.database.maxConnections)
+under ingest.sink db, else 0. Takes (dict "root" $ "service" ...).
+*/}}
+{{- define "distant-signal.trustSinkPool" -}}
+{{- if include "distant-signal.trustSinkDb" . -}}
+{{- int (get .root.Values (include "distant-signal.trustSinkValuesKey" .service)).ingest.database.maxConnections -}}
+{{- else -}}
+0
+{{- end -}}
+{{- end }}
+
+{{/*
+Both TRUST consumers' pools under ingest.sink db, summed (the api's
+INF-7 budget check). Takes root.
+*/}}
+{{- define "distant-signal.trustSinkPools" -}}
+{{- add (include "distant-signal.trustSinkPool" (dict "root" . "service" "trust_backlog")) (include "distant-signal.trustSinkPool" (dict "root" . "service" "trust_consumer")) -}}
 {{- end }}
 
 {{/*
@@ -1238,6 +1301,9 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 {{- else if hasKey $root.Values.pollers .service -}}
 {{- /* A poller that writes directly (phase 2): pollers.<name>.ingest.database. */ -}}
 {{- int (get $root.Values.pollers .service).ingest.database.maxConnections -}}
+{{- else if has .service (list "trust_backlog" "trust_consumer") -}}
+{{- /* Phase 3b: <consumer>.ingest.database.maxConnections. */ -}}
+{{- int (get $root.Values (include "distant-signal.trustSinkValuesKey" .service)).ingest.database.maxConnections -}}
 {{- else -}}
 5
 {{- end -}}

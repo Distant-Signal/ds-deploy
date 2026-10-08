@@ -63,7 +63,8 @@ so that clause fired on every rollout.
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
 {{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled) }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn }}
+{{- $outboxOn := and ($rule.trainEventOutbox).enabled .Values.ingestWriter.enabled }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn $outboxOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -215,15 +216,17 @@ spec:
         2026-10-01: trust-consumer failed GET /private/tracked-trains about
         23.6k times and trust-backlog-consumer about 2,200 POSTs, with no
         alert (their *_ready gauges only follow Redis). Each consumer's
-        <consumer>_errors_total operations that are failed calls to api
-        (not data rejections), registered at 0 at startup; each crate's
+        <consumer>_errors_total operations that are failed calls to api,
+        or failed direct writes under ingest.sink db (db_write,
+        db_write_reasons; ingest plan 3b.2) -- not data rejections --
+        registered at 0 at startup; each crate's
         API_CALL_OPERATIONS lists the same operations, and its tests check
         this list. Summed per consumer (not per operation), so an api outage
         is at most three alerts in one notification.
         */}}
         {{- $consumers := list
-          (list "trust_consumer" "trust-consumer" "reload_tracked_trains|post_train_events|reload_stanox_crs|startup_reference_load")
-          (list "trust_backlog_consumer" "trust-backlog-consumer" "post_batch|post_train_reasons|reload_stanox_crs")
+          (list "trust_consumer" "trust-consumer" "reload_tracked_trains|post_train_events|reload_stanox_crs|startup_reference_load|db_write")
+          (list "trust_backlog_consumer" "trust-backlog-consumer" "post_batch|post_train_reasons|reload_stanox_crs|db_write|db_write_reasons")
           (list "full_coverage_consumer" "full-coverage-consumer" "reload_line_population_fetch|post_line_stats|post_station_samples|reload_stanox_crs") }}
         - record: distant_signal:consumer_api_errors:increase
           expr: |
@@ -898,6 +901,43 @@ spec:
             summary: "the ingest-writer is down"
             description: "Not scraped, or no available replica, for {{ .for }}: the train-domain sweeps it owns are not running."
             runbook_url: {{ printf "%s#distantsignalingestwriterdown" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $outboxOn }}
+    {{- with $rule.trainEventOutbox }}
+    - name: distant-signal.train-event-outbox
+      rules:
+        {{- /*
+        Ingest plan 3b.3: under trustConsumer.ingest.sink db, resolutions,
+        cancellations and reinstatements (and the events queued behind
+        them) wait in train_event_outbox for the writer's loop (5 s).
+        Both series come from the writer; absent series never fire.
+        */}}
+        - alert: DistantSignalTrainEventOutboxRejected
+          expr: |
+            sum by (namespace) (increase(distant_signal_store_train_event_outbox_total{namespace="{{ $ns }}", outcome="rejected"}[{{ .rejected.window }}])) > 0
+          labels:
+            severity: {{ .rejected.severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "a deferred train event was refused for a data error"
+            description: "{{ "{{ $value | humanize }}" }} in {{ .rejected.window }}, left in train_event_outbox with rejected_at: that subscription's change did not land."
+            runbook_url: {{ printf "%s#distantsignaltraineventoutboxrejected" $runbook | quote }}
+        - alert: DistantSignalTrainEventOutboxStuck
+          expr: |
+            max by (namespace) ((time() - distant_signal_train_event_outbox_oldest_pending_timestamp_seconds{namespace="{{ $ns }}"}) and (distant_signal_train_event_outbox_oldest_pending_timestamp_seconds{namespace="{{ $ns }}"} > 0)) > {{ .stuck.maxAgeSeconds }}
+          for: {{ .stuck.for }}
+          labels:
+            severity: {{ .stuck.severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "train_event_outbox has a row waiting {{ "{{ $value | humanizeDuration }}" }}"
+            description: "Over {{ .stuck.maxAgeSeconds }}s: subscriptions are not resolving, cancelling or reopening, and their trains' movements wait behind them."
+            runbook_url: {{ printf "%s#distantsignaltraineventoutboxstuck" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $ingestStreamsOn }}

@@ -1,0 +1,58 @@
+# promtool unit tests for DistantSignalTrainEventOutboxRejected and
+# DistantSignalTrainEventOutboxStuck (ingest plan 3b.3; see
+# recorded-alerts.yaml's header for how rules.yaml is rendered, with
+# ingestWriter.enabled). Defaults: rejected window 1h; stuck over 120s for 1m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # One row rejected at 70m: fires while the 1h window holds it, not
+  # before. Applied rows never fire.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_store_train_event_outbox_total{namespace="distant-signal", pod="w", outcome="rejected"}'
+        values: '0x70 1x20'
+      - series: 'distant_signal_store_train_event_outbox_total{namespace="distant-signal", pod="w", outcome="applied"}'
+        values: '0+5x90'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: DistantSignalTrainEventOutboxRejected
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: DistantSignalTrainEventOutboxRejected
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: a deferred train event was refused for a data error
+              description: "1 in 1h, left in train_event_outbox with rejected_at: that subscription's change did not land."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaltraineventoutboxrejected
+  # Empty (0) until 5m; then the oldest pending row was created at 290s and
+  # stays: over 120s from 7m, fires from 8m. Another writer's empty outbox
+  # (0) never fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_train_event_outbox_oldest_pending_timestamp_seconds{namespace="distant-signal", pod="w"}'
+        values: '0x4 290x10'
+      - series: 'distant_signal_train_event_outbox_oldest_pending_timestamp_seconds{namespace="distant-signal", pod="w2"}'
+        values: '0x14'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DistantSignalTrainEventOutboxStuck
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: DistantSignalTrainEventOutboxStuck
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: train_event_outbox has a row waiting 4m 10s
+              description: "Over 120s: subscriptions are not resolving, cancelling or reopening, and their trains' movements wait behind them."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaltraineventoutboxstuck
+  # Rows applied within a tick: the timestamp moves forward each tick and
+  # drops to 0; never fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_train_event_outbox_oldest_pending_timestamp_seconds{namespace="distant-signal", pod="w"}'
+        values: '0 60 0 180 0 300 0 420 0 540 0'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalTrainEventOutboxStuck
+        exp_alerts: []

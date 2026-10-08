@@ -154,14 +154,28 @@ roles:
     used_by: schedule-ingest (CORPUS and feed markers)
   trust_backlog:
     name: distant_signal_trust_backlog
-    status: planned
+    # Plan 3b.2: narrow from creation (it never was a member of app). Used
+    # once trustBacklogConsumer.ingest.sink is db with
+    # postgresql.roles.perService.trust_backlog.connect. Beyond spec §6.4:
+    # SELECT on tiploc_crs and corpus_stanox_crs, which list_stanox_crs
+    # reads with the api's CORPUS fallback on (CORPUS_FALLBACK_ENABLED).
+    status: narrow
     phase: 3b
     groups: [schema_gate]
     connection_limit: 4
     used_by: trust-backlog-consumer
   trust_consumer:
     name: distant_signal_trust_consumer
-    status: planned
+    # Plan 3b.4: narrow from creation (it never was a member of app). Used
+    # once trustConsumer.ingest.sink is db with
+    # postgresql.roles.perService.trust_consumer.connect. Its reads (tracked
+    # trains, STANOX/CRS) stay on the api until phase 4. SELECT only on
+    # train_subscriptions (decided 2026-10-08): the events that update a
+    # subscription go into train_event_outbox, which the writer's loop
+    # applies (ds_store::tracking::outbox).
+    # SELECT only on trains too (decided 2026-10-08): creating and marking a
+    # train's row is part of a resolution, which the outbox path applies.
+    status: narrow
     phase: 3b
     groups: [schema_gate]
     connection_limit: 3
@@ -210,13 +224,17 @@ tables:
 
   # --- shared-train: trains and their movements, shared by users.
   # aggregator: SELECT ... FOR UPDATE OF t needs U or D (it has D).
-  trains: {class: shared-train, grants: {api: SIUD, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: SD, notifier: SIU}}
+  trains: {class: shared-train, grants: {api: SIUD, writer: SIU, trust_backlog: SIU, trust_consumer: S, aggregator: SD, notifier: SIU}}
   train_subscriptions: {class: shared-train, grants: {api: SIUD, writer: SU, trust_backlog: SU, trust_consumer: S, aggregator: S, notifier: SIU}}
   train_movement_events: {class: shared-train, grants: {api: S, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: S, notifier: S}}
   train_current_state: {class: shared-train, grants: {api: S, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: S, notifier: S}}
   trust_event_backlog: {class: shared-train, grants: {api: S, writer: SU, trust_backlog: SI, aggregator: SD}}
   train_reasons: {class: shared-train, grants: {api: S, trust_backlog: SIU}}
   notifier_forward_queue: {class: shared-train, grants: {api: S, writer: SI, trust_consumer: SI, notifier: S}}
+  # Plan 3b.3: trust-consumer's deferred subscription-changing events; the
+  # writer's train_event_outbox loop applies (SELECT ... FOR UPDATE) and
+  # deletes them, or marks one rejected.
+  train_event_outbox: {class: internal, grants: {api: S, trust_consumer: SI, writer: SUD}}
 
   # --- internal: one component's own state.
   notifier_cursor: {class: internal, grants: {notifier: SIU, api: S}}
@@ -255,7 +273,7 @@ tables:
   line_status_half_hourly_coverage_stats: {class: derived, grants: {api: S, aggregator: SIUD}}
   full_coverage_window_verdicts: {class: derived, grants: {api: S, aggregator: SIUD}}
   corpus_crosswalk_build: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD}}
-  corpus_stanox_crs: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD}}
+  corpus_stanox_crs: {class: derived, grants: {api: S, writer: SIUD, schedule_ingest: SIUD, trust_backlog: S}}
   # notifier: named in common::public_delay's SQL (corpus fallback off), so
   # Postgres checks SELECT even when the branch is unused.
   # schedule_reference: the line population's train summaries read it
@@ -267,7 +285,7 @@ tables:
   stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S, schedule_ingest: S}}
   tocs: {class: reference, grants: {api: S, writer: SIU}}
   stanox_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, trust_backlog: S, trust_consumer: S, full_coverage_ro: S, notifier: S}}
-  tiploc_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, notifier: S}}
+  tiploc_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, notifier: S, trust_backlog: S}}
   fixed_links: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD}}
   corpus_locations: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIUD}}
   corpus_deliveries: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIUD}}
@@ -322,6 +340,7 @@ sequences:
   train_movement_events_id_seq: {table: train_movement_events}
   trains_id_seq: {table: trains}
   trust_event_backlog_id_seq: {table: trust_event_backlog}
+  train_event_outbox_id_seq: {table: train_event_outbox}
 
 # Functions in schema public (extension members excluded), by signature.
 functions:

@@ -76,6 +76,16 @@ spec:
                   - {{ printf "poller-%s" $name }}
                   {{- end }}
                   {{- end }}
+                  {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_backlog") }}
+                  # trustBacklogConsumer.ingest.sink: db (plan 3b.1): the
+                  # TRUST backlog written directly.
+                  - trust-backlog-consumer
+                  {{- end }}
+                  {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer") }}
+                  # trustConsumer.ingest.sink: db (plan 3b.3, D1): train
+                  # events and forward signals written directly.
+                  - trust-consumer
+                  {{- end }}
         {{- with .Values.networkPolicy.postgresClients }}
         # networkPolicy.postgresClients: workloads outside this chart, e.g.
         # a postgres-exporter or a pg_dump backup CronJob.
@@ -410,12 +420,24 @@ rule is IP-based, so this only opens their ports, not their hosts. */}}
 {{- $enricherUrls = append $enricherUrls .Values.enricher.llm.workloadIdentity.authentik.tokenUrl }}
 {{- end }}
 {{- end }}
+{{- /* Phase 3b: a TRUST consumer on ingest.sink db calls Postgres.
+trust-backlog-consumer then calls nothing on the api (its STANOX/CRS reload
+reads Postgres too); trust-consumer still reads tracked trains and STANOX/CRS
+from it until phase 4. */}}
+{{- $trustConsumerEgress := $queueWorker }}
+{{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer") }}
+{{- $trustConsumerEgress = dict "api" true "redis" true "postgres" true }}
+{{- end }}
+{{- $trustBacklogEgress := $queueWorker }}
+{{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_backlog") }}
+{{- $trustBacklogEgress = dict "redis" true "postgres" true }}
+{{- end }}
 {{- $workers := list
   (dict "component" "aggregator" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true) "internet" .Values.archive.enabled "urls" (list (.Values.archive.s3.endpoint | default "https://s3.amazonaws.com")))
   (dict "component" "enricher" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true "redis" true) "urls" $enricherUrls)
   (dict "component" "notifier" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true))
-  (dict "component" "trust-consumer" "metricsPort" .Values.trustConsumer.metricsPort "healthPorts" (list .Values.trustConsumer.healthPort) "egress" $queueWorker "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
-  (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $queueWorker "urls" $token)
+  (dict "component" "trust-consumer" "metricsPort" .Values.trustConsumer.metricsPort "healthPorts" (list .Values.trustConsumer.healthPort) "egress" $trustConsumerEgress "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
+  (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $trustBacklogEgress "urls" $token)
   (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $queueWorker "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
 }}
 {{- if .Values.ingestWriter.enabled }}

@@ -90,6 +90,27 @@ tests:
               summary: trust-consumer keeps failing its calls to api
               description: "5 failed api calls in 5m, for 10m: its data is not landing. Check api and the consumer's log."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
+  # Ingest plan 3b.2: under ingest.sink db the direct writes count too.
+  # trust-backlog-consumer's db_write fails once a minute from 5m (fires
+  # after 10m of it); trust-consumer's db_write fails for only 4 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_trust_backlog_consumer_errors_total{namespace="distant-signal", pod="tbc", operation="db_write"}'
+        values: '0x5 1+1x40'
+      - series: 'distant_signal_trust_consumer_errors_total{namespace="distant-signal", pod="tc", operation="db_write"}'
+        values: '0x5 0+30x4 120x36'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DistantSignalConsumerApiCallsFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalConsumerApiCallsFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, consumer: trust-backlog-consumer}
+            exp_annotations:
+              summary: trust-backlog-consumer keeps failing its calls to api
+              description: "5 failed api calls in 5m, for 10m: its data is not landing. Check api and the consumer's log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
   # The aggregator's last success stops at 600s (10m); 15m later it fires.
   # The notifier's line_status loop is healthy; its hourly template_sweep
   # is old but left out; its skip_check loop never succeeded after a start

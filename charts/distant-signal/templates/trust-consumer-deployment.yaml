@@ -101,6 +101,18 @@ with trustConsumer.extraEnv, which replaces an entry of the same name.
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/train-forward-signals" | quote }}
             - name: API_TRACKED_TRAINS_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/tracked-trains" | quote }}
+            {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer") }}
+            # trustConsumer.ingest.sink: db (ingest architecture plan 3b.3,
+            # D1): train events and forward signals go to Postgres directly
+            # instead of API_INGEST_URL and FORWARD_SIGNALS_URL, as the app
+            # role or, with postgresql.roles.perService.trust_consumer.connect,
+            # its own. The tracked-trains and STANOX/CRS reads stay on the api.
+            - name: INGEST_SINK
+              value: "db"
+            {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "trust_consumer") | nindent 12 }}
+            - name: DATABASE_MAX_CONNECTIONS
+              value: {{ .Values.trustConsumer.ingest.database.maxConnections | int | quote }}
+            {{- end }}
             - name: INTERNAL_OAUTH_TOKEN_URL
               value: {{ .Values.internalOauth.tokenUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID

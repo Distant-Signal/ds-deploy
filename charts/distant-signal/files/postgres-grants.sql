@@ -11,7 +11,7 @@
 --     -f postgres-grants.sql
 --
 -- Passwords come from the environment (psql's \getenv), one per created
--- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_REFERENCE_PASSWORD, DS_PG_STATIONS_PASSWORD, DS_PG_INCIDENTS_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD.
+-- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_REFERENCE_PASSWORD, DS_PG_STATIONS_PASSWORD, DS_PG_INCIDENTS_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD, DS_PG_TRUST_BACKLOG_PASSWORD, DS_PG_TRUST_CONSUMER_PASSWORD.
 --
 -- In ONE transaction:
 --   1. the group roles (NOLOGIN) and every role whose status is not
@@ -110,6 +110,22 @@
 \else
 \set schedule_ingest_connection_limit 2
 \endif
+\if :{?trust_backlog}
+\else
+\set trust_backlog distant_signal_trust_backlog
+\endif
+\if :{?trust_backlog_connection_limit}
+\else
+\set trust_backlog_connection_limit 4
+\endif
+\if :{?trust_consumer}
+\else
+\set trust_consumer distant_signal_trust_consumer
+\endif
+\if :{?trust_consumer_connection_limit}
+\else
+\set trust_consumer_connection_limit 3
+\endif
 \getenv api_password DS_PG_API_PASSWORD
 \if :{?api_password}
 \else
@@ -155,6 +171,16 @@
 \else
 \set schedule_ingest_password ''
 \endif
+\getenv trust_backlog_password DS_PG_TRUST_BACKLOG_PASSWORD
+\if :{?trust_backlog_password}
+\else
+\set trust_backlog_password ''
+\endif
+\getenv trust_consumer_password DS_PG_TRUST_CONSUMER_PASSWORD
+\if :{?trust_consumer_password}
+\else
+\set trust_consumer_password ''
+\endif
 
 BEGIN;
 
@@ -189,7 +215,13 @@ SELECT
     set_config('ds_grants.incidents_connection_limit', :'incidents_connection_limit', true),
     set_config('ds_grants.schedule_ingest', :'schedule_ingest', true),
     set_config('ds_grants.schedule_ingest_password', :'schedule_ingest_password', true),
-    set_config('ds_grants.schedule_ingest_connection_limit', :'schedule_ingest_connection_limit', true)
+    set_config('ds_grants.schedule_ingest_connection_limit', :'schedule_ingest_connection_limit', true),
+    set_config('ds_grants.trust_backlog', :'trust_backlog', true),
+    set_config('ds_grants.trust_backlog_password', :'trust_backlog_password', true),
+    set_config('ds_grants.trust_backlog_connection_limit', :'trust_backlog_connection_limit', true),
+    set_config('ds_grants.trust_consumer', :'trust_consumer', true),
+    set_config('ds_grants.trust_consumer_password', :'trust_consumer_password', true),
+    set_config('ds_grants.trust_consumer_connection_limit', :'trust_consumer_connection_limit', true)
 \gset ignored_
 
 -- 1. Roles.
@@ -243,7 +275,9 @@ BEGIN
         ('schedule_reference', 'narrow'),
         ('stations', 'narrow'),
         ('incidents', 'narrow'),
-        ('schedule_ingest', 'narrow')) AS v(kind, status)
+        ('schedule_ingest', 'narrow'),
+        ('trust_backlog', 'narrow'),
+        ('trust_consumer', 'narrow')) AS v(kind, status)
     LOOP
         IF r.name = app OR r.name = current_user OR r.name = ANY (seen) THEN
             RAISE EXCEPTION 'the % role name % must be a new, separate role',
@@ -292,7 +326,9 @@ BEGIN
         ('schedule_reference', 'narrow'),
         ('stations', 'narrow'),
         ('incidents', 'narrow'),
-        ('schedule_ingest', 'narrow')) AS v(kind, status)
+        ('schedule_ingest', 'narrow'),
+        ('trust_backlog', 'narrow'),
+        ('trust_consumer', 'narrow')) AS v(kind, status)
     LOOP
         member_oid := (SELECT oid FROM pg_roles WHERE rolname = r.name);
         IF r.status = 'observed' AND NOT EXISTS (
@@ -324,7 +360,9 @@ BEGIN
         ('schedule_reference', 'schema_gate'),
         ('stations', 'schema_gate'),
         ('incidents', 'schema_gate'),
-        ('schedule_ingest', 'schema_gate')) AS v(kind, grp)
+        ('schedule_ingest', 'schema_gate'),
+        ('trust_backlog', 'schema_gate'),
+        ('trust_consumer', 'schema_gate')) AS v(kind, grp)
     LOOP
         IF NOT EXISTS (
             SELECT 1 FROM pg_auth_members
@@ -358,7 +396,9 @@ BEGIN
         ('schedule_reference'),
         ('stations'),
         ('incidents'),
-        ('schedule_ingest')) AS v(kind)
+        ('schedule_ingest'),
+        ('trust_backlog'),
+        ('trust_consumer')) AS v(kind)
     LOOP
         EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', grantee);
         EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM %I', grantee);
@@ -427,6 +467,34 @@ BEGIN
         SELECT v.tbl, current_setting('ds_grants.' || v.kind) AS grantee,
                v.priv, v.cols
         FROM (VALUES
+        ('trains', 'trust_backlog', 'SELECT', ''),
+        ('trains', 'trust_backlog', 'INSERT', ''),
+        ('trains', 'trust_backlog', 'UPDATE', ''),
+        ('trains', 'trust_consumer', 'SELECT', ''),
+        ('train_subscriptions', 'trust_backlog', 'SELECT', ''),
+        ('train_subscriptions', 'trust_backlog', 'UPDATE', ''),
+        ('train_subscriptions', 'trust_consumer', 'SELECT', ''),
+        ('train_movement_events', 'trust_backlog', 'SELECT', ''),
+        ('train_movement_events', 'trust_backlog', 'INSERT', ''),
+        ('train_movement_events', 'trust_backlog', 'UPDATE', ''),
+        ('train_movement_events', 'trust_consumer', 'SELECT', ''),
+        ('train_movement_events', 'trust_consumer', 'INSERT', ''),
+        ('train_movement_events', 'trust_consumer', 'UPDATE', ''),
+        ('train_current_state', 'trust_backlog', 'SELECT', ''),
+        ('train_current_state', 'trust_backlog', 'INSERT', ''),
+        ('train_current_state', 'trust_backlog', 'UPDATE', ''),
+        ('train_current_state', 'trust_consumer', 'SELECT', ''),
+        ('train_current_state', 'trust_consumer', 'INSERT', ''),
+        ('train_current_state', 'trust_consumer', 'UPDATE', ''),
+        ('trust_event_backlog', 'trust_backlog', 'SELECT', ''),
+        ('trust_event_backlog', 'trust_backlog', 'INSERT', ''),
+        ('train_reasons', 'trust_backlog', 'SELECT', ''),
+        ('train_reasons', 'trust_backlog', 'INSERT', ''),
+        ('train_reasons', 'trust_backlog', 'UPDATE', ''),
+        ('notifier_forward_queue', 'trust_consumer', 'SELECT', ''),
+        ('notifier_forward_queue', 'trust_consumer', 'INSERT', ''),
+        ('train_event_outbox', 'trust_consumer', 'SELECT', ''),
+        ('train_event_outbox', 'trust_consumer', 'INSERT', ''),
         ('schedule_calling_points_full_publish_keys', 'schedule_reference', 'SELECT', ''),
         ('schedule_calling_points_full_publish_keys', 'schedule_reference', 'INSERT', ''),
         ('schedule_calling_points_full_publish_keys', 'schedule_reference', 'DELETE', ''),
@@ -455,6 +523,7 @@ BEGIN
         ('corpus_stanox_crs', 'schedule_ingest', 'INSERT', ''),
         ('corpus_stanox_crs', 'schedule_ingest', 'UPDATE', ''),
         ('corpus_stanox_crs', 'schedule_ingest', 'DELETE', ''),
+        ('corpus_stanox_crs', 'trust_backlog', 'SELECT', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'SELECT', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'INSERT', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'UPDATE', ''),
@@ -469,10 +538,13 @@ BEGIN
         ('stanox_crs', 'schedule_reference', 'INSERT', ''),
         ('stanox_crs', 'schedule_reference', 'UPDATE', ''),
         ('stanox_crs', 'schedule_reference', 'DELETE', ''),
+        ('stanox_crs', 'trust_backlog', 'SELECT', ''),
+        ('stanox_crs', 'trust_consumer', 'SELECT', ''),
         ('tiploc_crs', 'schedule_reference', 'SELECT', ''),
         ('tiploc_crs', 'schedule_reference', 'INSERT', ''),
         ('tiploc_crs', 'schedule_reference', 'UPDATE', ''),
         ('tiploc_crs', 'schedule_reference', 'DELETE', ''),
+        ('tiploc_crs', 'trust_backlog', 'SELECT', ''),
         ('fixed_links', 'schedule_reference', 'SELECT', ''),
         ('fixed_links', 'schedule_reference', 'INSERT', ''),
         ('fixed_links', 'schedule_reference', 'UPDATE', ''),
@@ -532,6 +604,14 @@ BEGIN
     FOR r IN
         SELECT v.seq, current_setting('ds_grants.' || v.kind) AS grantee
         FROM (VALUES
+        ('trains_id_seq', 'trust_backlog'),
+        ('train_movement_events_id_seq', 'trust_backlog'),
+        ('train_movement_events_id_seq', 'trust_consumer'),
+        ('train_current_state_id_seq', 'trust_backlog'),
+        ('train_current_state_id_seq', 'trust_consumer'),
+        ('trust_event_backlog_id_seq', 'trust_backlog'),
+        ('notifier_forward_queue_id_seq', 'trust_consumer'),
+        ('train_event_outbox_id_seq', 'trust_consumer'),
         ('incident_history_id_seq', 'incidents'),
         ('fixed_links_id_seq', 'schedule_reference'),
         ('corpus_locations_id_seq', 'schedule_ingest')) AS v(seq, kind)

@@ -110,6 +110,22 @@ with trustBacklogConsumer.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.trustBacklogConsumer.redisGapCheckSecs | quote }}
             - name: API_INGEST_URL
               value: {{ printf "%s/private/trust-event-backlog" (include "distant-signal.apiBaseUrl" .) | quote }}
+            {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_backlog") }}
+            # trustBacklogConsumer.ingest.sink: db (ingest architecture plan
+            # 3b.1): the backlog events and reason codes go to Postgres
+            # directly, and STANOX/CRS is read from it, instead of the api's
+            # routes, as the app role or, with
+            # postgresql.roles.perService.trust_backlog.connect, its own.
+            - name: INGEST_SINK
+              value: "db"
+            {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "trust_backlog") | nindent 12 }}
+            - name: DATABASE_MAX_CONNECTIONS
+              value: {{ .Values.trustBacklogConsumer.ingest.database.maxConnections | int | quote }}
+            # The api's CORPUS fallback (api.corpusFallback), so the
+            # STANOX/CRS reload returns what GET /private/stanox-crs does.
+            - name: CORPUS_FALLBACK_ENABLED
+              value: {{ .Values.api.corpusFallback.enabled | toString | quote }}
+            {{- end }}
             - name: STANOX_CRS_URL
               value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: STANOX_CRS_RELOAD_SECS

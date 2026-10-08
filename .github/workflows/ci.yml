@@ -428,6 +428,12 @@ jobs:
       - name: cargo test -p schedule-ingest sink::db_tests -- --ignored (DB-backed tests)
         run: cargo test -p schedule-ingest sink::db_tests -- --ignored --test-threads=1
 
+      # Ingest architecture plan 3b: the TRUST consumers' direct DB sinks
+      # (INGEST_SINK=db), parity with the api's routes, and their schema
+      # gates. They run again as their narrow roles in the per-service step.
+      - name: cargo test -p trust-backlog-consumer -p trust-consumer -- --ignored (DB-backed tests)
+        run: cargo test -p trust-backlog-consumer -p trust-consumer -- --ignored --test-threads=1
+
       # Ingest architecture phase 3a: the stream runtime (produce/consume,
       # reclaim, dead letters, retries, MAXLEN, the producer policies while
       # Redis is down, and the poller-ldbws / ingest-writer ACL users).
@@ -475,6 +481,9 @@ jobs:
       # cannot DELETE the test stations it leaves behind. poller-incidents
       # runs as its narrow role (plan 2c.3) too, cleaning up through
       # MIGRATION_DATABASE_URL (the owner) since the role has no DELETE.
+      # The TRUST consumers (plan 3b) run as their narrow roles; their
+      # fixtures (users, subscriptions) go through DATABASE_URL_API, and
+      # their tests delete nothing they need.
       - name: DB-backed tests as each service's own role (Stage 0b)
         run: |
           # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
@@ -488,6 +497,8 @@ jobs:
             DATABASE_URL="$DATABASE_URL_SCHEDULE_INGEST" cargo test -p schedule-ingest sink::db_tests -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_SCHEDULE_REFERENCE" cargo test -p schedule-reference -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_ENRICHER" cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_TRUST_BACKLOG" cargo test -p trust-backlog-consumer -- --ignored --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_TRUST_CONSUMER" cargo test -p trust-consumer -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_INCIDENTS" cargo test -p poller-incidents -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_STATIONS" cargo test -p poller-stations -- --ignored --test-threads=1'
 
