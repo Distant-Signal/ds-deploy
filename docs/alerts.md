@@ -219,6 +219,26 @@ movement-events stream's MAXLEN or a poller's retry budget runs out. See
 [DistantSignalConsumerApiCallsFailing](#distantsignalconsumerapicallsfailing)
 for the consumers' view and the same first steps as above.
 
+### DistantSignalApiPrivateRouteRetiredCalled
+
+Renders only while `api.privateRoutes.enabled` is false
+(`API_PRIVATE_ROUTES=false`), the soak of ingest phase 5 step 5.1
+([runbook](ingest-phase5-runbook.md#51-api_private_routes-and-the-7-day-soak)).
+The api then answers every `/private/*` request with a 404 and counts it in
+`distant_signal_api_private_route_retired_total{route, method}`; this fires
+on any increase of a known route within `window` (15m).
+
+1. `route` and `method` name the pair that was called. Calls to a path or
+   method the old route table never had (a scanner through the Ingress, a
+   typo) are counted as `route="other"` but never alert; query the counter
+   to see them.
+2. For a real pair, find the caller: api logs `call to a retired /private
+   route` with `caller`, the verified `sub` of its internal OAuth bearer
+   (`none` without one). Check that producer's deployed `INGEST_SINK` /
+   `*_SOURCE` (runbook §1.3 C).
+3. To restore service at once, set `api.privateRoutes.enabled: true`; the
+   soak then restarts its 7 days once the producer is moved.
+
 ### Querying api request metrics
 
 - The route is the `exported_endpoint` label, not `endpoint`:
@@ -1059,7 +1079,7 @@ previous delivery. The ingest container's error log names the reason.
 ### DistantSignalCorpusStale
 
 The newest loaded Network Rail CORPUS extract was delivered over
-`corpusStaleAfterDays` ago (`api_corpus_last_delivered_at_seconds`). CORPUS is
+`corpusStaleAfterDays` ago (`api_corpus_last_delivered_at_seconds`, or `store_…` after the phase 5 rename). CORPUS is
 published monthly. Either RDM stopped pushing it (check the SFTP corpus
 folder) or schedule-ingest cannot load it (check
 [DistantSignalCorpusRejected](#distantsignalcorpusrejected) and the ingest
@@ -1277,7 +1297,7 @@ the alert clears once api stops listing it or LDBWS accepts it.
 Over the last window (2h, 24 polls), api applied its "Ended (no longer
 listed)" inference to no incidents snapshot, and skipped at least one as
 `incomplete`, `empty` or a `shrink`
-(`api_incident_removal_inference_total{outcome}`; `too_soon` and
+(`api_incident_removal_inference_total{outcome}`, or `store_…` after the phase 5 rename; `too_soon` and
 `no_baseline` skips are benign and not counted). While this lasts,
 an incident that leaves the Knowledgebase feed without RDM clearing it stays
 "active" on the archive and in line status, the bug the inference exists to

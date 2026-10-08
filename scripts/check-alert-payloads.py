@@ -96,6 +96,9 @@ RENDER_FLAGS = [
     "api.sso.redirectUrl=https://app.example.com/callback",
     "api.sso.postLoginRedirectUrl=https://app.example.com/",
     "metrics.prometheusRule.enabled=true",
+    # Retired /private routes, for DistantSignalApiPrivateRouteRetiredCalled
+    # (ingest phase 5, step 5.1). Off by default.
+    "api.privateRoutes.enabled=false",
     "pollers.ldbws.enabled=true",
     "pollers.ldbws.baseUrl=https://ldbws.example.com",
     "pollers.incidents.enabled=true",

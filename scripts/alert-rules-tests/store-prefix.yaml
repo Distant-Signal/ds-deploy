@@ -1,0 +1,64 @@
+# promtool unit tests: the alerts that read ds-store's metrics take both
+# the api_ name (emitted today) and the store_ name (after the phase 5
+# rename, Q1 of docs/ingest-phase5-runbook.md). See recorded-alerts.yaml's
+# header for how rules.yaml is rendered.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # DistantSignalIncidentRemovalStalled from store_ alone: a renamed
+  # poller-incidents counts incomplete snapshots while the api's old api_
+  # series sits at 0. Fires once `for` (15m) has passed.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="incomplete"}'
+        values: '0+1x60'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="applied"}'
+        values: '0x60'
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="applied"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DistantSignalIncidentRemovalStalled
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: no incident snapshot fit to infer ended incidents in 2h
+              description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents and api logs."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalincidentremovalstalled
+
+  # Mixed: api_ incomplete, store_ applied in the same window. The applied
+  # count under the other name suppresses the alert; so does every
+  # snapshot counting under store_ for DistantSignalIncidentSnapshotsMissing.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="incomplete"}'
+        values: '0+1x200'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="applied"}'
+        values: '0+1x200'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: DistantSignalIncidentRemovalStalled
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: DistantSignalIncidentSnapshotsMissing
+        exp_alerts: []
+
+  # DistantSignalCorpusStale from the store_ gauge: the last delivery was
+  # loaded 50 days before the test starts (default corpusStaleAfterDays 45).
+  # The api's old api_ gauge is absent. Fires after `for` (1h).
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_store_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="schedulefeed"}'
+        values: '-4320000x90'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DistantSignalCorpusStale
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: DistantSignalCorpusStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: no CORPUS delivery loaded for 45 days
+              description: "CORPUS is monthly: RDM stopped pushing it, or schedule-ingest cannot load it. The previous extract stays in use."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusstale

@@ -305,9 +305,13 @@ tables:
   # row_policies below (plan 3c.3, D10).
   line_status: {class: ingest, grants: {api: S, writer: SIUD, aggregator: SIUD}}
   line_status_history: {class: ingest, grants: {api: S, writer: SI, aggregator: SID, notifier: S}}
-  # enricher: UPDATE only on its extraction columns once narrowed (phase 5;
-  # the column list comes from the 0b report).
-  incidents: {class: ingest, grants: {api: S, incidents: SIU, enricher: SU, aggregator: S}}
+  # enricher: SELECT on the table, UPDATE only on its extraction columns
+  # (Q3 of docs/ingest-phase5-runbook.md): the columns its two UPDATEs set
+  # (crates/enricher/src/queries.rs write_extraction and
+  # carry_forward_extraction). The target; no effect while the enricher is
+  # observed (a member of app, so it still holds table-wide UPDATE) until
+  # 5.5 narrows it. Confirm the list against the 0b report first.
+  incidents: {class: ingest, grants: {api: S, incidents: SIU, aggregator: S, enricher: [S, {privileges: U, columns: [source_text_hash, extracted_category, extracted_periods, extraction_model_version, extracted_at]}]}}
   incident_history: {class: ingest, grants: {api: S, incidents: SI, enricher: S}}
   incident_feed_state: {class: ingest, grants: {api: S, incidents: SIU}}
   ingest_freshness: {class: ingest, grants: {api: S, writer: SIU, stations: SIU, incidents: SIU}}
@@ -349,9 +353,10 @@ tables:
   # Each line population's slim per-train summary (2026-10-08), written in
   # the same transaction as schedule_line_population (the api's ingest
   # endpoint until phase 2a), read by the api's line pages; the aggregator
-  # prunes old dates. The one-off backfill_line_train_summaries binary runs
-  # in the api pod and writes with its credentials: run it before the api
-  # role is narrowed, or move it with the writer.
+  # prunes old dates. The one-off backfill is `ds-migrate
+  # backfill-line-train-summaries`, as the schema owner (phase 5 prep, Q2);
+  # the api image's deprecated backfill_line_train_summaries binary, which
+  # writes with the api's credentials, goes in step 5.4b.
   line_train_summaries: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
   # Each schedule's vehicle (train, bus, ferry) per service date, published
   # by schedule-reference (through the api's ingest endpoint until phase

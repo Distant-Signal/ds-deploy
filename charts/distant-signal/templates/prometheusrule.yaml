@@ -54,12 +54,13 @@ so that clause fired on every rollout.
 {{- $archiveExpiryOn := and ($rule.archiveExpiry).enabled .Values.archive.enabled (.Values.archive.expiry).enabled }}
 {{- $postgresDownOn := ($rule.postgresDown).enabled }}
 {{- $apiDbDownOn := ($rule.apiDatabaseDown).enabled }}
+{{- $privateRetiredOn := and ($rule.apiPrivateRouteRetired).enabled (not (dig "privateRoutes" "enabled" true .Values.api)) }}
 {{- $consumerApiOn := ($rule.consumerApiErrors).enabled }}
 {{- $cyclesOn := ($rule.cycleStalled).enabled }}
 {{- $api5xxOn := ($rule.api5xx).enabled }}
 {{- $schemaGateOn := ($rule.schemaGateWaiting).enabled }}
 {{- $imagePullOn := and ($rule.statefulImagePull).enabled (or .Values.postgresql.enabled .Values.redis.enabled) }}
-{{- $healthOn := or $postgresDownOn $apiDbDownOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
+{{- $healthOn := or $postgresDownOn $apiDbDownOn $privateRetiredOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
 {{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled ($rule.ingestShadowMismatch).enabled) }}
@@ -192,6 +193,32 @@ spec:
             summary: "api cannot query its database"
             description: "api's SELECT 1 probe has failed for {{ .for }}: ingest and most pages fail. See DistantSignalPostgresDown and api's log."
             runbook_url: {{ printf "%s#distantsignalapidatabasedown" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if $privateRetiredOn }}
+        {{- with $rule.apiPrivateRouteRetired }}
+        {{- /*
+        Ingest phase 5, step 5.1 (docs/ingest-phase5-runbook.md): with
+        api.privateRoutes.enabled false the api answers every /private/*
+        request with a counted 404 (api::private_retired). Any call is a
+        producer still on its HTTP sink (route = the pair it called) or a
+        stray (route="other": a scanner through the Ingress, a typo). Only
+        known pairs alert (decided 2026-10-08); `other` is still counted.
+        Registered at 0, so a first call counts.
+        */}}
+        - alert: DistantSignalApiPrivateRouteRetiredCalled
+          expr: |
+            sum by (namespace, route, method) (increase(distant_signal_api_private_route_retired_total{namespace="{{ $ns }}", route!="other"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Something still calls retired {{ "{{ $labels.method }} {{ $labels.route }}" }}"
+            description: "API_PRIVATE_ROUTES is false and this answered 404. A producer may still be on its HTTP sink: check api's log for the caller."
+            runbook_url: {{ printf "%s#distantsignalapiprivaterouteretiredcalled" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.schemaGateWaiting }}
@@ -1755,12 +1782,15 @@ spec:
         first load, so a freshly enabled install waiting for its first
         delivery does not fire. Renders only while CORPUS ingest is on, so
         a disabled feature (whose old deliveries still set the gauge) never
-        alerts.
+        alerts. Reads the gauge under both prefixes (Q1 of
+        docs/ingest-phase5-runbook.md): ds-store emits api_ today and will
+        emit store_ after the phase 5 rename; `max` over the regex takes
+        whichever process set it.
         */}}
         {{- if ($.Values.scheduleFeed.corpus).enabled }}
         - alert: DistantSignalCorpusStale
           expr: |
-            time() - max by (namespace) (distant_signal_api_corpus_last_delivered_at_seconds{namespace="{{ $ns }}"}) > {{ mul (int .corpusStaleAfterDays) 86400 }}
+            time() - max by (namespace) ({__name__=~"distant_signal_(api|store)_corpus_last_delivered_at_seconds", namespace="{{ $ns }}"}) > {{ mul (int .corpusStaleAfterDays) 86400 }}
           for: 1h
           labels:
             severity: {{ .severity }}
@@ -2207,10 +2237,13 @@ spec:
         pollers.incidents.ingest.sink db, plan 2c.2) at startup. too_soon and
         no_baseline are benign and not counted. The per-outcome increase is
         a recording rule to keep the alert's expr (and so its webhook) short.
+        Summed over both prefixes (api_ today, store_ after the phase 5
+        rename, Q1), as one sum rather than `A or B`: both are counters
+        registered at 0, so `or` would always pick one and miss the other.
         */}}
         - record: distant_signal:incident_removal_inference:increase
           expr: |
-            sum by (namespace, outcome) (increase(distant_signal_api_incident_removal_inference_total{namespace="{{ $ns }}"}[{{ .window }}]))
+            sum by (namespace, outcome) (increase({__name__=~"distant_signal_(api|store)_incident_removal_inference_total", namespace="{{ $ns }}"}[{{ .window }}]))
         - alert: DistantSignalIncidentRemovalStalled
           expr: |
             sum by (namespace) (distant_signal:incident_removal_inference:increase{namespace="{{ $ns }}", outcome=~"incomplete|empty|shrink"}) > 0
@@ -2238,11 +2271,12 @@ spec:
         Both register every outcome at 0 at startup (the api always, with
         metrics on), so with the poller on the sum is a real 0 when no
         snapshot lands; with neither process scraped there is no series
-        and nothing fires.
+        and nothing fires. Both prefixes count (api_ today, store_ after the
+        phase 5 rename, Q1).
         */}}
         - alert: DistantSignalIncidentSnapshotsMissing
           expr: |
-            sum by (namespace) (increase(distant_signal_api_incident_removal_inference_total{namespace="{{ $ns }}"}[{{ .window }}])) == 0
+            sum by (namespace) (increase({__name__=~"distant_signal_(api|store)_incident_removal_inference_total", namespace="{{ $ns }}"}[{{ .window }}])) == 0
           for: {{ .for }}
           labels:
             severity: {{ .severity }}

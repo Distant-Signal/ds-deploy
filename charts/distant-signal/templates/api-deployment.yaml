@@ -383,6 +383,10 @@ with api.extraEnv, which replaces an entry of the same name.
             # api.tripPlanGraphCache in values.yaml.
             - name: API_REQUEST_TIMEOUT_SECS
               value: {{ .Values.api.timeouts.requestTimeoutSecs | quote }}
+            # Ingest phase 5, step 5.1: false retires /private/* behind a
+            # counted 404; see api.privateRoutes.
+            - name: API_PRIVATE_ROUTES
+              value: {{ dig "privateRoutes" "enabled" true .Values.api | toString | quote }}
             - name: API_PRIVATE_REQUEST_TIMEOUT_SECS
               value: {{ .Values.api.timeouts.privateRequestTimeoutSecs | quote }}
             - name: API_HEADER_READ_TIMEOUT_SECS

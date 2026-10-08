@@ -1608,6 +1608,17 @@ api:
       # IP). Empty turns the feature off (any bearer is then ignored). Must
       # differ from every group above; api refuses to start otherwise.
       mcp: srv-ds-mcp
+  # -- Ingest phase 5, step 5.1 (docs/ingest-phase5-runbook.md;
+  # API_PRIVATE_ROUTES). On by default: the /private/* ingest routes are
+  # served as before. false retires them for the phase 5 soak: every
+  # /private/* request answers 404 and is counted in
+  # distant_signal_api_private_route_retired_total{route,method}, and the
+  # DistantSignalApiPrivateRouteRetiredCalled alert fires when a known
+  # route's count rises (route="other" is counted, not alerted).
+  # Set false only once every producer runs on its db/stream sink (the
+  # runbook's entry criteria); rolling back is setting it true again.
+  privateRoutes:
+    enabled: true
   # -- Network Rail CORPUS as a FALLBACK for the timetable-derived
   # TIPLOC/STANOX->CRS lookups (CORPUS_FALLBACK_ENABLED; see
   # crates/api/src/data/corpus_crosswalk.rs). OFF by default. When on, a
@@ -4984,6 +4995,17 @@ metrics:
       enabled: true
       for: 2m
       severity: critical
+    # DistantSignalApiPrivateRouteRetiredCalled (ingest phase 5, step 5.1):
+    # with api.privateRoutes.enabled false, something called a retired
+    # /private/* route (distant_signal_api_private_route_retired_total rose
+    # within `window` for a known route; route="other" is counted, never
+    # alerted). Renders only while the routes are retired.
+    # Runbook: docs/alerts.md.
+    apiPrivateRouteRetired:
+      enabled: true
+      window: 15m
+      for: 0m
+      severity: warning
     # DistantSignalSchemaGateWaiting (critical; ingest spec §14.2): a
     # service's schema gate (distant_signal_db_schema_ready) has been 0 for
     # `for`: the database lacks the newest migration in its image, or its
