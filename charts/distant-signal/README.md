@@ -1244,10 +1244,10 @@ subscription key from `TFL_APP_KEY` rather than `RDM_API_KEY`.
 The three island-of-Ireland pollers (`pollerIrishRailGtfs`,
 `pollerIrishRailLive`, `pollerNirStations`) are separate top-level values,
 also off by default, with working public default URLs; see their comments
-in `values.yaml`. Each also needs its api-side group,
-`api.internalOauth.groups.irishRailGtfs` / `irishRailLive` / `nirStations`,
-which is empty by default (no such Authentik group exists until you create
-one); enabling one of these pollers with its group empty aborts the render.
+in `values.yaml`. Since ingest plan 3c.2 (decision D8) they write only to
+the `ds:ingest:island-of-ireland` Redis stream, which the ingest-writer
+applies (`ingestWriter.streams.island-of-ireland: apply`); they no longer
+call the api, so they need no OAuth credential or api-side group.
 
 Enabling a poller without setting its `baseUrl` **aborts the render** with an
 explicit message, rather than deploying a pod that cannot work.
@@ -1679,9 +1679,9 @@ Used only when `postgresql.enabled` is `false`.
 | `api.internalOauth.groups.scheduleReference` | `svc-schedule-reference` | Required Authentik group for schedule-reference (also accepted on `POST /private/stanox-crs`). Not secret. |
 | `api.internalOauth.groups.fullCoverage` | `svc-full-coverage-consumer` | Required Authentik group for full-coverage-consumer. Not secret. |
 | `api.internalOauth.groups.trustBacklog` | `svc-trust-backlog-consumer` | Required Authentik group for trust-backlog-consumer. Not secret. |
-| `api.internalOauth.groups.irishRailGtfs` | `""` | Authentik group for the Irish Rail GTFS poller. Empty (the default) closes its api routes; required when `pollerIrishRailGtfs.enabled`. Not secret. |
-| `api.internalOauth.groups.irishRailLive` | `""` | Authentik group for the Irish Rail realtime poller. Empty (the default) closes its api route; required when `pollerIrishRailLive.enabled`. Not secret. |
-| `api.internalOauth.groups.nirStations` | `""` | Authentik group for the NIR stations poller. Empty (the default) closes its api routes; required when `pollerNirStations.enabled`. Not secret. |
+| `api.internalOauth.groups.irishRailGtfs` | `""` | Authentik group for the Irish Rail GTFS poller's former api routes. Since ingest plan 3c.2 the poller writes only to its stream, so nothing needs it; the routes go in phase 5. Not secret. |
+| `api.internalOauth.groups.irishRailLive` | `""` | Authentik group for the Irish Rail realtime poller's former api routes. Since ingest plan 3c.2 the poller writes only to its stream, so nothing needs it; the routes go in phase 5. Not secret. |
+| `api.internalOauth.groups.nirStations` | `""` | Authentik group for the NIR stations poller's former api routes. Since ingest plan 3c.2 the poller writes only to its stream, so nothing needs it; the routes go in phase 5. Not secret. |
 | `api.internalOauth.groups.corpus` | `svc-corpus-ingest` | Required Authentik group on `POST /private/corpus-locations` (Network Rail CORPUS loads). Add the schedule-ingest service account to it before setting `scheduleFeed.corpus.enabled`. Not secret. |
 | `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account. Opens no `/private/*` route: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. Must differ from every other group (api refuses to start otherwise). See "Distant-Signal-MCP as a service caller" below. |
 | `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). `/private/*` is never limited. |
@@ -1917,6 +1917,7 @@ twice.
 | `notifier.cooldownMinutes` | `20` | How long a de-escalation or lateral line notification is suppressed after the last one sent to the same user for the same line. |
 | `notifier.trainDelayThresholdMinutes` | `15` | Delay, in minutes, at or above which a tracked train's delay is worth a notification. |
 | `notifier.cursorGraceSeconds` | `120` | How long a cursor watermark proposal must age before it is promoted to the cursor's `last_processed_id`. |
+| `notifier.lineHistoryMaxAgeSeconds` | `900` | Line-status history rows whose `computed_at` is older than this are skipped, not pushed (`LINE_HISTORY_MAX_AGE_SECS`, ingest plan 3c.4, D13): the cursor moves past them, they stay the next row's "previous" status, and each counts in `notifier_line_history_skipped_total{reason="stale"}`. Deploy before `ingestWriter.streams.tfl: apply`. `0` turns the skip off. |
 | `notifier.forwardQueuePollIntervalSecs` | `15` | Poll cadence for the forwarding queue (notifications api hands over), faster than `pollIntervalSecs`. |
 | `notifier.skipCheckPollIntervalSecs` | `90` | Cadence of the station-skip check for tracked journeys. |
 | `notifier.templateSweepPollIntervalSecs` | `3600` | Cadence of the recurring-journey materialisation sweep. |
@@ -1970,6 +1971,8 @@ used for and why persistence defaults on.
 | `redis.acl.clients.ingestWriter` | `false` | ingest-writer, as user `ingest-writer` (only once an `ingestWriter.streams` entry is not `off`). |
 | `redis.acl.clients.pollerIncidents` | `false` | poller-incidents' DB sink (`pollers.incidents.ingest.sink: db`), as user `poller-incidents`. |
 | `redis.acl.clients.pollerLdbws` | `false` | poller-ldbws' stream sinks (`pollers.ldbws.ingest.sink: http+shadow` or `stream`), as user `poller-ldbws` (`~ds:ingest:station-samples +xadd +xrevrange`). |
+| `redis.acl.clients.pollerTfl` / `.pollerTocs` | `false` | poller-tfl's and poller-tocs's stream sinks (`pollers.<name>.ingest.sink: http+shadow` or `stream`, ingest plan 3c.2), as users `poller-tfl` and `poller-tocs`. |
+| `redis.acl.clients.pollerIrishRailGtfs` / `.pollerIrishRailLive` / `.pollerNirStations` | `false` | The island-of-Ireland pollers (their only sink is `ds:ingest:island-of-ireland`, D8), as users `poller-irish-rail-gtfs`, `poller-irish-rail-live` and `poller-nir-stations`. |
 | `redis.image.repository` | `redis` | Redis image repository (upstream image; this repo builds no Redis image). |
 | `redis.image.tag` | `7.4.11@sha256:…` | Redis 7.4, digest-pinned in the tag. |
 | `redis.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2405,6 +2408,7 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.stations.ingest.sink` | `http` | stations only (ingest architecture plan 2b): `http` POSTs the feed to `ingestPath`; `db` (`INGEST_SINK=db`) writes Postgres directly and reads the startup cursor from `ingest_freshness`, as the app role or, with `postgresql.roles.perService.stations.connect`, as `distant_signal_stations`. Adds the Postgres NetworkPolicy egress and admission. `db` needs `ingestWriter.enabled` and `ingestWriter.loops.enabled` (the writer's CORPUS crosswalk loop replaces the rebuild the api's POST triggers); the render fails otherwise. |
 | `pollers.stations.ingest.database.maxConnections` | `1` | stations only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `pollers.incidents.ingest.sink` | `http` | incidents only (ingest plan 2c.2): `http` POSTs snapshots to the api; `db` writes Postgres directly (DATABASE_URL: the incidents role with `perService.incidents.connect`, else app) and XADDs `incident-text-changed` from the poller (the `poller-incidents` user with `redis.acl.clients.pollerIncidents`), with Postgres and Redis egress and admission. Rollback: `http`. |
+| `pollers.tfl.ingest.sink` / `pollers.tocs.ingest.sink` | `http` | tfl and tocs (ingest plan 3c.2): `http` POSTs each snapshot to `ingestPath`; `http+shadow` also XADDs a copy to `ds:ingest:tfl` / `ds:ingest:reference` for the ingest-writer's `shadow` mode (the POST stays authoritative); `stream` XADDs only (the ingest-writer applies it with `ingestWriter.streams.tfl` / `.reference: apply`) and reads the startup cursor from the stream. The stream sinks add `REDIS_URL` (the `poller-<name>` user with `redis.acl.clients.poller<Name>`) and Redis egress and admission. For tfl, deploy `notifier.lineHistoryMaxAgeSeconds` first. Rollback: `http`. |
 | `pollers.incidents.ingest.rowHeartbeat` | `true` | incidents only (plan 2c.6): `INCIDENTS_ROW_HEARTBEAT` for both writers (the api's `POST /private/incidents` and the `db` sink). `false` writes only changed rows (about 600k fewer `incidents` updates a day); readers show the feed's snapshot time. Rendered only when `false`. Rollback: `true`. |
 | `pollers.incidents.ingest.database.maxConnections` | `2` | incidents only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `pollers.ldbws.ingest.sink` | `http` | ldbws only (ingest plan 3a.7): `http` POSTs each cycle to `ingestPath`; `http+shadow` also XADDs a copy to `ds:ingest:station-samples` (for `ingestWriter.streams.station-samples: shadow`); `stream` XADDs only and reads the startup cursor from the stream, and needs `ingestWriter.enabled` with `ingestWriter.streams.station-samples: apply` (the render fails otherwise; flip both together). Either stream sink renders `INGEST_SINK` and `REDIS_URL` (the `poller-ldbws` user with `redis.acl.clients.pollerLdbws`) and the Redis egress and admission. Rollback: `http`. |
@@ -2424,21 +2428,14 @@ Irish Rail GTFS zip. Off by default; no API key needed.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerIrishRailGtfs.enabled` | `false` | Deploy the poller. |
+| `pollerIrishRailGtfs.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:island-of-ireland` stream (ingest plan 3c.2: `INGEST_SINK=stream`, `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailGtfs`; no api route or OAuth), so turn on `ingestWriter.streams.island-of-ireland: apply` with it. |
 | `pollerIrishRailGtfs.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-gtfs` | Image repository. |
 | `pollerIrishRailGtfs.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailGtfs.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollerIrishRailGtfs.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollerIrishRailGtfs.gtfsUrl` | `https://www.transportforireland.ie/transitData/Data/GTFS_Irish_Rail.zip` | GTFS zip URL (public, key-free). |
-| `pollerIrishRailGtfs.apiStationsIngestPath` | `/private/island-of-ireland-stations` | api ingest path for stations. |
-| `pollerIrishRailGtfs.apiLinesIngestPath` | `/private/island-of-ireland-lines` | api ingest path for lines. |
 | `pollerIrishRailGtfs.pollIntervalSecs` | `86400` | Poll cadence. The feed's real refresh cadence is unknown; 24h matches the other reference-data pollers. |
 | `pollerIrishRailGtfs.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one download plus up to 15 minutes of ingest retries. |
-| `pollerIrishRailGtfs.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-poller-irish-rail-gtfs`). |
-| `pollerIrishRailGtfs.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
-| `pollerIrishRailGtfs.existingSecret` | `""` | Read the OAuth2 credential from this pre-existing Secret instead of the chart-rendered one. |
-| `pollerIrishRailGtfs.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-poller-irish-rail-gtfs` | Key for the OAuth2 username. |
-| `pollerIrishRailGtfs.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-irish-rail-gtfs` | Key for the OAuth2 password. |
 | `pollerIrishRailGtfs.logLevel` | `info` | `RUST_LOG` value. |
 | `pollerIrishRailGtfs.metricsPort` | `9091` | Prometheus `/metrics` port. |
 | `pollerIrishRailGtfs.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
@@ -2456,21 +2453,15 @@ default; no API key needed.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerIrishRailLive.enabled` | `false` | Deploy the poller. |
+| `pollerIrishRailLive.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:island-of-ireland` stream (ingest plan 3c.2: `INGEST_SINK=stream`, `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailLive`; no api route or OAuth), so turn on `ingestWriter.streams.island-of-ireland: apply` with it. |
 | `pollerIrishRailLive.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-live` | Image repository. |
 | `pollerIrishRailLive.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailLive.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollerIrishRailLive.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollerIrishRailLive.irishRailBaseUrl` | `http://api.irishrail.ie/realtime/realtime.asmx` | Irish Rail realtime service root (public, key-free). |
-| `pollerIrishRailLive.apiIngestPath` | `/private/island-of-ireland-station-samples` | api ingest path for samples. |
 | `pollerIrishRailLive.pollIntervalSecs` | `300` | Poll cadence. Conservative: the API's rate limits are unknown and every station is sampled. |
 | `pollerIrishRailLive.stationCodesOverride` | `""` | Comma-separated station-code allowlist. Empty polls every station the API lists. |
 | `pollerIrishRailLive.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one sampling cycle plus its ingest retries. |
-| `pollerIrishRailLive.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-poller-irish-rail-live`). |
-| `pollerIrishRailLive.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
-| `pollerIrishRailLive.existingSecret` | `""` | Read the OAuth2 credential from this pre-existing Secret instead of the chart-rendered one. |
-| `pollerIrishRailLive.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-poller-irish-rail-live` | Key for the OAuth2 username. |
-| `pollerIrishRailLive.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-irish-rail-live` | Key for the OAuth2 password. |
 | `pollerIrishRailLive.logLevel` | `info` | `RUST_LOG` value. |
 | `pollerIrishRailLive.metricsPort` | `9091` | Prometheus `/metrics` port. |
 | `pollerIrishRailLive.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
@@ -2488,22 +2479,15 @@ Off by default; no API key needed.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerNirStations.enabled` | `false` | Deploy the poller. |
+| `pollerNirStations.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:island-of-ireland` stream (ingest plan 3c.2: `INGEST_SINK=stream`, `REDIS_URL`, the user in `redis.acl.clients.pollerNirStations`; no api route or OAuth), so turn on `ingestWriter.streams.island-of-ireland: apply` with it. |
 | `pollerNirStations.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-nir-stations` | Image repository. |
 | `pollerNirStations.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerNirStations.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollerNirStations.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollerNirStations.stationsCsvUrl` | OpenDataNI `translink_rail_stations.csv` | Stations CSV URL (see values.yaml for the full URL). |
 | `pollerNirStations.haltsCsvUrl` | OpenDataNI `translink_halts.csv` | Halts CSV URL (see values.yaml for the full URL). |
-| `pollerNirStations.apiStationsIngestPath` | `/private/island-of-ireland-stations` | api ingest path for stations. |
-| `pollerNirStations.apiLinesIngestPath` | `/private/island-of-ireland-lines` | api ingest path for lines. |
 | `pollerNirStations.pollIntervalSecs` | `86400` | Poll cadence. The CSVs change irregularly. |
 | `pollerNirStations.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one download plus up to 15 minutes of ingest retries. |
-| `pollerNirStations.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-poller-nir-stations`). |
-| `pollerNirStations.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
-| `pollerNirStations.existingSecret` | `""` | Read the OAuth2 credential from this pre-existing Secret instead of the chart-rendered one. |
-| `pollerNirStations.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-poller-nir-stations` | Key for the OAuth2 username. |
-| `pollerNirStations.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-nir-stations` | Key for the OAuth2 password. |
 | `pollerNirStations.logLevel` | `info` | `RUST_LOG` value. |
 | `pollerNirStations.metricsPort` | `9091` | Prometheus `/metrics` port. |
 | `pollerNirStations.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |

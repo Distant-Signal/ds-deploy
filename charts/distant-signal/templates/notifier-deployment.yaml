@@ -122,6 +122,10 @@ with notifier.extraEnv, which replaces an entry of the same name.
             # to be what every deployment wanted.
             - name: CURSOR_GRACE_SECONDS
               value: {{ .Values.notifier.cursorGraceSeconds | quote }}
+            # Ingest plan 3c.4: line-status history rows older than this are
+            # skipped (0: off). Deploy before ingestWriter.streams.tfl: apply.
+            - name: LINE_HISTORY_MAX_AGE_SECS
+              value: {{ .Values.notifier.lineHistoryMaxAgeSeconds | int | quote }}
             - name: FORWARD_QUEUE_POLL_INTERVAL_SECS
               value: {{ .Values.notifier.forwardQueuePollIntervalSecs | quote }}
             # Station-skip check cadence (Task 9, §5.2) -- see

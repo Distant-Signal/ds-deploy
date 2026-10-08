@@ -1100,6 +1100,21 @@ pollers:
     # binary reads TFL_APP_KEY where the RDM pollers read RDM_API_KEY.
     apiKeyEnvVar: TFL_APP_KEY
     ingestPath: /private/tfl-line-status
+    # Ingest architecture plan 3c.2: where each snapshot goes.
+    ingest:
+      # -- `http` (today's behaviour): POST it to `ingestPath`.
+      # `http+shadow`: that, plus a copy XADDed to `ds:ingest:tfl` for the
+      # ingest-writer's `shadow` mode (`ingestWriter.streams.tfl:
+      # shadow`); the POST stays authoritative and the copy never fails a
+      # cycle. `stream`: XADD only, and the startup cursor is the stream's
+      # newest `tfl-line-status/1` entry; the ingest-writer applies it
+      # (`ingestWriter.streams.tfl: apply`). Both stream sinks add
+      # REDIS_URL (as the `poller-tfl` ACL user with
+      # `redis.acl.clients.pollerTfl`) and Redis egress and admission.
+      # Deploy the notifier's `lineHistoryMaxAgeSeconds` first (plan
+      # 3c.4): applied late, a snapshot's history rows carry their fetch
+      # time.
+      sink: http
     # -- TfL publishes no recommended cadence for the line-status endpoint,
     # and offers no push or conditional requests. 300s mirrors incidents.
     pollIntervalSecs: 300
@@ -1160,6 +1175,18 @@ pollers:
     baseUrl: ""
     baseUrlEnvVar: RDM_TOCS_BASE_URL
     ingestPath: /private/tocs
+    # Ingest architecture plan 3c.2: where each snapshot goes.
+    ingest:
+      # -- `http` (today's behaviour): POST it to `ingestPath`.
+      # `http+shadow`: that, plus a copy XADDed to `ds:ingest:reference` for the
+      # ingest-writer's `shadow` mode (`ingestWriter.streams.reference:
+      # shadow`); the POST stays authoritative and the copy never fails a
+      # cycle. `stream`: XADD only, and the startup cursor is the stream's
+      # newest `tocs/1` entry; the ingest-writer applies it
+      # (`ingestWriter.streams.reference: apply`). Both stream sinks add
+      # REDIS_URL (as the `poller-tocs` ACL user with
+      # `redis.acl.clients.pollerTocs`) and Redis egress and admission.
+      sink: http
     # -- RSPS5050 P-03-00 Rev A section 3: at least once every 24 hours.
     pollIntervalSecs: 86400
     apiKey: ""
@@ -1510,9 +1537,9 @@ api:
       # The three island-of-Ireland pollers' groups. Empty by default: those
       # pollers ship disabled and no such group exists in Authentik, and an
       # empty group closes the /private/island-of-ireland-* routes it gates
-      # (every caller gets 403). Create the group in Authentik and set it here
-      # when enabling the matching poller; the chart refuses to render an
-      # enabled poller whose group is empty.
+      # (every caller gets 403). Since ingest plan 3c.2 (decision D8) the
+      # three island-of-Ireland pollers write only to their Redis stream, so
+      # no poller calls these routes; they are deleted in phase 5.
       irishRailGtfs: ""
       irishRailLive: ""
       nirStations: ""
@@ -2437,6 +2464,15 @@ notifier:
   # cursor's real last_processed_id -- see config.rs's own
   # cursor_grace_seconds doc.
   cursorGraceSeconds: 120
+  # -- Line-status history rows whose `computed_at` is older than this many
+  # seconds are skipped instead of pushed: the cursor moves past them, they
+  # stay the "previous" status of their line's next row, and each counts in
+  # `notifier_line_history_skipped_total{reason="stale"}` (ingest plan 3c.4,
+  # decision D13). Once `ingestWriter.streams.tfl` is `apply`, a TfL backlog
+  # applied late arrives stamped with its fetch time, so this keeps it from
+  # pushing disruptions that may be over. Deploy it before that flip. `0`
+  # turns the skip off (every row is pushed, the old behaviour).
+  lineHistoryMaxAgeSeconds: 900
   # -- Task 17/18: cadence for the forwarding-queue poll, deliberately
   # faster than pollIntervalSecs above -- see config.rs's own comment on
   # why this is a judgment call, not a researched figure.
@@ -2640,6 +2676,20 @@ redis:
       # http+shadow` or `stream`), as user `poller-ldbws`
       # (`~ds:ingest:station-samples +xadd +xrevrange`).
       pollerLdbws: false
+      # -- poller-tfl's stream sinks (`pollers.tfl.ingest.sink: http+shadow`
+      # or `stream`, ingest plan 3c.2), as user `poller-tfl`
+      # (`~ds:ingest:tfl +xadd +xrevrange`).
+      pollerTfl: false
+      # -- poller-tocs's stream sinks (`pollers.tocs.ingest.sink`), as user
+      # `poller-tocs` (`~ds:ingest:reference`).
+      pollerTocs: false
+      # -- The island-of-Ireland pollers (when enabled; they write only to
+      # `ds:ingest:island-of-ireland`, decision D8), as users
+      # `poller-irish-rail-gtfs`, `poller-irish-rail-live` and
+      # `poller-nir-stations`.
+      pollerIrishRailGtfs: false
+      pollerIrishRailLive: false
+      pollerNirStations: false
   image:
     repository: redis
     # -- Pinned to an exact 7.4 patch release and content digest (INF-11);
@@ -3395,6 +3445,11 @@ movementRelay:
 pollerIrishRailGtfs:
   # -- /livez stall window (see workerHealth): one GTFS download plus up to 15 minutes of ingest-POST retries.
   progressStallSecs: 1800
+  # -- Off by default (decision D8). Its snapshots go only to the
+  # `ds:ingest:island-of-ireland` stream (ingest plan 3c.2; no api
+  # route, no OAuth), so turn on `ingestWriter.streams.island-of-ireland`
+  # (`apply`) with it; its Redis user is
+  # `redis.acl.clients.pollerIrishRailGtfs`.
   enabled: false
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-gtfs
@@ -3409,20 +3464,10 @@ pollerIrishRailGtfs:
   # section 1), unlike every RDM poller's own baseUrl. Overridable in case
   # the feed ever moves.
   gtfsUrl: "https://www.transportforireland.ie/transitData/Data/GTFS_Irish_Rail.zip"
-  apiStationsIngestPath: /private/island-of-ireland-stations
-  apiLinesIngestPath: /private/island-of-ireland-lines
   # -- No confirmed real refresh cadence for this feed; defaults to the
   # same 24h convention pollers.stations/pollers.tocs already use for
   # reference data with an unconfirmed cadence.
   pollIntervalSecs: 86400
-  # -- No API key needed at all (unlike every RDM poller) -- see this
-  # chart's own Judgment Call #2 in
-  # docs/superpowers/plans/2026-09-05-ireland-rail-support-plan.md.
-  internalOauthUsername: ""
-  internalOauthPassword: ""
-  existingSecret: ""
-  existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-irish-rail-gtfs
-  existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-irish-rail-gtfs
   logLevel: info
   metricsPort: 9091
   extraEnv: []
@@ -3453,6 +3498,11 @@ pollerIrishRailGtfs:
 pollerIrishRailLive:
   # -- /livez stall window (see workerHealth): one sampling cycle (240s budget) plus its ingest-POST retries.
   progressStallSecs: 1800
+  # -- Off by default (decision D8). Its snapshots go only to the
+  # `ds:ingest:island-of-ireland` stream (ingest plan 3c.2; no api
+  # route, no OAuth), so turn on `ingestWriter.streams.island-of-ireland`
+  # (`apply`) with it; its Redis user is
+  # `redis.acl.clients.pollerIrishRailLive`.
   enabled: false
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-live
@@ -3466,7 +3516,6 @@ pollerIrishRailLive:
   # (docs/superpowers/specs/2026-09-05-ireland-vs-northern-ireland-friction-research.md
   # section 1; re-confirmed live during this crate's own implementation).
   irishRailBaseUrl: "http://api.irishrail.ie/realtime/realtime.asmx"
-  apiIngestPath: /private/island-of-ireland-station-samples
   # -- Conservative default: api.irishrail.ie's real rate limits/uptime are
   # unconfirmed (design spec section 8, open question 4), and this poller
   # samples every station getAllStationsXML returns (no line-catalogue
@@ -3477,11 +3526,6 @@ pollerIrishRailLive:
   # -- Comma-separated station-code allowlist; empty means "poll
   # everything getAllStationsXML returns."
   stationCodesOverride: ""
-  internalOauthUsername: ""
-  internalOauthPassword: ""
-  existingSecret: ""
-  existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-irish-rail-live
-  existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-irish-rail-live
   logLevel: info
   metricsPort: 9091
   extraEnv: []
@@ -3509,6 +3553,11 @@ pollerIrishRailLive:
 pollerNirStations:
   # -- /livez stall window (see workerHealth): one CSV download plus up to 15 minutes of ingest-POST retries.
   progressStallSecs: 1800
+  # -- Off by default (decision D8). Its snapshots go only to the
+  # `ds:ingest:island-of-ireland` stream (ingest plan 3c.2; no api
+  # route, no OAuth), so turn on `ingestWriter.streams.island-of-ireland`
+  # (`apply`) with it; its Redis user is
+  # `redis.acl.clients.pollerNirStations`.
   enabled: false
   image:
     repository: ghcr.io/fasterspeeding/distant-signal/poller-nir-stations
@@ -3525,18 +3574,10 @@ pollerNirStations:
   # ever moves these.
   stationsCsvUrl: "https://admin.opendatani.gov.uk/dataset/5f27f171-b8aa-4511-983d-6df6e87bbf20/resource/967e32c3-1cc2-4aee-b485-92121a32eb4d/download/translink_rail_stations.csv"
   haltsCsvUrl: "https://admin.opendatani.gov.uk/dataset/1f2a94b9-1e86-4aec-ad9a-90a3de233893/resource/370b0d8a-29b9-46ca-bcc7-91357c28c43d/download/translink_halts.csv"
-  apiStationsIngestPath: /private/island-of-ireland-stations
-  apiLinesIngestPath: /private/island-of-ireland-lines
   # -- OpenDataNI's own CKAN metadata confirms `frequency: "irregular"` for
   # both CSVs -- same 24h convention pollerIrishRailGtfs/pollers.stations
   # already use for reference data with an unconfirmed cadence.
   pollIntervalSecs: 86400
-  # -- No API key needed at all (OGL-licensed, anonymous CSV downloads).
-  internalOauthUsername: ""
-  internalOauthPassword: ""
-  existingSecret: ""
-  existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-nir-stations
-  existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-nir-stations
   logLevel: info
   metricsPort: 9091
   extraEnv: []

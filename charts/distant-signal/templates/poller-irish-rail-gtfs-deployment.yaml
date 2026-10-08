@@ -1,7 +1,4 @@
 {{- if .Values.pollerIrishRailGtfs.enabled }}
-{{- if not (trim (.Values.api.internalOauth.groups.irishRailGtfs | default "")) }}
-{{- fail "pollerIrishRailGtfs.enabled needs api.internalOauth.groups.irishRailGtfs: the Authentik group this poller's service account is in (empty closes its api routes)" }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -84,26 +81,15 @@ with pollerIrishRailGtfs.extraEnv, which replaces an entry of the same name.
 {{- define "distant-signal.pollerIrishRailGtfsEnv" }}
             - name: GTFS_URL
               value: {{ .Values.pollerIrishRailGtfs.gtfsUrl | quote }}
-            - name: API_STATIONS_INGEST_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.pollerIrishRailGtfs.apiStationsIngestPath | quote }}
-            - name: API_LINES_INGEST_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.pollerIrishRailGtfs.apiLinesIngestPath | quote }}
-            - name: INTERNAL_OAUTH_TOKEN_URL
-              value: {{ .Values.internalOauth.tokenUrl | quote }}
-            - name: INTERNAL_OAUTH_CLIENT_ID
-              value: {{ .Values.internalOauth.clientId | quote }}
-            - name: INTERNAL_OAUTH_SCOPE
-              value: {{ .Values.internalOauth.scope | quote }}
-            - name: INTERNAL_OAUTH_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.pollerIrishRailGtfsSecretName" . }}
-                  key: {{ include "distant-signal.pollerIrishRailGtfsOauthUsernameSecretKey" . }}
-            - name: INTERNAL_OAUTH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.pollerIrishRailGtfsSecretName" . }}
-                  key: {{ include "distant-signal.pollerIrishRailGtfsOauthPasswordSecretKey" . }}
+            # Ingest plan 3c.2 (decision D8): the only sink is the
+            # ds:ingest:island-of-ireland stream (the ingest-writer applies
+            # it with ingestWriter.streams.island-of-ireland), as the
+            # poller-irish-rail-gtfs ACL user with redis.acl.clients.pollerIrishRailGtfs.
+            - name: INGEST_SINK
+              value: "stream"
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "pollerIrishRailGtfs" "user" "poller-irish-rail-gtfs") }}
             - name: POLL_INTERVAL_SECS
               value: {{ .Values.pollerIrishRailGtfs.pollIntervalSecs | quote }}
             - name: METRICS_ENABLED

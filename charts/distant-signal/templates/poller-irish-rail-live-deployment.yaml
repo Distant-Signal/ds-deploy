@@ -1,7 +1,4 @@
 {{- if .Values.pollerIrishRailLive.enabled }}
-{{- if not (trim (.Values.api.internalOauth.groups.irishRailLive | default "")) }}
-{{- fail "pollerIrishRailLive.enabled needs api.internalOauth.groups.irishRailLive: the Authentik group this poller's service account is in (empty closes its api routes)" }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -84,24 +81,15 @@ with pollerIrishRailLive.extraEnv, which replaces an entry of the same name.
 {{- define "distant-signal.pollerIrishRailLiveEnv" }}
             - name: IRISH_RAIL_BASE_URL
               value: {{ .Values.pollerIrishRailLive.irishRailBaseUrl | quote }}
-            - name: API_INGEST_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.pollerIrishRailLive.apiIngestPath | quote }}
-            - name: INTERNAL_OAUTH_TOKEN_URL
-              value: {{ .Values.internalOauth.tokenUrl | quote }}
-            - name: INTERNAL_OAUTH_CLIENT_ID
-              value: {{ .Values.internalOauth.clientId | quote }}
-            - name: INTERNAL_OAUTH_SCOPE
-              value: {{ .Values.internalOauth.scope | quote }}
-            - name: INTERNAL_OAUTH_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.pollerIrishRailLiveSecretName" . }}
-                  key: {{ include "distant-signal.pollerIrishRailLiveOauthUsernameSecretKey" . }}
-            - name: INTERNAL_OAUTH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.pollerIrishRailLiveSecretName" . }}
-                  key: {{ include "distant-signal.pollerIrishRailLiveOauthPasswordSecretKey" . }}
+            # Ingest plan 3c.2 (decision D8): the only sink is the
+            # ds:ingest:island-of-ireland stream (the ingest-writer applies
+            # it with ingestWriter.streams.island-of-ireland), as the
+            # poller-irish-rail-live ACL user with redis.acl.clients.pollerIrishRailLive.
+            - name: INGEST_SINK
+              value: "stream"
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "pollerIrishRailLive" "user" "poller-irish-rail-live") }}
             - name: POLL_INTERVAL_SECS
               value: {{ .Values.pollerIrishRailLive.pollIntervalSecs | quote }}
             {{- if .Values.pollerIrishRailLive.stationCodesOverride }}

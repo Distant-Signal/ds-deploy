@@ -22,7 +22,10 @@
 --   3. CONNECT and USAGE on schema public for every created role;
 --   4. the groups' grants and each narrow role's grants, after revoking
 --      everything else they hold in schema public. Objects that do not
---      exist yet are skipped (a new cluster's initdb run).
+--      exist yet are skipped (a new cluster's initdb run);
+--   5. the row policies (db-grants.yaml `row_policies`): every policy named
+--      ds_grants_* is dropped, then each listed one is created again as a
+--      RESTRICTIVE policy for its role.
 
 \set ON_ERROR_STOP on
 
@@ -631,5 +634,34 @@ BEGIN
     END LOOP;
 END
 $grants$;
+
+-- 5. Row policies (spec §6.4, D10). Each is RESTRICTIVE, so it narrows its
+-- role whatever permissive policy (the table's migration adds one for
+-- PUBLIC) or membership (the app role) would otherwise let it see. It
+-- takes effect once the table's migration has enabled row-level security.
+DO $policies$
+DECLARE
+    r record;
+BEGIN
+    FOR r IN
+        SELECT p.tablename, p.policyname
+        FROM pg_policies p
+        WHERE p.schemaname = 'public' AND p.policyname LIKE 'ds\_grants\_%'
+    LOOP
+        EXECUTE format('DROP POLICY %I ON public.%I', r.policyname, r.tablename);
+    END LOOP;
+    FOR r IN
+        SELECT v.tbl, v.kind, current_setting('ds_grants.' || v.kind) AS grantee,
+               v.cond
+        FROM (VALUES
+        ('line_status', 'writer', 'source = ''tfl''')) AS v(tbl, kind, cond)
+        WHERE to_regclass(format('public.%I', v.tbl)) IS NOT NULL
+    LOOP
+        EXECUTE format('CREATE POLICY %I ON public.%I AS RESTRICTIVE FOR ALL TO %I '
+                       'USING (%s) WITH CHECK (%s)',
+                       'ds_grants_' || r.kind, r.tbl, r.grantee, r.cond, r.cond);
+    END LOOP;
+END
+$policies$;
 
 COMMIT;

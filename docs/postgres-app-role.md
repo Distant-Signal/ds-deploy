@@ -217,6 +217,11 @@ WHERE datname = 'distant_signal' GROUP BY 1, 2 ORDER BY 1, 2;
 - `pg_dump` CronJob: connect as `distant_signal_dump` with
   `postgres-dump-password`. Its `CONNECTION LIMIT` is 2; a parallel
   `pg_dump -j N` needs `postgresql.roles.dump.connectionLimit: N + 1`.
+  It also needs `--enable-row-security` once
+  `20261009131300_line_status_rls.sql` has run (ingest plan 3c.3):
+  `line_status` has row-level security, and pg_dump refuses such a table
+  for a role that does not bypass RLS. The dump role is covered by the
+  permissive `USING (true)` policy, so the dump still holds every row.
 
 Verify: the exporter's `pg_up` is 1 and its metrics are back; trigger one
 dump by hand and check its size against last night's.

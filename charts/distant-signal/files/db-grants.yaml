@@ -257,7 +257,10 @@ tables:
   island_of_ireland_lines: {class: ingest, grants: {api: S, writer: SIU}}
   island_of_ireland_stations: {class: ingest, grants: {api: S, writer: SIU}}
   island_of_ireland_station_samples: {class: ingest, grants: {api: S, writer: SIU}}
-  line_status: {class: ingest, grants: {api: S, writer: SIU, aggregator: SIUD}}
+  # writer: D too (spec §6.4 says SIU): the TfL upsert deletes the TfL lines
+  # that left the feed. Its rows are pinned to source = 'tfl' by
+  # row_policies below (plan 3c.3, D10).
+  line_status: {class: ingest, grants: {api: S, writer: SIUD, aggregator: SIUD}}
   line_status_history: {class: ingest, grants: {api: S, writer: SI, aggregator: SID, notifier: S}}
   # enricher: UPDATE only on its extraction columns once narrowed (phase 5;
   # the column list comes from the 0b report).
@@ -345,3 +348,16 @@ sequences:
 # Functions in schema public (extension members excluded), by signature.
 functions:
   "analyze_publish_keys(text)": {grants: [schedule_reference]}
+
+# Row-level restrictions (spec §6.4, decision D10): table -> {role: SQL
+# condition}. Each becomes a RESTRICTIVE policy `ds_grants_<role>` on the
+# table for that role (if created), FOR ALL commands, with the condition as
+# both USING and WITH CHECK: the role sees and writes only those rows,
+# whatever else it is granted (including through the app role). The table's
+# migration enables RLS and adds the permissive USING (true) policy every
+# role shares; policies named ds_grants_* that are no longer listed here
+# are dropped on the next run.
+row_policies:
+  # The ingest-writer applies the `tfl` stream (plan 3c.3); the aggregator
+  # owns every other line.
+  line_status: {writer: "source = 'tfl'"}

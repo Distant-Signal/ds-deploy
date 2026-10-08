@@ -1,7 +1,4 @@
 {{- if .Values.pollerNirStations.enabled }}
-{{- if not (trim (.Values.api.internalOauth.groups.nirStations | default "")) }}
-{{- fail "pollerNirStations.enabled needs api.internalOauth.groups.nirStations: the Authentik group this poller's service account is in (empty closes its api routes)" }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -86,26 +83,15 @@ with pollerNirStations.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.pollerNirStations.stationsCsvUrl | quote }}
             - name: HALTS_CSV_URL
               value: {{ .Values.pollerNirStations.haltsCsvUrl | quote }}
-            - name: API_STATIONS_INGEST_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.pollerNirStations.apiStationsIngestPath | quote }}
-            - name: API_LINES_INGEST_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) .Values.pollerNirStations.apiLinesIngestPath | quote }}
-            - name: INTERNAL_OAUTH_TOKEN_URL
-              value: {{ .Values.internalOauth.tokenUrl | quote }}
-            - name: INTERNAL_OAUTH_CLIENT_ID
-              value: {{ .Values.internalOauth.clientId | quote }}
-            - name: INTERNAL_OAUTH_SCOPE
-              value: {{ .Values.internalOauth.scope | quote }}
-            - name: INTERNAL_OAUTH_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.pollerNirStationsSecretName" . }}
-                  key: {{ include "distant-signal.pollerNirStationsOauthUsernameSecretKey" . }}
-            - name: INTERNAL_OAUTH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.pollerNirStationsSecretName" . }}
-                  key: {{ include "distant-signal.pollerNirStationsOauthPasswordSecretKey" . }}
+            # Ingest plan 3c.2 (decision D8): the only sink is the
+            # ds:ingest:island-of-ireland stream (the ingest-writer applies
+            # it with ingestWriter.streams.island-of-ireland), as the
+            # poller-nir-stations ACL user with redis.acl.clients.pollerNirStations.
+            - name: INGEST_SINK
+              value: "stream"
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "pollerNirStations" "user" "poller-nir-stations") }}
             - name: POLL_INTERVAL_SECS
               value: {{ .Values.pollerNirStations.pollIntervalSecs | quote }}
             - name: METRICS_ENABLED
