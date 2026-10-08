@@ -920,6 +920,67 @@ The aggregator failed cold-archive batch uploads or verifications
 `delete`, rows are pruned without an archive. Check the object store and the
 aggregator's "archiving a trains batch failed" logs.
 
+### DistantSignalArchiveStale
+
+No trains archive cycle has succeeded for `maxAgeSeconds` (6h by default):
+`aggregator_archive_last_success_timestamp_seconds{cycle="trains"}` has not
+moved. The gauge is set at aggregator start and after each cycle that neither
+returned an error nor failed an upload. A cycle with nothing due counts as a
+success. So this fires when every cycle fails, or when the retention task has
+stopped.
+
+1. Check `aggregator_archive_cycles_total{result="failure"}` and
+   `aggregator_retention_errors_total{task="trains"}`. A rising
+   `retention_errors` means a database error. Look in the aggregator's
+   "retention step failed" logs with `task=trains`.
+2. Rising upload failures (DistantSignalArchiveUploadFailures) mean the object
+   store is the cause. See that entry.
+3. If neither counter moves, the retention loop is stuck. Look for a long
+   `aggregator_retention_duration_seconds` or a blocked query in
+   `pg_stat_activity`. A restart resets the gauge to the start time, so the
+   alert clears for 6h even if nothing is fixed.
+
+Under `failurePolicy: retain`, `trains` and its children grow past retention
+while this fires.
+
+### DistantSignalArchiveBatchChurn
+
+More than `threshold` (10 by default) archive batches changed between their
+export and their delete within `window` (6h)
+(`aggregator_archive_batches_changed_total`). Each changed batch is left in
+place, and the run stops there. The next run re-exports it and overwrites the
+same keys. Occasional churn is normal: someone subscribes to an old train, or
+a late TRUST message lands on one. A steady rate means something keeps
+writing to `trains` rows, or to their `train_movement_events`,
+`train_current_state` or `train_reasons` rows, past their retention. Each
+run then re-uploads the same batch without pruning it.
+
+Check the aggregator's "a trains batch changed between its archive export and
+its delete" warnings for the `service_date` and `first_id`. Then find what
+writes to those rows: a backfill script, or a consumer replaying an old
+backlog. If the writes are legitimate and finite, wait for them to finish.
+
+### DistantSignalRetentionStepFailing
+
+One aggregator retention step failed at least `minErrors` times (2 by
+default) within `window` (2h): `aggregator_retention_errors_total{task}`.
+Retention runs every `aggregator.pollIntervalSecs` (60s), so two consecutive
+failed passes are enough to fire. A single transient failure does not. Every
+step has its own error scope, so the other steps keep running. The failing
+step's table keeps growing past its window until the step succeeds. Some of
+those windows are licensing obligations: `trust_event_backlog` (1 day) and the
+LDBWS-derived `daily_stats`, `half_hourly_stats` and coverage stats.
+
+1. Find the error in the aggregator's "retention step failed" logs for the
+   alert's `task`.
+2. A statement timeout usually means a large backlog after an outage. It
+   clears as later passes catch up. A lock wait points at a long transaction
+   in `pg_stat_activity`. "relation does not exist" means the migrations
+   are behind the aggregator image.
+3. For `task="trains"` with the cold archive on, also see
+   DistantSignalArchiveStale. Upload failures do not count here; only
+   database errors do.
+
 ### DistantSignalArchiveExpiryErrors
 
 Cold-archive expiry hit errors (`aggregator_archive_expiry_errors_total{stage}`):

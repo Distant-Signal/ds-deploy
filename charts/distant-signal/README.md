@@ -898,7 +898,7 @@ strictly wider audience than `get secrets` — never sees it.
 Off by default. When `archive.enabled` is false, the aggregator renders no
 `ARCHIVE_*` env and its retention prunes simply delete. When enabled, the
 rows that `trains` retention is about to prune (together with their
-`train_movement_events`/`train_current_state` children) are written first to
+`train_movement_events`/`train_current_state`/`train_reasons` children) are written first to
 S3-compatible storage as zstd JSON Lines, and deleted only once the upload
 is confirmed (size plus ETag = body MD5). `archive.s3.bucket` and
 `archive.s3.existingSecret` are required when enabled. Something must also
@@ -2765,7 +2765,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; `/docs/alerts.md#<alert name, lowercased>` is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `enricherTokenExchange`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `scheduleBucket`, `pollerFailures`, `pollerStale`, `ldbwsStalestStation`, `ldbwsInvalidCrs` and `incidentRemovalStalled`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `enricherTokenExchange`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `userSignupSpike`, `archiveUploadFailures`, `archiveStale`, `archiveBatchChurn`, `retentionStepFailing`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `scheduleBucket`, `pollerFailures`, `pollerStale`, `ldbwsStalestStation`, `ldbwsInvalidCrs` and `incidentRemovalStalled`. |
 
 #### Alerts
 

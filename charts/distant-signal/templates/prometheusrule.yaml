@@ -74,6 +74,8 @@ so that clause fired on every rollout.
 {{- $directWritesOn := ($rule.directWritesFailing).enabled }}
 {{- $feedMarkerOn := and ($rule.scheduleFeedMarkerStale).enabled .Values.scheduleFeed.enabled }}
 {{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
+{{- $archiveHealthOn := and .Values.archive.enabled (or ($rule.archiveStale).enabled ($rule.archiveBatchChurn).enabled) }}
+{{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -1527,6 +1529,75 @@ spec:
             summary: "cold archive uploads failing ({{ "{{ $value | humanize }}" }} in {{ .window }})"
             description: "retain: trains grows past retention; delete: rows are pruned unarchived. Check the object store and the aggregator's logs."
             runbook_url: {{ printf "%s#distantsignalarchiveuploadfailures" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $archiveHealthOn }}
+    - name: distant-signal.archive-health
+      rules:
+        {{- /*
+        Renders only with archive.enabled. The gauge and the counter exist
+        only when archive.tables includes trains; the gauge is seeded to
+        the aggregator's start time (common::metrics::register_cycle).
+        */}}
+        {{- with $rule.archiveStale }}
+        {{- if .enabled }}
+        - alert: DistantSignalArchiveStale
+          expr: |
+            time() - max by (namespace) (distant_signal_aggregator_archive_last_success_timestamp_seconds{namespace="{{ $ns }}", cycle="trains"}) > {{ int .maxAgeSeconds }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no successful cold archive cycle for {{ "{{ $value | humanizeDuration }}" }}"
+            description: "None in {{ int .maxAgeSeconds }}s: it errors, fails uploads or has stopped, and trains stops pruning under retain."
+            runbook_url: {{ printf "%s#distantsignalarchivestale" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.archiveBatchChurn }}
+        {{- if .enabled }}
+        - alert: DistantSignalArchiveBatchChurn
+          expr: |
+            sum by (namespace) (increase(distant_signal_aggregator_archive_batches_changed_total{namespace="{{ $ns }}"}[{{ .window }}])) > {{ .threshold }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $value | humanize }}" }} cold archive batches changed before delete in {{ .window }}"
+            description: "Each is re-exported next run instead of pruned. Something keeps writing to old trains rows."
+            runbook_url: {{ printf "%s#distantsignalarchivebatchchurn" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+    {{- end }}
+    {{- with $rule.retentionStepFailing }}
+    {{- if .enabled }}
+    - name: distant-signal.retention
+      rules:
+        {{- /*
+        Every aggregator retention step (one pass per pollIntervalSecs, 60s
+        by default) counts its errors under its own `task`, registered at 0.
+        `>= minErrors` (2) over `window` covers two consecutive failed
+        passes and any two within the window, while one transient blip
+        (~1 after increase()'s extrapolation) stays quiet.
+        */}}
+        - alert: DistantSignalRetentionStepFailing
+          expr: |
+            sum by (namespace, task) (increase(distant_signal_aggregator_retention_errors_total{namespace="{{ $ns }}"}[{{ .window }}])) >= {{ .minErrors }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "aggregator retention step {{ "{{ $labels.task }}" }} failing ({{ "{{ $value | humanize }}" }} in {{ .window }})"
+            description: "Its rows stop being pruned (some are licensing deadlines); the other steps still run. See the aggregator's log."
+            runbook_url: {{ printf "%s#distantsignalretentionstepfailing" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $archiveExpiryOn }}

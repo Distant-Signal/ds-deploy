@@ -1,0 +1,51 @@
+# promtool unit tests for DistantSignalRetentionStepFailing (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered). Defaults:
+# at least 2 errors of one task within 2h. Retention runs every 60s; the
+# counters are registered at 0, so every series starts at 0.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # history fails on two consecutive passes (10m and 11m): fires. trains
+  # fails once at 5m and never again: quiet. daily_stats never fails.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_aggregator_retention_errors_total{namespace="distant-signal", pod="a", task="history"}'
+        values: '0x9 1 2x30'
+      - series: 'distant_signal_aggregator_retention_errors_total{namespace="distant-signal", pod="a", task="trains"}'
+        values: '0x4 1x35'
+      - series: 'distant_signal_aggregator_retention_errors_total{namespace="distant-signal", pod="a", task="daily_stats"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DistantSignalRetentionStepFailing
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DistantSignalRetentionStepFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, task: history}
+            exp_annotations:
+              summary: aggregator retention step history failing (2 in 2h)
+              description: "Its rows stop being pruned (some are licensing deadlines); the other steps still run. See the aggregator's log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalretentionstepfailing
+
+  # A single failure in a long-running pod, with the window fully covered
+  # by samples: quiet.
+  # Two failures an hour apart: fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_aggregator_retention_errors_total{namespace="distant-signal", pod="a", task="trust_event_backlog"}'
+        values: '0x179 1x60'
+      - series: 'distant_signal_aggregator_retention_errors_total{namespace="distant-signal", pod="a", task="schedule_services"}'
+        values: '0x149 1x60 2x30'
+    alert_rule_test:
+      - eval_time: 200m
+        alertname: DistantSignalRetentionStepFailing
+        exp_alerts: []
+      - eval_time: 235m
+        alertname: DistantSignalRetentionStepFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, task: schedule_services}
+            exp_annotations:
+              summary: aggregator retention step schedule_services failing (2 in 2h)
+              description: "Its rows stop being pruned (some are licensing deadlines); the other steps still run. See the aggregator's log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalretentionstepfailing

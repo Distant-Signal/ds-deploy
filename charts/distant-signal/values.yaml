@@ -2418,8 +2418,9 @@ aggregator:
 archive:
   enabled: false
   # -- Tables to archive before pruning (explicit opt-in). Supported:
-  #   - trains  -> the trains row plus its cascaded train_movement_events and
-  #                train_current_state rows, one object per table per batch
+  #   - trains  -> the trains row plus its cascaded train_movement_events,
+  #                train_current_state and train_reasons rows (not the
+  #                transient notifier_forward_queue), one object per table per batch
   #                under service_date=YYYY-MM-DD/. Movement events are
   #                archived WITHOUT raw_body (the verbatim TRUST message).
   # Deliberately NOT archivable (the binary refuses to start if listed):
@@ -2468,8 +2469,8 @@ archive:
   # Client-side expiry (crates/aggregator/src/archive_expiry.rs), for stores
   # with no lifecycle API. OFF BY DEFAULT, and DRY-RUN by default once
   # enabled. Needs archive.enabled. A task in the aggregator lists
-  # <prefix>/<table>/ for trains, train_movement_events and
-  # train_current_state and deletes an object only if its key matches
+  # <prefix>/<table>/ for trains, train_movement_events, train_current_state
+  # and train_reasons and deletes an object only if its key matches
   # <prefix>/<table>/service_date=YYYY-MM-DD/part-<19 digits>.jsonl.zst
   # exactly and the service_date IN THE KEY (never LastModified) is older
   # than the current rail day (02:00 Europe/London) minus retentionDays.
@@ -5254,6 +5255,38 @@ metrics:
       enabled: true
       window: 1h
       minFailures: 3
+      for: 0m
+      severity: warning
+    # DistantSignalArchiveStale: no successful cold-archive cycle (the trains
+    # archive-then-prune, run every aggregator poll interval) for
+    # `maxAgeSeconds`: it errors, fails uploads, or has stopped. The gauge
+    # is seeded at aggregator start, so a fresh pod does not fire. Renders
+    # only when archive.enabled is also true.
+    archiveStale:
+      enabled: true
+      maxAgeSeconds: 21600
+      for: 15m
+      severity: warning
+    # DistantSignalArchiveBatchChurn: more than `threshold` archive batches
+    # changed between their export and their delete within `window`. Each
+    # one is left in place and re-exported, so steady churn means the
+    # archive keeps re-uploading without pruning. Renders only when
+    # archive.enabled is also true.
+    archiveBatchChurn:
+      enabled: true
+      window: 6h
+      threshold: 10
+      for: 0m
+      severity: warning
+    # DistantSignalRetentionStepFailing: one aggregator retention step
+    # (`task` label: history, trains, daily_stats, ...) failed at least
+    # `minErrors` times within `window`. Retention runs every
+    # aggregator.pollIntervalSecs (60s), so 2 catches two consecutive failed
+    # passes, and a single transient failure stays quiet.
+    retentionStepFailing:
+      enabled: true
+      window: 2h
+      minErrors: 2
       for: 0m
       severity: warning
     # Cold-archive expiry (archive.expiry). Renders only when archive.enabled

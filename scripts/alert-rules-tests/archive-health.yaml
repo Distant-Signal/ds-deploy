@@ -1,0 +1,59 @@
+# promtool unit tests for DistantSignalArchiveStale and
+# DistantSignalArchiveBatchChurn (see recorded-alerts.yaml's header for how
+# rules.yaml is rendered: archive.enabled is on). Defaults: stale after
+# 21600s for 15m; churn when more than 10 batches changed in 6h.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # The archive succeeds every minute until 20m, then never again. 21600s
+  # after 20m is 380m; plus 15m of `for`, it fires at 395m.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_aggregator_archive_last_success_timestamp_seconds{namespace="distant-signal", pod="a", cycle="trains"}'
+        values: '0+60x20 1200x400'
+    alert_rule_test:
+      - eval_time: 390m
+        alertname: DistantSignalArchiveStale
+        exp_alerts: []
+      - eval_time: 400m
+        alertname: DistantSignalArchiveStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: no successful cold archive cycle for 6h 20m 0s
+              description: "None in 21600s: it errors, fails uploads or has stopped, and trains stops pruning under retain."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalarchivestale
+
+  # A healthy archive, succeeding every minute, stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_aggregator_archive_last_success_timestamp_seconds{namespace="distant-signal", pod="a", cycle="trains"}'
+        values: '0+60x420'
+    alert_rule_test:
+      - eval_time: 400m
+        alertname: DistantSignalArchiveStale
+        exp_alerts: []
+
+  # Two changed batches every 30m (~24 in 6h) fires; one an hour (~6 in
+  # 6h) does not.
+  - interval: 30m
+    input_series:
+      - series: 'distant_signal_aggregator_archive_batches_changed_total{namespace="distant-signal", pod="a"}'
+        values: '0+2x20'
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: DistantSignalArchiveBatchChurn
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: 24 cold archive batches changed before delete in 6h
+              description: "Each is re-exported next run instead of pruned. Something keeps writing to old trains rows."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalarchivebatchchurn
+  - interval: 1h
+    input_series:
+      - series: 'distant_signal_aggregator_archive_batches_changed_total{namespace="distant-signal", pod="a"}'
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: DistantSignalArchiveBatchChurn
+        exp_alerts: []
