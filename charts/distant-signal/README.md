@@ -830,7 +830,10 @@ its first poll. The schedulefeed NetworkPolicy gains Postgres egress and the
 postgres policy admits `schedulefeed`. It counts
 `distant_signal_db_writes_total{operation, outcome}` and
 `distant_signal_store_schedule_publish_staged_mismatch_total`, which the
-staged-mismatch alert reads alongside the api's name. Rollback: `http`.
+staged-mismatch alert reads alongside the api's name, and
+`distant_signal_store_schedule_publish_rows_total{product, outcome}` (rows
+written vs skipped as unchanged; the api counts the same under `api_`).
+Rollback: `http`.
 
 ## Password encoding caveat
 
