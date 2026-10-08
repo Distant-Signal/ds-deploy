@@ -3213,6 +3213,12 @@ movementRelay:
     # keys in the same chart-rendered Secret. See secret.yaml's comment.
     existingSecretUsernameKey: movement-relay-kafka-sasl-username
     existingSecretPasswordKey: movement-relay-kafka-sasl-password
+    # -- Where to start when the consumer group has no committed offset
+    # (KAFKA_AUTO_OFFSET_RESET): `earliest` replays from the oldest message
+    # Kafka retains, which downstream dedup keys absorb; `latest` skips to
+    # new messages and loses the gap. See
+    # crates/movement-relay/src/kafka_source.rs.
+    autoOffsetReset: earliest
   streamLagPollSecs: 30
   # -- `MAXLEN ~` cap on the movement-events stream, in entries
   # (MOVEMENT_STREAM_MAXLEN). The default is a 1 GiB memory budget at a
@@ -4747,6 +4753,21 @@ metrics:
       window: 2h
       failureRatio: 0.5
       ratioWindow: 15m
+      for: 10m
+      severity: warning
+    # DistantSignalPollerStale: a poller's last successful cycle
+    # (distant_signal_poller_last_success_timestamp_seconds{cycle}, the
+    # process start until one succeeds) is older than intervalMultiple times
+    # its own pollIntervalSecs, and at least minAgeSeconds. Unlike
+    # pollerFailures it needs no failed cycle, so it also catches a poller
+    # that has stopped completing cycles at all. 2x is the smallest safe
+    # multiple: a restarted daily poller can wait up to one interval before
+    # its first cycle. One rule per enabled poller, in the
+    # `<fullname>-pollers` PrometheusRule.
+    pollerStale:
+      enabled: true
+      intervalMultiple: 2
+      minAgeSeconds: 1800
       for: 10m
       severity: warning
     # DistantSignalLdbwsStationStale (SVC-04): the least recently sampled

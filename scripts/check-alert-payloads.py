@@ -100,6 +100,9 @@ RENDER_FLAGS = [
     "pollers.ldbws.baseUrl=https://ldbws.example.com",
     "pollers.incidents.enabled=true",
     "pollers.incidents.baseUrl=https://incidents.example.com",
+    # A daily poller, for DistantSignalPollerStale's per-interval threshold.
+    "pollers.stations.enabled=true",
+    "pollers.stations.baseUrl=https://stations.example.com",
     "archive.enabled=true",
     "archive.s3.bucket=archive-bucket",
     "archive.s3.existingSecret=archive-creds",

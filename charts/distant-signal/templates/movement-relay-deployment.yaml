@@ -147,6 +147,8 @@ with movementRelay.extraEnv, which replaces an entry of the same name.
               value: {{ $group | quote }}
             - name: KAFKA_SASL_MECHANISM
               value: {{ $mechanism | quote }}
+            - name: KAFKA_AUTO_OFFSET_RESET
+              value: {{ .Values.movementRelay.kafka.autoOffsetReset | default "earliest" | quote }}
             - name: KAFKA_SASL_USERNAME
               valueFrom:
                 secretKeyRef:

@@ -932,6 +932,22 @@ took 40-55 minutes on 2026-10-01. Daily pollers
 Check the poller's logs: its upstream feed (National Rail, TfL, Irish Rail),
 its credentials or an expired key, and api's `/private` ingest route.
 
+### DistantSignalPollerStale
+
+A poller's last successful cycle
+(`poller_last_success_timestamp_seconds{cycle}`, recorded by
+`common::poller_loop` for every poller; the process start until a cycle
+succeeds) is older than `pollerStale.intervalMultiple` (2) times its own
+`pollIntervalSecs`, and at least `minAgeSeconds` (1800), for `for` (10m):
+30 minutes for ldbws and incidents, two days for the daily pollers. Unlike
+DistantSignalPollerFailing it needs no failed cycle, so it also fires for a
+poller that has stopped completing cycles at all (a wedged loop, a schedule
+that never comes due). If DistantSignalPollerFailing is firing too, start
+there. Otherwise check the poller's log for its last "poll cycle" line and
+whether the pod is running. poller-ldbws holds undelivered samples while api
+is down (`ldbws_pending_samples`) and sends them on the first successful
+POST.
+
 ### DistantSignalLdbwsStationStale
 
 The least recently sampled LDBWS station

@@ -1,0 +1,50 @@
+# promtool unit tests for DistantSignalPollerStale (see recorded-alerts.yaml's
+# header for how rules.yaml is rendered: ldbws (60s), incidents (300s) and
+# stations (86400s) are enabled). Defaults: older than max(2 x interval,
+# 1800s), for 10m. The gauge is a Unix time, so each series counts up with
+# the test clock (starting at 0) until the poller stops succeeding.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # ldbws succeeds every minute until 20m, then never again (an api outage,
+  # or a loop that stopped cycling). 1800s after 20m is 50m; plus 10m of
+  # `for`, it fires at 60m. stations last succeeded at 0 and is due once a
+  # day: still quiet at 60m. incidents keeps succeeding.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_poller_last_success_timestamp_seconds{namespace="distant-signal", pod="l", cycle="ldbws"}'
+        values: '0+60x20 1200x60'
+      - series: 'distant_signal_poller_last_success_timestamp_seconds{namespace="distant-signal", pod="s", cycle="stations"}'
+        values: '0x80'
+      - series: 'distant_signal_poller_last_success_timestamp_seconds{namespace="distant-signal", pod="i", cycle="incidents"}'
+        values: '0+60x80'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: DistantSignalPollerStale
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: DistantSignalPollerStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cycle: ldbws, poller: ldbws}
+            exp_annotations:
+              summary: no successful ldbws poll for 41m 0s
+              description: "None in 1800s: its cycles fail, or it is not polling at all. Check its log, its upstream and api."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpollerstale
+
+  # A daily poller fires only after two days without a success.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_poller_last_success_timestamp_seconds{namespace="distant-signal", pod="s", cycle="stations"}'
+        values: '0x3000'
+    alert_rule_test:
+      - eval_time: 47h
+        alertname: DistantSignalPollerStale
+        exp_alerts: []
+      - eval_time: 49h
+        alertname: DistantSignalPollerStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cycle: stations, poller: stations}
+            exp_annotations:
+              summary: no successful stations poll for 2d 1h 0m 0s
+              description: "None in 172800s: its cycles fail, or it is not polling at all. Check its log, its upstream and api."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpollerstale

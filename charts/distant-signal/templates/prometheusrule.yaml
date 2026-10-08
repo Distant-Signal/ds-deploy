@@ -1616,10 +1616,23 @@ scoping as above.
 {{- end }}
 {{- end }}
 {{- $pollerFailuresOn := and ($rule.pollerFailures).enabled $anyPoller }}
+{{- /* Each enabled poller's label (common::poller_loop) -> pollIntervalSecs. */}}
+{{- $pollerIntervals := dict }}
+{{- range $name, $poller := .Values.pollers }}
+{{- if $poller.enabled }}
+{{- $_ := set $pollerIntervals $name $poller.pollIntervalSecs }}
+{{- end }}
+{{- end }}
+{{- range $label, $values := dict "irish-rail-gtfs" .Values.pollerIrishRailGtfs "irish-rail-live" .Values.pollerIrishRailLive "nir-stations" .Values.pollerNirStations }}
+{{- if $values.enabled }}
+{{- $_ := set $pollerIntervals $label $values.pollIntervalSecs }}
+{{- end }}
+{{- end }}
+{{- $pollerStaleOn := and ($rule.pollerStale).enabled $anyPoller }}
 {{- $ldbwsOn := and ($rule.ldbwsStalestStation).enabled (.Values.pollers.ldbws).enabled }}
 {{- $ldbwsInvalidCrsOn := and ($rule.ldbwsInvalidCrs).enabled (.Values.pollers.ldbws).enabled }}
 {{- $incidentRemovalOn := and ($rule.incidentRemovalStalled).enabled (.Values.pollers.incidents).enabled }}
-{{- if or $pollerFailuresOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn }}
+{{- if or $pollerFailuresOn $pollerStaleOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -1691,6 +1704,37 @@ spec:
             summary: "poller {{ "{{ $labels.poller }}" }} is failing its poll cycles"
             description: "No success in {{ .window }}{{ if .failureRatio }}, or over {{ .failureRatio }} of cycles failed in {{ .ratioWindow }}{{ end }}. Check its upstream, its key, and api."
             runbook_url: {{ printf "%s#distantsignalpollerfailing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.pollerStale }}
+        {{- if $pollerStaleOn }}
+        {{- /*
+        No successful cycle for intervalMultiple x the poller's own interval
+        (at least minAgeSeconds). The gauge is the process start until a
+        cycle succeeds (common::metrics::register_cycle), so a poller that
+        never completes a cycle still ages; DistantSignalPollerFailing needs
+        a failed cycle to fire. One rule per poller: each has its own
+        interval.
+        */}}
+        {{- $stale := . }}
+        {{- range $label, $interval := $pollerIntervals }}
+        {{- $maxAge := max (int $stale.minAgeSeconds) (mul (int $stale.intervalMultiple) (int $interval)) }}
+        - alert: DistantSignalPollerStale
+          expr: |
+            time() - max by (namespace, cycle) (distant_signal_poller_last_success_timestamp_seconds{namespace="{{ $ns }}", cycle="{{ $label }}"}) > {{ $maxAge }}
+          for: {{ $stale.for }}
+          labels:
+            severity: {{ $stale.severity }}
+            {{- /* As DistantSignalPollerFailing; also keeps each rule distinct (promtool lint). */}}
+            poller: {{ $label }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no successful {{ "{{ $labels.cycle }}" }} poll for {{ "{{ $value | humanizeDuration }}" }}"
+            description: "None in {{ $maxAge }}s: its cycles fail, or it is not polling at all. Check its log, its upstream and api."
+            runbook_url: {{ printf "%s#distantsignalpollerstale" $runbook | quote }}
+        {{- end }}
         {{- end }}
         {{- end }}
         {{- with $rule.ldbwsStalestStation }}
