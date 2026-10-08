@@ -1948,9 +1948,9 @@ jobs:
           # The bounded connect retry (2026-10-08: a saturated node, a late NetworkPolicy).
           grep -A1 'name: MIGRATION_CONNECT_DEADLINE_SECS$' <<<"${job}" | grep -q 'value: "120"' \
             || fail "the migrate Job must set MIGRATION_CONNECT_DEADLINE_SECS=120 by default"
-          grep -A1 'name: MIGRATION_CONNECT_DEADLINE_SECS$' \
-            <<<"$(render --set migrate.job.enabled=true --set migrate.job.connectDeadlineSecs=45 \
-              --show-only templates/migrate-job.yaml)" | grep -q 'value: "45"' \
+          job45=$(render --set migrate.job.enabled=true --set migrate.job.connectDeadlineSecs=45 \
+            --show-only templates/migrate-job.yaml)
+          grep -A1 'name: MIGRATION_CONNECT_DEADLINE_SECS$' <<<"${job45}" | grep -q 'value: "45"' \
             || fail "migrate.job.connectDeadlineSecs must reach MIGRATION_CONNECT_DEADLINE_SECS"
           urls=$(grep -A1 'name: MIGRATION_DATABASE_URL$' <<<"${job}")
           n=$(grep -c 'value: "postgres://distant_signal_owner:' <<<"${urls}" || true)
@@ -2907,9 +2907,9 @@ jobs:
           # The bounded connect retry (2026-10-08: "pool timed out" on a saturated node).
           grep -A1 'name: MAINTENANCE_CONNECT_DEADLINE_SECS$' <<<"${cj}" | grep -q 'value: "120"' \
             || fail "the CronJob must set MAINTENANCE_CONNECT_DEADLINE_SECS=120 by default"
-          grep -A1 'name: MAINTENANCE_CONNECT_DEADLINE_SECS$' \
-            <<<"$(render "${on[@]}" --set apiMaintenance.database.connectDeadlineSecs=45 \
-              --show-only templates/api-maintenance-cronjob.yaml)" | grep -q 'value: "45"' \
+          cj45=$(render "${on[@]}" --set apiMaintenance.database.connectDeadlineSecs=45 \
+            --show-only templates/api-maintenance-cronjob.yaml)
+          grep -A1 'name: MAINTENANCE_CONNECT_DEADLINE_SECS$' <<<"${cj45}" | grep -q 'value: "45"' \
             || fail "apiMaintenance.database.connectDeadlineSecs must reach MAINTENANCE_CONNECT_DEADLINE_SECS"
           for env in PAST_TRAVEL_RETENTION_DAYS STALE_PUSH_SUBSCRIPTION_DAYS INACTIVE_ACCOUNT_RETENTION_DAYS; do
             grep -q "name: ${env}\$" <<<"${cj}" || fail "api-maintenance CronJob lacks ${env}"
