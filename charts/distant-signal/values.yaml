@@ -3454,11 +3454,13 @@ pollerNirStations:
 # scheduleFeed -- OPT-IN CIF SCHEDULE feed SFTP-push receiver
 # (docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md)
 # ---------------------------------------------------------------------------
-# Renders ONE Deployment with three containers (an SFTP server, this app's
-# own schedule-ingest verifier, and schedule-reference) sharing one
-# ReadWriteOnce PVC -- see the
-# design doc's "The reader/writer problem push introduces" for why this is
-# one Pod, not two. Off by default: enabling this without a real DTD push
+# Renders an SFTP server (SFTPGo, its own Deployment by default:
+# scheduleFeed.sftp.separateDeployment) and a Deployment running this app's
+# own schedule-ingest verifier and schedule-reference, all sharing one
+# ReadWriteOnce PVC. The design doc's "The reader/writer problem push
+# introduces" put all three in one Pod; SFTPGo moved out on 2026-10-08 so
+# that app deploys stop restarting it, which on one node (the PVC is RWO
+# per node) changes nothing about the shared volume. Off by default: enabling this without a real DTD push
 # account configured (see docs/superpowers/plans/2026-09-01-schedule-feed-push-ingestion.md
 # Task 1; pruned from the tree in b7f71a8a, read it from the repo history) stands up infrastructure nothing can reach yet, which is a
 # legitimate thing to do ahead of time but not silently assumed to be "done."
@@ -3471,6 +3473,22 @@ scheduleFeed:
     # PVC and the ingest/reference containers stay. scheduleFeed.enabled
     # with neither source enabled fails the render.
     enabled: true
+    # -- Run SFTPGo in its own Deployment (`<fullname>-schedulefeed-sftp`,
+    # component `schedulefeed-sftp`) instead of as the `sftp` container of
+    # the schedulefeed pod, so app deploys (which recreate the
+    # ingest/reference pod) never restart it: DTD's daily push at about
+    # 20:00-20:06 UTC must not meet a restarting listener. Same container,
+    # env, host keys, account and PVC; the SFTP Service and NetworkPolicy
+    # follow the new pod. Assumes a single node (both pods mount one
+    # ReadWriteOnce PVC; see schedulefeed-sftp-deployment.yaml). Switching
+    # either way recreates both pods once and leaves the PVC data alone;
+    # `false` renders the previous one-pod layout exactly.
+    separateDeployment: true
+    # -- Annotations for the separate SFTP pod only (separateDeployment).
+    # scheduleFeed.podAnnotations stays on the ingest/reference pod, so an
+    # annotation that changes per release there does not restart SFTPGo.
+    # Unused with separateDeployment false.
+    podAnnotations: {}
     image:
       repository: drakkan/sftpgo
       # -- MUST be a real drakkan/sftpgo tag, NOT left empty: unlike every
@@ -4073,9 +4091,13 @@ scheduleFeed:
   # three are set individually -- it exists so an operator's
   # pre-existing single-block override keeps working.
   resources: {}
+  # Placement for BOTH the schedulefeed pod and the separate SFTP pod: they
+  # mount one ReadWriteOnce PVC, so they must share a node.
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # The schedulefeed (ingest/reference) pod's annotations. The separate SFTP
+  # pod has its own, scheduleFeed.sftp.podAnnotations.
   podAnnotations: {}
   serviceAccount:
     # -- Create `<fullname>-schedulefeed` (or `name`): a dedicated

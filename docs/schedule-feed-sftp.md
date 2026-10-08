@@ -1,7 +1,10 @@
 # Schedule feed SFTP: push account controls
 
-The schedulefeed pod's `sftp` container (SFTPGo v2.7.5) is the one service on
-the node's public IP. DTD (the Rail Data Marketplace push) logs in as
+The `sftp` container (SFTPGo v2.7.5) of the `schedulefeed-sftp` pod is the
+one service on the node's public IP. It has had its own Deployment since
+2026-10-08 (`scheduleFeed.sftp.separateDeployment`), so app deploys no
+longer restart it; the container name, and so the Loki queries below, did
+not change. DTD (the Rail Data Marketplace push) logs in as
 `dtd-push` and uploads the CIF timetable zip, and sometimes the CORPUS
 extract. DTD will not pin our host key or publish its source addresses, so an
 IP allow-list and host-key pinning are not available. These controls make up

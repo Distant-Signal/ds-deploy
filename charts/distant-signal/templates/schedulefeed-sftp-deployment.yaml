@@ -1,0 +1,250 @@
+{{/*
+SFTPGo in its own Deployment (scheduleFeed.sftp.separateDeployment, the
+default), so that app deploys never restart it.
+
+WHY: DTD pushes the daily CIF zip at about 20:00-20:06 UTC, an upload of a
+few seconds, and nothing says its client retries a failed push. Until
+2026-10-08 SFTPGo was the `sftp` container of the schedulefeed pod,
+alongside `ingest` (schedule-ingest) and `reference` (schedule-reference),
+whose images change with every Distant Signal release -- so every deploy
+recreated the pod and took the SFTP listener down with it (one deploy
+already landed at 20:12). This pod carries only third-party, pinned
+inputs: the drakkan/sftpgo image tag, the entrypoint script, the host-key
+and push-account Secrets, and SFTPGo's env. Its pod template therefore
+changes only when one of those does.
+
+WHAT KEEPS IT STABLE ACROSS RELEASES (keep it that way):
+  - pod-template labels come from `distant-signal.podLabels`, like every
+    other pod template: the full `distant-signal.labels` set carries
+    helm.sh/chart and app.kubernetes.io/version, which change with every
+    build (scripts/check-pod-labels-chart.py enforces it).
+  - checksum/sftp-entrypoint hashes the script file itself, not the
+    rendered ConfigMap, whose labels change with every chart version.
+  - no prometheus.io/* annotations and no scheduleFeed.podAnnotations: the
+    PodMonitor scrapes sftp-metrics, and scheduleFeed.sftp.podAnnotations
+    is this pod's own annotation hook.
+scripts/check-schedulefeed-chart.py renders the chart under two different
+chart versions and app versions and requires this Deployment unchanged.
+
+SINGLE-NODE ASSUMPTION: this pod mounts the SAME ReadWriteOnce PVC as the
+schedulefeed pod (`ingest` reads what SFTPGo writes; `reference` reads
+`ingest`'s output). ReadWriteOnce is per node, not per pod, so two pods
+share it only while they run on the same node -- true on the single-node
+local-path cluster this chart targets (redis-deployment.yaml makes the same
+assumption for its Recreate strategy). On a multi-node cluster pin both
+pods to one node (scheduleFeed.nodeSelector/affinity apply to both), or use
+an RWX storage class, or set separateDeployment: false.
+
+Recreate and replicas 1, as before: two SFTPGo processes must not accept
+uploads into the same directory. The container, its env, volumes, host keys
+and push account are the same `sftp` container the shared pod ran
+(distant-signal.scheduleFeedSftpContainer below), so DTD's host key and
+credentials do not change.
+*/}}
+{{- if include "distant-signal.scheduleFeedSftpSeparate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "distant-signal.scheduleFeedSftpFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed-sftp") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "schedulefeed-sftp") | nindent 6 }}
+  template:
+    metadata:
+      # Constant across releases (see the header comment).
+      labels:
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "schedulefeed-sftp") | nindent 8 }}
+      annotations:
+        # SFTPGo reads its account policy (permissions, login methods,
+        # limits) from the entrypoint script at start, so a change to the
+        # script must replace the pod; env changes already do. The script's
+        # own hash: the ConfigMap's labels change with every chart version.
+        checksum/sftp-entrypoint: {{ .Files.Get "files/schedule-sftp-entrypoint.sh" | sha256sum }}
+        {{- with .Values.scheduleFeed.sftp.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      # The release's shared ServiceAccount, not scheduleFeed's own: that
+      # one exists for the bucket reader's workload identity, which SFTPGo
+      # has no use for. No API token either way.
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # scheduleFeed.podSecurityContext, as for the schedulefeed pod: its
+      # fsGroup (1000) is what lets SFTPGo (uid 1000) write the shared PVC,
+      # and both pods must agree on it.
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.scheduleFeed.podSecurityContext) | nindent 8 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ default (include "distant-signal.scheduleFeedFullname" .) .Values.scheduleFeed.persistence.existingClaim }}
+        {{- include "distant-signal.scheduleFeedSftpVolumes" . | nindent 8 }}
+      containers:
+        {{- include "distant-signal.scheduleFeedSftpContainer" . | nindent 8 }}
+      # The schedulefeed pod's placement: both pods mount one
+      # ReadWriteOnce PVC (see the header comment).
+      {{- with .Values.scheduleFeed.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduleFeed.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduleFeed.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+{{- /*
+The `sftp` container's volumes (host keys, entrypoint script, the
+memory-backed bootstrap dir), as pod `volumes:` list items. Shared by this
+Deployment and, with scheduleFeed.sftp.separateDeployment false, the
+schedulefeed pod. Takes root.
+*/ -}}
+{{- define "distant-signal.scheduleFeedSftpVolumes" -}}
+- name: host-key
+  secret:
+    secretName: {{ default (include "distant-signal.scheduleFeedSecretName" .) .Values.scheduleFeed.sftp.existingSecretHostKey }}
+    # 0440 plus the pod's fsGroup: kubelet mounts these root-owned,
+    # so SFTPGo (uid 1000) can only read them through the group
+    # bit. 0600 left them unreadable.
+    items:
+      {{- range .Values.scheduleFeed.sftp.hostKeys }}
+      - key: {{ . }}
+        path: {{ . }}
+        mode: 0440
+      {{- end }}
+- name: sftp-entrypoint
+  configMap:
+    name: {{ include "distant-signal.scheduleFeedFullname" . }}-sftp-entrypoint
+    defaultMode: 0555
+# INF-13: the sftp entrypoint writes the push account's loaddata
+# JSON (which holds its password or public key) here: memory-backed,
+# so the credential never reaches the node's disk, and gone with the
+# Pod.
+- name: sftp-bootstrap
+  emptyDir:
+    medium: Memory
+    sizeLimit: 1Mi
+{{- end }}
+
+{{- /*
+The `sftp` container (SFTPGo), as one `containers:` list item. Shared by
+this Deployment and, with scheduleFeed.sftp.separateDeployment false, the
+schedulefeed pod. Takes root.
+*/ -}}
+{{- define "distant-signal.scheduleFeedSftpContainer" -}}
+- name: sftp
+  image: {{ include "distant-signal.image" (dict "root" . "image" .Values.scheduleFeed.sftp.image) | quote }}
+  imagePullPolicy: {{ .Values.scheduleFeed.sftp.image.pullPolicy }}
+  # readOnlyRootFilesystem is left false here, unlike every
+  # single-purpose Rust binary elsewhere in this chart: SFTPGo's own
+  # runtime writes (its own SQLite metadata store at
+  # /var/lib/sftpgo/sftpgo.db by default -- confirmed against
+  # SFTPGo's own shipped sftpgo.json, data_provider.driver: "sqlite"
+  # -- the loaddata JSON the sftp-entrypoint ConfigMap's script
+  # writes now goes to the memory-backed sftp-bootstrap emptyDir
+  # instead, INF-13) genuinely need a writable root filesystem with
+  # the mechanism this chart now uses. Note this also means the
+  # SQLite user database is NOT on the persistent PVC (only
+  # /data/schedule-feed is) -- it is rebuilt from scratch by the
+  # loaddata script on every pod restart, which is fine (arguably
+  # correct for this chart's "config as code" convention): the
+  # account's credentials come from values/Secrets, not from any
+  # state a human might have changed via SFTPGo's own admin UI
+  # (which this chart never provisions an admin for at all).
+  securityContext:
+    {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" false) | nindent 4 }}
+  ports:
+    - name: sftp
+      containerPort: {{ .Values.scheduleFeed.sftp.port }}
+    {{- if and .Values.metrics.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
+    - name: sftp-metrics
+      containerPort: {{ .Values.scheduleFeed.sftp.telemetry.port }}
+      protocol: TCP
+    {{- end }}
+  # Overrides the image's own `CMD ["sftpgo", "serve"]` (no
+  # ENTRYPOINT is set upstream, so this replaces it outright) to run
+  # the sftp-entrypoint ConfigMap's script first -- see that
+  # ConfigMap (schedulefeed-configmap.yaml) for the full mechanism
+  # and source citations for why this replaced
+  # SFTPGO_DEFAULT_ADMIN_USERNAME/PASSWORD (that pair only ever
+  # bootstraps SFTPGo's web-UI/REST-API *admin* account, confirmed
+  # against SFTPGo's real Go source -- never the SFTP-login *user*
+  # DTD's push client needs).
+  command: ["/bin/sh", "/scripts/entrypoint.sh"]
+  # INF-9: SFTPGo has no health endpoint this chart configures, so a
+  # TCP check on the SFTP port -- restarts a hung sftpd, generous
+  # enough (3 min) never to trip on a slow start.
+  livenessProbe:
+    tcpSocket:
+      port: {{ .Values.scheduleFeed.sftp.port }}
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 6
+  # This env block, the host-key mount path below, and SFTPGo's
+  # sftpd port-binding env var name are otherwise unchanged from
+  # this chart's earlier version -- still UNVERIFIED against a real
+  # deployed drakkan/sftpgo container/entrypoint in this pass
+  # (docker/podman are not available in this sandbox -- see this
+  # task's own implementation report) beyond what the
+  # source-code-level confirmation below establishes; the
+  # SFTPGO_SFTPD__BINDINGS__0__PORT env var name itself (viper's
+  # `__`-delimited nested-config convention, confirmed against
+  # config.go's SetEnvKeyReplacer/AutomaticEnv wiring) was not
+  # independently re-verified in this pass either.
+  #
+  # ALSO UNVERIFIED / LIKELY A MISMATCH: the mounted host key
+  # (distant-signal.scheduleFeedHostKeySecretKey, rendered by
+  # schedulefeed-secret.yaml via Helm's `genPrivateKey "ed25519"`)
+  # is stored as a PKCS8 PEM blob ("-----BEGIN PRIVATE KEY-----"),
+  # NOT the OpenSSH-native "-----BEGIN OPENSSH PRIVATE KEY-----"
+  # container format that SFTPGo (like most sshd-alikes, e.g.
+  # atmoz/sftp) may expect at a raw host-key file path. Whether
+  # SFTPGo's loader accepts PKCS8 PEM directly, or needs a
+  # conversion step (e.g. an initContainer running
+  # `ssh-keygen -p -m PEM`/similar) has NOT been confirmed in this
+  # pass -- treat this as an open verification item, not a
+  # working default. Out of scope for this task (SFTP account
+  # provisioning), not touched here.
+  env:
+    {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.scheduleFeedSftpEnv" .) "extra" .Values.scheduleFeed.sftp.extraEnv) | trim | nindent 4 }}
+  volumeMounts:
+    - name: data
+      mountPath: /data/schedule-feed
+    - name: host-key
+      mountPath: /srv/sftpgo/host_keys
+      readOnly: true
+    - name: sftp-entrypoint
+      mountPath: /scripts
+      readOnly: true
+    - name: sftp-bootstrap
+      mountPath: /run/sftp-bootstrap
+  # Per-container resources, NOT the one shared
+  # .Values.scheduleFeed.resources block all three containers used
+  # until 2026-09-25. These three siblings differ by an order of
+  # magnitude -- `reference` parses the whole-network CIF extract in
+  # memory, `sftp` just runs sftpgo -- and Kubernetes sums a Pod's
+  # per-container requests, so one shared block either starved
+  # `reference` or tripled the Pod's footprint to pad out two
+  # containers that never needed it. `.Values.scheduleFeed.resources`
+  # is still honoured as the fallback for any container whose own
+  # block is left empty, so an existing override keeps working.
+  {{- with (.Values.scheduleFeed.sftp.resources | default .Values.scheduleFeed.resources) }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

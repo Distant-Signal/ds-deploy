@@ -102,6 +102,7 @@ RENDERS: tuple[tuple[str, tuple[str, ...]], ...] = (
 EXPECTED_IN_EVERYTHING = (
     "Deployment/distant-signal-redis",
     "Deployment/distant-signal-schedulefeed",
+    "Deployment/distant-signal-schedulefeed-sftp",
     "Deployment/distant-signal-ingest-writer",
     "Deployment/distant-signal-devauthentik",
     "StatefulSet/distant-signal-postgres",

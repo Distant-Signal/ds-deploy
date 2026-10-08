@@ -473,6 +473,9 @@ policy above. The migrate hook Job's policies are hooks themselves
 {{- end }}
 {{- end }}
 {{- if .Values.scheduleFeed.enabled }}
+{{- /* SFTPGo is the `sftp` container of THIS pod (not split out into
+schedulefeed-sftp, whose own policy follows this one). */}}
+{{- $sftpHere := and .Values.scheduleFeed.sftp.enabled (not (include "distant-signal.scheduleFeedSftpSeparate" .)) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -490,31 +493,8 @@ spec:
     - Egress
     {{- end }}
   ingress:
-    {{- if .Values.scheduleFeed.sftp.enabled }}
-    # INF-2: DTD pushes the timetable over SFTP to the `sftp` container.
-    # Until 2026-09-27 this policy allowed only the metrics scrape, so
-    # enabling networkPolicy silently dropped every delivery. Traffic from
-    # the schedulefeed Service's LoadBalancer/NodePort reaches the pod as an
-    # ordinary ingress connection, which NetworkPolicy does govern.
-    #
-    # scheduleFeed.sftp.allowedCidrs narrows the sources. It only works when
-    # the pod sees the real client address: set
-    # scheduleFeed.service.externalTrafficPolicy to Local (or use a load
-    # balancer that preserves the source IP). Behind a source-NATing hop
-    # the source is a node or LB address and an allow-list would drop every
-    # push.
-    # Empty (the default) allows any source; SFTP authentication is the
-    # control then.
-    - ports:
-        - protocol: TCP
-          port: {{ .Values.scheduleFeed.sftp.port }}
-      {{- with .Values.scheduleFeed.sftp.allowedCidrs }}
-      from:
-        {{- range . }}
-        - ipBlock:
-            cidr: {{ . | quote }}
-        {{- end }}
-      {{- end }}
+    {{- if $sftpHere }}
+    {{- include "distant-signal.scheduleFeedSftpIngressRule" . | nindent 4 }}
     {{- end }}
     # Kubelet probes (the ingest and reference /livez and /healthz ports)
     # come from the node, which no selector can name
@@ -533,7 +513,7 @@ spec:
           port: {{ .Values.metrics.port }}
         - protocol: TCP
           port: {{ .Values.scheduleFeed.reference.metricsPort }}
-        {{- if and .Values.scheduleFeed.sftp.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
+        {{- if and $sftpHere .Values.scheduleFeed.sftp.telemetry.enabled }}
         # The sftp container's SFTPGo telemetry (/metrics, /healthz).
         - protocol: TCP
           port: {{ .Values.scheduleFeed.sftp.telemetry.port }}
@@ -565,4 +545,83 @@ network namespace, so the egress is the pod's. */}}
   {{- . | nindent 2 }}
 {{- end }}
 {{- end }}
+{{- if include "distant-signal.scheduleFeedSftpSeparate" . }}
+---
+{{- /*
+The separate SFTPGo pod (scheduleFeed.sftp.separateDeployment,
+schedulefeed-sftp-deployment.yaml): DTD's push on the SFTP port, its
+telemetry from the monitoring namespace, and nothing else in. SFTPGo opens
+no connections of its own, so egress (when on) is DNS only:
+no api, Postgres or internet. networkPolicy.components.schedulefeed-sftp
+adds rules. Its liveness probe is a TCP check on the SFTP port, which the
+SFTP rule admits (as it did in the shared pod).
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "distant-signal.scheduleFeedSftpFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed-sftp") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "schedulefeed-sftp") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if include "distant-signal.egressOn" (dict "root" . "component" "schedulefeed-sftp") }}
+    - Egress
+    {{- end }}
+  ingress:
+    {{- include "distant-signal.scheduleFeedSftpIngressRule" . | nindent 4 }}
+  {{- if and .Values.metrics.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
+    # SFTPGo's telemetry (/metrics, /healthz), scoped to the monitoring
+    # namespace like every other workload.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.scheduleFeed.sftp.telemetry.port }}
+  {{- end }}
+{{- with include "distant-signal.extraIngress" (dict "root" . "component" "schedulefeed-sftp") }}
+    {{- . | nindent 4 }}
+{{- end }}
+{{- with include "distant-signal.egressSection" (dict "root" . "component" "schedulefeed-sftp" "internet" false) }}
+  {{- . | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /*
+The SFTP ingress rule (one NetworkPolicyIngressRule list item) for
+whichever pod runs SFTPGo: the separate schedulefeed-sftp pod, or the
+schedulefeed pod with scheduleFeed.sftp.separateDeployment false. Takes
+root.
+*/ -}}
+{{- define "distant-signal.scheduleFeedSftpIngressRule" -}}
+# INF-2: DTD pushes the timetable over SFTP to the `sftp` container.
+# Until 2026-09-27 this policy allowed only the metrics scrape, so
+# enabling networkPolicy silently dropped every delivery. Traffic from
+# the schedulefeed Service's LoadBalancer/NodePort reaches the pod as an
+# ordinary ingress connection, which NetworkPolicy does govern.
+#
+# scheduleFeed.sftp.allowedCidrs narrows the sources. It only works when
+# the pod sees the real client address: set
+# scheduleFeed.service.externalTrafficPolicy to Local (or use a load
+# balancer that preserves the source IP). Behind a source-NATing hop
+# the source is a node or LB address and an allow-list would drop every
+# push.
+# Empty (the default) allows any source; SFTP authentication is the
+# control then.
+- ports:
+    - protocol: TCP
+      port: {{ .Values.scheduleFeed.sftp.port }}
+  {{- with .Values.scheduleFeed.sftp.allowedCidrs }}
+  from:
+    {{- range . }}
+    - ipBlock:
+        cidr: {{ . | quote }}
+    {{- end }}
+  {{- end }}
 {{- end }}

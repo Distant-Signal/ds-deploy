@@ -90,6 +90,11 @@ spec:
           {{- if .Values.scheduleFeed.enabled }}
           - schedulefeed
           {{- end }}
+          {{- if and (include "distant-signal.scheduleFeedSftpSeparate" .) .Values.scheduleFeed.sftp.telemetry.enabled }}
+          # SFTPGo's own pod (scheduleFeed.sftp.separateDeployment): only
+          # the sftp-metrics endpoint below finds a port on it.
+          - schedulefeed-sftp
+          {{- end }}
   podMetricsEndpoints:
     - port: metrics
       path: /metrics

@@ -17,21 +17,33 @@ checks:
     `scheduleFeed.sftp.enabled=true` or `scheduleFeed.bucket.auth=key` (the
     defaults) renders exactly what leaving it unset does, for each of the
     --baseline value sets below;
+  - SFTPGo's own Deployment (`scheduleFeed.sftp.separateDeployment`, the
+    default): `<release>-schedulefeed-sftp` runs exactly the `sftp`
+    container and volumes the one-pod layout (`separateDeployment=false`)
+    runs, with Recreate, one replica, the schedulefeed PVC and pod-template
+    labels free of chart/app versions; it renders identically under another
+    chart version, app version and ingest/reference image tag; the SFTP
+    Service selects it; its NetworkPolicy admits SFTP and telemetry and
+    allows DNS egress only, and the schedulefeed policy no longer admits
+    them; the PodMonitor selects it. With `separateDeployment=false`: no
+    such Deployment or policy, and `sftp` back in the schedulefeed pod;
   - schedulefeed with neither source (`scheduleFeed.sftp.enabled=false`,
     bucket off) refuses to render, naming both switches;
   - SFTP only (the default): no bucket or source-switch env on any
-    container, no `bucket-credentials` volume, containers sftp, ingest and
-    reference;
+    container, no `bucket-credentials` volume, containers ingest and
+    reference in the schedulefeed pod and sftp in its own;
   - both sources: the ingest env contract (source switches, precedence,
     bucket name, key path, expected keys, every BUCKET_* default as a plain
     integer; no BUCKET_BASE_URL or audit-log vars unless set), the reader
     key as an optional 0440 Secret volume mounted read-only on `ingest`
     only, and no bucket env on `sftp` or `reference`;
   - bucket only: containers ingest and reference, SFTP_SOURCE_ENABLED
-    false, no SFTP Service, entrypoint ConfigMap, host-key Secret, volumes
-    or checksum annotation, the PVC kept, and no sftp.authMethod needed;
+    false, no SFTP Deployment, Service, entrypoint ConfigMap, host-key
+    Secret, volumes or checksum annotation, the PVC kept, and no
+    sftp.authMethod needed;
   - bucket only with NetworkPolicy egress and internetPorts [443]: no SFTP
-    (2022) or SFTP telemetry (9097) ingress, and the internet rule allows
+    (2022) or SFTP telemetry (9097) ingress and no schedulefeed-sftp
+    policy, and the internet rule allows
     443 (and a custom baseUrl's port);
   - audit-log shipping adds its three vars; extraEnv overrides a BUCKET_*
     var once;
@@ -59,16 +71,19 @@ checks:
     ingress; `db` gives `reference` (only) INGEST_SINK=db, DATABASE_URL
     (after PGPASSWORD), DATABASE_MAX_CONNECTIONS and the api's
     CORPUS_FALLBACK_ENABLED, the schedulefeed policy Postgres egress and the
-    postgres policy `schedulefeed` ingress; an unknown sink refuses to
-    render.
+    postgres policy `schedulefeed` ingress (and nothing for
+    schedulefeed-sftp); an unknown sink refuses to render.
 
 --baseline DIR renders DIR (a copy of charts/distant-signal from another
 commit, e.g. the merge base) and this chart with the same flags, for the
 defaults; schedulefeed on; schedulefeed on with the NetworkPolicy and its
 egress rules; both sources (key auth); bucket only with the NetworkPolicy;
-and values-example.yaml. Every document must be identical
-after normalisation (the `data`/`stringData` of every Secret are dropped:
-genPrivateKey and randAlphaNum differ between runs). A difference fails
+and values-example.yaml. --baseline-set KEY=VALUE (repeatable) adds
+`--set KEY=VALUE` to this chart's renders only, e.g.
+`scheduleFeed.sftp.separateDeployment=false` against a commit from before
+the SFTP split. Every document must be identical after normalisation (the
+`data`/`stringData` of every Secret are dropped: genPrivateKey and
+randAlphaNum differ between runs). A difference fails
 with a unified diff per document. A one-off check for refactors; CI
 doesn't run it (on main it would compare main with itself).
 
@@ -79,9 +94,11 @@ PyYAML (pinned in pyproject.toml's `lint` dependency group).
 import argparse
 import difflib
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from typing import cast
 
@@ -135,6 +152,15 @@ BUCKET = (
     "scheduleFeed.bucket.existingSecret=distant-signal-schedulefeed-bucket",
 )
 SFTP_OFF = ("--set", "scheduleFeed.sftp.enabled=false")
+ONE_POD = ("--set", "scheduleFeed.sftp.separateDeployment=false")
+METRICS = (
+    "--set",
+    "metrics.enabled=true",
+    "--set",
+    "metrics.podMonitor.enabled=true",
+)
+SFTP_DEPLOYMENT = "distant-signal-schedulefeed-sftp"
+SFTP_COMPONENT = "schedulefeed-sftp"
 AUDIT = (
     "--set",
     "scheduleFeed.bucket.auditLogs.ship=true",
@@ -287,10 +313,22 @@ def schedulefeed(docs: Sequence[Doc]) -> Doc | None:
     return None
 
 
+def sftp_deployment(docs: Sequence[Doc]) -> Doc | None:
+    """Return SFTPGo's own Deployment, if rendered."""
+    for doc in docs:
+        if name_of(doc) == f"Deployment/{SFTP_DEPLOYMENT}":
+            return doc
+    return None
+
+
 def container(docs: Sequence[Doc], name: str) -> Container:
-    """Return the schedulefeed Deployment's container `name` (empty if absent)."""
-    deployment = schedulefeed(docs)
-    found = [c for c in containers_of(deployment or {}) if c.get("name") == name]
+    """Return container `name` of the schedulefeed or SFTP Deployment, or {}."""
+    found = [
+        c
+        for deployment in (schedulefeed(docs), sftp_deployment(docs))
+        for c in containers_of(deployment or {})
+        if c.get("name") == name
+    ]
     return found[0] if found else {}
 
 
@@ -330,10 +368,10 @@ def compare(c: Checker, label: str, old: Sequence[Doc], new: Sequence[Doc]) -> N
             c.failures.append(f"{label}: {key} differs\n{''.join(diff)}")
 
 
-def check_baseline(c: Checker, base: pathlib.Path) -> None:
-    """Every BASELINE_SETS render of `base` equals this chart's."""
+def check_baseline(c: Checker, base: pathlib.Path, extra: Sequence[str] = ()) -> None:
+    """Every BASELINE_SETS render of `base` equals this chart's (plus `extra`)."""
     for label, args in BASELINE_SETS:
-        compare(c, label, c.docs(*args, chart=base), c.docs(*args))
+        compare(c, label, c.docs(*args, chart=base), c.docs(*args, *extra))
 
 
 def check_explicit_defaults(c: Checker) -> None:
@@ -341,6 +379,7 @@ def check_explicit_defaults(c: Checker) -> None:
     for name, explicit in (
         ("sftp", ("--set", "scheduleFeed.sftp.enabled=true")),
         ("key auth", ("--set", "scheduleFeed.bucket.auth=key")),
+        ("separate sftp", ("--set", "scheduleFeed.sftp.separateDeployment=true")),
     ):
         for label, args in BASELINE_SETS:
             if name == "sftp" and SFTP_OFF[1] in args:
@@ -371,16 +410,36 @@ def container_names(docs: Sequence[Doc]) -> list[str]:
     return [str(ctr.get("name")) for ctr in containers_of(schedulefeed(docs) or {})]
 
 
+def sftp_container_names(docs: Sequence[Doc]) -> list[str]:
+    """Return the SFTP Deployment's container names (none if not rendered)."""
+    return [str(ctr.get("name")) for ctr in containers_of(sftp_deployment(docs) or {})]
+
+
+def template_of(deployment: Doc | None) -> dict[str, dict[str, object]]:
+    """Return a Deployment's pod template (empty if None)."""
+    spec = cast("dict[str, object]", (deployment or {}).get("spec") or {})
+    return cast("dict[str, dict[str, object]]", spec.get("template") or {})
+
+
+def deployment_pod_spec(deployment: Doc | None) -> dict[str, object]:
+    """Return a Deployment's pod spec (empty if None)."""
+    return template_of(deployment).get("spec") or {}
+
+
 def pod_spec(docs: Sequence[Doc]) -> dict[str, object]:
     """Return the schedulefeed Deployment's pod spec (empty if not rendered)."""
-    spec = cast("dict[str, dict[str, object]]", (schedulefeed(docs) or {})["spec"])
-    return cast("dict[str, object]", spec["template"]["spec"])
+    return deployment_pod_spec(schedulefeed(docs))
+
+
+def pod_volumes(pod: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Return a pod spec's volumes, by name."""
+    vols = cast("list[dict[str, object]]", pod.get("volumes") or [])
+    return {str(v["name"]): v for v in vols}
 
 
 def volumes(docs: Sequence[Doc]) -> dict[str, dict[str, object]]:
     """Return the schedulefeed pod's volumes, by name."""
-    vols = cast("list[dict[str, object]]", pod_spec(docs).get("volumes") or [])
-    return {str(v["name"]): v for v in vols}
+    return pod_volumes(pod_spec(docs))
 
 
 def mounts(c: Container) -> dict[str, dict[str, object]]:
@@ -404,8 +463,192 @@ def check_sftp_only(c: Checker) -> None:
         message="sftp only: a bucket-credentials volume",
     )
     c.check(
+        ok=container_names(docs) == ["ingest", "reference"]
+        and sftp_container_names(docs) == ["sftp"],
+        message=f"sftp only: containers {container_names(docs)}, "
+        f"sftp pod {sftp_container_names(docs)}",
+    )
+
+
+def labels_of(meta: object) -> dict[str, str]:
+    """Return an object's or pod template's metadata.labels."""
+    found = cast("dict[str, dict[str, str]]", meta or {}).get("labels")
+    return found or {}
+
+
+def podmonitor_components(docs: Sequence[Doc]) -> set[str]:
+    """Return the components the PodMonitor selects (none if not rendered)."""
+    for doc in docs:
+        if doc.get("kind") != "PodMonitor":
+            continue
+        spec = cast("dict[str, dict[str, object]]", doc["spec"])
+        exprs = cast(
+            "list[dict[str, object]]", spec["selector"].get("matchExpressions") or []
+        )
+        for expr in exprs:
+            if expr.get("key") == "app.kubernetes.io/component":
+                return set(cast("list[str]", expr.get("values") or []))
+    return set()
+
+
+def sftp_service_selector(docs: Sequence[Doc]) -> dict[str, str]:
+    """Return the SFTP Service's selector (empty if not rendered)."""
+    for doc in docs:
+        if name_of(doc) == "Service/distant-signal-schedulefeed":
+            spec = cast("dict[str, dict[str, str]]", doc["spec"])
+            return spec.get("selector") or {}
+    return {}
+
+
+def check_split_policies(c: Checker, docs: Sequence[Doc]) -> None:
+    """SFTP and telemetry ingress on the SFTP pod only; its egress is DNS."""
+    policy = sftp_policy(docs)
+    spec = cast("dict[str, object]", policy.get("spec") or {})
+    selector = cast("dict[str, dict[str, str]]", spec.get("podSelector") or {})
+    c.check(
+        ok=selector.get("matchLabels", {}).get("app.kubernetes.io/component")
+        == SFTP_COMPONENT,
+        message=f"split: schedulefeed-sftp NetworkPolicy selector {selector}",
+    )
+    c.check(
+        ok=ingress_ports(policy) == {SFTP_PORT, SFTP_TELEMETRY_PORT},
+        message=f"split: schedulefeed-sftp ingress {ingress_ports(policy)}",
+    )
+    egress = cast("list[dict[str, object]]", spec.get("egress") or [])
+    egress_ports = {
+        port.get("port")
+        for rule in egress
+        for port in cast("list[dict[str, object]]", rule.get("ports") or [])
+    }
+    c.check(
+        ok=len(egress) == 1 and not egress[0].get("to") and egress_ports == {53},
+        message=f"split: schedulefeed-sftp egress is not DNS only: {egress}",
+    )
+    left = ingress_ports(schedulefeed_policy(docs)) & {SFTP_PORT, SFTP_TELEMETRY_PORT}
+    c.check(ok=not left, message=f"split: schedulefeed still admits {left}")
+
+
+def check_sftp_split(c: Checker) -> None:
+    """SFTPGo's own Deployment runs the one-pod layout's `sftp`, intact."""
+    docs = c.docs(*ON, *NETPOL, *METRICS)
+    one_pod = c.docs(*ON, *NETPOL, *METRICS, *ONE_POD)
+    deployment = sftp_deployment(docs)
+    c.check(ok=deployment is not None, message="split: no SFTP Deployment")
+    if deployment is None:
+        return
+    spec = cast("dict[str, object]", deployment["spec"])
+    c.check(
+        ok=spec.get("replicas") == 1 and spec.get("strategy") == {"type": "Recreate"},
+        message=f"split: replicas {spec.get('replicas')}, {spec.get('strategy')}",
+    )
+    selector = cast("dict[str, dict[str, str]]", spec["selector"])["matchLabels"]
+    labels = labels_of(template_of(deployment).get("metadata"))
+    c.check(
+        ok=selector.get("app.kubernetes.io/component") == SFTP_COMPONENT
+        # distant-signal.podLabels: the selector plus the two static labels.
+        and labels
+        == {
+            **selector,
+            "app.kubernetes.io/managed-by": "Helm",
+            "app.kubernetes.io/part-of": "distant-signal",
+        },
+        message=f"split: selector {selector}, pod labels {labels}",
+    )
+    legacy = [
+        x for x in containers_of(schedulefeed(one_pod) or {}) if x["name"] == "sftp"
+    ]
+    c.check(
+        ok=bool(legacy) and containers_of(deployment) == legacy,
+        message="split: the sftp container differs from the one-pod layout's",
+    )
+    pod = deployment_pod_spec(deployment)
+    sftp_vols = ("data", "host-key", "sftp-entrypoint", "sftp-bootstrap")
+    want = {n: v for n, v in volumes(one_pod).items() if n in sftp_vols}
+    c.check(
+        ok=len(want) == len(sftp_vols) and pod_volumes(pod) == want,
+        message=f"split: volumes {sorted(pod_volumes(pod))}, want the one-pod "
+        "layout's data (the same PVC), host-key, sftp-entrypoint, sftp-bootstrap",
+    )
+    c.check(
+        ok=pod.get("securityContext") == pod_spec(docs).get("securityContext")
+        and pod.get("automountServiceAccountToken") is False,
+        message="split: pod securityContext differs from schedulefeed's, "
+        "or the API token is mounted",
+    )
+    leftover = set(volumes(docs)) & set(sftp_vols[1:])
+    sf_meta = cast(
+        "dict[str, dict[str, str]]", template_of(schedulefeed(docs)).get("metadata")
+    )
+    annotations = sf_meta.get("annotations") or {}
+    c.check(
+        ok=not leftover and "checksum/sftp-entrypoint" not in annotations,
+        message=f"split: schedulefeed keeps sftp volumes {leftover} or checksum",
+    )
+    service = sftp_service_selector(docs)
+    c.check(
+        ok=service.get("app.kubernetes.io/component") == SFTP_COMPONENT
+        and service.items() <= labels.items(),
+        message=f"split: SFTP Service selector {service}",
+    )
+    check_split_policies(c, docs)
+    c.check(
+        ok=SFTP_COMPONENT in podmonitor_components(docs),
+        message="split: the PodMonitor does not select schedulefeed-sftp",
+    )
+
+
+def check_sftp_one_pod(c: Checker) -> None:
+    """separateDeployment=false: `sftp` back in the schedulefeed pod."""
+    docs = c.docs(*ON, *NETPOL, *METRICS, *ONE_POD)
+    c.check(
         ok=container_names(docs) == ["sftp", "ingest", "reference"],
-        message=f"sftp only: containers {container_names(docs)}",
+        message=f"one pod: containers {container_names(docs)}",
+    )
+    c.check(
+        ok=sftp_deployment(docs) is None and not sftp_policy(docs),
+        message="one pod: the SFTP Deployment or its NetworkPolicy rendered",
+    )
+    ports = ingress_ports(schedulefeed_policy(docs))
+    c.check(
+        ok={SFTP_PORT, SFTP_TELEMETRY_PORT} <= ports,
+        message=f"one pod: schedulefeed ingress {ports}",
+    )
+    service = sftp_service_selector(docs)
+    c.check(
+        ok=service.get("app.kubernetes.io/component") == "schedulefeed",
+        message=f"one pod: SFTP Service selector {service}",
+    )
+    c.check(
+        ok=SFTP_COMPONENT not in podmonitor_components(docs),
+        message="one pod: the PodMonitor selects schedulefeed-sftp",
+    )
+
+
+def check_sftp_stable_across_releases(c: Checker) -> None:
+    """Check an app release (chart/app version, image tags) leaves SFTPGo alone."""
+    release = (
+        "--set",
+        "scheduleFeed.ingest.image.tag=9.9.9",
+        "--set",
+        "scheduleFeed.reference.image.tag=9.9.9",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        chart = pathlib.Path(tmp) / "distant-signal"
+        shutil.copytree(CHART, chart)
+        meta = chart / "Chart.yaml"
+        text = re.sub(r"(?m)^version: .*$", "version: 9.9.9", meta.read_text())
+        text = re.sub(r"(?m)^appVersion: .*$", 'appVersion: "9.9.9"', text)
+        meta.write_text(text)
+        before = c.docs(*ON, *NETPOL, *METRICS)
+        after = c.docs(*ON, *NETPOL, *METRICS, *release, chart=chart)
+    changed = (schedulefeed(before) or {}).get("spec") != (
+        schedulefeed(after) or {}
+    ).get("spec")
+    c.check(ok=changed, message="release: the schedulefeed pod did not change")
+    old, new = sftp_deployment(before), sftp_deployment(after)
+    c.check(
+        ok=old is not None and (old or {}).get("spec") == (new or {}).get("spec"),
+        message="release: the SFTP Deployment's spec changed with the release",
     )
 
 
@@ -413,8 +656,10 @@ def check_both(c: Checker) -> None:
     """Both sources: the ingest env contract and the reader key mount."""
     docs = c.docs(*ON, *BUCKET)
     c.check(
-        ok=container_names(docs) == ["sftp", "ingest", "reference"],
-        message=f"both: containers {container_names(docs)}",
+        ok=container_names(docs) == ["ingest", "reference"]
+        and sftp_container_names(docs) == ["sftp"],
+        message=f"both: containers {container_names(docs)}, "
+        f"sftp pod {sftp_container_names(docs)}",
     )
     ingest = env(container(docs, "ingest"))
     for name, value in BOTH_ENV.items():
@@ -468,6 +713,7 @@ def check_bucket_only(c: Checker) -> None:
                     doc.get("kind") in {"Service", "Secret"}
                     and component == "schedulefeed"
                 )
+                or component == SFTP_COMPONENT
                 or name.endswith("-sftp-entrypoint")
             ),
             message=f"bucket only: {name} rendered",
@@ -512,6 +758,24 @@ def schedulefeed_policy(docs: Sequence[Doc]) -> Doc:
     return {}
 
 
+def sftp_policy(docs: Sequence[Doc]) -> Doc:
+    """Return the schedulefeed-sftp NetworkPolicy (empty if not rendered)."""
+    for doc in docs:
+        if name_of(doc) == f"NetworkPolicy/{SFTP_DEPLOYMENT}":
+            return doc
+    return {}
+
+
+def ingress_ports(policy: Doc) -> set[object]:
+    """Return every port a NetworkPolicy's ingress rules name."""
+    spec = cast("dict[str, list[dict[str, object]]]", policy.get("spec") or {})
+    return {
+        port.get("port")
+        for rule in spec.get("ingress") or []
+        for port in cast("list[dict[str, object]]", rule.get("ports") or [])
+    }
+
+
 def check_network_policy(c: Checker) -> None:
     """Bucket only: no SFTP ingress; the internet rule allows the GCS port."""
     netpol = (*NETPOL, "--set", "networkPolicy.egress.internetPorts={443}")
@@ -529,6 +793,10 @@ def check_network_policy(c: Checker) -> None:
     c.check(
         ok=not ingress_ports & {SFTP_PORT, SFTP_TELEMETRY_PORT},
         message=f"bucket only: SFTP ingress ports {sorted(map(str, ingress_ports))}",
+    )
+    c.check(
+        ok=not sftp_policy(docs),
+        message="bucket only: a schedulefeed-sftp NetworkPolicy",
     )
     ports = internet_ports(policy)
     c.check(ok=HTTPS_PORT in ports, message=f"bucket only: internet ports {ports}")
@@ -630,6 +898,14 @@ def check_reference_sink(c: Checker) -> None:
     c.check(
         ok="schedulefeed" in postgres_clients(docs),
         message="sink db: postgres does not admit schedulefeed",
+    )
+    c.check(
+        ok=bool(sftp_policy(docs)) and not postgres_egress(sftp_policy(docs)),
+        message="sink db: no schedulefeed-sftp policy, or it may reach postgres",
+    )
+    c.check(
+        ok=SFTP_COMPONENT not in postgres_clients(docs),
+        message="sink db: postgres admits schedulefeed-sftp",
     )
 
     code, out = c.render(*ON, "--set", "scheduleFeed.reference.ingest.sink=redis")
@@ -1031,6 +1307,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="also check DIR (another commit's charts/distant-signal) renders "
         "identically",
     )
+    parser.add_argument(
+        "--baseline-set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="with --baseline, --set KEY=VALUE on this chart's renders only",
+    )
     args = parser.parse_args(argv)
     c = Checker(args.helm)
 
@@ -1038,6 +1321,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_extra_env(c)
     check_explicit_defaults(c)
     check_neither_source(c)
+    check_sftp_split(c)
+    check_sftp_one_pod(c)
+    check_sftp_stable_across_releases(c)
     check_sftp_only(c)
     check_both(c)
     check_bucket_only(c)
@@ -1055,7 +1341,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         check_no_duplicate_env(c, label, c.docs(*values))
     if args.baseline is not None:
-        check_baseline(c, args.baseline)
+        extra = [a for kv in args.baseline_set for a in ("--set", kv)]
+        check_baseline(c, args.baseline, extra)
 
     for failure in c.failures:
         print(f"FAIL: {failure}")

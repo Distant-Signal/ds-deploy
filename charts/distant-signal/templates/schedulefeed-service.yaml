@@ -5,6 +5,11 @@ cloud LoadBalancer (or a NodePort + external LB/DNS) at to actually expose
 scheduleFeed's SFTP receiver to DTD; see values.yaml's scheduleFeed.service
 comment for why LoadBalancer is the default here, unlike every HTTP
 workload in this chart.
+
+It selects whichever pod runs SFTPGo (distant-signal.scheduleFeedSftpComponent):
+the separate schedulefeed-sftp Deployment by default, else the schedulefeed
+pod. The Service's name, type and nodePort do not change with that, so the
+LoadBalancer address and NodePort DTD pushes to stay the same.
 */}}
 {{- if and .Values.scheduleFeed.enabled .Values.scheduleFeed.sftp.enabled }}
 {{- with .Values.scheduleFeed.service.externalTrafficPolicy }}
@@ -20,7 +25,7 @@ kind: Service
 metadata:
   name: {{ include "distant-signal.scheduleFeedFullname" . }}
   labels:
-    {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
+    {{- include "distant-signal.labels" (dict "root" . "component" (include "distant-signal.scheduleFeedSftpComponent" .)) | nindent 4 }}
   {{- with .Values.scheduleFeed.service.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -31,7 +36,7 @@ spec:
   externalTrafficPolicy: {{ . }}
   {{- end }}
   selector:
-    {{- include "distant-signal.selectorLabels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
+    {{- include "distant-signal.selectorLabels" (dict "root" . "component" (include "distant-signal.scheduleFeedSftpComponent" .)) | nindent 4 }}
   ports:
     - name: sftp
       port: {{ .Values.scheduleFeed.sftp.port }}

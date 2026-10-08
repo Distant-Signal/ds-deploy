@@ -14,9 +14,9 @@ consumers read. It also has these optional, off-by-default workloads:
   (incidents, stations, tocs, ldbws) plus a TfL Unified API poller (tfl);
 - three island-of-Ireland pollers (`pollerIrishRailGtfs`,
   `pollerIrishRailLive`, `pollerNirStations`);
-- the **schedulefeed** pod (`scheduleFeed`): an SFTP server for the pushed
-  CIF timetable delivery, with `schedule-ingest` and `schedule-reference`
-  containers alongside it.
+- **schedulefeed** (`scheduleFeed`): an SFTP server for the pushed CIF
+  timetable delivery (its own `schedulefeed-sftp` pod by default), and a
+  pod running `schedule-ingest` and `schedule-reference`, sharing one PVC.
 
 The chart has no subchart
 dependencies and no `dependencies:` block, so `helm dependency update` is
@@ -1069,13 +1069,18 @@ explicit allows:
   any policy applies, and Calico and Cilium allow it by default, so probes
   keep working there either way. Check your CNI before dropping it: one that
   filters node traffic would fail every probe.
-- **schedulefeed** (INF-2): SFTP on `scheduleFeed.sftp.port` from any source,
-  or only from `scheduleFeed.sftp.allowedCidrs` when set. The allow-list only
-  works when the pod sees the client's real address
+- **schedulefeed-sftp** (INF-2): SFTP on `scheduleFeed.sftp.port` from any
+  source, or only from `scheduleFeed.sftp.allowedCidrs` when set. The
+  allow-list only works when the pod sees the client's real address
   (`scheduleFeed.service.externalTrafficPolicy: Local`, or a load balancer
   that preserves it);
-  behind source NAT it blocks every push. Also both containers' health ports
-  and metrics ports.
+  behind source NAT it blocks every push. Also SFTPGo's telemetry port from
+  the monitoring namespace. Egress is DNS only. With
+  `scheduleFeed.sftp.separateDeployment: false` these SFTP rules are on the
+  schedulefeed policy instead.
+- **schedulefeed**: the `ingest` and `reference` containers' health ports
+  and metrics ports. Egress to the api, the OAuth token endpoint, the
+  bucket's endpoints when on, and Postgres under either db sink.
 
 **Tunnels (cloudflared).** With no Ingress, a tunnel connector running in
 the cluster publishes the site. `networkPolicy.tunnel.enabled: true` (off by
@@ -2492,20 +2497,46 @@ Off by default; no API key needed.
 
 ### scheduleFeed
 
-The schedulefeed pod: an SFTP server (SFTPGo) that receives the pushed CIF
-timetable, `schedule-ingest` (waits for a complete delivery and posts it
-to api) and `schedule-reference` (derives the schedule products from it).
-Off by default. The feed has two sources, switched separately:
+An SFTP server (SFTPGo) that receives the pushed CIF timetable, and the
+schedulefeed pod: `schedule-ingest` (waits for a complete delivery and
+posts it to api) and `schedule-reference` (derives the schedule products
+from it). Off by default. The feed has two sources, switched separately:
 `scheduleFeed.sftp.enabled` (the SFTP receiver, on by default) and
 `scheduleFeed.bucket.enabled` (a Google Cloud Storage bucket, off; see
 "scheduleFeed: bucket source" below and
 [docs/schedule-feed-bucket.md](../../docs/schedule-feed-bucket.md)). Both
 can run at once, deduplicated by content; with neither the render fails.
 
+**SFTPGo has its own Deployment** (`<fullname>-schedulefeed-sftp`,
+`scheduleFeed.sftp.separateDeployment: true`, the default since
+2026-10-08). DTD pushes the daily CIF zip at about 20:00–20:06 UTC, and
+nothing says its client retries a failed push. When SFTPGo was a container
+of the schedulefeed pod, every app deploy recreated it along with
+`ingest`/`reference`. Now its pod template holds only pinned inputs: the
+SFTPGo image, the entrypoint script's hash, the Secrets and the env. Its
+labels are the release-stable `distant-signal.podLabels`, with no chart or
+app version, like every pod template. So an app deploy leaves it running, and only a change to SFTPGo's
+own settings restarts it. The SFTP Service keeps its name, type and
+NodePort and selects the new pod. Both pods mount the same ReadWriteOnce
+PVC, which **assumes a single-node cluster**: ReadWriteOnce is per node,
+so on several nodes pin both pods to one node (`scheduleFeed.nodeSelector`
+or `affinity`, which apply to both), use a ReadWriteMany class, or turn
+the split off.
+
+Switching either way (the first deploy of this change, or a rollback to
+`separateDeployment: false`) recreates both pods once. Expect an SFTP
+outage of under a minute, so deploy away from 19:45–20:30 UTC. The PVC and
+its data are untouched, and so are the host keys and the push account, so
+DTD sees the same host key and credentials. Roll back by setting
+`scheduleFeed.sftp.separateDeployment: false`, which renders the earlier
+one-pod layout.
+
 | Key | Default | Description |
 |---|---|---|
-| `scheduleFeed.enabled` | `false` | Deploy the schedulefeed pod, Service and PVC. |
+| `scheduleFeed.enabled` | `false` | Deploy the schedulefeed pod, the SFTP Deployment and Service, and the PVC. |
 | `scheduleFeed.sftp.enabled` | `true` | Run the SFTP receiver (the `sftp` container, its Service/NodePort, host keys and entrypoint). Off for bucket-only delivery (`scheduleFeed.bucket`); the PVC and the ingest/reference containers stay. `scheduleFeed.enabled` with neither source enabled fails the render. |
+| `scheduleFeed.sftp.separateDeployment` | `true` | Run SFTPGo in its own Deployment (`<fullname>-schedulefeed-sftp`) so that app deploys never restart it. Assumes a single node (one ReadWriteOnce PVC for both pods). `false` puts it back in the schedulefeed pod, as before 2026-10-08. Switching recreates both pods once; the PVC is untouched. |
+| `scheduleFeed.sftp.podAnnotations` | `{}` | Annotations for the separate SFTP pod. Unused with `separateDeployment: false`. |
 | `scheduleFeed.sftp.image.repository` | `drakkan/sftpgo` | SFTP server image. |
 | `scheduleFeed.sftp.image.tag` | `v2.7.5@sha256:…` | Must be a real `drakkan/sftpgo` tag: an empty tag would fall back to this chart's version. |
 | `scheduleFeed.sftp.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2592,10 +2623,10 @@ can run at once, deduplicated by content; with neither the render fails.
 | `scheduleFeed.persistence.existingClaim` | `""` | Use this existing PVC instead of creating one. |
 | `scheduleFeed.logLevel` | `info` | `RUST_LOG` value for both Rust containers. |
 | `scheduleFeed.resources` | `{}` | Fallback for any container whose own `resources` is empty. |
-| `scheduleFeed.nodeSelector` | `{}` | Pod node selector. |
-| `scheduleFeed.tolerations` | `[]` | Pod tolerations. |
-| `scheduleFeed.affinity` | `{}` | Pod affinity rules. |
-| `scheduleFeed.podAnnotations` | `{}` | Pod annotations. |
+| `scheduleFeed.nodeSelector` | `{}` | Pod node selector, for both the schedulefeed and SFTP pods. |
+| `scheduleFeed.tolerations` | `[]` | Pod tolerations, for both pods. |
+| `scheduleFeed.affinity` | `{}` | Pod affinity rules, for both pods. |
+| `scheduleFeed.podAnnotations` | `{}` | Annotations for the schedulefeed (ingest/reference) pod. The separate SFTP pod uses `scheduleFeed.sftp.podAnnotations`. |
 | `scheduleFeed.serviceAccount.create` | `false` | Create a dedicated ServiceAccount for the schedulefeed pod (`<fullname>-schedulefeed`, or `name`), with no RBAC and `automountServiceAccountToken: false`. Off: the pod uses the shared `serviceAccount`. Required (or `name`) by `scheduleFeed.bucket.auth=workloadIdentity`. |
 | `scheduleFeed.serviceAccount.name` | `""` | Its name. With `create: false`, an existing ServiceAccount, which must not be the shared one in `workloadIdentity` mode. |
 | `scheduleFeed.podSecurityContext` | `{fsGroup: 1000}` | `fsGroup: 1000` is required: the SFTPGo image runs as UID 1000 and does not chown a fresh volume. |
@@ -2950,6 +2981,9 @@ helm uninstall distant-signal -n distant-signal
 - **No HorizontalPodAutoscaler.** The aggregator, the enricher and every
   poller are singleton loops that must not be scaled, and the api is
   database-bound.
+- **No multi-node support for scheduleFeed's shared volume.** The SFTP pod
+  and the schedulefeed pod mount one ReadWriteOnce PVC, so they must run on
+  the same node. See "scheduleFeed" above.
 - **No backup or HA for the bundled Redis.** It is a single replica with
   AOF persistence on a PVC; see "Using an external Redis" above.
 - **No backup, restore or replication** for the bundled Postgres. It is a

@@ -1720,6 +1720,37 @@ devAuthentikSecretName's exact pattern.
 {{- end }}
 
 {{/*
+"true" when SFTPGo runs in its own Deployment
+(schedulefeed-sftp-deployment.yaml) rather than as the `sftp` container
+of the schedulefeed pod: scheduleFeed.enabled, scheduleFeed.sftp.enabled
+and scheduleFeed.sftp.separateDeployment. Empty otherwise. Takes root.
+*/}}
+{{- define "distant-signal.scheduleFeedSftpSeparate" -}}
+{{- $s := .Values.scheduleFeed.sftp -}}
+{{- if and .Values.scheduleFeed.enabled $s.enabled $s.separateDeployment -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+The SFTP Deployment's name, `<fullname>-schedulefeed-sftp`. Takes root.
+*/}}
+{{- define "distant-signal.scheduleFeedSftpFullname" -}}
+{{- printf "%s-sftp" (include "distant-signal.scheduleFeedFullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+The app.kubernetes.io/component of the pod that runs SFTPGo:
+`schedulefeed-sftp` with scheduleFeed.sftp.separateDeployment, else
+`schedulefeed` (the `sftp` container of the shared pod). The SFTP
+Service's selector, its NetworkPolicy and the PodMonitor follow it.
+Takes root.
+*/}}
+{{- define "distant-signal.scheduleFeedSftpComponent" -}}
+{{- ternary "schedulefeed-sftp" "schedulefeed" (eq (include "distant-signal.scheduleFeedSftpSeparate" .) "true") -}}
+{{- end }}
+
+{{/*
 The schedulefeed pod's ServiceAccount: its dedicated one
 (scheduleFeed.serviceAccount, `<fullname>-schedulefeed` unless named) when
 created or named, else the shared one. Takes root.
@@ -2105,7 +2136,7 @@ this chart can render, so a typo cannot silently drop a rule. Takes
 {{- define "distant-signal.npComponent" -}}
 {{- $root := .root -}}
 {{- $all := $root.Values.networkPolicy.components | default dict -}}
-{{- $known := list "api" "frontend" "aggregator" "enricher" "notifier" "postgres" "redis" "schedulefeed" "trust-consumer" "trust-backlog-consumer" "full-coverage-consumer" "movement-relay" "poller-irish-rail-gtfs" "poller-irish-rail-live" "poller-nir-stations" "postgres-roles" "migrate" "api-maintenance" "ingest-writer" -}}
+{{- $known := list "api" "frontend" "aggregator" "enricher" "notifier" "postgres" "redis" "schedulefeed" "schedulefeed-sftp" "trust-consumer" "trust-backlog-consumer" "full-coverage-consumer" "movement-relay" "poller-irish-rail-gtfs" "poller-irish-rail-live" "poller-nir-stations" "postgres-roles" "migrate" "api-maintenance" "ingest-writer" -}}
 {{- range $name, $_ := $root.Values.pollers -}}
 {{- $known = append $known (printf "poller-%s" $name) -}}
 {{- end -}}

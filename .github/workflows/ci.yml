@@ -1323,7 +1323,7 @@ jobs:
               --set scheduleFeed.sftp.authMethod=password "$@"
           }
           fail() { echo "::error::$1"; exit 1; }
-          dep=$(render --show-only templates/schedulefeed-deployment.yaml)
+          dep=$(render --show-only templates/schedulefeed-sftp-deployment.yaml)
           grep -q 'value: "/srv/sftpgo/host_keys/ssh_host_ecdsa_key,/srv/sftpgo/host_keys/ssh_host_ed25519_key"' <<<"${dep}" \
             || fail "SFTPGO_SFTPD__HOST_KEYS must list the mounted keys"
           grep -A1 'SFTPGO_HTTPD__BINDINGS__0__PORT' <<<"${dep}" | grep -q 'value: "0"' \
@@ -1335,10 +1335,10 @@ jobs:
           dep=$(render --set scheduleFeed.sftp.webAdmin.enabled=true \
             --set 'scheduleFeed.sftp.extraEnv[0].name=SFTPGO_TELEMETRY__BIND_PORT' \
             --set-string 'scheduleFeed.sftp.extraEnv[0].value=9097' \
-            --show-only templates/schedulefeed-deployment.yaml)
+            --show-only templates/schedulefeed-sftp-deployment.yaml)
           if grep -q 'SFTPGO_HTTPD__BINDINGS__0__PORT' <<<"${dep}"; then fail "webAdmin.enabled must drop the port override"; fi
           grep -q 'SFTPGO_TELEMETRY__BIND_PORT' <<<"${dep}" || fail "extraEnv must reach the SFTPGo container"
-          dep=$(render --set 'scheduleFeed.sftp.hostKeys=null' --show-only templates/schedulefeed-deployment.yaml)
+          dep=$(render --set 'scheduleFeed.sftp.hostKeys=null' --show-only templates/schedulefeed-sftp-deployment.yaml)
           if grep -q 'SFTPGO_SFTPD__HOST_KEYS' <<<"${dep}"; then fail "an empty hostKeys list must not set HOST_KEYS"; fi
 
       # extraEnv is merged with the chart's env by name (distant-signal.mergeEnv):
@@ -1377,7 +1377,7 @@ jobs:
             --set-string 'scheduleFeed.sftp.extraEnv[1].value=7' \
             --set 'scheduleFeed.sftp.extraEnv[2].name=SFTPGO_COMMON__DEFENDER__THRESHOLD' \
             --set-string 'scheduleFeed.sftp.extraEnv[2].value=16' \
-            --show-only templates/schedulefeed-deployment.yaml)
+            --show-only templates/schedulefeed-sftp-deployment.yaml)
           once SFTPGO_COMMON__DEFENDER__THRESHOLD 16
           once SFTPGO_EXTRA_ONLY 7
           once SFTPGO_COMMON__DEFENDER__SCORE_VALID 2
@@ -1476,7 +1476,7 @@ jobs:
               --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
               --set scheduleFeed.enabled=true \
               --set scheduleFeed.sftp.authMethod=password "$@" \
-              --show-only templates/schedulefeed-deployment.yaml
+              --show-only templates/schedulefeed-sftp-deployment.yaml
           }
           fail() { echo "::error::$1"; exit 1; }
           dep=$(render)
@@ -1527,7 +1527,7 @@ jobs:
               --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
               --set scheduleFeed.enabled=true \
               --set scheduleFeed.sftp.authMethod=password "$@" \
-              --show-only templates/schedulefeed-deployment.yaml
+              --show-only templates/schedulefeed-sftp-deployment.yaml
           }
           fail() { echo "::error::$1"; exit 1; }
           has() { grep -A1 "name: $1\$" <<<"${dep}" | grep -q "value: \"$2\"" || fail "$1 must be \"$2\""; }
@@ -1588,7 +1588,7 @@ jobs:
               --set networkPolicy.enabled=true "$@"
           }
           fail() { echo "::error::$1"; exit 1; }
-          dep=$(render --show-only templates/schedulefeed-deployment.yaml)
+          dep=$(render --show-only templates/schedulefeed-sftp-deployment.yaml)
           grep -A1 'name: sftp-metrics' <<<"${dep}" | grep -q 'containerPort: 9097' || fail "sftp-metrics must be port 9097"
           grep -A1 'name: SFTPGO_TELEMETRY__BIND_PORT' <<<"${dep}" | grep -q 'value: "9097"' || fail "telemetry must bind 9097"
           grep -A1 'name: SFTPGO_TELEMETRY__BIND_ADDRESS' <<<"${dep}" | grep -q 'value: "0.0.0.0"' || fail "telemetry must bind all addresses"
@@ -1600,8 +1600,8 @@ jobs:
           pm=$(render --show-only templates/podmonitor.yaml)
           grep -q 'port: sftp-metrics' <<<"${pm}" || fail "the PodMonitor must scrape sftp-metrics"
           np=$(render --show-only templates/networkpolicy.yaml)
-          grep -A60 'name: distant-signal-schedulefeed$' <<<"${np}" | grep -q 'port: 9097' \
-            || fail "the schedulefeed NetworkPolicy must admit monitoring on 9097"
+          grep -A60 'name: distant-signal-schedulefeed-sftp$' <<<"${np}" | grep -q 'port: 9097' \
+            || fail "the schedulefeed-sftp NetworkPolicy must admit monitoring on 9097"
           rule=$(render --show-only templates/prometheusrule.yaml)
           for alert in DistantSignalSftpNoUpload DistantSignalSftpUploadErrors DistantSignalSftpUserStoreDown; do
             grep -q "alert: ${alert}\$" <<<"${rule}" || fail "missing ${alert}"
@@ -1610,7 +1610,7 @@ jobs:
           if grep -q 'sftp-metrics\|SFTPGO_TELEMETRY\|alert: DistantSignalSftp' <<<"${off}"; then
             fail "telemetry.enabled=false must render no telemetry, endpoint or alerts"
           fi
-          nometrics=$(render --set metrics.enabled=false --show-only templates/schedulefeed-deployment.yaml)
+          nometrics=$(render --set metrics.enabled=false --show-only templates/schedulefeed-sftp-deployment.yaml)
           if grep -q 'sftp-metrics\|SFTPGO_TELEMETRY' <<<"${nometrics}"; then
             fail "telemetry needs metrics.enabled"
           fi
@@ -2108,7 +2108,8 @@ jobs:
             || fail "every poller needs a /livez liveness probe (${probes} of ${deployments})"
 
           feed=$(render --set scheduleFeed.enabled=true --set scheduleFeed.sftp.authMethod=password \
-            --show-only templates/schedulefeed-deployment.yaml)
+            --show-only templates/schedulefeed-deployment.yaml \
+            --show-only templates/schedulefeed-sftp-deployment.yaml)
           n_livez=$(grep -c 'path: /livez' <<<"${feed}" || true)
           [[ "${n_livez}" -eq 2 ]] \
             || fail "schedulefeed ingest and reference need /livez liveness probes"
@@ -2446,7 +2447,7 @@ jobs:
           fi
 
       # networkPolicy.enabled: every policy must keep the traffic its
-      # workload needs. INF-2: the schedulefeed policy must admit SFTP.
+      # workload needs. INF-2: the schedulefeed-sftp policy must admit SFTP.
       # INF-10: every background worker has a policy.
       - name: helm template (NetworkPolicy)
         run: |
@@ -2471,12 +2472,12 @@ jobs:
           # One policy per document, keyed by name.
           policy() { awk -v n="$1" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}'; }
 
-          feed=$(render --show-only templates/networkpolicy.yaml | policy distant-signal-schedulefeed)
-          [[ -n "${feed}" ]] || fail "no schedulefeed NetworkPolicy rendered"
-          grep -q 'port: 2022' <<<"${feed}" || fail "schedulefeed policy must allow SFTP on 2022"
+          feed=$(render --show-only templates/networkpolicy.yaml | policy distant-signal-schedulefeed-sftp)
+          [[ -n "${feed}" ]] || fail "no schedulefeed-sftp NetworkPolicy rendered"
+          grep -q 'port: 2022' <<<"${feed}" || fail "schedulefeed-sftp policy must allow SFTP on 2022"
           if grep -q 'ipBlock' <<<"${feed}"; then fail "empty allowedCidrs must not restrict SFTP sources"; fi
           feed=$(render --set 'scheduleFeed.sftp.allowedCidrs={203.0.113.0/24}' \
-            --show-only templates/networkpolicy.yaml | policy distant-signal-schedulefeed)
+            --show-only templates/networkpolicy.yaml | policy distant-signal-schedulefeed-sftp)
           grep -q 'cidr: "203.0.113.0/24"' <<<"${feed}" || fail "allowedCidrs must render as ipBlocks"
           # The allow-list needs the client IP, i.e. externalTrafficPolicy:
           # Local on the SFTP Service. Empty renders nothing; Local/Cluster
@@ -2634,7 +2635,7 @@ jobs:
             p=$(policy "distant-signal-${c%%:*}" <<<"${np}")
             if grep -q "port: ${c##*:}\$" <<<"${p}"; then fail "healthIngress.enabled=false must drop ${c%%:*}'s health port rule"; fi
           done
-          p=$(policy distant-signal-schedulefeed <<<"${np}")
+          p=$(policy distant-signal-schedulefeed-sftp <<<"${np}")
           grep -q 'port: 2022' <<<"${p}" || fail "healthIngress.enabled=false must keep SFTP"
 
           # postgresClients/redisClients admit outside workloads (exporters,
