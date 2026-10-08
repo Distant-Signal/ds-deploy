@@ -1983,6 +1983,11 @@ migrate:
       - run
     # -- Retries after a failed run (spec: 1).
     backoffLimit: 1
+    # -- Seconds `ds-migrate run` keeps retrying its first connection
+    # (MIGRATION_CONNECT_DEADLINE_SECS; at least 1) before it fails: the
+    # pg_isready wait only shows the server answers, and on a saturated
+    # node or with a late NetworkPolicy the connect itself can still fail.
+    connectDeadlineSecs: 120
     # -- Deadline for the whole Job, the Postgres wait included (spec: 900).
     # Keep `api.migrations.statementTimeoutSecs` well below it.
     activeDeadlineSeconds: 900
@@ -2025,10 +2030,18 @@ apiMaintenance:
   database:
     # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS).
     maxConnections: 2
+    # -- Seconds it keeps retrying its first connection
+    # (MAINTENANCE_CONNECT_DEADLINE_SECS; at least 1) before the run fails.
+    # A fresh pod on a saturated node, or one whose NetworkPolicy is not
+    # programmed yet, can miss the 5 s acquire timeout
+    # (`databasePool.acquireTimeoutSecs`), which this leaves alone.
+    connectDeadlineSecs: 120
   # -- A run missed by more than this is skipped.
   startingDeadlineSeconds: 600
-  # -- Retries after a failed run.
-  backoffLimit: 1
+  # -- Retries after a failed run. Every step is idempotent, so a retry is
+  # harmless; 3 rides out a node that stays saturated past one pod's
+  # connect deadline.
+  backoffLimit: 3
   # -- Deadline per run. The retention prune allows itself 600 s per
   # statement.
   activeDeadlineSeconds: 1800

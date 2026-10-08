@@ -1813,6 +1813,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `migrate.job.command` | `["/usr/local/bin/ds-migrate"]` | Command, in the api image. |
 | `migrate.job.args` | `["run"]` | Arguments to `command`. |
 | `migrate.job.backoffLimit` | `1` | Retries after a failed run. |
+| `migrate.job.connectDeadlineSecs` | `120` | `MIGRATION_CONNECT_DEADLINE_SECS`: how long `ds-migrate run` retries its first connection (a saturated node, a late NetworkPolicy) before failing. At least 1. |
 | `migrate.job.activeDeadlineSeconds` | `900` | Deadline for the whole Job, the Postgres wait included. The HelmRelease `timeout` must cover it. |
 | `migrate.job.logLevel` | `info` | `RUST_LOG`. |
 | `migrate.job.resources` | `{}` | The migrate container's resources. |
@@ -1832,8 +1833,9 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `apiMaintenance.command` | `["/usr/local/bin/maintenance"]` | Command, in the api image: one pass, then exit. |
 | `apiMaintenance.args` | `[]` | Arguments to `command`. |
 | `apiMaintenance.database.maxConnections` | `2` | Its Postgres pool; counted in the connection budgets. |
+| `apiMaintenance.database.connectDeadlineSecs` | `120` | `MAINTENANCE_CONNECT_DEADLINE_SECS`: how long a run retries its first connection (a saturated node, a late NetworkPolicy) before failing. At least 1. `databasePool.acquireTimeoutSecs` is unchanged. |
 | `apiMaintenance.startingDeadlineSeconds` | `600` | A run missed by more than this is skipped. |
-| `apiMaintenance.backoffLimit` | `1` | Retries after a failed run. |
+| `apiMaintenance.backoffLimit` | `3` | Retries after a failed run (every step is idempotent). |
 | `apiMaintenance.activeDeadlineSeconds` | `1800` | Deadline per run. |
 | `apiMaintenance.successfulJobsHistoryLimit` | `1` | Finished Jobs kept. |
 | `apiMaintenance.failedJobsHistoryLimit` | `3` | Failed Jobs kept. |

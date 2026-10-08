@@ -122,6 +122,8 @@ spec:
               value: {{ .Values.api.migrations.lockTimeoutSecs | int | quote }}
             - name: MIGRATION_STATEMENT_TIMEOUT_SECS
               value: {{ .Values.api.migrations.statementTimeoutSecs | int | quote }}
+            - name: MIGRATION_CONNECT_DEADLINE_SECS
+              value: {{ $job.connectDeadlineSecs | int | quote }}
             - name: RUST_LOG
               value: {{ $job.logLevel | quote }}
           securityContext:

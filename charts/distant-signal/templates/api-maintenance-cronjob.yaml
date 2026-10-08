@@ -67,6 +67,8 @@ spec:
                 {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "api") | nindent 16 }}
                 - name: DATABASE_MAX_CONNECTIONS
                   value: {{ $m.database.maxConnections | int | quote }}
+                - name: MAINTENANCE_CONNECT_DEADLINE_SECS
+                  value: {{ $m.database.connectDeadlineSecs | int | quote }}
                 # The retention settings, from the api's own values so the
                 # CronJob and the api's sweep cannot drift apart.
                 - name: PAST_TRAVEL_RETENTION_DAYS
