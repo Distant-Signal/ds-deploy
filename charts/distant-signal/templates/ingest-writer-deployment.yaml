@@ -105,6 +105,9 @@ with ingestWriter.extraEnv, which replaces an entry of the same name.
             - name: INGEST_WRITER_CHANGED_ROWS_ONLY
               value: "true"
             {{- end }}
+            # An unsupported entry is dead-lettered after this (0: never).
+            - name: INGEST_WRITER_UNSUPPORTED_DEADLINE_SECS
+              value: {{ .Values.ingestWriter.unsupportedDeadlineSecs | int | quote }}
             {{- if include "distant-signal.ingestWriterStreamsOn" . }}
             # Only once a stream is not off: the streams' Redis, as the
             # ingest-writer ACL user under redis.acl.clients.ingestWriter.

@@ -2111,6 +2111,13 @@ ingestWriter:
   # per-row time. Turn on only after the api with the derived readers is
   # deployed and `streams.full-coverage` has soaked on `apply`.
   changedRowsOnly: false
+  # -- Seconds an entry may stay pending as unsupported (a schema or
+  # envelope version newer than the writer's; it alerts as
+  # DistantSignalIngestUnsupportedSchema) before it is dead-lettered with
+  # reason `unsupported_expired` (INGEST_WRITER_UNSUPPORTED_DEADLINE_SECS;
+  # security review L6). Until then it blocks its stream: roll the writer
+  # forward within this time. 0 never dead-letters it.
+  unsupportedDeadlineSecs: 3600
   database:
     # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; the crate's default
     # and spec §6.6's). The binary also holds one more connection, the
@@ -2841,6 +2848,19 @@ redis:
   # would evict whole stream keys (a stream is one key), i.e. delete
   # movement-events and all three consumer groups outright.
   maxmemoryPolicy: noeviction
+  # -- Redis `proto-max-bulk-len`, passed as `--proto-max-bulk-len`: the
+  # largest single string (one command argument) a client may send. Redis'
+  # own default is 512mb, so one compromised producer's XADD could fill
+  # `maxmemory` with a single field (security review L6, 2026-10-08). The
+  # largest legitimate one is an ingest stream entry's `body`: producers
+  # write at most 512 KiB (ingest_stream::envelope::MAX_ENCODED_BODY), the
+  # writer accepts up to 1 MiB (MAX_ACCEPTED_BODY) and copies it into a
+  # dead-letter entry at most once. movement-events entries are one TRUST
+  # envelope each (about 1 KiB); incident-text-changed carries an id. CIF
+  # and CORPUS go through Postgres, never Redis. Redis refuses values
+  # under 1mb. Empty or null leaves Redis' default. Changing it restarts
+  # Redis (it is a container arg).
+  protoMaxBulkLen: 2mb
   # -- RDB snapshot schedule, passed as `--save`. "" (the default)
   # disables RDB snapshots; null leaves the image's built-in schedule
   # (`3600 1 300 100 60 10000`).
@@ -4892,6 +4912,9 @@ metrics:
     # stream (ingestWriter.streams.*: apply): only the stream path writes
     # its row, so after a rollback to http it would age for good. The http
     # paths today: incidents and tfl every 5 min, stations and tocs daily.
+    # The island-of-Ireland catalogues are stream-only, one source per table
+    # and network (poller-irish-rail-gtfs and poller-nir-stations, daily
+    # each), so 2 days as for the GB reference data.
     ingestSourceStale:
       enabled: true
       maxAgeSeconds:
@@ -4903,11 +4926,19 @@ metrics:
         full-coverage-stats: 1800
         full-coverage-window-stats: 1800
         station-full-coverage-samples: 1800
+        island_of_ireland_stations_gtfs: 172800
+        island_of_ireland_lines_gtfs: 172800
+        island_of_ireland_stations_nir: 172800
+        island_of_ireland_lines_nir: 172800
       whileStreamApplies:
         station-samples: "ds:ingest:station-samples"
         full-coverage-stats: "ds:ingest:full-coverage"
         full-coverage-window-stats: "ds:ingest:full-coverage"
         station-full-coverage-samples: "ds:ingest:full-coverage"
+        island_of_ireland_stations_gtfs: "ds:ingest:ioi-gtfs"
+        island_of_ireland_lines_gtfs: "ds:ingest:ioi-gtfs"
+        island_of_ireland_stations_nir: "ds:ingest:ioi-nir"
+        island_of_ireland_lines_nir: "ds:ingest:ioi-nir"
       for: 10m
       severity: warning
     # DistantSignalDbPoolAcquireTimeouts: a component's Postgres pool timed

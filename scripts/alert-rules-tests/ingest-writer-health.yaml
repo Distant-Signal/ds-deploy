@@ -166,6 +166,38 @@ tests:
               description: "Its ingest_freshness row is over 1800s old: its producer is down or failing, or writes nowhere."
               runbook_url: *source_runbook
 
+  # Island of Ireland, one source per table and network (172800s each,
+  # stream-only). GTFS's stations last landed at 0 and ds:ingest:ioi-gtfs
+  # is in apply: over 2 days from 48h 1m, firing from 48h 11m. NIR's
+  # stations are as old, but ds:ingest:ioi-nir is in shadow: silent. GTFS's
+  # lines land every minute. The legacy shared source is not checked.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="island_of_ireland_stations_gtfs"}'
+        values: '0x3000'
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="island_of_ireland_lines_gtfs"}'
+        values: '0+60x3000'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-gtfs", mode="apply"}'
+        values: '1x3000'
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="island_of_ireland_stations_nir"}'
+        values: '0x3000'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-nir", mode="shadow"}'
+        values: '1x3000'
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="island_of_ireland_stations"}'
+        values: '0x3000'
+    alert_rule_test:
+      - eval_time: 48h5m
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts: []
+      - eval_time: 49h
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, source: island_of_ireland_stations_gtfs}
+            exp_annotations:
+              summary: "island_of_ireland_stations_gtfs data last landed 2d 1h 0m 0s ago"
+              description: "Its ingest_freshness row is over 172800s old: its producer is down or failing, or writes nowhere."
+              runbook_url: *source_runbook
+
   # Backlog severities. station-samples at 400 of 720 (0.56): warning from
   # 10m. At 16m it jumps to 648 (0.9): the critical pends, the warning
   # keeps firing (no gap), and once the critical fires (26m) the warning is

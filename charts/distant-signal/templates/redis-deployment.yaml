@@ -241,6 +241,10 @@ spec:
             - --maxmemory-policy
             - {{ . | quote }}
             {{- end }}
+            {{- with .Values.redis.protoMaxBulkLen }}
+            - --proto-max-bulk-len
+            - {{ . | quote }}
+            {{- end }}
             {{- if $requirePass }}
             # redis.auth (INF-3): the kubelet substitutes $(REDIS_PASSWORD)
             # from the env below, so the value is never in the manifest.

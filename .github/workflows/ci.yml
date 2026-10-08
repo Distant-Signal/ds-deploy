@@ -1274,16 +1274,18 @@ jobs:
           grep -A1 -- '- --save' <<<"${redis}" | grep -q -- '- ""'
           grep -A1 -- '- --maxmemory$' <<<"${redis}" | grep -q -- '- "1536mb"'
           grep -A1 -- '- --maxmemory-policy' <<<"${redis}" | grep -q -- '- "noeviction"'
+          # Security review L6: one argument at most 2mb.
+          grep -A1 -- '- --proto-max-bulk-len' <<<"${redis}" | grep -q -- '- "2mb"'
           grep -q 'memory: 2560Mi' <<<"${redis}"
           # DQ15: 4Gi default (no cluster here, so the existing-PVC lookup is
           # empty and the value renders as-is).
           helm template distant-signal charts/distant-signal "${base[@]}" \
             --show-only templates/redis-pvc.yaml | grep -q 'storage: "4Gi"'
           bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
-            --set redis.save=null --set redis.maxmemory=null \
+            --set redis.save=null --set redis.maxmemory=null --set redis.protoMaxBulkLen=null \
             --show-only templates/redis-deployment.yaml)
-          if grep -E -q -- '- --save|- --maxmemory$' <<<"${bare}"; then
-            echo "redis --save/--maxmemory rendered despite being null" >&2; exit 1
+          if grep -E -q -- '- --save|- --maxmemory$|- --proto-max-bulk-len' <<<"${bare}"; then
+            echo "redis --save/--maxmemory/--proto-max-bulk-len rendered despite being null" >&2; exit 1
           fi
           relay=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --show-only templates/movement-relay-deployment.yaml)

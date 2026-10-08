@@ -420,7 +420,37 @@ functions:
 # and adds the permissive USING (true) policy every role shares; policies
 # named ds_grants_* that are no longer listed here are dropped on the next
 # run.
+#
+# `{writes: <condition>}` instead of a bare condition restricts only the
+# role's writes: RESTRICTIVE policies ds_grants_<role>_insert (WITH CHECK),
+# _update (USING and WITH CHECK) and _delete (USING); its reads are
+# unchanged.
 row_policies:
   # The ingest-writer applies the `tfl` stream (plan 3c.3); the aggregator
   # owns every other line.
   line_status: {writer: "source = 'tfl'"}
+  # Each producer writes only its own freshness rows (security review L4,
+  # 2026-10-08), so a compromised one cannot push another feed's
+  # fetched_at into the future (the upsert keeps GREATEST) and hide that
+  # feed's staleness. Writes only: the writer's freshness gauge
+  # (ingest_writer::telemetry) reads every row. Migration
+  # 20261009170000_ingest_freshness_rls.sql enables RLS. These are the
+  # only created roles with write grants on the table; the api and the
+  # aggregator (members of app) are unrestricted.
+  #   writer: ds_store::freshness::record_ingest from its handlers: tfl,
+  #     tocs, the four snapshot sources (ds_store::samples::sources) and the
+  #     island-of-Ireland catalogue's per-network sources
+  #     (ds_store::samples::island_of_ireland). The two unsuffixed
+  #     island_of_ireland_* names are what writers before the per-network
+  #     split recorded; they stay allowed so a writer still on that release
+  #     keeps applying during the rollout. Drop them a release later.
+  ingest_freshness:
+    writer:
+      writes: >-
+        source IN ('tfl', 'tocs', 'station-samples', 'full-coverage-stats',
+        'full-coverage-window-stats', 'station-full-coverage-samples',
+        'island_of_ireland_stations_gtfs', 'island_of_ireland_lines_gtfs',
+        'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir',
+        'island_of_ireland_stations', 'island_of_ireland_lines')
+    stations: {writes: "source = 'stations'"}
+    incidents: {writes: "source = 'incidents'"}

@@ -26,7 +26,8 @@
 --      exist yet are skipped (a new cluster's initdb run);
 --   5. the row policies (db-grants.yaml `row_policies`): every policy named
 --      ds_grants_* is dropped, then each listed one is created again as a
---      RESTRICTIVE policy for its role.
+--      RESTRICTIVE policy for its role (FOR ALL, or one per write command
+--      for a `{writes: ...}` entry).
 
 \set ON_ERROR_STOP on
 
@@ -774,15 +775,33 @@ BEGIN
         EXECUTE format('DROP POLICY %I ON public.%I', r.policyname, r.tablename);
     END LOOP;
     FOR r IN
-        SELECT v.tbl, v.kind, current_setting('ds_grants.' || v.kind) AS grantee,
+        SELECT v.tbl, v.kind, v.cmd, current_setting('ds_grants.' || v.kind) AS grantee,
                v.cond
         FROM (VALUES
-        ('line_status', 'writer', 'source = ''tfl''')) AS v(tbl, kind, cond)
+        ('line_status', 'writer', 'ALL', 'source = ''tfl'''),
+        ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''island_of_ireland_stations'', ''island_of_ireland_lines'')'),
+        ('ingest_freshness', 'writer', 'UPDATE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''island_of_ireland_stations'', ''island_of_ireland_lines'')'),
+        ('ingest_freshness', 'writer', 'DELETE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''island_of_ireland_stations'', ''island_of_ireland_lines'')'),
+        ('ingest_freshness', 'stations', 'INSERT', 'source = ''stations'''),
+        ('ingest_freshness', 'stations', 'UPDATE', 'source = ''stations'''),
+        ('ingest_freshness', 'stations', 'DELETE', 'source = ''stations'''),
+        ('ingest_freshness', 'incidents', 'INSERT', 'source = ''incidents'''),
+        ('ingest_freshness', 'incidents', 'UPDATE', 'source = ''incidents'''),
+        ('ingest_freshness', 'incidents', 'DELETE', 'source = ''incidents''')) AS v(tbl, kind, cmd, cond)
         WHERE to_regclass(format('public.%I', v.tbl)) IS NOT NULL
     LOOP
-        EXECUTE format('CREATE POLICY %I ON public.%I AS RESTRICTIVE FOR ALL TO %I '
-                       'USING (%s) WITH CHECK (%s)',
-                       'ds_grants_' || r.kind, r.tbl, r.grantee, r.cond, r.cond);
+        -- FOR ALL: ds_grants_<role>, USING and WITH CHECK. A writes-only
+        -- entry: ds_grants_<role>_<command> for INSERT (WITH CHECK), UPDATE
+        -- (both) and DELETE (USING); the role's reads stay unrestricted.
+        EXECUTE format('CREATE POLICY %I ON public.%I AS RESTRICTIVE FOR %s TO %I %s',
+                       'ds_grants_' || r.kind
+                           || CASE WHEN r.cmd = 'ALL' THEN '' ELSE '_' || lower(r.cmd) END,
+                       r.tbl, r.cmd, r.grantee,
+                       CASE r.cmd
+                           WHEN 'INSERT' THEN format('WITH CHECK (%s)', r.cond)
+                           WHEN 'DELETE' THEN format('USING (%s)', r.cond)
+                           ELSE format('USING (%s) WITH CHECK (%s)', r.cond, r.cond)
+                       END);
     END LOOP;
 END
 $policies$;
