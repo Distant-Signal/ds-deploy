@@ -122,7 +122,14 @@ CLIENTS = {
     "fullCoverageConsumer": ("-full-coverage-consumer", "full-coverage-consumer"),
     "trustBacklogConsumer": ("-trust-backlog-consumer", "trust-backlog-consumer"),
 }
-ALL_CLIENTS = sets(*(f"redis.acl.clients.{k}=true" for k in CLIENTS))
+# redis.acl.clients keys whose workload renders nothing with the defaults
+# (the ingest-writer's streams, plan 3a.3; poller-incidents' db sink, plan
+# 2c): no per-client Deployment check, but defaultUser off still needs
+# each of them on.
+DORMANT_CLIENTS = ("ingestWriter", "pollerIncidents")
+ALL_CLIENTS = sets(
+    *(f"redis.acl.clients.{k}=true" for k in (*CLIENTS, *DORMANT_CLIENTS))
+)
 
 BASELINE_SETS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("defaults", ()),
@@ -508,7 +515,13 @@ def check_redis_refusals(c: Checker) -> None:
         "redis.acl.clients.enricher",
         *ACL,
         *sets("redis.acl.defaultUser=off"),
-        *sets(*(f"redis.acl.clients.{k}=true" for k in CLIENTS if k != "enricher")),
+        *sets(
+            *(
+                f"redis.acl.clients.{k}=true"
+                for k in (*CLIENTS, *DORMANT_CLIENTS)
+                if k != "enricher"
+            )
+        ),
     )
 
 
