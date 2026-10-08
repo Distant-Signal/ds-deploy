@@ -385,6 +385,22 @@ postgresql:
         # (`scheduleFeed.reference.ingest.database.maxConnections`, 3) plus
         # 1 (spec §6.6: pool 3, limit 4).
         connectionLimit: ""
+      stations:
+        # -- Connect poller-stations (`pollers.stations`, which must be
+        # enabled with `ingest.sink: db`) as `distant_signal_stations` (plan
+        # 2b.3). The role is narrow, not a member of `app`: SELECT, INSERT
+        # and UPDATE on `stations` and `ingest_freshness` only. It is created
+        # with the others whenever `enabled` is on, unused until then.
+        connect: false
+        # -- Password. Generated when empty (and no `existingSecret`).
+        password: ""
+        # -- Read the password from this pre-existing Secret instead.
+        existingSecret: ""
+        # -- Key within `existingSecret` (and in the chart's Secret).
+        existingSecretPasswordKey: postgres-stations-password
+        # -- CONNECTION LIMIT. Empty: its pool
+        # (`pollers.stations.ingest.database.maxConnections`, 1) plus 1.
+        connectionLimit: ""
   probes:
     # -- startupProbe budget (INF-4). Liveness only begins once pg_isready
     # succeeds, so crash recovery (WAL redo after a node reboot) is never
@@ -936,6 +952,21 @@ pollers:
     baseUrl: ""
     baseUrlEnvVar: RDM_STATIONS_BASE_URL
     ingestPath: /private/stations
+    # Ingest architecture plan 2b: where the parsed feed goes.
+    ingest:
+      # -- `http` (today's behaviour): POST it to `ingestPath`. `db`
+      # (INGEST_SINK=db): write Postgres directly and read the startup
+      # cursor from `ingest_freshness`, as the app role or, with
+      # `postgresql.roles.perService.stations.connect`, as the narrow
+      # `distant_signal_stations`. Adds Postgres egress and admission to the
+      # NetworkPolicies. `db` needs `ingestWriter.enabled` and
+      # `ingestWriter.loops.enabled`: the writer's 10-minute CORPUS crosswalk
+      # loop replaces the rebuild the api's POST triggers (plan 2b.2).
+      sink: http
+      database:
+        # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
+        # §6.6: one daily transaction, pool 1, role limit 2).
+        maxConnections: 1
     # -- RSPS5050 P-03-00 Rev A section 6: once every 24 hours, overnight.
     pollIntervalSecs: 86400
     apiKey: ""

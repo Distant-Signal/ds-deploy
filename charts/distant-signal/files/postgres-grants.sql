@@ -11,7 +11,7 @@
 --     -f postgres-grants.sql
 --
 -- Passwords come from the environment (psql's \getenv), one per created
--- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_REFERENCE_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD.
+-- role: DS_PG_API_PASSWORD, DS_PG_AGGREGATOR_PASSWORD, DS_PG_ENRICHER_PASSWORD, DS_PG_NOTIFIER_PASSWORD, DS_PG_WRITER_PASSWORD, DS_PG_SCHEDULE_REFERENCE_PASSWORD, DS_PG_STATIONS_PASSWORD, DS_PG_SCHEDULE_INGEST_PASSWORD.
 --
 -- In ONE transaction:
 --   1. the group roles (NOLOGIN) and every role whose status is not
@@ -86,6 +86,14 @@
 \else
 \set schedule_reference_connection_limit 4
 \endif
+\if :{?stations}
+\else
+\set stations distant_signal_stations
+\endif
+\if :{?stations_connection_limit}
+\else
+\set stations_connection_limit 2
+\endif
 \if :{?schedule_ingest}
 \else
 \set schedule_ingest distant_signal_schedule_ingest
@@ -124,6 +132,11 @@
 \else
 \set schedule_reference_password ''
 \endif
+\getenv stations_password DS_PG_STATIONS_PASSWORD
+\if :{?stations_password}
+\else
+\set stations_password ''
+\endif
 \getenv schedule_ingest_password DS_PG_SCHEDULE_INGEST_PASSWORD
 \if :{?schedule_ingest_password}
 \else
@@ -155,6 +168,9 @@ SELECT
     set_config('ds_grants.schedule_reference', :'schedule_reference', true),
     set_config('ds_grants.schedule_reference_password', :'schedule_reference_password', true),
     set_config('ds_grants.schedule_reference_connection_limit', :'schedule_reference_connection_limit', true),
+    set_config('ds_grants.stations', :'stations', true),
+    set_config('ds_grants.stations_password', :'stations_password', true),
+    set_config('ds_grants.stations_connection_limit', :'stations_connection_limit', true),
     set_config('ds_grants.schedule_ingest', :'schedule_ingest', true),
     set_config('ds_grants.schedule_ingest_password', :'schedule_ingest_password', true),
     set_config('ds_grants.schedule_ingest_connection_limit', :'schedule_ingest_connection_limit', true)
@@ -209,6 +225,7 @@ BEGIN
         ('notifier', 'observed'),
         ('writer', 'observed'),
         ('schedule_reference', 'narrow'),
+        ('stations', 'narrow'),
         ('schedule_ingest', 'narrow')) AS v(kind, status)
     LOOP
         IF r.name = app OR r.name = current_user OR r.name = ANY (seen) THEN
@@ -256,6 +273,7 @@ BEGIN
         ('notifier', 'observed'),
         ('writer', 'observed'),
         ('schedule_reference', 'narrow'),
+        ('stations', 'narrow'),
         ('schedule_ingest', 'narrow')) AS v(kind, status)
     LOOP
         member_oid := (SELECT oid FROM pg_roles WHERE rolname = r.name);
@@ -286,6 +304,7 @@ BEGIN
         ('writer', 'read_shared'),
         ('writer', 'schema_gate'),
         ('schedule_reference', 'schema_gate'),
+        ('stations', 'schema_gate'),
         ('schedule_ingest', 'schema_gate')) AS v(kind, grp)
     LOOP
         IF NOT EXISTS (
@@ -318,6 +337,7 @@ BEGIN
         ('notifier'),
         ('writer'),
         ('schedule_reference'),
+        ('stations'),
         ('schedule_ingest')) AS v(kind)
     LOOP
         EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', grantee);
@@ -393,6 +413,9 @@ BEGIN
         ('schedule_destination_departures_publish_keys', 'schedule_reference', 'SELECT', ''),
         ('schedule_destination_departures_publish_keys', 'schedule_reference', 'INSERT', ''),
         ('schedule_destination_departures_publish_keys', 'schedule_reference', 'DELETE', ''),
+        ('ingest_freshness', 'stations', 'SELECT', ''),
+        ('ingest_freshness', 'stations', 'INSERT', ''),
+        ('ingest_freshness', 'stations', 'UPDATE', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'SELECT', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'INSERT', ''),
         ('corpus_crosswalk_build', 'schedule_ingest', 'UPDATE', ''),
@@ -406,6 +429,9 @@ BEGIN
         ('corpus_tiploc_crs', 'schedule_ingest', 'UPDATE', ''),
         ('corpus_tiploc_crs', 'schedule_ingest', 'DELETE', ''),
         ('corpus_tiploc_crs', 'schedule_reference', 'SELECT', ''),
+        ('stations', 'stations', 'SELECT', ''),
+        ('stations', 'stations', 'INSERT', ''),
+        ('stations', 'stations', 'UPDATE', ''),
         ('stations', 'schedule_ingest', 'SELECT', ''),
         ('stanox_crs', 'schedule_reference', 'SELECT', ''),
         ('stanox_crs', 'schedule_reference', 'INSERT', ''),

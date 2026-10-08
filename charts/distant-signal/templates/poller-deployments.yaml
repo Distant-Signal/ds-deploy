@@ -145,6 +145,17 @@ with $poller.extraEnv, which replaces an entry of the same name.
                   key: {{ include "distant-signal.pollerOauthPasswordSecretKey" (dict "root" $root "name" $name "poller" $poller) }}
             - name: API_INGEST_URL
               value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" $root) $poller.ingestPath | quote }}
+            {{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" $name "poller" $poller) }}
+            # Ingest architecture phase 2 (pollers.<name>.ingest.sink: db):
+            # write Postgres directly instead of POSTing to API_INGEST_URL,
+            # as the app role or, with postgresql.roles.perService.<name>.connect,
+            # the poller's own role.
+            - name: INGEST_SINK
+              value: "db"
+            {{- include "distant-signal.databaseEnvFor" (dict "root" $root "service" (ternary $name "" (hasKey $root.Values.postgresql.roles.perService $name))) | nindent 12 }}
+            - name: DATABASE_MAX_CONNECTIONS
+              value: {{ $poller.ingest.database.maxConnections | int | quote }}
+            {{- end }}
             {{- if $poller.sampleStationsPath }}
             # ldbws only: a SECOND api endpoint, listing which stations to
             # sample (crates/poller-ldbws/src/config.rs).

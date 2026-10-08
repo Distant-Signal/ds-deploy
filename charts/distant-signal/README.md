@@ -1390,6 +1390,11 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.roles.perService.schedule_reference.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.schedule_reference.existingSecretPasswordKey` | `postgres-schedule-reference-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.schedule_reference.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `scheduleFeed.reference.ingest.database.maxConnections` + 1. |
+| `postgresql.roles.perService.stations.connect` | `false` | Connect poller-stations (`pollers.stations.enabled` with `ingest.sink: db` required) as `distant_signal_stations` (plan 2b.3). A narrow role, not a member of `app`: SELECT, INSERT and UPDATE on `stations` and `ingest_freshness` only. Created with the others whenever `perService.enabled`, unused until then. |
+| `postgresql.roles.perService.stations.password` | `""` | Password. |
+| `postgresql.roles.perService.stations.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
+| `postgresql.roles.perService.stations.existingSecretPasswordKey` | `postgres-stations-password` | Key within `existingSecret` (and in the chart's Secret). |
+| `postgresql.roles.perService.stations.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `pollers.stations.ingest.database.maxConnections` + 1. |
 | `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
 | `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |
@@ -2331,6 +2336,8 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.<name>.affinity` | `{}` | Pod affinity rules. |
 | `pollers.<name>.podAnnotations` | `{}` | Pod annotations. |
 | `pollers.<name>.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+| `pollers.stations.ingest.sink` | `http` | stations only (ingest architecture plan 2b): `http` POSTs the feed to `ingestPath`; `db` (`INGEST_SINK=db`) writes Postgres directly and reads the startup cursor from `ingest_freshness`, as the app role or, with `postgresql.roles.perService.stations.connect`, as `distant_signal_stations`. Adds the Postgres NetworkPolicy egress and admission. `db` needs `ingestWriter.enabled` and `ingestWriter.loops.enabled` (the writer's CORPUS crosswalk loop replaces the rebuild the api's POST triggers); the render fails otherwise. |
+| `pollers.stations.ingest.database.maxConnections` | `1` | stations only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `pollers.tfl.apiKeyEnvVar` | `TFL_APP_KEY` | tfl only: env var the key is passed in (the RDM pollers default to `RDM_API_KEY`). Do not change. |
 | `pollers.tfl.dlrPilotEnabled` | `false` | tfl only: DLR arrivals-diffing pilot (`DLR_PILOT_ENABLED`). |
 | `pollers.tfl.dlrPilotStopPointId` | `940GZZDLPOP` | tfl only: the DLR pilot's stop point (`DLR_PILOT_STOP_POINT_ID`). |

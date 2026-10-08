@@ -388,9 +388,10 @@ jobs:
       # ds-store: the api's data access as it moves out (ingest architecture
       # plan phase 1A); its DB tests run everywhere the api's do. ds-migrate
       # (plan 1B.1): `run` against the migrated database. schedule-reference
-      # (plan 2a.2): its db sink's protocol and parity tests.
-      - name: cargo test -p api -p ds-store -p ds-migrate -p aggregator -p notifier -p schedule-reference -- --ignored (DB-backed tests)
-        run: cargo test -p api -p ds-store -p ds-migrate -p aggregator -p notifier -p schedule-reference -- --ignored --test-threads=1
+      # (plan 2a.2): its db sink's protocol and parity tests. poller-stations
+      # (plan 2b.1): its two sinks and the schema gate.
+      - name: cargo test -p api -p ds-store -p ds-migrate -p aggregator -p notifier -p schedule-reference -p poller-stations -- --ignored (DB-backed tests)
+        run: cargo test -p api -p ds-store -p ds-migrate -p aggregator -p notifier -p schedule-reference -p poller-stations -- --ignored --test-threads=1
 
       # common::pg's pool-settings tests (statement/idle timeouts actually
       # applied, a timed-out statement cancelled without leaking, acquire
@@ -469,6 +470,8 @@ jobs:
       # every service with one runs as its own role, the writer included.
       # schedule-reference's role is narrow (plan 2a.6): its db sink's
       # parity and protocol tests prove exactly its db-grants.yaml grants.
+      # poller-stations runs last, as its narrow role (plan 2b.3), which
+      # cannot DELETE the test stations it leaves behind.
       - name: DB-backed tests as each service's own role (Stage 0b)
         run: |
           # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
@@ -481,7 +484,8 @@ jobs:
             DATABASE_URL="$DATABASE_URL_WRITER" cargo test -p ingest-writer -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_SCHEDULE_INGEST" cargo test -p schedule-ingest sink::db_tests -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_SCHEDULE_REFERENCE" cargo test -p schedule-reference -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_ENRICHER" cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1'
+            DATABASE_URL="$DATABASE_URL_ENRICHER" cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_STATIONS" cargo test -p poller-stations -- --ignored --test-threads=1'
 
   # Custom: no reusable Piped workflow covers Node/npm at all (its
   # ecosystem coverage is Python + Rust). frontend/package.json now has a

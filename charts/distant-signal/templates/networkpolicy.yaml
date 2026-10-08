@@ -31,9 +31,11 @@ spec:
     # poll those tables), so turning networkPolicy.enabled on would have
     # silently stopped every push notification this app sends.
     #
-    # The pollers/consumers really do NOT belong here: they reach the database
-    # only indirectly, by POSTing to api's /private/* ingest endpoints (see the
-    # api policy below, which is where they are allow-listed).
+    # The pollers/consumers that POST to api's /private/* ingest endpoints do
+    # NOT belong here: they reach the database only through the api (see the
+    # api policy below, which is where they are allow-listed). A poller moved
+    # to a direct write (pollers.<name>.ingest.sink: db, ingest architecture
+    # phase 2) does, and is added below while it is on `db`.
     - from:
         - podSelector:
             matchExpressions:
@@ -66,6 +68,13 @@ spec:
                   # schedule-ingest's direct writes
                   # (scheduleFeed.ingest.sink=db, plan 2d).
                   - schedulefeed
+                  {{- end }}
+                  {{- range $name, $poller := .Values.pollers }}
+                  {{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" $name "poller" $poller) }}
+                  # pollers.{{ $name }}.ingest.sink: db (ingest architecture
+                  # phase 2): this poller writes Postgres directly.
+                  - {{ printf "poller-%s" $name }}
+                  {{- end }}
                   {{- end }}
         {{- with .Values.networkPolicy.postgresClients }}
         # networkPolicy.postgresClients: workloads outside this chart, e.g.
@@ -417,7 +426,10 @@ rule is IP-based, so this only opens their ports, not their hosts. */}}
 {{- $workers = append $workers (dict "component" "movement-relay" "metricsPort" .Values.movementRelay.metricsPort "healthPorts" (list .Values.movementRelay.healthPort) "egress" (dict "redis" true) "brokers" (include "distant-signal.movementRelayKafkaBrokers" .)) }}
 {{- end }}
 {{- range $enabledPollerNames }}
-{{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $callsApi "urls" (list (get $root.Values.pollers .).baseUrl $root.Values.internalOauth.tokenUrl)) }}
+{{- $poller := get $root.Values.pollers . }}
+{{- /* Phase 2: a poller on ingest.sink db calls Postgres, not the api. */}}
+{{- $pollerEgress := ternary (dict "postgres" true) $callsApi (empty (include "distant-signal.pollerSinkDb" (dict "root" $root "name" . "poller" $poller)) | not) }}
+{{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $pollerEgress "urls" (list $poller.baseUrl $root.Values.internalOauth.tokenUrl)) }}
 {{- end }}
 {{- if .Values.pollerIrishRailGtfs.enabled }}
 {{- $workers = append $workers (dict "component" "poller-irish-rail-gtfs" "metricsPort" .Values.pollerIrishRailGtfs.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $callsApi "urls" (list .Values.pollerIrishRailGtfs.gtfsUrl .Values.internalOauth.tokenUrl)) }}

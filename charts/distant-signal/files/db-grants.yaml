@@ -118,7 +118,12 @@ roles:
     used_by: schedule-reference
   stations:
     name: distant_signal_stations
-    status: planned
+    # Plan 2b.3: narrow from creation (it never was a member of app): SIU on
+    # stations and ingest_freshness, nothing else. Used once
+    # pollers.stations.ingest.sink is db with
+    # postgresql.roles.perService.stations.connect. The CORPUS crosswalk
+    # rebuild stays with the writer's loop (spec §9.3), so no crosswalk grants.
+    status: narrow
     phase: 2b
     groups: [schema_gate]
     connection_limit: 2
