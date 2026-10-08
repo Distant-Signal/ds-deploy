@@ -24,8 +24,8 @@
 --
 -- What it does, in the application database, in ONE transaction:
 --   1. Creates or updates the five roles: LOGIN, NOSUPERUSER, NOCREATEDB,
---      NOCREATEROLE, NOREPLICATION, NOBYPASSRLS, the given CONNECTION
---      LIMIT and password. Refuses a name that is the superuser itself or
+--      NOCREATEROLE, NOREPLICATION, NOBYPASSRLS (BYPASSRLS for the dump
+--      role, see below), the given CONNECTION LIMIT and password. Refuses a name that is the superuser itself or
 --      any other existing superuser, so a typo can never demote an admin.
 --   2. Built-in role memberships: owner pg_read_all_stats (the migration
 --      heal reads other sessions' pg_stat_progress_create_index rows),
@@ -194,10 +194,17 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r.name) THEN
             EXECUTE format('CREATE ROLE %I', r.name);
         END IF;
+        -- The dump role alone bypasses row-level security (ingest plan
+        -- 3c.3): pg_dump runs with row_security off and refuses a table with
+        -- RLS (line_status, 20261009131300_line_status_rls.sql) for a role
+        -- that does not, which would fail the nightly dump. It only ever
+        -- reads (pg_read_all_data), and PostgreSQL recommends BYPASSRLS for
+        -- such a role; a dump then holds every row whatever the policies.
         EXECUTE format(
             'ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION '
-            'NOBYPASSRLS INHERIT CONNECTION LIMIT %s',
-            r.name, r.connection_limit);
+            '%s INHERIT CONNECTION LIMIT %s',
+            r.name, CASE WHEN r.kind = 'dump' THEN 'BYPASSRLS' ELSE 'NOBYPASSRLS' END,
+            r.connection_limit);
         EXECUTE format('ALTER ROLE %I PASSWORD %L', r.name, r.password);
     END LOOP;
 

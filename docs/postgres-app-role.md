@@ -23,7 +23,8 @@ That cost two things:
 
 `distant_signal` stays the bootstrap superuser, **for humans only**
 (`kubectl exec ... psql`). Five new roles, all `LOGIN NOSUPERUSER
-NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` with a `CONNECTION
+NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` (the dump role
+`BYPASSRLS`, see Stage C) with a `CONNECTION
 LIMIT`:
 
 | Role (default name) | Used by | Privileges | Connection limit (default) |
@@ -217,11 +218,16 @@ WHERE datname = 'distant_signal' GROUP BY 1, 2 ORDER BY 1, 2;
 - `pg_dump` CronJob: connect as `distant_signal_dump` with
   `postgres-dump-password`. Its `CONNECTION LIMIT` is 2; a parallel
   `pg_dump -j N` needs `postgresql.roles.dump.connectionLimit: N + 1`.
-  It also needs `--enable-row-security` once
-  `20261009131300_line_status_rls.sql` has run (ingest plan 3c.3):
-  `line_status` has row-level security, and pg_dump refuses such a table
-  for a role that does not bypass RLS. The dump role is covered by the
-  permissive `USING (true)` policy, so the dump still holds every row.
+  `line_status` has row-level security once
+  `20261009131300_line_status_rls.sql` has run (ingest plan 3c.3), and
+  pg_dump refuses such a table for a role that does not bypass RLS. The
+  role setup Job (`files/postgres-roles.sql`) therefore gives the dump role
+  `BYPASSRLS` (it only reads, through `pg_read_all_data`), so the existing
+  CronJob needs no change and the dump holds every row whatever the
+  policies. The Job runs right after the migrate Job on every deploy, so
+  both land together. A dump run as any other non-superuser role needs
+  `pg_dump --enable-row-security` instead (the permissive `USING (true)`
+  policy then shows it every row).
 
 Verify: the exporter's `pg_up` is 1 and its metrics are back; trigger one
 dump by hand and check its size against last night's.
