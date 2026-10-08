@@ -2308,10 +2308,12 @@ jobs:
           env_is "${sdep}" REDIS_USERNAME ingest-writer
           grep -q 'name: REDIS_URL$' <<<"${sdep}" || fail "a stream on needs REDIS_URL"
           grep -q 'fieldPath: metadata.name' <<<"${sdep}" || fail "a stream on needs POD_NAME"
-          grep -q 'port: 6379' <<<"$(doc NetworkPolicy distant-signal-ingest-writer <<<"${st}")" \
-            || fail "a stream on needs egress to Redis"
-          grep -q -- '- ingest-writer$' <<<"$(doc NetworkPolicy distant-signal-redis <<<"${st}")" \
+          snp=$(doc NetworkPolicy distant-signal-ingest-writer <<<"${st}")
+          grep -q 'port: 6379' <<<"${snp}" || fail "a stream on needs egress to Redis"
+          rnp=$(doc NetworkPolicy distant-signal-redis <<<"${st}")
+          grep -q -- '- ingest-writer$' <<<"${rnp}" \
             || fail "Redis must admit the ingest-writer once a stream is on"
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if render --set ingestWriter.enabled=true --set ingestWriter.streams.tfl=on >/dev/null 2>&1; then
             fail "an unknown stream mode must fail the render"
           fi
