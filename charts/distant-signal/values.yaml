@@ -2749,7 +2749,7 @@ redis:
     # -- Pinned to an exact 7.4 patch release and content digest (INF-11);
     # Renovate (helm-values manager) proposes bumps, digest included. 7.4.11
     # is what the floating `7` tag resolved to on 2026-09-27.
-    tag: "7.4.11@sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f"
+    tag: "7.4.11@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85"
     pullPolicy: IfNotPresent
   service:
     port: 6379
@@ -3736,8 +3736,9 @@ scheduleFeed:
       # this chart's other third-party images (devAuthentik.image.tag,
       # postgres/redis tags above) -- docker-compose.yml's schedule-sftp
       # service is pinned to the same tag for the same reason.
-      # Digest-pinned (INF-11): the digest above, which production runs.
-      tag: "v2.7.5@sha256:9011fe608d336d3daf6ed6224b16fd40443aab8f3335e0b20853d6a539c58738"
+      # Digest-pinned (INF-11). Bumped to v2.7.6 on 2026-10-08: the
+      # dependency scan found 14 criticals in v2.7.5 and none in v2.7.6.
+      tag: "v2.7.6@sha256:1edd28d80de2a008863fbfc58c8ff7db47b1b410bae48d4e6076192337809b11"
       pullPolicy: IfNotPresent
     # -- SFTPGo's own default container port -- not independently
     # re-verified against a real deployed instance by this plan.

@@ -2557,7 +2557,7 @@ one-pod layout.
 | `scheduleFeed.sftp.separateDeployment` | `true` | Run SFTPGo in its own Deployment (`<fullname>-schedulefeed-sftp`) so that app deploys never restart it. Assumes a single node (one ReadWriteOnce PVC for both pods). `false` puts it back in the schedulefeed pod, as before 2026-10-08. Switching recreates both pods once; the PVC is untouched. |
 | `scheduleFeed.sftp.podAnnotations` | `{}` | Annotations for the separate SFTP pod. Unused with `separateDeployment: false`. |
 | `scheduleFeed.sftp.image.repository` | `drakkan/sftpgo` | SFTP server image. |
-| `scheduleFeed.sftp.image.tag` | `v2.7.5@sha256:…` | Must be a real `drakkan/sftpgo` tag: an empty tag would fall back to this chart's version. |
+| `scheduleFeed.sftp.image.tag` | `v2.7.6@sha256:…` | Must be a real `drakkan/sftpgo` tag: an empty tag would fall back to this chart's version. |
 | `scheduleFeed.sftp.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `scheduleFeed.sftp.port` | `2022` | SFTP container and Service port. |
 | `scheduleFeed.sftp.allowedCidrs` | `[]` | See the networkPolicy table below. |

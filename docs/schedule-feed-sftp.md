@@ -1,6 +1,6 @@
 # Schedule feed SFTP: push account controls
 
-The `sftp` container (SFTPGo v2.7.5) of the `schedulefeed-sftp` pod is the
+The `sftp` container (SFTPGo v2.7.6) of the `schedulefeed-sftp` pod is the
 one service on the node's public IP. It has had its own Deployment since
 2026-10-08 (`scheduleFeed.sftp.separateDeployment`), so app deploys no
 longer restart it; the container name, and so the Loki queries below, did
