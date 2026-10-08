@@ -1798,6 +1798,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.streams.tfl` | `off` | Mode of `ds:ingest:tfl`, as `station-samples` (handlers: plan 3c). |
 | `ingestWriter.streams.reference` | `off` | Mode of `ds:ingest:reference` (tocs), as `station-samples` (handlers: plan 3c). |
 | `ingestWriter.streams.island-of-ireland` | `off` | Mode of `ds:ingest:island-of-ireland`, as `station-samples` (handlers: plan 3c). |
+| `ingestWriter.changedRowsOnly` | `false` | Changed rows only (`INGEST_WRITER_CHANGED_ROWS_ONLY`, plan 3a.9): `station_full_coverage_samples` rows whose stats are unchanged are not rewritten, and readers derive their age from the feed's observed time. The other snapshot tables keep their per-row time. Turn on only after the api with the derived readers is deployed and `streams.full-coverage` has soaked on `apply`. |
 | `ingestWriter.database.maxConnections` | `6` | Its Postgres pool; counted, plus its one loop-lock session, in the connection budgets. |
 | `ingestWriter.progressStallSecs` | `900` | `/livez` stall window (`PROGRESS_STALL_SECS`). |
 | `ingestWriter.logLevel` | `info` | `RUST_LOG`. |

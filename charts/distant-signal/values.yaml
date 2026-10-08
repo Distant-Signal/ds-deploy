@@ -2009,6 +2009,14 @@ ingestWriter:
     tfl: "off"
     reference: "off"
     island-of-ireland: "off"
+  # -- Changed rows only (INGEST_WRITER_CHANGED_ROWS_ONLY; plan 3a.9, spec
+  # §7.8): the `station-full-coverage-samples/1` handler stops advancing
+  # `resolved_at` on rows whose stats are unchanged (about 2,400 of 2,700
+  # updates a minute), and readers derive the age from the feed's observed
+  # time in `ingest_freshness`. The other snapshot tables keep their
+  # per-row time. Turn on only after the api with the derived readers is
+  # deployed and `streams.full-coverage` has soaked on `apply`.
+  changedRowsOnly: false
   database:
     # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; the crate's default
     # and spec §6.6's). The binary also holds one more connection, the

@@ -100,6 +100,11 @@ with ingestWriter.extraEnv, which replaces an entry of the same name.
             # Each ingest stream's mode (plan 3a.3): off, shadow or apply.
             - name: INGEST_WRITER_STREAMS
               value: {{ include "distant-signal.ingestWriterStreams" . | quote }}
+            {{- if .Values.ingestWriter.changedRowsOnly }}
+            # Plan 3a.9: changed rows only (station-full-coverage-samples).
+            - name: INGEST_WRITER_CHANGED_ROWS_ONLY
+              value: "true"
+            {{- end }}
             {{- if include "distant-signal.ingestWriterStreamsOn" . }}
             # Only once a stream is not off: the streams' Redis, as the
             # ingest-writer ACL user under redis.acl.clients.ingestWriter.
