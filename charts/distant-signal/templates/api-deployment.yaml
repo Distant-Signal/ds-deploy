@@ -350,12 +350,6 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.internalOauth.groups.fullCoverage | quote }}
             - name: INTERNAL_OAUTH_GROUP_TRUST_BACKLOG
               value: {{ .Values.api.internalOauth.groups.trustBacklog | quote }}
-            - name: INTERNAL_OAUTH_GROUP_IRISH_RAIL_GTFS
-              value: {{ .Values.api.internalOauth.groups.irishRailGtfs | quote }}
-            - name: INTERNAL_OAUTH_GROUP_IRISH_RAIL_LIVE
-              value: {{ .Values.api.internalOauth.groups.irishRailLive | quote }}
-            - name: INTERNAL_OAUTH_GROUP_NIR_STATIONS
-              value: {{ .Values.api.internalOauth.groups.nirStations | quote }}
             - name: INTERNAL_OAUTH_GROUP_CORPUS
               value: {{ .Values.api.internalOauth.groups.corpus | quote }}
             # Not a /private/* gate: the Distant-Signal-MCP's group, which

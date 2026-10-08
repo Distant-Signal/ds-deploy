@@ -44,12 +44,6 @@ api:
   internalOauth:
     issuerUrl: https://sso.example.com/application/o/distant-signal-internal/
     clientId: distant-signal-internal
-    # The island-of-Ireland pollers' groups are empty by default; the
-    # pollers enabled below each need theirs, created in Authentik.
-    groups:
-      irishRailGtfs: svc-poller-irish-rail-gtfs
-      irishRailLive: svc-poller-irish-rail-live
-      nirStations: svc-poller-nir-stations
   # resources: deliberately not overridden. values.yaml's 1Gi/3Gi default
   # is what production needed to stop OOMKills from schedule publishes and
   # line-population bursts; a smaller limit here would bring those back.

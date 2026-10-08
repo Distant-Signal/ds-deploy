@@ -1588,15 +1588,6 @@ api:
       # crates/api/src/data/config.rs's `chart_env_wiring_tests` module now
       # makes impossible to reintroduce.)
       trustBacklog: svc-trust-backlog-consumer
-      # The three island-of-Ireland pollers' groups. Empty by default: those
-      # pollers ship disabled and no such group exists in Authentik, and an
-      # empty group closes the /private/island-of-ireland-* routes it gates
-      # (every caller gets 403). Since ingest plan 3c.2 (decision D8) the
-      # three island-of-Ireland pollers write only to their Redis stream, so
-      # no poller calls these routes; they are deleted in phase 5.
-      irishRailGtfs: ""
-      irishRailLive: ""
-      nirStations: ""
       # Gates POST /private/corpus-locations (Network Rail CORPUS loads,
       # scheduleFeed.corpus below). The caller is schedule-ingest's OWN
       # service account (scheduleFeed.ingest.internalOauthUsername), which
