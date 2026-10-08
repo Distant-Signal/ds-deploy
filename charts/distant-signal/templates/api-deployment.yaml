@@ -427,6 +427,8 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.rateLimit.mcp.publicWrite.perMinute | quote }}
             - name: API_RATE_LIMIT_MCP_PUBLIC_WRITE_BURST
               value: {{ .Values.api.rateLimit.mcp.publicWrite.burst | quote }}
+            - name: SCHEDULE_PROVISIONAL_AFTER_DAYS
+              value: {{ .Values.api.scheduleProvisionalAfterDays | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_DATES
               value: {{ .Values.api.tripPlanGraphCache.dates | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_MAX_AGE_SECS

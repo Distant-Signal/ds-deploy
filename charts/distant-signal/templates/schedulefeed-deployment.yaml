@@ -205,7 +205,7 @@ spec:
           # schedule_reference_publishes_url, schedule_line_population_url,
           # schedule_network_departures_url, schedule_destination_departures_url,
           # fixed_links_url, schedule_calling_points_full_url, tiploc_crs_url,
-          # lines (LINES_DIR),
+          # lines (LINES_DIR), forward_publish_days (SCHEDULE_FORWARD_PUBLISH_DAYS),
           # internal_oauth_token_url/client_id/scope/username/password,
           # metrics_port, metrics_enabled.
           #
@@ -282,6 +282,9 @@ spec:
               value: {{ printf "%s/private/tiploc-locations" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: LINES_DIR
               value: /app/lines
+            # Days beyond today the per-date products are published for.
+            - name: SCHEDULE_FORWARD_PUBLISH_DAYS
+              value: {{ .Values.scheduleFeed.reference.forwardPublishDays | int | quote }}
             {{- if include "distant-signal.scheduleReferenceDbSink" . }}
             # Where the products go (scheduleFeed.reference.ingest.sink;
             # ingest architecture plan 2a): `db` writes Postgres directly

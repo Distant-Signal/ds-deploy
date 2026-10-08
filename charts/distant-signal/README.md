@@ -1728,6 +1728,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.timeouts.headerReadTimeoutSecs` | `10` | Disconnect an HTTP/1 client that has not sent its full headers within this. |
 | `api.timeouts.unavailableRetryAfterSecs` | `30` | `Retry-After` (seconds, 1-3600) on a 503. A route that cannot reach the database answers `503 {"error":"service_unavailable","retryable":true}` instead of a 500. |
 | `api.corpusFallback.enabled` | `false` | Use Network Rail CORPUS as a fallback for TIPLOC/STANOX→CRS lookups the timetable has no CRS for; the timetable always wins a conflict. Does nothing until CORPUS is loaded (`scheduleFeed.corpus.enabled`). Review `corpus_compare` (in the api image) first. |
+| `api.scheduleProvisionalAfterDays` | `7` | Days after today a service date's timetable counts as firm (`SCHEDULE_PROVISIONAL_AFTER_DAYS`, 0-60). Train search, `/Train/by-uid` and `/Trips/plan` report a later date as `provisional: true`, because late STP changes (engineering works) can still land. |
 | `api.tripPlanGraphCache.dates` | `2` | Service dates whose connections graph `/Trips/plan` keeps built (about 100 MB each). `0` disables the cache. |
 | `api.tripPlanGraphCache.maxAgeSecs` | `600` | Rebuild a cached graph after this long, or after a new schedule publish. |
 | `api.tripPlanMaxWaypoints` | `20` | Most `?waypoints=` one `/Trips/plan` request may name (clamped to 1-20). |
@@ -2618,6 +2619,7 @@ one-pod layout.
 | `scheduleFeed.reference.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `scheduleFeed.reference.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `scheduleFeed.reference.pollIntervalSecs` | `1800` | How often the storage folder is checked for a new complete delivery. |
+| `scheduleFeed.reference.forwardPublishDays` | `28` | Days beyond today each delivery publishes the per-date timetable products for (`SCHEDULE_FORWARD_PUBLISH_DAYS`, 28-60, never below the 28-day tracking horizon): how far ahead train search, `/Train/by-uid` stops, service modes and `/Trips/plan` reach. Each day costs ~190 MB of Postgres and ~30 s of publish cycle. Raising it fills the new dates on the next delivery. |
 | `scheduleFeed.reference.ingest.sink` | `http` | Where the products go (`INGEST_SINK`, ingest plan 2a): `http`, the api's `/private` routes; `db`, Postgres directly (the container gets `DATABASE_URL`, the pod Postgres egress, and the schema gate runs before the first poll). Rollback is `http`. |
 | `scheduleFeed.reference.ingest.database.maxConnections` | `3` | The `db` sink's pool (`DATABASE_MAX_CONNECTIONS`). |
 | `scheduleFeed.reference.healthPort` | `8091` | Health port. Must differ from `workerHealth.port`, which the ingest container in the same pod uses. |

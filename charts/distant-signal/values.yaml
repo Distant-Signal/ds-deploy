@@ -1703,6 +1703,12 @@ api:
       publicWrite:
         perMinute: 600
         burst: 200
+  # -- Days after today a service date's timetable counts as firm
+  # (SCHEDULE_PROVISIONAL_AFTER_DAYS, 0-60; invalid values fall back to 7).
+  # A later date is reported `provisional: true` by train search,
+  # /Train/by-uid and /Trips/plan: late STP changes (engineering works) can
+  # still land. 7 is the publish horizon before it grew to 28 days.
+  scheduleProvisionalAfterDays: 7
   # -- TRIPS-1: /Trips/plan keeps the built connections graph for this many
   # service dates (~100 MB each; 0 disables the cache), rebuilt after a new
   # schedule publish or after maxAgeSecs.
@@ -4184,6 +4190,14 @@ scheduleFeed:
       digest: ""
       pullPolicy: IfNotPresent
     pollIntervalSecs: 1800
+    # -- How many days beyond today each delivery publishes the per-date
+    # timetable products for (`SCHEDULE_FORWARD_PUBLISH_DAYS`): train search,
+    # `/Train/by-uid` stops, service modes and `/Trips/plan` reach this far
+    # ahead. 28-60: no lower than the 28-day tracking horizon (pins and
+    # track-by-uid). Each day costs ~190 MB of Postgres (table and indexes)
+    # and ~30 s of publish cycle at production sizes; dates further out
+    # carry fewer of the CIF's late (STP) changes.
+    forwardPublishDays: 28
     ingest:
       # -- Where the products go (`INGEST_SINK`; ingest architecture plan
       # 2a): `http`, the api's `/private` ingest routes (today's path), or
