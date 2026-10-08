@@ -556,6 +556,137 @@ sweeps catch up when it is back.
 
 Design: [ingest architecture](superpowers/specs/2026-10-06-ingest-architecture-design.md#10-the-ingest-writer).
 
+## ingest streams
+
+The `ds:ingest:*` Redis streams (ingest spec §7, §14.2; plan 3a.4): the
+pollers and full-coverage-consumer XADD snapshots, and the ingest-writer
+applies them to Postgres through one consumer group, `ingest-writer`. The
+metrics are `crates/ingest-stream`'s (`src/metrics.rs`, labelled `stream`).
+These alerts render with `ingestWriter.enabled` and their
+`metrics.prometheusRule.ingest*` toggles, and stay silent until a stream is
+on: their series do not exist before. Dead letters, inspection and
+re-injection: [ingest-streams-deadletter](ingest-streams-deadletter.md).
+
+The usual first steps: the writer's log (`kubectl -n distant-signal logs
+deploy/distant-signal-ingest-writer`), filtered on the stream; and the
+group's view in Redis (`XINFO GROUPS <stream>`, `XPENDING <stream>
+ingest-writer`).
+
+### DistantSignalIngestStreamBacklog
+
+A stream's oldest pending entry
+(`ingest_stream_oldest_pending_age_seconds`) is older than
+`ingestStreamBacklog.oldestPendingAgeSecs` (600), or its unread
+(`ingest_stream_lag`) plus delivered-but-unACKed (`ingest_stream_pending`)
+entries are over `warningRatio` (0.5) of its `MAXLEN ~` cap (warning) or
+over `criticalRatio` (0.8) (critical), for `for`. Recorded as
+`distant_signal:ingest_stream_behind:ratio`, with each stream's cap from
+`ingestStreamBacklog.maxlen` (keep in step with
+`crates/ingest-stream/src/budget.rs`).
+
+At the cap, the oldest entries are trimmed before they are applied
+(`ingest_stream_consumed_total{outcome="trimmed"}` counts the pending ones).
+For the snapshot streams only the newest snapshot matters for correctness,
+so a trim loses history granularity, not current state.
+
+1. A transient failure retries the same entry forever, in order: the log
+   says "failed transiently; left pending". Usually the database (see
+   [DistantSignalPostgresDown](#distantsignalpostgresdown)); a
+   `permission denied` is a missing grant.
+2. An entry of an unknown schema version also stays pending: see
+   [DistantSignalIngestUnsupportedSchema](#distantsignalingestunsupportedschema).
+3. A slow writer (high `ingest_stream_handler_seconds`): look at the
+   database's load.
+4. No consumer at all: [DistantSignalIngestWriterDown](#distantsignalingestwriterdown),
+   or that stream is `off` in the writer while its producer writes.
+
+### DistantSignalIngestStreamStalled
+
+The producers' XADDs to a stream succeeded within
+`ingestStreamStalled.stallAfterSecs` (about 3x the stream's cadence), but
+the writer last applied an entry of it longer ago than that
+(`time() - ingest_stream_last_applied_timestamp_seconds`, recorded as
+`distant_signal:ingest_stream_unapplied:seconds` while over), for `for`.
+Data is reaching Redis and not Postgres: pages go stale.
+
+Shadow mode counts as applying (`skipped`), and so does a duplicate. A
+writer that has applied nothing since it started has no last-applied
+series and does not fire this; the backlog alert covers it. Work through
+[DistantSignalIngestStreamBacklog](#distantsignalingeststreambacklog)'s
+steps; the writer's `/livez` also fails once a stream task makes no
+progress for `ingestWriter.progressStallSecs`.
+
+### DistantSignalIngestDeadLetters
+
+The writer moved entries to the stream's dead-letter stream
+(`ds:dlq:<domain>`; `ingest_stream_dead_lettered_total{stream,reason}`)
+within `ingestDeadLetters.window`. Reasons: `poison` (the handler refused
+the whole entry: an unknown schema name, or a data error), `undecodable`
+(a broken envelope or body), `oversize` (a body over 1 MiB),
+`rejected_rows` (the entry was applied, but some rows were refused and only
+those were dead-lettered). This should stay at 0. Inspect, fix, re-inject
+or delete: [ingest-streams-deadletter](ingest-streams-deadletter.md).
+
+### DistantSignalIngestDeadLetterExpiring
+
+A dead-letter stream's oldest entry (`ingest_stream_dlq_oldest_age_seconds`)
+is within `ingestDeadLetterExpiring.warnBeforeSecs` (4 h) of
+`retentionSecs` (7 days), after which the writer's hourly `MINID` trim
+deletes it. Re-inject it or decide it can go, before then:
+[ingest-streams-deadletter](ingest-streams-deadletter.md#retention).
+
+### DistantSignalIngestUnsupportedSchema
+
+The writer left an entry pending because it does not know its schema
+*version* (`ingest_stream_consumed_total{outcome="unsupported_schema"}`): a
+producer was rolled out before the writer that understands its new
+schema. The stream is blocked behind that entry (entries apply in order),
+so this is critical. Roll the ingest-writer forward to a build that has the
+schema (spec §13.3: writer first, then producers), or roll the producer
+back. Nothing is lost while the entry stays pending, up to the stream's
+`MAXLEN`. Do not `XACK` it by hand.
+
+### DistantSignalIngestProducerXaddFailing
+
+Every XADD to a stream failed over `ingestProducerXaddFailing.window`
+(`ingest_stream_produce_total`: some `outcome!="ok"`, none `ok`). The
+outcome label says why: `down` (Redis unreachable or loading), `oom`
+(Redis at `maxmemory`), `noauth` or `noperm` (the producer's ACL user or
+password, `redis.acl`), `misconf` (a failed RDB/AOF write), `error`. A
+snapshot producer keeps only its newest snapshot, retries with backoff,
+and reports readiness `stream_unavailable`.
+
+1. The producer's log (the poller named by the failing pod).
+2. Redis: `INFO memory`, `INFO persistence`, and `ACL LOG` for a refused
+   user.
+3. With `oom`, see also
+   [DistantSignalIngestStreamMemoryHigh](#distantsignalingeststreammemoryhigh).
+
+### DistantSignalIngestStreamMemoryHigh
+
+The ingest streams and their dead-letter streams together use over
+`ingestStreamMemoryHigh.ratio` (0.75) of `budgetBytes` (512 MiB, D5) of
+Redis (`sum(ingest_stream_bytes)`, the `MEMORY USAGE` of each stream and
+its dead-letter stream). Every stream at its cap is about 285 MB worst
+case, so a breach means a cap or an entry size is larger than budgeted
+(`crates/ingest-stream/src/budget.rs`). Look at the per-stream values, then
+fix the backlog or drain dead letters
+([ingest-streams-deadletter](ingest-streams-deadletter.md)). Redis's
+`maxmemory` is shared with movement-events: at it, every XADD fails with
+OOM.
+
+### DistantSignalIngestClockSkew
+
+The writer clamped an observed time to its own `now() + 2 min`
+(`ingest_stream_observed_at_clamped_total{stream,schema}`; D13, spec §7.8)
+within `ingestClockSkew.window`. A producer stamped `produced_at` (or a row
+time) more than 2 minutes in the future: its node's clock is ahead of the
+writer's. The clamp keeps the ordering guard working (a row stamped in the
+future is overwritten by the next snapshot), so data is not blocked, but
+that producer's freshness and history times are off. Compare the clocks
+(`date -u` in the producer and writer pods; NTP on the nodes). The cluster
+is a single node today, so this should not fire.
+
 ## users
 
 ### DistantSignalUserSignupSpike

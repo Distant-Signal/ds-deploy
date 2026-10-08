@@ -62,7 +62,8 @@ so that clause fired on every rollout.
 {{- $healthOn := or $postgresDownOn $apiDbDownOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn }}
+{{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled) }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -898,6 +899,230 @@ spec:
             description: "Not scraped, or no available replica, for {{ .for }}: the train-domain sweeps it owns are not running."
             runbook_url: {{ printf "%s#distantsignalingestwriterdown" $runbook | quote }}
     {{- end }}
+    {{- end }}
+    {{- if $ingestStreamsOn }}
+    - name: distant-signal.ingest-streams
+      rules:
+        {{- /*
+        Ingest spec §14.2 (plan 3a.4), on crates/ingest-stream's metrics
+        (src/metrics.rs; spec §14.1): the writer's consumers export the
+        per-stream gauges every 30s and the consumed/dead-lettered
+        counters, the producers the produce counters. None of these series
+        exists until a stream is on, and every expression below is a plain
+        comparison or `increase() > 0` on them (no absent(), no `or 0`
+        fallback), so nothing fires while the streams are off.
+        */}}
+        {{- with $rule.ingestStreamBacklog }}
+        {{- if .enabled }}
+        {{- /*
+        "Behind" is lag + pending over the stream's MAXLEN ~ cap, as for
+        movement-events: at the cap, entries are trimmed before they are
+        applied. The writer has no MAXLEN gauge, so each stream's cap is a
+        constant from values (budget.rs), one recording rule per stream
+        (the same record name; each sets its `stream` label, so promtool
+        sees no duplicate rule). register_consumer
+        sets lag and pending together, so both sides exist.
+        */}}
+        {{- range $stream, $maxlen := .maxlen }}
+        - record: distant_signal:ingest_stream_behind:ratio
+          expr: |
+            (
+              max by (namespace, stream) (distant_signal_ingest_stream_lag{namespace="{{ $ns }}", stream="{{ $stream }}"})
+              + on (namespace, stream)
+              max by (namespace, stream) (distant_signal_ingest_stream_pending{namespace="{{ $ns }}", stream="{{ $stream }}"})
+            ) / {{ $maxlen }}
+          labels:
+            stream: {{ $stream | quote }}
+        {{- end }}
+        - alert: DistantSignalIngestStreamBacklog
+          expr: |
+            distant_signal:ingest_stream_behind:ratio{namespace="{{ $ns }}"} > {{ .warningRatio }}
+            or max by (namespace, stream) (distant_signal_ingest_stream_oldest_pending_age_seconds{namespace="{{ $ns }}"}) > {{ .oldestPendingAgeSecs }}
+          for: {{ .for }}
+          labels:
+            severity: warning
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.stream }}" }} is backing up in front of the ingest-writer"
+            description: "An entry pending over {{ .oldestPendingAgeSecs }}s, or unread plus un-ACKed entries over {{ .warningRatio }} of MAXLEN. At the cap they are trimmed unapplied."
+            runbook_url: {{ printf "%s#distantsignalingeststreambacklog" $runbook | quote }}
+        - alert: DistantSignalIngestStreamBacklog
+          expr: |
+            distant_signal:ingest_stream_behind:ratio{namespace="{{ $ns }}"} > {{ .criticalRatio }}
+          for: {{ .for }}
+          labels:
+            severity: critical
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.stream }}" }} is {{ "{{ $value | humanizePercentage }}" }} of its MAXLEN behind"
+            description: "Over {{ .criticalRatio }} of MAXLEN: entries are about to be trimmed unapplied. Fix the ingest-writer."
+            runbook_url: {{ printf "%s#distantsignalingeststreambacklog" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ingestStreamStalled }}
+        {{- if .enabled }}
+        {{- /*
+        Seconds since the writer last applied an entry of a stream whose
+        producers XADDed successfully within its stallAfterSecs (about 3x
+        its cadence), recorded only while over it: one rule per stream.
+        The last-applied gauge appears on the writer's first apply after a
+        start, so a writer that has applied nothing since it started does
+        not fire here (DistantSignalIngestStreamBacklog covers it).
+        */}}
+        {{- range $stream, $after := .stallAfterSecs }}
+        - record: distant_signal:ingest_stream_unapplied:seconds
+          expr: |
+            time() - max by (namespace, stream) (distant_signal_ingest_stream_last_applied_timestamp_seconds{namespace="{{ $ns }}", stream="{{ $stream }}"}) > {{ $after }}
+            and on (namespace, stream)
+            sum by (namespace, stream) (increase(distant_signal_ingest_stream_produce_total{namespace="{{ $ns }}", stream="{{ $stream }}", outcome="ok"}[{{ $after }}s])) > 0
+          labels:
+            stream: {{ $stream | quote }}
+        {{- end }}
+        - alert: DistantSignalIngestStreamStalled
+          expr: |
+            distant_signal:ingest_stream_unapplied:seconds{namespace="{{ $ns }}"}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.stream }}" }}: nothing applied for {{ "{{ $value | humanizeDuration }}" }}"
+            description: "Producers are writing to the stream but the ingest-writer applies nothing from it. Check the writer's log for this stream."
+            runbook_url: {{ printf "%s#distantsignalingeststreamstalled" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ingestDeadLetters }}
+        {{- if .enabled }}
+        {{- /* register_consumer registers every reason at 0, so increase() sees the first. */}}
+        - alert: DistantSignalIngestDeadLetters
+          expr: |
+            sum by (namespace, stream, reason) (increase(distant_signal_ingest_stream_dead_lettered_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.stream }}" }} entries dead-lettered ({{ "{{ $labels.reason }}" }})"
+            description: "Over the last {{ .window }}. They are not applied until fixed and re-injected; the runbook covers each reason."
+            runbook_url: {{ printf "%s#distantsignalingestdeadletters" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ingestDeadLetterExpiring }}
+        {{- if .enabled }}
+        - alert: DistantSignalIngestDeadLetterExpiring
+          expr: |
+            max by (namespace, stream) (distant_signal_ingest_stream_dlq_oldest_age_seconds{namespace="{{ $ns }}"}) > {{ sub (int64 .retentionSecs) (int64 .warnBeforeSecs) }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "a {{ "{{ $labels.stream }}" }} dead letter is {{ "{{ $value | humanizeDuration }}" }} old"
+            description: "Within {{ div (int64 .warnBeforeSecs) 3600 }}h of the dead-letter retention trim. Re-inject it or decide it can go."
+            runbook_url: {{ printf "%s#distantsignalingestdeadletterexpiring" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ingestUnsupportedSchema }}
+        {{- if .enabled }}
+        {{- /*
+        The per-schema series appears on first use, so increase() misses
+        the first count; the entry stays pending and is retried (backoff up
+        to 60s), so the next one is seen.
+        */}}
+        - alert: DistantSignalIngestUnsupportedSchema
+          expr: |
+            sum by (namespace, stream, schema) (increase(distant_signal_ingest_stream_consumed_total{namespace="{{ $ns }}", outcome="unsupported_schema"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "the ingest-writer does not know {{ "{{ $labels.schema }}" }}"
+            description: "{{ "{{ $labels.stream }}" }} is blocked on an entry of a newer schema version than the writer's. Roll the writer forward."
+            runbook_url: {{ printf "%s#distantsignalingestunsupportedschema" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ingestProducerXaddFailing }}
+        {{- if .enabled }}
+        {{- /* register_producer registers every outcome at 0. */}}
+        - record: distant_signal:ingest_stream_xadd_failures:increase
+          expr: |
+            sum by (namespace, stream) (increase(distant_signal_ingest_stream_produce_total{namespace="{{ $ns }}", outcome!="ok"}[{{ .window }}])) > 0
+            unless on (namespace, stream)
+            sum by (namespace, stream) (increase(distant_signal_ingest_stream_produce_total{namespace="{{ $ns }}", outcome="ok"}[{{ .window }}])) > 0
+        - alert: DistantSignalIngestProducerXaddFailing
+          expr: |
+            distant_signal:ingest_stream_xadd_failures:increase{namespace="{{ $ns }}"}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "every XADD to {{ "{{ $labels.stream }}" }} is failing"
+            description: "No XADD succeeded for {{ .window }}: the producers hold only their newest snapshot. Check Redis (OOM, auth, ACL)."
+            runbook_url: {{ printf "%s#distantsignalingestproducerxaddfailing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ingestStreamMemoryHigh }}
+        {{- if .enabled }}
+        {{- /* max by stream first: a rollout briefly has two writers. */}}
+        - alert: DistantSignalIngestStreamMemoryHigh
+          expr: |
+            sum by (namespace) (max by (namespace, stream) (distant_signal_ingest_stream_bytes{namespace="{{ $ns }}"})) > {{ printf "%.0f" (mulf .budgetBytes .ratio) }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "the ingest streams use {{ "{{ $value | humanize1024 }}" }}B of Redis"
+            description: "Over {{ .ratio }} of their {{ div (int64 .budgetBytes) 1048576 }} MiB budget (D5). Check for a backlog or a full dead-letter stream."
+            runbook_url: {{ printf "%s#distantsignalingeststreammemoryhigh" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.ingestClockSkew }}
+        {{- if .enabled }}
+        {{- /*
+        ingest_stream_observed_at_clamped_total{stream, schema} (plan 3a.3,
+        spec §7.8). The second arm sees a series whose first sample is
+        already above 0 (one not registered at 0): unlike a registered-at-0
+        series on a new pod, it is a real clamp.
+        */}}
+        {{- $m := printf `distant_signal_ingest_stream_observed_at_clamped_total{namespace="%s"}` $ns }}
+        - record: distant_signal:ingest_stream_observed_at_clamped:increase
+          expr: |
+            sum by (namespace, stream, schema) (increase({{ $m }}[{{ .window }}])) > 0
+            or sum by (namespace, stream, schema) ({{ $m }} unless {{ $m }} offset {{ .window }}) > 0
+        - alert: DistantSignalIngestClockSkew
+          expr: |
+            distant_signal:ingest_stream_observed_at_clamped:increase{namespace="{{ $ns }}"}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.stream }}" }} carries times over 2 min in the future"
+            description: "The ingest-writer clamped observed times ({{ "{{ $labels.schema }}" }}) to its own clock: a producer's clock is ahead."
+            runbook_url: {{ printf "%s#distantsignalingestclockskew" $runbook | quote }}
+        {{- end }}
+        {{- end }}
     {{- end }}
     {{- if $signupSpikeOn }}
     {{- with $rule.userSignupSpike }}

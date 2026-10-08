@@ -1,0 +1,262 @@
+# promtool unit tests for the ingest stream alerts (ingest spec §14.2,
+# plan 3a.4; see recorded-alerts.yaml's header for how rules.yaml is
+# rendered, with ingestWriter.enabled). Defaults: backlog 600s / 0.5 / 0.8
+# of MAXLEN for 10m; stalled after 3x cadence for 5m; dead letters,
+# unsupported schema and clock skew on any increase; dead-letter expiring
+# at 7d - 4h; XADD failing over 10m; memory over 0.75 of 512 MiB for 10m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Streams off: none of the series exists, so nothing fires (no absent()).
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="distant-signal", app_kubernetes_io_component="ingest-writer", pod="w"}'
+        values: '1x40'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: DistantSignalIngestStreamBacklog, exp_alerts: []}
+      - {eval_time: 30m, alertname: DistantSignalIngestStreamStalled, exp_alerts: []}
+      - {eval_time: 30m, alertname: DistantSignalIngestDeadLetters, exp_alerts: []}
+      - {eval_time: 30m, alertname: DistantSignalIngestDeadLetterExpiring, exp_alerts: []}
+      - {eval_time: 30m, alertname: DistantSignalIngestUnsupportedSchema, exp_alerts: []}
+      - {eval_time: 30m, alertname: DistantSignalIngestProducerXaddFailing, exp_alerts: []}
+      - {eval_time: 30m, alertname: DistantSignalIngestStreamMemoryHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: DistantSignalIngestClockSkew, exp_alerts: []}
+
+  # Backlog. station-samples: 300 unread + 100 pending of MAXLEN 720
+  # (0.56): warning. full-coverage: 324 of 360 (0.9): warning and
+  # critical. tfl: nothing unread, but an entry pending for 700s: warning.
+  # island-of-ireland: 900 of 2000 (0.45), pending 500s: nothing.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_lag{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples"}'
+        values: '300x20'
+      - series: 'distant_signal_ingest_stream_pending{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples"}'
+        values: '100x20'
+      - series: 'distant_signal_ingest_stream_lag{namespace="distant-signal", pod="w", stream="ds:ingest:full-coverage"}'
+        values: '324x20'
+      - series: 'distant_signal_ingest_stream_pending{namespace="distant-signal", pod="w", stream="ds:ingest:full-coverage"}'
+        values: '0x20'
+      - series: 'distant_signal_ingest_stream_oldest_pending_age_seconds{namespace="distant-signal", pod="w", stream="ds:ingest:tfl"}'
+        values: '700x20'
+      - series: 'distant_signal_ingest_stream_lag{namespace="distant-signal", pod="w", stream="ds:ingest:tfl"}'
+        values: '0x20'
+      - series: 'distant_signal_ingest_stream_pending{namespace="distant-signal", pod="w", stream="ds:ingest:tfl"}'
+        values: '1x20'
+      - series: 'distant_signal_ingest_stream_lag{namespace="distant-signal", pod="w", stream="ds:ingest:island-of-ireland"}'
+        values: '800x20'
+      - series: 'distant_signal_ingest_stream_pending{namespace="distant-signal", pod="w", stream="ds:ingest:island-of-ireland"}'
+        values: '100x20'
+      - series: 'distant_signal_ingest_stream_oldest_pending_age_seconds{namespace="distant-signal", pod="w", stream="ds:ingest:island-of-ireland"}'
+        values: '500x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DistantSignalIngestStreamBacklog
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DistantSignalIngestStreamBacklog
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:station-samples"}
+            exp_annotations:
+              summary: ds:ingest:station-samples is backing up in front of the ingest-writer
+              description: &backlog_description "An entry pending over 600s, or unread plus un-ACKed entries over 0.5 of MAXLEN. At the cap they are trimmed unapplied."
+              runbook_url: &backlog_runbook https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingeststreambacklog
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:full-coverage"}
+            exp_annotations:
+              summary: ds:ingest:full-coverage is backing up in front of the ingest-writer
+              description: *backlog_description
+              runbook_url: *backlog_runbook
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:tfl"}
+            exp_annotations:
+              summary: ds:ingest:tfl is backing up in front of the ingest-writer
+              description: *backlog_description
+              runbook_url: *backlog_runbook
+          - exp_labels: {severity: critical, namespace: distant-signal, stream: "ds:ingest:full-coverage"}
+            exp_annotations:
+              summary: ds:ingest:full-coverage is 90% of its MAXLEN behind
+              description: "Over 0.8 of MAXLEN: entries are about to be trimmed unapplied. Fix the ingest-writer."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingeststreambacklog
+
+  # Stalled. station-samples: applied every minute until 10m, then
+  # nothing while the producer keeps XADDing: over 180s at 13m, firing
+  # after `for: 5m`. tfl: nothing applied for 40m, but nothing produced
+  # either (the counter is flat): no stall. full-coverage: produced, but
+  # the writer never applied anything (no last-applied series): silent.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_last_applied_timestamp_seconds{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples"}'
+        values: '0+60x10 600x30'
+      - series: 'distant_signal_ingest_stream_produce_total{namespace="distant-signal", pod="p", stream="ds:ingest:station-samples", outcome="ok"}'
+        values: '0+6x40'
+      - series: 'distant_signal_ingest_stream_last_applied_timestamp_seconds{namespace="distant-signal", pod="w", stream="ds:ingest:tfl"}'
+        values: '0x40'
+      - series: 'distant_signal_ingest_stream_produce_total{namespace="distant-signal", pod="p", stream="ds:ingest:tfl", outcome="ok"}'
+        values: '5x40'
+      - series: 'distant_signal_ingest_stream_produce_total{namespace="distant-signal", pod="p", stream="ds:ingest:full-coverage", outcome="ok"}'
+        values: '0+3x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DistantSignalIngestStreamStalled
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalIngestStreamStalled
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal, stream: "ds:ingest:station-samples"}
+            exp_annotations:
+              summary: "ds:ingest:station-samples: nothing applied for 10m 0s"
+              description: "Producers are writing to the stream but the ingest-writer applies nothing from it. Check the writer's log for this stream."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingeststreamstalled
+
+  # Dead letters: one poison entry at 6m fires at once and clears 15m
+  # later; the other reasons, registered at 0, stay quiet.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_dead_lettered_total{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples", reason="poison"}'
+        values: '0x5 1x25'
+      - series: 'distant_signal_ingest_stream_dead_lettered_total{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples", reason="undecodable"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalIngestDeadLetters
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DistantSignalIngestDeadLetters
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:station-samples", reason: poison}
+            exp_annotations:
+              summary: ds:ingest:station-samples entries dead-lettered (poison)
+              description: "Over the last 15m. They are not applied until fixed and re-injected; the runbook covers each reason."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestdeadletters
+      - eval_time: 25m
+        alertname: DistantSignalIngestDeadLetters
+        exp_alerts: []
+
+  # Dead letter expiring: over 7d - 4h (590400s) fires; under does not.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_dlq_oldest_age_seconds{namespace="distant-signal", pod="w", stream="ds:ingest:tfl"}'
+        values: '590000x5 590500x5'
+      - series: 'distant_signal_ingest_stream_dlq_oldest_age_seconds{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DistantSignalIngestDeadLetterExpiring
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: DistantSignalIngestDeadLetterExpiring
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:tfl"}
+            exp_annotations:
+              summary: a ds:ingest:tfl dead letter is 6d 20h 1m 40s old
+              description: "Within 4h of the dead-letter retention trim. Re-inject it or decide it can go."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestdeadletterexpiring
+
+  # Unsupported schema: the per-schema series appears on the first refusal
+  # (5m) and counts each retry; the second count fires. Applied entries of
+  # another schema are ignored.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:tfl", schema="tfl-line-status/2", outcome="unsupported_schema"}'
+        values: '_x5 1+1x10'
+      - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:tfl", schema="tfl-line-status/1", outcome="applied"}'
+        values: '0+1x15'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalIngestUnsupportedSchema
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: DistantSignalIngestUnsupportedSchema
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal, stream: "ds:ingest:tfl", schema: tfl-line-status/2}
+            exp_annotations:
+              summary: the ingest-writer does not know tfl-line-status/2
+              description: "ds:ingest:tfl is blocked on an entry of a newer schema version than the writer's. Roll the writer forward."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestunsupportedschema
+
+  # XADD failing. tfl: every attempt `down`, `ok` registered at 0: fires.
+  # station-samples: some fail, some succeed: no. full-coverage: idle.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_produce_total{namespace="distant-signal", pod="p1", stream="ds:ingest:tfl", outcome="down"}'
+        values: '0+1x20'
+      - series: 'distant_signal_ingest_stream_produce_total{namespace="distant-signal", pod="p1", stream="ds:ingest:tfl", outcome="ok"}'
+        values: '0x20'
+      - series: 'distant_signal_ingest_stream_produce_total{namespace="distant-signal", pod="p2", stream="ds:ingest:station-samples", outcome="oom"}'
+        values: '0+1x20'
+      - series: 'distant_signal_ingest_stream_produce_total{namespace="distant-signal", pod="p2", stream="ds:ingest:station-samples", outcome="ok"}'
+        values: '0+1x20'
+      - series: 'distant_signal_ingest_stream_produce_total{namespace="distant-signal", pod="p3", stream="ds:ingest:full-coverage", outcome="down"}'
+        values: '0x20'
+      - series: 'distant_signal_ingest_stream_produce_total{namespace="distant-signal", pod="p3", stream="ds:ingest:full-coverage", outcome="ok"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: DistantSignalIngestProducerXaddFailing
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal, stream: "ds:ingest:tfl"}
+            exp_annotations:
+              summary: every XADD to ds:ingest:tfl is failing
+              description: "No XADD succeeded for 10m: the producers hold only their newest snapshot. Check Redis (OOM, auth, ACL)."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestproducerxaddfailing
+
+  # Memory: station-samples is reported by two writer pods during a
+  # rollout (counted once, 100 MiB), full-coverage 200 MiB then 300 MiB
+  # from 10m: 400 MiB > 384 MiB fires after `for: 10m`. Summed per pod
+  # it would already be 400 MiB at the start.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_bytes{namespace="distant-signal", pod="w1", stream="ds:ingest:station-samples"}'
+        values: '104857600x30'
+      - series: 'distant_signal_ingest_stream_bytes{namespace="distant-signal", pod="w2", stream="ds:ingest:station-samples"}'
+        values: '104857600x30'
+      - series: 'distant_signal_ingest_stream_bytes{namespace="distant-signal", pod="w1", stream="ds:ingest:full-coverage"}'
+        values: '209715200x9 314572800x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DistantSignalIngestStreamMemoryHigh
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: DistantSignalIngestStreamMemoryHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: the ingest streams use 400MiB of Redis
+              description: "Over 0.75 of their 512 MiB budget (D5). Check for a backlog or a full dead-letter stream."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingeststreammemoryhigh
+
+  # Clock skew. station-samples: a series not registered at 0 appears at
+  # 6m with its first clamp: fires at once, and clears once the window
+  # has passed with no more. tfl: registered at 0, one clamp at 12m.
+  # full-coverage: registered at 0, never clamped.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_stream_observed_at_clamped_total{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples", schema="station-samples/1"}'
+        values: '_x6 1x30'
+      - series: 'distant_signal_ingest_stream_observed_at_clamped_total{namespace="distant-signal", pod="w", stream="ds:ingest:tfl", schema="tfl-line-status/1"}'
+        values: '0x11 1x25'
+      - series: 'distant_signal_ingest_stream_observed_at_clamped_total{namespace="distant-signal", pod="w", stream="ds:ingest:full-coverage", schema="full-coverage-stats/1"}'
+        values: '0x36'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalIngestClockSkew
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: DistantSignalIngestClockSkew
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:station-samples", schema: station-samples/1}
+            exp_annotations: &skew
+              summary: ds:ingest:station-samples carries times over 2 min in the future
+              description: "The ingest-writer clamped observed times (station-samples/1) to its own clock: a producer's clock is ahead."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestclockskew
+      - eval_time: 13m
+        alertname: DistantSignalIngestClockSkew
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:station-samples", schema: station-samples/1}
+            exp_annotations: *skew
+          - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:tfl", schema: tfl-line-status/1}
+            exp_annotations:
+              summary: ds:ingest:tfl carries times over 2 min in the future
+              description: "The ingest-writer clamped observed times (tfl-line-status/1) to its own clock: a producer's clock is ahead."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestclockskew
+      - eval_time: 34m
+        alertname: DistantSignalIngestClockSkew
+        exp_alerts: []

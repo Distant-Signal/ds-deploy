@@ -4229,6 +4229,96 @@ metrics:
       enabled: true
       for: 5m
       severity: critical
+    # The ingest stream alerts (ingest spec §14.2, plan 3a.4), on the
+    # ingest_stream_* metrics of crates/ingest-stream (the writer's
+    # consumers and the stream producers). Like ingestWriterDown they
+    # render only with ingestWriter.enabled. Their series exist only once
+    # a stream is on (ingestWriter.streams.* not `off`, a producer
+    # writing), and every expression is a plain comparison on them, so
+    # none fires on an absent series. Runbooks: docs/alerts.md and
+    # docs/ingest-streams-deadletter.md.
+    #
+    # DistantSignalIngestStreamBacklog: a stream's oldest pending entry is
+    # older than oldestPendingAgeSecs, or its unread plus un-ACKed entries
+    # are over warningRatio of its MAXLEN (warning) or over criticalRatio
+    # (critical), for `for`. `maxlen` is each stream's MAXLEN ~ cap: keep
+    # it in step with crates/ingest-stream/src/budget.rs (spec §7.1).
+    ingestStreamBacklog:
+      enabled: true
+      for: 10m
+      oldestPendingAgeSecs: 600
+      warningRatio: 0.5
+      criticalRatio: 0.8
+      maxlen:
+        "ds:ingest:station-samples": 720
+        "ds:ingest:full-coverage": 360
+        "ds:ingest:tfl": 288
+        "ds:ingest:reference": 30
+        "ds:ingest:island-of-ireland": 2000
+    # DistantSignalIngestStreamStalled (critical): producers' XADDs to a
+    # stream succeeded within its stallAfterSecs, but the writer has
+    # applied nothing from it for longer, for `for`. stallAfterSecs is
+    # about 3x each stream's cadence (at least 3 minutes, for the 30s
+    # gauges): station-samples 1/min, full-coverage 3/min, tfl 1/5 min,
+    # reference daily, island-of-ireland 1/5 min.
+    ingestStreamStalled:
+      enabled: true
+      for: 5m
+      severity: critical
+      stallAfterSecs:
+        "ds:ingest:station-samples": 180
+        "ds:ingest:full-coverage": 180
+        "ds:ingest:tfl": 900
+        "ds:ingest:reference": 259200
+        "ds:ingest:island-of-ireland": 900
+    # DistantSignalIngestDeadLetters: any entry dead-lettered within
+    # `window`.
+    ingestDeadLetters:
+      enabled: true
+      window: 15m
+      for: 0m
+      severity: warning
+    # DistantSignalIngestDeadLetterExpiring: a dead-letter stream's oldest
+    # entry is within warnBeforeSecs of retentionSecs, the writer's MINID
+    # trim (spec §7.1: 7 days).
+    ingestDeadLetterExpiring:
+      enabled: true
+      retentionSecs: 604800
+      warnBeforeSecs: 14400
+      for: 0m
+      severity: warning
+    # DistantSignalIngestUnsupportedSchema (critical): the writer left an
+    # entry pending because it does not know its schema version (a
+    # producer newer than the writer), within `window`.
+    ingestUnsupportedSchema:
+      enabled: true
+      window: 10m
+      for: 0m
+      severity: critical
+    # DistantSignalIngestProducerXaddFailing (critical): every XADD to a
+    # stream failed over `window` (some failed, none succeeded).
+    ingestProducerXaddFailing:
+      enabled: true
+      window: 10m
+      for: 0m
+      severity: critical
+    # DistantSignalIngestStreamMemoryHigh: the ingest streams and their
+    # dead-letter streams use over `ratio` of budgetBytes (D5: 512 MiB of
+    # Redis), for `for`.
+    ingestStreamMemoryHigh:
+      enabled: true
+      budgetBytes: 536870912
+      ratio: 0.75
+      for: 10m
+      severity: warning
+    # DistantSignalIngestClockSkew: the writer clamped an observed time
+    # over 2 minutes ahead of its own clock (D13, spec §7.8) within
+    # `window`.
+    ingestClockSkew:
+      enabled: true
+      window: 15m
+      for: 0m
+      severity: warning
     # DistantSignalApiDatabaseDown (critical): api's own `SELECT 1` probe
     # through its request pool (distant_signal_api_db_up, every 15s) has
     # failed on some replica for `for`. Covers what pg_up cannot see: a
