@@ -105,4 +105,6 @@ with pollerIrishRailGtfs.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.pollerIrishRailGtfs.progressStallSecs | quote }}
             - name: RUST_LOG
               value: {{ .Values.pollerIrishRailGtfs.logLevel | quote }}
+            - name: FEED_MAX_DROP_FRACTION
+              value: {{ .Values.pollerIrishRailGtfs.feedMaxDropFraction | quote }}
 {{- end }}

@@ -3546,6 +3546,13 @@ pollerIrishRailGtfs:
   logLevel: info
   metricsPort: 9091
   extraEnv: []
+  # -- Sharp-drop guard (FEED_MAX_DROP_FRACTION): a feed whose station or
+  # line count fell by more than this fraction since the last published
+  # feed is refused, the previous catalogue is kept, and the cycle counts
+  # as failed (distant_signal_gtfs_feed_refused_total). The baseline is
+  # in memory, so the first feed after a start is always published. 1.0
+  # turns the check off; an empty feed is refused regardless.
+  feedMaxDropFraction: 0.3
   # Downloads the Irish Rail GTFS zip and expands it to build the
   # station/line ingest bodies -- a whole archive in memory, so an
   # order of magnitude above the JSON/XML pollers above.

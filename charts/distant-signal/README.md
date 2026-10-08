@@ -2452,6 +2452,7 @@ Irish Rail GTFS zip. Off by default; no API key needed.
 | `pollerIrishRailGtfs.logLevel` | `info` | `RUST_LOG` value. |
 | `pollerIrishRailGtfs.metricsPort` | `9091` | Prometheus `/metrics` port. |
 | `pollerIrishRailGtfs.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
+| `pollerIrishRailGtfs.feedMaxDropFraction` | `0.3` | `FEED_MAX_DROP_FRACTION`: refuse to publish a feed whose station or line count fell by more than this fraction since the last published one (in-memory baseline; the first feed after a start always publishes). `1.0` turns it off; an empty feed is always refused. |
 | `pollerIrishRailGtfs.resources` | requests `100m`/`256Mi`, limit `768Mi` | Container resource requests/limits. The whole GTFS archive is held in memory. |
 | `pollerIrishRailGtfs.nodeSelector` | `{}` | Pod node selector. |
 | `pollerIrishRailGtfs.tolerations` | `[]` | Pod tolerations. |
