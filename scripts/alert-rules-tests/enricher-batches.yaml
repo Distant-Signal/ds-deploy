@@ -1,0 +1,83 @@
+# promtool unit tests for the distant-signal.enricher-batches group (Claude
+# Message Batches; see recorded-alerts.yaml's header for how rules.yaml is
+# rendered: scripts/check-alert-payloads.py renders it with
+# enricher.llm.batch.sweepMode=batch, so this group is present). Defaults:
+# window 6h, minFailures 2, resultFailureRatio 0.2, minResults 20,
+# maxAgeSeconds 93600 (26 h), for 15m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Two batches fail to submit an hour apart: fires once the second lands
+  # and `for` has passed. A poll failure alone never counts.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_batches_total{namespace="distant-signal", pod="enricher", stage="primary", event="submit_failed"}'
+        values: '0x30 1x60 2x120'
+      - series: 'distant_signal_enricher_llm_batches_total{namespace="distant-signal", pod="enricher", stage="primary", event="poll_failed"}'
+        values: '0+5x210'
+      - series: 'distant_signal_enricher_llm_batches_total{namespace="elsewhere", pod="enricher", stage="primary", event="abandoned"}'
+        values: '0+1x210'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: DistantSignalEnricherBatchFailing
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: DistantSignalEnricherBatchFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: enricher Message Batches failing to submit or abandoned
+              description: "2 batches failed to submit or were abandoned in 6h; the sweep's extractions are not getting done."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalenricherbatchfailing
+
+  # 100 requests end, 30 of them expired or errored (30% > 20%): fires. The
+  # same share of a handful of requests (under minResults) does not.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_batch_requests_total{namespace="distant-signal", pod="enricher", call="primary", result="succeeded"}'
+        values: '0x10 70x60'
+      - series: 'distant_signal_enricher_llm_batch_requests_total{namespace="distant-signal", pod="enricher", call="primary", result="expired"}'
+        values: '0x10 20x60'
+      - series: 'distant_signal_enricher_llm_batch_requests_total{namespace="distant-signal", pod="enricher", call="primary", result="errored"}'
+        values: '0x10 10x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DistantSignalEnricherBatchResultsFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: enricher batch requests errored, expired or canceled
+              description: "30% of batch requests ended errored, expired or canceled in 6h."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalenricherbatchresultsfailing
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_batch_requests_total{namespace="distant-signal", pod="enricher", call="primary", result="succeeded"}'
+        values: '0x10 5x60'
+      - series: 'distant_signal_enricher_llm_batch_requests_total{namespace="distant-signal", pod="enricher", call="primary", result="expired"}'
+        values: '0x10 5x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DistantSignalEnricherBatchResultsFailing
+        exp_alerts: []
+
+  # The oldest batch ages past 26 h: fires after `for`. A batch that ended
+  # (age back to 0) clears it.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_batch_oldest_age_seconds{namespace="distant-signal", pod="enricher"}'
+        values: '93000+60x40 0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalEnricherBatchStuck
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DistantSignalEnricherBatchStuck
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: enricher Message Batch in flight for over a day
+              description: "The oldest in-flight batch was submitted 1d 2h 20m 0s ago; batches expire after 24 h."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalenricherbatchstuck
+      - eval_time: 55m
+        alertname: DistantSignalEnricherBatchStuck
+        exp_alerts: []

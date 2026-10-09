@@ -433,13 +433,15 @@ networkPolicy.components.<component>.extraEgress.
 {{- $queueWorker := dict "api" true "redis" true }}
 {{- /* Upstreams whose ports the internet rule must allow (internetPorts). */}}
 {{- $token := list .Values.internalOauth.tokenUrl }}
-{{- /* enricher: the LLM endpoint, plus OpenAI's token exchange and (primary
-mode) Authentik's token endpoint in a workload identity mode. The internet
-rule is IP-based, so this only opens their ports, not their hosts. */}}
-{{- $enricherUrls := list .Values.enricher.llm.baseUrl }}
+{{- /* enricher: the LLM endpoint (enricher.llm.anthropic.baseUrl, i.e.
+api.anthropic.com, with provider anthropic; batches go to the same host),
+plus OpenAI's token exchange and (primary mode) Authentik's token endpoint
+in a workload identity mode. The internet rule is IP-based, so this only
+opens their ports, not their hosts. */}}
+{{- $enricherUrls := list (include "distant-signal.enricherLlmBaseUrl" .) }}
 {{- if include "distant-signal.enricherWif" . }}
-{{- $enricherUrls = append $enricherUrls .Values.enricher.llm.workloadIdentity.tokenExchangeUrl }}
-{{- if eq .Values.enricher.llm.auth "openaiWifAuthentik" }}
+{{- $enricherUrls = append $enricherUrls (include "distant-signal.enricherTokenExchangeUrl" .) }}
+{{- if include "distant-signal.enricherWifAuthentik" . }}
 {{- $enricherUrls = append $enricherUrls .Values.enricher.llm.workloadIdentity.authentik.tokenUrl }}
 {{- end }}
 {{- end }}

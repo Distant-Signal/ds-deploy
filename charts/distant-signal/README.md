@@ -1158,7 +1158,7 @@ cluster.
 | api | postgres, redis, dev IdP | yes (OIDC discovery and JWKS for `api.sso.issuerUrl` and `api.internalOauth.issuerUrl`) |
 | frontend | api | no (the `/chat` Anthropic calls run in the browser) |
 | aggregator | postgres | only with `archive.enabled` (S3) |
-| enricher | postgres, redis | yes (`enricher.llm.baseUrl`) |
+| enricher | postgres, redis | yes (`enricher.llm.baseUrl`, or `enricher.llm.anthropic.baseUrl` with provider `anthropic`) |
 | notifier | postgres | yes (Web Push services) |
 | pollers, consumers, movement-relay | api and/or redis, dev IdP | yes (upstream feeds, Kafka, the OAuth token endpoint) |
 | schedulefeed | api, dev IdP | yes (the OAuth token endpoint) |
@@ -2069,7 +2069,10 @@ loop, and it renders unconditionally.
 `enricher.llm.baseUrl` and `enricher.llm.model` are **required** (alongside
 the five `api.sso.*` values) — leaving either empty aborts the render, because both
 become non-optional env vars on the binary and an empty value would deploy a
-pod that fails every request forever.
+pod that fails every request forever. With `enricher.llm.provider: anthropic`
+(the Claude API, [docs/enricher-anthropic.md](../../docs/enricher-anthropic.md))
+they are not used: `enricher.llm.anthropic.*` has defaults for both, and
+`enricher.llm.anthropic.existingSecret` is the required value instead.
 
 | Key | Default | Description |
 |---|---|---|
@@ -2077,20 +2080,40 @@ pod that fails every request forever.
 | `enricher.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `enricher.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `enricher.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `enricher.llm.baseUrl` | `""` | **Required.** Base URL of an OpenAI-compatible chat-completions endpoint. Empty aborts the render. |
+| `enricher.llm.provider` | `openai` | `LLM_PROVIDER`. `openai` is any OpenAI-compatible Chat Completions endpoint (the keys below). `anthropic` is the Claude API, configured by `enricher.llm.anthropic.*` (`baseUrl`/`model`/`apiKey`/`existingSecret` here are then unused, and `auth` must stay `apiKey`). Switching either way re-extracts every live incident once. Any other value aborts the render. |
+| `enricher.llm.baseUrl` | `""` | **Required** (provider `openai`). Base URL of an OpenAI-compatible chat-completions endpoint. Empty aborts the render. |
 | `enricher.llm.model` | `""` | **Required.** Model name that endpoint serves. Empty aborts the render. Also stored as the extraction's `model_version`, so changing it re-extracts every incident on the next sweep. |
 | `enricher.llm.apiKey` | `""` | API key for that endpoint. Rendered into the chart Secret when `existingSecret` is empty. Empty is valid for a local endpoint needing no auth, and is never auto-generated. |
 | `enricher.llm.existingSecret` | `""` | Read the API key from this pre-existing Secret instead. |
 | `enricher.llm.existingSecretApiKeyKey` | `llm-api-key` | Key within `enricher.llm.existingSecret`. |
 | `enricher.llm.reasoningEffort` | `""` | `LLM_REASONING_EFFORT`, sent as `reasoning_effort`. Empty renders nothing (no `reasoning_effort` sent). OpenAI's gpt-6-luna needs `none` (see [docs/enricher-openai.md](../../docs/enricher-openai.md)); NVIDIA's GLM wants `low`. An `enricher.extraEnv` entry of the same name wins. |
-| `enricher.llm.auth` | `apiKey` | `LLM_AUTH`. `apiKey` uses `apiKey`/`existingSecret` above, as before. `openaiWifAuthentik` (primary) and `openaiWifKubernetes` (fallback) are keyless OpenAI workload identity federation: see "Keyless OpenAI auth" below. Any other value aborts the render. |
+| `enricher.llm.auth` | `apiKey` | `LLM_AUTH`. `apiKey` uses `apiKey`/`existingSecret` above, as before. `openaiWifAuthentik` (primary) and `openaiWifKubernetes` (fallback) are keyless OpenAI workload identity federation: see "Keyless OpenAI auth" below. `anthropicWifAuthentik` (provider `anthropic` only) is keyless Claude auth through a separate Authentik provider, with a fresh Authentik token per exchange: see [docs/enricher-anthropic.md](../../docs/enricher-anthropic.md#keyless-auth). Any other value aborts the render. |
 | `enricher.llm.workloadIdentity.identityProviderId` | `""` | `OPENAI_IDENTITY_PROVIDER_ID`, the OpenAI Workload Identity Provider's ID. Required in both WIF modes. |
 | `enricher.llm.workloadIdentity.serviceAccountId` | `""` | `OPENAI_SERVICE_ACCOUNT_ID`, the OpenAI service account the mapping resolves to. Required in both WIF modes. |
 | `enricher.llm.workloadIdentity.tokenAudience` | `""` | Audience of the projected service-account token. Empty in `openaiWifAuthentik` means `authentik.clientId`; required in `openaiWifKubernetes`, where it must equal the OpenAI provider's audience. |
 | `enricher.llm.workloadIdentity.tokenExchangeUrl` | `https://auth.openai.com/oauth/token` | `LLM_TOKEN_EXCHANGE_URL`. |
 | `enricher.llm.workloadIdentity.authentik.tokenUrl` | `""` | `LLM_AUTHENTIK_TOKEN_URL` (e.g. `https://sso.example.com/application/o/token/`). Required in `openaiWifAuthentik`. |
-| `enricher.llm.workloadIdentity.authentik.clientId` | `""` | `LLM_AUTHENTIK_CLIENT_ID`, the dedicated Authentik OAuth2 provider's client ID. Required in `openaiWifAuthentik`. |
+| `enricher.llm.workloadIdentity.authentik.clientId` | `""` | `LLM_AUTHENTIK_CLIENT_ID`, the dedicated Authentik OAuth2 provider's client ID. Required in `openaiWifAuthentik` and `anthropicWifAuthentik` (a different provider per mode, so a token for one can't be replayed at the other). |
+| `enricher.llm.workloadIdentity.anthropic.organizationId` | `""` | `ANTHROPIC_ORGANIZATION_ID`, the Claude organization UUID. Required in `anthropicWifAuthentik`. |
+| `enricher.llm.workloadIdentity.anthropic.serviceAccountId` | `""` | `ANTHROPIC_SERVICE_ACCOUNT_ID`, the Claude service account (`svac_...`). Required in `anthropicWifAuthentik`. |
+| `enricher.llm.workloadIdentity.anthropic.federationRuleId` | `""` | `ANTHROPIC_FEDERATION_RULE_ID`, the federation rule (`fdrl_...`). Required in `anthropicWifAuthentik`. |
+| `enricher.llm.workloadIdentity.anthropic.workspaceId` | `""` | `ANTHROPIC_WORKSPACE_ID` (`wrkspc_...`); only needed when the rule spans more than one workspace. |
+| `enricher.llm.workloadIdentity.anthropic.tokenExchangeUrl` | `https://api.anthropic.com/v1/oauth/token` | `LLM_TOKEN_EXCHANGE_URL` in `anthropicWifAuthentik`. Its port gets the NetworkPolicy egress entry. |
 | `enricher.llm.workloadIdentity.authentik.scope` | `""` | `LLM_AUTHENTIK_SCOPE`, e.g. `profile` so Authentik's mapping emits the `groups` claim. Empty sends no `scope`. |
+| `enricher.llm.anthropic.baseUrl` | `https://api.anthropic.com/v1` | `LLM_BASE_URL` with provider `anthropic` (requests go to `{baseUrl}/messages` and `{baseUrl}/messages/batches`). Its port gets the NetworkPolicy egress entry. |
+| `enricher.llm.anthropic.model` | `claude-haiku-5-5` | `LLM_MODEL` with provider `anthropic`. `claude-sonnet-5-5` is the step-up if the quality eval shows misses (see the doc's "Model"). |
+| `enricher.llm.anthropic.existingSecret` | `""` | **Required** with provider `anthropic`: a pre-existing Secret holding the Claude API key (sent as `x-api-key`). The chart never renders this key into its own Secret. |
+| `enricher.llm.anthropic.existingSecretApiKeyKey` | `anthropic-api-key` | Key within `enricher.llm.anthropic.existingSecret`. |
+| `enricher.llm.anthropic.promptCache` | `1h` | `LLM_PROMPT_CACHE`: `1h`, `5m` or `off`, the `cache_control` TTL on each call's static system prompt (see the doc's caching analysis). Any other value aborts the render. |
+| `enricher.llm.anthropic.thinking` | `""` | `LLM_THINKING`, sent as `thinking.type` when set (e.g. `disabled` on Haiku 5.5, `between_tools` on Sonnet 5.5). Empty: the model's default (adaptive thinking). |
+| `enricher.llm.profile` | `""` | `LLM_PROFILE`: a built-in generation profile (`openai-gpt-6-luna`, `openai-default`, `claude-default`). Empty picks it by provider and model: OpenAI-compatible endpoints get `temperature: 0` (gpt-6-luna also effort `none`), Claude no sampling parameters. A profile for the other provider, or an unknown name, aborts the render. See [docs/enricher-anthropic.md](../../docs/enricher-anthropic.md#tuning-per-model). |
+| `enricher.llm.temperature` | `""` | `LLM_TEMPERATURE`: overrides the profile's temperature; a number (quote it, e.g. `"0"`), or `omit` to send none. A value a model is known to reject fails at startup; anything else aborts the render. |
+| `enricher.llm.topP` | `""` | `LLM_TOP_P`: overrides the profile's `top_p` (none); a number (quoted) or `omit`. |
+| `enricher.llm.prompts.configMap` | `""` | An existing ConfigMap of system-prompt overrides, mounted at `/etc/enricher/prompts` (`LLM_PROMPTS_DIR`): keys `<profile>.<call>.txt` or `<call>.txt` (`primary`, `adversarial`, `severity_adversarial`); a call with neither keeps the built-in prompt. A prompt change changes `model_version`, so incidents re-extract. |
+| `enricher.llm.batch.sweepMode` | `sync` | `LLM_SWEEP_MODE`. `batch` (provider `anthropic` only) sends the reconciliation sweep's extractions through Claude Message Batches, at half price, results usually within an hour (at most 24 h); the stream loop and reclaim stay synchronous. `batch` with provider `openai`, or any other value, aborts the render. |
+| `enricher.llm.batch.minItems` | `20` | `LLM_BATCH_MIN_ITEMS`: a sweep that finds fewer incidents runs them synchronously. |
+| `enricher.llm.batch.maxItems` | `2000` | `LLM_BATCH_MAX_ITEMS`: most incidents per batch (the service caps it at 5000). |
+| `enricher.llm.batch.pollIntervalSecs` | `60` | `LLM_BATCH_POLL_SECS`: how often in-flight batches are polled. |
 | `enricher.serviceAccount.create` | `false` | Create a dedicated ServiceAccount for the enricher (`<fullname>-enricher`, or `name`), with no RBAC and `automountServiceAccountToken: false`. Off: the enricher uses the shared `serviceAccount`. Required (or `name`) by both WIF modes. |
 | `enricher.serviceAccount.name` | `""` | Its name. With `create: false`, an existing ServiceAccount, which must not be the shared one. |
 | `enricher.llmRequestTimeoutSecs` | `300` | Per-request timeout for a single LLM call (`LLM_REQUEST_TIMEOUT_SECS`). One incident makes three sequential calls. Behind a gateway that cuts calls itself (e.g. a 504 at ~302 s), set this slightly above the gateway's cutoff (e.g. `320`) so the 504 is what gets reported. |
@@ -2770,7 +2793,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; `/docs/alerts.md#<alert name, lowercased>` is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `enricherTokenExchange`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `notifierForwardQueue`, `userSignupSpike`, `archiveUploadFailures`, `archiveStale`, `archiveBatchChurn`, `retentionStepFailing`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `scheduleBucket`, `pollerFailures`, `pollerStale`, `ldbwsStalestStation`, `ldbwsInvalidCrs` and `incidentRemovalStalled`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `enricherTokenExchange`, `enricherBatches`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `notifierForwardQueue`, `userSignupSpike`, `archiveUploadFailures`, `archiveStale`, `archiveBatchChurn`, `retentionStepFailing`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `scheduleBucket`, `pollerFailures`, `pollerStale`, `ldbwsStalestStation`, `ldbwsInvalidCrs` and `incidentRemovalStalled`. |
 
 #### Alerts
 
@@ -2823,7 +2846,10 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalRedisPersistenceFailing` | critical | Redis's last AOF write or rewrite failed (`redis_aof_last_write_ok` / `redis_aof_last_bgrewrite_ok` is 0, from movement-relay's `INFO persistence`), or, for the bundled Redis with persistence, AOF is off, for 5m. |
 | `DistantSignalMovementGroupRecreated` | warning | Within 1h a consumer recreated its group after `NOGROUP` (`movement_feed_group_recreated_total`), or movement-relay recreated a missing stream with every group (`movement_relay_stream_created_total`): Redis lost its data. |
 | `DistantSignalEnricherErrors` | warning | Over 30m, more than 50% of an LLM call site's calls (`enricher_llm_call_total{outcome!="success"}`: `error`, `timeout`, `rate_limited`, `quota_exhausted`, `gateway_error`, `http_error`, `empty_content` or `refused`) failed, with at least 3 failures, for 15m. |
-| `DistantSignalEnricherTokenExchangeFailing` | warning | Keyless auth only (`enricher.llm.auth` not `apiKey`; not rendered otherwise): at least 3 token requests to one `stage` (`enricher_llm_token_exchange_total{outcome!="success"}`) failed over 30m with none succeeding, for 10m (`enricherTokenExchange.minFailures`, `window`, `for`). The cached OpenAI token lasts at most an hour after the last success. |
+| `DistantSignalEnricherTokenExchangeFailing` | warning | Keyless auth only (`enricher.llm.auth` not `apiKey`; not rendered otherwise): at least 3 token requests to one `stage` (`enricher_llm_token_exchange_total{outcome!="success"}`) failed over 30m with none succeeding, for 10m (`enricherTokenExchange.minFailures`, `window`, `for`). The cached OpenAI or Claude token lasts at most an hour after the last success. |
+| `DistantSignalEnricherBatchFailing` | warning | Batch mode only (`enricher.llm.batch.sweepMode: batch`): at least 2 Message Batches failed to submit or were abandoned over 6h, for 15m (`enricherBatches.minFailures`, `window`). |
+| `DistantSignalEnricherBatchResultsFailing` | warning | Batch mode only: over 6h, more than 20% of ended batch requests were errored, expired or canceled, with at least 20 ended (`enricherBatches.resultFailureRatio`, `minResults`). |
+| `DistantSignalEnricherBatchStuck` | warning | Batch mode only: a batch in flight for more than 26 h (`enricherBatches.maxAgeSeconds`; batches expire after 24 h). |
 | `DistantSignalFullCoverageWindowFeedStale` | warning | full-coverage-consumer has marked its windows `feed_stale` (`full_coverage_consumer_window_feed_stale` is 1) for 15m. |
 | `DistantSignalFullCoverageWindowPostErrors` | warning | At least 3 POSTs to `/private/full-coverage-window-stats` failed (`full_coverage_consumer_errors_total{operation="post_window_stats"}`) within 5m, continuously for 10m (`postErrorsThreshold`, `postErrorsWindow`, `postErrorsFor`): one POST lost to an api rollout does not fire. |
 | `DistantSignalFullCoverageWindowStatsStalled` | warning | No window rows posted (`full_coverage_consumer_window_rows_posted_total`) over 10m, for 15m. |

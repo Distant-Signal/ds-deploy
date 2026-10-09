@@ -81,13 +81,17 @@ RENDER_FLAGS = [
     "trustConsumer.kafka.brokers=kafka.example.com:9094",
     "trustConsumer.kafka.topic=test-topic",
     "trustConsumer.kafka.saslMechanism=PLAIN",
-    "enricher.llm.baseUrl=http://llm.example.com/v1",
-    "enricher.llm.model=test-model",
-    # Workload identity mode, for DistantSignalEnricherTokenExchangeFailing.
-    "enricher.llm.auth=openaiWifAuthentik",
+    # The Claude provider in its keyless mode, for
+    # DistantSignalEnricherTokenExchangeFailing (rendered in every workload
+    # identity mode, OpenAI's included), with batch mode for the
+    # distant-signal.enricher-batches group.
+    "enricher.llm.provider=anthropic",
+    "enricher.llm.batch.sweepMode=batch",
+    "enricher.llm.auth=anthropicWifAuthentik",
     "enricher.serviceAccount.create=true",
-    "enricher.llm.workloadIdentity.identityProviderId=idp_test",
-    "enricher.llm.workloadIdentity.serviceAccountId=svc_acct_test",
+    "enricher.llm.workloadIdentity.anthropic.organizationId=org-test",
+    "enricher.llm.workloadIdentity.anthropic.serviceAccountId=svac_test",
+    "enricher.llm.workloadIdentity.anthropic.federationRuleId=fdrl_test",
     "enricher.llm.workloadIdentity.authentik.tokenUrl=https://sso.example.com/application/o/token/",
     "enricher.llm.workloadIdentity.authentik.clientId=test-enricher-client",
     "api.sso.issuerUrl=https://sso.example.com",

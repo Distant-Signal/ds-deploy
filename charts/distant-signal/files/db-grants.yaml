@@ -288,6 +288,10 @@ tables:
   # The ingest-writer's stream idempotency keys (plan 3a.3, spec §7.4):
   # inserted with each applied entry, pruned hourly after 48 h.
   ingest_dedup: {class: internal, grants: {writer: SID}}
+  # The enricher's in-flight Claude Message Batches (LLM_SWEEP_MODE=batch,
+  # docs/enricher-anthropic.md): inserted at submission, deleted once the
+  # results are written (crates/enricher/src/batch.rs). No UPDATE.
+  enricher_llm_batches: {class: internal, grants: {enricher: SID}}
   # The publish staging keys (UNLOGGED). The api publishes until
   # schedule-reference's db sink is on (phase 2a); then schedule_reference.
   schedule_calling_points_full_publish_keys: {class: internal, grants: {schedule_reference: SID}}

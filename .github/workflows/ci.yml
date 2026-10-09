@@ -950,6 +950,12 @@ jobs:
       - name: pod templates stable across releases
         run: uv run --no-sync scripts/check-pod-labels-chart.py
 
+      # enricher.llm.provider (docs/enricher-anthropic.md): openai renders
+      # the enricher as before; anthropic renders the Claude env, key Secret
+      # and egress port, batch mode its knobs; bad combinations refuse.
+      - name: enricher LLM provider settings
+        run: uv run --no-sync scripts/check-enricher-provider-chart.py
+
       # Ingest architecture spec §5.1: ds-store's (and ds-migrate's) normal
       # dependency closure holds no axum, tower, hyper, redis, reqwest,
       # oauth2, openidconnect or api. `cargo tree` only (no build), so no

@@ -458,14 +458,15 @@ enabled.
 
 ### DistantSignalEnricherTokenExchangeFailing
 
-Only rendered with keyless auth (`enricher.llm.auth` is `openaiWifAuthentik`
-or `openaiWifKubernetes`). At least `enricherTokenExchange.minFailures`
-token requests to one `stage` failed over the window and none succeeded
-(`distant_signal:enricher_llm_token_exchange_failures:increase` and
-`:successes:increase`, from `enricher_llm_token_exchange_total`). The
-enricher keeps using its cached OpenAI token until it expires (at most an
-hour; `enricher_llm_token_remaining_seconds` shows what is left), so this
-can fire before extractions fail with `outcome="auth_error"`.
+Only rendered with keyless auth (`enricher.llm.auth` is `openaiWifAuthentik`,
+`openaiWifKubernetes` or `anthropicWifAuthentik`). At least
+`enricherTokenExchange.minFailures` token requests to one `stage`
+(`authentik`, `openai` or `anthropic`) failed over the window and none
+succeeded (`distant_signal:enricher_llm_token_exchange_failures:increase`
+and `:successes:increase`, from `enricher_llm_token_exchange_total`). The
+enricher keeps using its cached OpenAI or Claude token until it expires (at
+most an hour; `enricher_llm_token_remaining_seconds` shows what is left), so
+this can fire before extractions fail with `outcome="auth_error"`.
 
 The `outcome` label of `enricher_llm_token_exchange_total` and enricher's
 `LLM token request rejected` log lines (`stage`, `status`, `error_code`,
@@ -484,13 +485,82 @@ The `outcome` label of `enricher_llm_token_exchange_total` and enricher's
   a signing-key rotation (in `openaiWifKubernetes` mode, upload the new
   JWKS first), or a mapping that no longer matches the `sub` or the group
   attribute.
+- `stage="anthropic"`, `authentication_failed`: the Claude API refused the
+  exchange. Its 401 is deliberately opaque; the reason (for example
+  `match_subject_prefix`, `jti_reused`, `workspace_id_required`, an `iss`
+  mismatch) is only on the Claude Console's Workload identity →
+  authentication history page. See
+  [enricher-anthropic.md](enricher-anthropic.md#troubleshooting-keyless-auth).
+  The projected token for this mode is in the `llm-identity-token` volume.
 - `timeout`, `error`, `http_error`: the endpoint is unreachable or failing
-  (NetworkPolicy egress, DNS, an Authentik or OpenAI outage).
+  (NetworkPolicy egress, DNS, an Authentik, OpenAI or Claude outage).
 
 The checklist and rotation runbook are in
-[enricher-openai.md](enricher-openai.md#keyless-auth-workload-identity-federation).
+[enricher-openai.md](enricher-openai.md#keyless-auth-workload-identity-federation)
+(OpenAI) and [enricher-anthropic.md](enricher-anthropic.md#keyless-auth)
+(Claude).
 To switch from Authentik to the fallback, follow "Switching to the fallback"
 there.
+
+### DistantSignalEnricherBatchFailing
+
+Only rendered in batch mode (`enricher.llm.batch.sweepMode: batch`, Claude
+only; [enricher-anthropic.md](enricher-anthropic.md#batch-mode)). At least
+`enricherBatches.minFailures` Message Batches failed to submit or were
+abandoned over the window
+(`distant_signal:enricher_llm_batch_failures:increase`, from
+`enricher_llm_batches_total{event=~"submit_failed|abandoned"}`). The sweep's
+re-extractions are not getting done; the incidents stay stale until a later
+sweep succeeds.
+
+- `submit_failed`: creating a batch failed (enricher's `could not submit a
+  primary batch` / `Message Batches API call failed` log lines carry the
+  status and `request-id`), or recording it in `enricher_llm_batches`
+  failed (then the batch is canceled). A 401/403 is the credential (with
+  keyless auth, a rule scope too narrow for batches: use
+  `workspace:developer`); 413 a batch too large (lower
+  `enricher.llm.batch.maxItems`); 429/529 the API's limits.
+- `abandoned`: the API no longer knows a batch (404), its results are gone
+  (over 29 days), or it was submitted under another `model_version`. One or
+  two right after a model or prompt change are expected (in-flight batches
+  are canceled); more mean batches are lost: check the logs.
+
+Poll failures (`event="poll_failed"`) don't count here: a transient one is
+retried next poll, and a persistent one shows up as
+DistantSignalEnricherBatchStuck.
+
+### DistantSignalEnricherBatchResultsFailing
+
+Only rendered in batch mode. Over the window, more than
+`enricherBatches.resultFailureRatio` of the batch requests that ended were
+`errored`, `expired` or `canceled`, with at least `minResults` ended
+(`distant_signal:enricher_llm_batch_requests_failed:increase` over
+`:requests:increase`, from `enricher_llm_batch_requests_total`). None of
+these is billed, and each incident goes into a later sweep, so the cost is
+delay.
+
+- `expired`: the API didn't get to the request within 24 h (high demand, or
+  the workspace's batch queue limits). Smaller batches
+  (`enricher.llm.batch.maxItems`) or synchronous sweeps
+  (`sweepMode: sync`) for a while.
+- `errored`: an invalid request (enricher logs `Message Batch request
+  errored` with the error type; a 400 would be a request shape the API
+  rejects, e.g. a schema) or a server error.
+- `canceled`: someone canceled the batch in the Console, or the enricher
+  canceled it after a model change.
+
+### DistantSignalEnricherBatchStuck
+
+Only rendered in batch mode. The oldest row of `enricher_llm_batches` was
+submitted more than `enricherBatches.maxAgeSeconds` ago
+(`enricher_llm_batch_oldest_age_seconds`, set on every poll). A batch ends
+within 24 h, so the enricher isn't finishing it: polling keeps failing
+(`poll_failed` and its log lines), the results download fails, or the
+adversarial stage can't be submitted. Check the enricher's logs for the
+batch id and the Console's Batches page. A row whose batch the API has
+forgotten is dropped on the next poll (404 → `abandoned`); to drop one by
+hand, `DELETE FROM enricher_llm_batches WHERE batch_id = '<id>'` (its
+incidents go into the next sweep).
 
 ## full-coverage windows
 

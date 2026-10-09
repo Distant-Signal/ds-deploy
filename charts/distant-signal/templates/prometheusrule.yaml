@@ -63,6 +63,7 @@ so that clause fired on every rollout.
 {{- $imagePullOn := and ($rule.statefulImagePull).enabled (or .Values.postgresql.enabled .Values.redis.enabled) }}
 {{- $healthOn := or $postgresDownOn $apiDbDownOn $privateRetiredOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
+{{- $enricherBatchesOn := and ($rule.enricherBatches).enabled (eq ((.Values.enricher.llm.batch).sweepMode | default "sync") "batch") }}
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
 {{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled ($rule.ingestShadowMismatch).enabled) }}
 {{- $outboxOn := and ($rule.trainEventOutbox).enabled .Values.ingestWriter.enabled }}
@@ -75,7 +76,7 @@ so that clause fired on every rollout.
 {{- $poolTimeoutsOn := ($rule.dbPoolAcquireTimeouts).enabled }}
 {{- $directWritesOn := ($rule.directWritesFailing).enabled }}
 {{- $feedMarkerOn := and ($rule.scheduleFeedMarkerStale).enabled .Values.scheduleFeed.enabled }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
 {{- $archiveHealthOn := and .Values.archive.enabled (or ($rule.archiveStale).enabled ($rule.archiveBatchChurn).enabled) }}
 {{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled }}
 apiVersion: monitoring.coreos.com/v1
@@ -769,7 +770,7 @@ spec:
     {{- with $rule.enricherTokenExchange }}
     {{- /*
     Workload identity federation (enricher.llm.auth): token requests to one
-    stage (authentik, openai) keep failing and none succeeds. The counter is
+    stage (authentik, openai, anthropic) keep failing and none succeeds. The counter is
     registered at 0 for every stage and outcome, so increase() sees the
     first failure and the success series exists (== 0) before any success.
     */}}
@@ -796,6 +797,67 @@ spec:
             summary: "enricher {{ "{{ $labels.stage }}" }} LLM token exchange failing"
             description: "{{ "{{ $value | humanize }}" }} failed token requests and no success in {{ .window }}. Extractions stop once the cached token expires."
             runbook_url: {{ printf "%s#distantsignalenrichertokenexchangefailing" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $enricherBatchesOn }}
+    {{- with $rule.enricherBatches }}
+    {{- /*
+    Claude Message Batches (enricher.llm.batch.sweepMode: batch,
+    docs/enricher-anthropic.md "Batch mode"). The counters and the age gauge
+    are registered at 0 in batch mode, so increase() sees the first event.
+    */}}
+    - name: distant-signal.enricher-batches
+      rules:
+        - record: distant_signal:enricher_llm_batch_failures:increase
+          expr: |
+            sum by (namespace) (increase(distant_signal_enricher_llm_batches_total{namespace="{{ $ns }}", event=~"submit_failed|abandoned"}[{{ .window }}]))
+        - record: distant_signal:enricher_llm_batch_requests_failed:increase
+          expr: |
+            sum by (namespace) (increase(distant_signal_enricher_llm_batch_requests_total{namespace="{{ $ns }}", result=~"errored|expired|canceled"}[{{ .window }}]))
+        - record: distant_signal:enricher_llm_batch_requests:increase
+          expr: |
+            sum by (namespace) (increase(distant_signal_enricher_llm_batch_requests_total{namespace="{{ $ns }}"}[{{ .window }}]))
+        - alert: DistantSignalEnricherBatchFailing
+          expr: |
+            distant_signal:enricher_llm_batch_failures:increase{namespace="{{ $ns }}"} >= {{ .minFailures }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "enricher Message Batches failing to submit or abandoned"
+            description: "{{ "{{ $value | humanize }}" }} batches failed to submit or were abandoned in {{ .window }}; the sweep's extractions are not getting done."
+            runbook_url: {{ printf "%s#distantsignalenricherbatchfailing" $runbook | quote }}
+        - alert: DistantSignalEnricherBatchResultsFailing
+          expr: |
+            distant_signal:enricher_llm_batch_requests_failed:increase{namespace="{{ $ns }}"}
+              / distant_signal:enricher_llm_batch_requests:increase{namespace="{{ $ns }}"} > {{ .resultFailureRatio }}
+            and distant_signal:enricher_llm_batch_requests:increase{namespace="{{ $ns }}"} >= {{ .minResults }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "enricher batch requests errored, expired or canceled"
+            description: "{{ "{{ $value | humanizePercentage }}" }} of batch requests ended errored, expired or canceled in {{ .window }}."
+            runbook_url: {{ printf "%s#distantsignalenricherbatchresultsfailing" $runbook | quote }}
+        - alert: DistantSignalEnricherBatchStuck
+          expr: |
+            max by (namespace) (distant_signal_enricher_llm_batch_oldest_age_seconds{namespace="{{ $ns }}"}) > {{ .maxAgeSeconds }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "enricher Message Batch in flight for over a day"
+            description: "The oldest in-flight batch was submitted {{ "{{ $value | humanizeDuration }}" }} ago; batches expire after 24 h."
+            runbook_url: {{ printf "%s#distantsignalenricherbatchstuck" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $fcwOn }}

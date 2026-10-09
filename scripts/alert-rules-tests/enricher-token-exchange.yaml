@@ -1,7 +1,8 @@
 # promtool unit tests for the distant-signal.enricher-token-exchange group
-# (keyless OpenAI auth; see recorded-alerts.yaml's header for how rules.yaml
+# (keyless auth; see recorded-alerts.yaml's header for how rules.yaml
 # is rendered: scripts/check-alert-payloads.py renders it in
-# openaiWifAuthentik mode, so this group is present).
+# anthropicWifAuthentik mode, so this group is present; the rules are the
+# same in every workload identity mode).
 rule_files: [rules.yaml]
 evaluation_interval: 1m
 tests:
