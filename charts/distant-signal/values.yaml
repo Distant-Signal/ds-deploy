@@ -552,7 +552,7 @@ postgresql:
     effective_cache_size: "3584MB"
     # Per sort/hash node per backend, and hash nodes may use
     # hash_mem_multiplier (2) times this. Keep it modest -- the chart's
-    # services hold ~15-20 pooled connections, max_connections is 100.
+    # services hold ~15-20 pooled connections, max_connections is 200.
     work_mem: "16MB"
     # Manual VACUUM, CREATE INDEX, ALTER TABLE ADD FOREIGN KEY.
     maintenance_work_mem: "256MB"
@@ -584,18 +584,17 @@ postgresql:
     # can SIGBUS on nodes that have hugepages configured but not granted
     # to this cgroup. Quoted: a bare `off` is a YAML boolean.
     huge_pages: "off"
-    # max_connections is deliberately NOT set here: it stays at Postgres's
-    # default 100 (97 usable by non-superusers). The services' pools add up
-    # to api 50 per replica (`api.database.maxConnections`) + aggregator 10
-    # + notifier 5 + enricher 5 = 70 at `api.replicaCount: 1`, plus the
-    # migration connection, the backup job and psql/kubectl exec. Each
-    # extra api replica adds another 50, so before scaling api to 2
-    # replicas either raise max_connections here (needs a restart; check
-    # the memory budget first -- work_mem is per sort/hash node per
-    # backend) or lower `api.database.maxConnections`
-    # (DATABASE_MAX_CONNECTIONS). Not raised by default: at 1GB
-    # shared_buffers, 16MB work_mem and a 5Gi limit, 200 backends risk
-    # memory pressure (INF-7, 2026-09-27).
+    # Postgres default 100. 200 (197 usable once the 3
+    # superuser_reserved_connections are taken out), which production
+    # already runs: the service pools (api 50 per replica, every poller
+    # and consumer pool, the role setup's per-service limits) plus the
+    # migration connection, backups and psql sessions outgrew 100. The
+    # render-time budget checks (INF-7 in api-deployment.yaml and the
+    # per-service role check) sum against this value. Raising it further
+    # needs a restart and a memory check: work_mem is per sort/hash node
+    # per backend, and at 1GB shared_buffers, 16MB work_mem and a 5Gi
+    # limit most backends must stay idle or light.
+    max_connections: 200
     # --- Observability (DB review 2026-09-27, F6: slow queries were
     # invisible). ---
     # Per-query statistics: `SELECT ... FROM pg_stat_statements`. The

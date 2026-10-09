@@ -1535,6 +1535,7 @@ override only needs to name the keys it changes:
 | `checkpoint_timeout` | `15min` | `5min` | Fewer full-page images. Crash recovery takes longer. |
 | `wal_compression` | `lz4` | `off` | Compresses the full-page images written after each checkpoint. Needs Postgres 15+ built with lz4 (the chart's `postgres:16` image is). |
 | `random_page_cost` | `1.1` | `4` | **Assumes SSD-class storage.** Set `"4"` on spinning disks. |
+| `max_connections` | `200` | `100` | Production's value. The service pools, migrations, backups and psql sessions outgrew 100; the render-time connection budget checks sum against it. Each backend can use `work_mem` per sort/hash node, so check memory before raising it. |
 | `huge_pages` | `off` | `try` | The pod requests no hugepages. `try` can SIGBUS on nodes where hugepages exist but aren't granted to the pod. |
 | `shared_preload_libraries` | `pg_stat_statements` | `""` | Per-query statistics. Only loads at server start. The extension is created by migration `20260927070000`. |
 | `pg_stat_statements.track` | `top` | `top` | Top-level statements only. Pinned explicitly. |
@@ -1622,7 +1623,7 @@ budget). Before it migrates, it drops any INVALID index that a failed
 | `databasePool.statementTimeoutSecs` | `60` | `statement_timeout` for every pooled connection. `0` disables it. |
 | `databasePool.idleInTransactionTimeoutSecs` | `30` | `idle_in_transaction_session_timeout`. `0` disables it. |
 | `databasePool.acquireTimeoutSecs` | `5` | How long to wait for a free pool connection. |
-| `api.database.maxConnections` | `50` | api pool size per replica. Pools total api 50 per replica + aggregator 10 + notifier 5 + enricher 5 = 70 at one api replica, against Postgres's default `max_connections` of 100 (the chart does not raise it). Each extra api replica adds 50: before scaling to 2 replicas, raise `postgresql.config.max_connections` (restart; check memory) or lower this. |
+| `api.database.maxConnections` | `50` | api pool size per replica. Pools total api 50 per replica + aggregator 10 + notifier 5 + enricher 5 = 70 at one api replica, plus every poller and consumer pool, against the chart's `postgresql.config.max_connections` of 200. Each extra api replica (and a RollingUpdate surge pod) adds 50; the render fails when the total no longer fits, so raise `postgresql.config.max_connections` (restart; check memory) or lower this. |
 | `api.migrations.lockTimeoutSecs` | `10` | `lock_timeout` for startup migrations. |
 | `api.migrations.statementTimeoutSecs` | `240` | `statement_timeout` for each startup migration statement. Keep it below the startup probe budget. |
 
