@@ -63,8 +63,9 @@ api client %W~incident-text-changed +xadd +ping +hello +auth +client|setname +cl
 
 # Ranma's redis_exporter (not in this chart): read-only metrics commands.
 # Checked against the exporter's own command list in a staging run before
-# production (docs/redis-acl.md).
-exporter client %R~* +info +ping +config|get +client|list +slowlog|get +slowlog|len +latency|latest +latency|histogram +xinfo|stream +xinfo|groups +xinfo|consumers +xlen +scan +type +memory|usage +select +hello +auth +client|setname +client|setinfo +client|id
+# production (docs/redis-acl.md). COMMAND INFO: redis_exporter v1.93 sends it
+# on every scrape; refused, it fills ACL LOG (Ranma's staging run, 2026-10-09).
+exporter client %R~* +info +ping +config|get +client|list +slowlog|get +slowlog|len +latency|latest +latency|histogram +xinfo|stream +xinfo|groups +xinfo|consumers +xlen +scan +type +memory|usage +command|info +select +hello +auth +client|setname +client|setinfo +client|id
 
 # Future clients, created with their final rights (phase 2c / 3).
 poller-incidents final %W~incident-text-changed +xadd +ping +hello +auth +client|setname +client|setinfo +client|id

@@ -32,7 +32,7 @@ explains the format). The kinds:
 | `full-coverage-consumer` | client | as above, plus XADD and XREVRANGE on `ds:ingest:full-coverage` (phase 3a) |
 | `enricher` | client | `incident-text-changed`: its consumer group commands |
 | `api` | client | XADD on `incident-text-changed` only (write-only) |
-| `exporter` | client | read-only metrics commands (`INFO`, `CONFIG GET`, `CLIENT LIST`, `SLOWLOG`, `LATENCY`, `XINFO`, `SCAN`, `MEMORY USAGE`, ...) |
+| `exporter` | client | read-only metrics commands (`INFO`, `CONFIG GET`, `CLIENT LIST`, `SLOWLOG`, `LATENCY`, `XINFO`, `SCAN`, `MEMORY USAGE`, `COMMAND INFO`, ...) |
 | `poller-incidents` | final | XADD on `incident-text-changed` (phase 2c) |
 | `poller-ldbws`, `poller-tfl`, `poller-tocs`, the three island-of-Ireland pollers | final | XADD and XREVRANGE on their own `ds:ingest:*` stream (one each: the island-of-Ireland pollers have `ds:ingest:ioi-gtfs`, `-live` and `-nir`) |
 | `ingest-writer` | final | consumer-group and gauge commands on `ds:ingest:*` (never XADD, XTRIM or XDEL there); XADD, XTRIM, XLEN, XRANGE and MEMORY USAGE on `ds:dlq:*` |
