@@ -2659,8 +2659,14 @@ notifier:
   vapid:
     # -- mailto: or https: contact, required by RFC 8292's VAPID "sub" claim.
     subject: ""
-    # -- PEM EC private key / uncompressed base64url public key
-    # (openssl ecparam -genkey -name prime256v1). Never auto-generated --
+    # -- VAPID key pair. publicKey: uncompressed P-256 point, base64url.
+    # privateKey, any of: PEM (SEC1 "EC PRIVATE KEY" from `openssl ecparam
+    # -genkey -name prime256v1 -noout`, or PKCS#8 "PRIVATE KEY"); that PEM
+    # with newlines as literal \n or spaces; or the raw 32-byte key as
+    # base64url/base64 (`npx web-push generate-vapid-keys`). The notifier
+    # refuses to start if publicKey does not match privateKey. Raw to PEM:
+    #   python3 -c 'import base64,sys; k=sys.argv[1]; d=bytes.fromhex("30310201010420")+base64.urlsafe_b64decode(k+"="*(-len(k)%4))+bytes.fromhex("a00a06082a8648ce3d030107"); print("-----BEGIN EC PRIVATE KEY-----\n"+base64.b64encode(d).decode()+"\n-----END EC PRIVATE KEY-----")' "$RAW" | openssl ec
+    # Never auto-generated --
     # see secret.yaml's own comment on why this differs from
     # postgres-password/internal-token. The public key is also read by the
     # api Deployment (api.extraEnv-free, wired directly in

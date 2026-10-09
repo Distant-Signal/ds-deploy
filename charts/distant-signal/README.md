@@ -2035,8 +2035,8 @@ twice.
 | `notifier.push.pruneAfterTimeouts` | `3` | Delete a subscription after this many consecutive timeouts (in-memory count, reset on restart). |
 | `notifier.push.shutdownGraceSecs` | `20` | On SIGTERM, seconds to let queued and in-flight pushes finish. |
 | `notifier.vapid.subject` | `""` | `mailto:` or `https:` contact for the VAPID `sub` claim (RFC 8292). |
-| `notifier.vapid.publicKey` | `""` | VAPID public key (uncompressed, base64url). Must pair with `privateKey`: generate with `openssl ecparam -genkey -name prime256v1`. Never auto-generated. |
-| `notifier.vapid.privateKey` | `""` | VAPID private key (PEM EC). Never auto-generated. |
+| `notifier.vapid.publicKey` | `""` | VAPID public key (uncompressed, base64url). Must pair with `privateKey`: the notifier refuses to start on a mismatch. Never auto-generated. |
+| `notifier.vapid.privateKey` | `""` | VAPID private key, any of: PEM (SEC1 `EC PRIVATE KEY` from `openssl ecparam -genkey -name prime256v1 -noout`, or PKCS#8 `PRIVATE KEY`); that PEM with newlines as literal `\n` or spaces; or the raw 32-byte key as base64url/base64, padding optional (`npx web-push generate-vapid-keys`). values.yaml has a raw-to-PEM one-liner. Never auto-generated. |
 | `notifier.vapid.existingSecret` | `""` | Read the VAPID key pair from this pre-existing Secret instead. |
 | `notifier.vapid.existingSecretPublicKeyKey` | `vapid-public-key` | Key within `notifier.vapid.existingSecret` for the public key. |
 | `notifier.vapid.existingSecretPrivateKeyKey` | `vapid-private-key` | Key within `notifier.vapid.existingSecret` for the private key. |
