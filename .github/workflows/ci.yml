@@ -2059,9 +2059,10 @@ jobs:
             if render "${job[@]}" --set api.strategy.type=Rolling >/dev/null 2>&1; then
               fail "an unknown strategy type must fail the render"
             fi
-            # 2 pods x 36 + 21 other pools + 5 reserved = 98 > 97; x 35 = 96 fits.
+            # 2 pods x 86 + 21 other pools + 5 reserved = 198 > 197 (max_connections
+            # 200 less 3 superuser-reserved); x 85 = 196 fits.
             if render "${job[@]}" --set api.strategy.type=RollingUpdate \
-                --set api.database.maxConnections=36 >/dev/null 2>&1; then
+                --set api.database.maxConnections=86 >/dev/null 2>&1; then
               fail "the surge pod's pool must count in the connection budget"
             fi
           }
@@ -2496,24 +2497,26 @@ jobs:
             --show-only templates/api-deployment.yaml
           )
           if helm template distant-signal charts/distant-signal "${base[@]}" \
-              --set api.replicaCount=2 > /dev/null 2>&1; then
-            echo "2 api replicas x 50 must exceed the default budget" >&2; exit 1
+              --set api.replicaCount=2 --set postgresql.config.max_connections=100 > /dev/null 2>&1; then
+            echo "2 api replicas x 50 must exceed a max_connections of 100" >&2; exit 1
           fi
           helm template distant-signal charts/distant-signal "${base[@]}" \
-            --set api.replicaCount=2 --set api.database.maxConnections=30 > /dev/null
+            --set api.replicaCount=2 --set postgresql.config.max_connections=100 \
+            --set api.database.maxConnections=30 > /dev/null
           helm template distant-signal charts/distant-signal "${base[@]}" \
-            --set api.replicaCount=2 --set postgresql.config.max_connections=200 > /dev/null
+            --set api.replicaCount=2 > /dev/null
           # R-048: the budget also reserves postgresql.connectionBudget
           # (exporter + pg_dump 2, admin psql 3) and 2 for pgBackRest. Pools
-          # other than api are 21, so api may have 97 - 21 - 5 = 71.
+          # other than api are 21, so at the default max_connections of 200
+          # api may have 197 - 21 - 5 = 171.
           helm template distant-signal charts/distant-signal "${base[@]}" \
-            --set api.database.maxConnections=71 > /dev/null
+            --set api.database.maxConnections=171 > /dev/null
           if helm template distant-signal charts/distant-signal "${base[@]}" \
-              --set api.database.maxConnections=72 > /dev/null 2>&1; then
-            echo "72 + 21 + 5 reserved must exceed 97" >&2; exit 1
+              --set api.database.maxConnections=172 > /dev/null 2>&1; then
+            echo "172 + 21 + 5 reserved must exceed 197" >&2; exit 1
           fi
           if helm template distant-signal charts/distant-signal "${base[@]}" \
-              --set api.database.maxConnections=60 \
+              --set api.database.maxConnections=160 \
               --set postgresql.connectionBudget.adminSessions=20 > /dev/null 2>&1; then
             echo "postgresql.connectionBudget.adminSessions must count" >&2; exit 1
           fi
@@ -2527,9 +2530,9 @@ jobs:
             --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds
           )
           helm template distant-signal charts/distant-signal "${base[@]}" "${pgbackrest[@]}" \
-            --set api.database.maxConnections=69 > /dev/null
+            --set api.database.maxConnections=169 > /dev/null
           if helm template distant-signal charts/distant-signal "${base[@]}" "${pgbackrest[@]}" \
-              --set api.database.maxConnections=70 > /dev/null 2>&1; then
+              --set api.database.maxConnections=170 > /dev/null 2>&1; then
             echo "pgBackRest must reserve 2 connections" >&2; exit 1
           fi
 
@@ -2944,12 +2947,12 @@ jobs:
             --set postgresql.roles.perService.api.connect=true --show-only templates/api-maintenance-cronjob.yaml)
           # shellcheck disable=SC2016 # as above
           grep -q 'postgres://distant_signal_api:\$(PGPASSWORD)@' <<<"${cj}" || fail "api.connect: the CronJob must connect as the api role"
-          # Its 2 connections count: the app limit 75 -> 77, the INF-7 budget 71 -> 69.
+          # Its 2 connections count: the app limit 75 -> 77, the INF-7 budget 171 -> 169.
           out=$(render "${on[@]}" "${roles[@]}")
           grep -q "'--variable=app_connection_limit=77'" <<<"${out}" || fail "the CronJob's pool must count in the app role's limit"
-          render "${on[@]}" --set api.database.maxConnections=69 >/dev/null
+          render "${on[@]}" --set api.database.maxConnections=169 >/dev/null
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if render "${on[@]}" --set api.database.maxConnections=70 >/dev/null 2>&1; then
+          if render "${on[@]}" --set api.database.maxConnections=170 >/dev/null 2>&1; then
             fail "the CronJob's pool must count in the INF-7 budget"
           fi
 

@@ -22,8 +22,8 @@ Per-service Postgres roles (`postgresql.roles.perService`):
     takes its pool out of the app role's computed limit; the api's
     migrations stay the owner's;
   - the generated Secret gains one password per service;
-  - the role-limit budget (spec §6.6): fails at 98 of the 97 slots, passes
-    at 92.
+  - the role-limit budget (spec §6.6): fails at 198 of the 197 slots
+    (max_connections 200), passes at 192.
 
 Per-client Redis ACL users (`redis.acl`):
   - off: nothing of it renders (no REDIS_USERNAME, --aclfile, initContainer
@@ -452,10 +452,10 @@ def check_roles_connect(c: Checker) -> None:
 
 
 def check_roles_budget(c: Checker) -> None:
-    """Role limits must fit the 97 non-superuser slots."""
+    """Role limits must fit the 197 non-superuser slots (max_connections 200)."""
     # All four connecting: owner 3 + app 5 + exporter 3 + dump 2 + backup 4
     # + aggregator 11 + enricher 6 + notifier 6 = 40, plus the api's.
-    for api_limit, total, ok in ((58, 98, False), (52, 92, True)):
+    for api_limit, total, ok in ((158, 198, False), (152, 192, True)):
         code, out = c.render(
             *ALL_CONNECT,
             *sets(f"postgresql.roles.perService.api.connectionLimit={api_limit}"),
@@ -464,12 +464,12 @@ def check_roles_budget(c: Checker) -> None:
         )
         if ok:
             c.check(
-                ok=code == 0, message=f"budget {total}/97 must render: {out[-300:]}"
+                ok=code == 0, message=f"budget {total}/197 must render: {out[-300:]}"
             )
         else:
             c.check(
                 ok=code != 0 and f"sum to {total}" in out,
-                message=f"budget {total}/97 must fail the render",
+                message=f"budget {total}/197 must fail the render",
             )
 
 
