@@ -81,7 +81,12 @@ import yaml
 REPO = pathlib.Path(__file__).resolve().parent.parent
 CHART = REPO / "charts" / "distant-signal"
 EXAMPLE = "values-example.yaml"
+# Release A (2026-10-09) put every ingest producer on its db/stream sink by
+# default; these checks predate it and test other switches, so they render
+# on ci/http-sinks.yaml (every producer back on http, the writer on app).
 BASE = (
+    "-f",
+    str(CHART / "ci" / "http-sinks.yaml"),
     "--set",
     "trustConsumer.kafka.brokers=k:9094",
     "--set",
@@ -654,7 +659,10 @@ NARROW_ACL = (*ACL, *sets("redis.acl.stage=narrow"))
 DEFAULT_OFF = (*NARROW_ACL, *sets("redis.acl.defaultUser=off"), *ALL_CLIENTS)
 WRITER_LOOPS = sets("ingestWriter.enabled=true", "ingestWriter.loops.enabled=true")
 # values-example.yaml (every poller on) without the island-of-Ireland
-# pollers, whose own Redis users it sets.
+# pollers, whose own Redis users it sets, and without the release A
+# prerequisites it also sets (2026-10-09: the Redis ACL users with default
+# off, the Postgres roles, the ingest-writer), so each guard below starts
+# from none of them.
 EXAMPLE_NO_IOI = (
     "-f",
     EXAMPLE,
@@ -662,6 +670,30 @@ EXAMPLE_NO_IOI = (
         "pollerIrishRailGtfs.enabled=false",
         "pollerIrishRailLive.enabled=false",
         "pollerNirStations.enabled=false",
+        "redis.acl.enabled=false",
+        "redis.acl.stage=open",
+        "redis.acl.defaultUser=on",
+        *(
+            f"redis.acl.clients.{client}=false"
+            for client in (
+                "api",
+                "enricher",
+                "movementRelay",
+                "trustConsumer",
+                "fullCoverageConsumer",
+                "trustBacklogConsumer",
+                "ingestWriter",
+                "pollerIncidents",
+                "pollerLdbws",
+                "pollerTfl",
+                "pollerTocs",
+            )
+        ),
+        "postgresql.roles.enabled=false",
+        "postgresql.roles.setupJob.enabled=false",
+        "postgresql.roles.perService.enabled=false",
+        "ingestWriter.enabled=false",
+        "ingestWriter.loops.enabled=false",
         # Its api pools leave too little of the role budget for a
         # per-service role on top of app's computed limit.
         "postgresql.roles.app.connectionLimit=60",
@@ -811,8 +843,10 @@ def check_narrow_role_guards(c: Checker) -> None:
     )
     for label, args, service in components:
         needle = f"perService.{service}.connect"
-        c.refuses(f"H2: {label} on the superuser", needle, *args)
-        c.refuses(f"H2: {label} on the app role", needle, *args, *PER_SERVICE)
+        # Release A made the producers' connect default true: off explicitly.
+        off = sets(f"postgresql.roles.perService.{service}.connect=false")
+        c.refuses(f"H2: {label} on the superuser", needle, *args, *off)
+        c.refuses(f"H2: {label} on the app role", needle, *args, *PER_SERVICE, *off)
         renders(c, f"H2: {label} as its own role", *args, *connect(service))
         docs = c.docs(*args, *connect(service))
         role = f"distant_signal_{service}"

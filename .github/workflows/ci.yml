@@ -1013,10 +1013,16 @@ jobs:
       # endpoint, SSO, and a Kafka connection. movement-relay falls back to
       # trustConsumer.kafka.*, so these --set dummy values configure it too.
       # They exist only to satisfy the guard rails for this smoke test; they
-      # are not meant to be real settings.
+      # are not meant to be real settings. Since release A (2026-10-09) the
+      # defaults also put every ingest producer on its db or stream sink,
+      # which needs the Postgres per-service roles, the ingest-writer and
+      # the Redis ACL: ci/ingest-prereqs.yaml is the least a fresh install
+      # adds (the next step checks the failure without it). The later checks
+      # of features unrelated to the cutover use ci/http-sinks.yaml instead.
       - name: helm template (default values)
         run: |
           helm template distant-signal charts/distant-signal \
+            -f charts/distant-signal/ci/ingest-prereqs.yaml \
             --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
             --set trustConsumer.kafka.topic=test-topic \
             --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1028,6 +1034,146 @@ jobs:
             --set api.sso.redirectUrl=https://app.example.com/callback \
             --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
             > /dev/null
+
+      # Release A (2026-10-09, docs/ingest-phase5-runbook.md "Release A"):
+      # every producer defaults to its new sink, and every internal reader
+      # to its direct read (`internalReads.source: db`). Without the prerequisites
+      # the render fails once, listing all of them and the per-producer
+      # `sink: http` opt-out. With them, every producer renders its sink
+      # and its own Postgres role, and the writer applies the four
+      # producer streams. Each producer rolls back to `http` on its own.
+      # `defaultUser: "off"` needs no user for a client whose workload is
+      # off (the island-of-Ireland pollers by default).
+      - name: helm template (release A ingest defaults)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          doc() { awk -v k="$1" -v n="$2" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: " k "\n" && $0 ~ "\n  name: " n "\n" {print}'; }
+          env_is() { grep -A1 "name: $2\$" <<<"$1" | grep -q "value: \"$3\"" || fail "$4: $2 must be \"$3\""; }
+
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if err=$(render 2>&1 >/dev/null); then fail "release A's defaults rendered without their prerequisites"; fi
+          grep -q 'zz-ingest-sink-preflight.yaml' <<<"${err}" || fail "the preflight must be the first failure: ${err}"
+          for want in 'postgresql.roles.enabled: true' 'postgresql.roles.perService.enabled: true' \
+              'ingestWriter.loops.enabled: true' 'redis.acl.stage: narrow' 'redis.acl.defaultUser: off' \
+              'redis.acl.clients.fullCoverageConsumer: true' 'trustConsumer.ingest.sink: http' \
+              'trustBacklogConsumer.ingest.sink: http' 'fullCoverageConsumer.ingest.sink: http'; do
+            grep -qF -- "${want}" <<<"${err}" || fail "the preflight must name ${want}: ${err}"
+          done
+          if grep -q -E 'pollerIrishRail|pollerNirStations' <<<"${err}"; then
+            fail "the preflight must not ask for the disabled island-of-Ireland pollers' users: ${err}"
+          fi
+
+          all=(-f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set scheduleFeed.enabled=true --set scheduleFeed.sftp.authMethod=password)
+          for p in incidents stations tocs ldbws tfl; do
+            all+=(--set "pollers.${p}.enabled=true" --set "pollers.${p}.baseUrl=https://rdm.example.com/${p}"
+              --set "redis.acl.clients.poller${p^}=true")
+          done
+          out=$(render "${all[@]}")
+          declare -A sink=(
+            [poller-incidents]=db [poller-stations]=db [trust-consumer]=db [trust-backlog-consumer]=db
+            [poller-ldbws]=stream [poller-tfl]=stream [poller-tocs]=stream [full-coverage-consumer]=stream
+          )
+          declare -A role=(
+            [poller-incidents]=incidents [poller-stations]=stations [trust-consumer]=trust_consumer
+            [trust-backlog-consumer]=trust_backlog [ingest-writer]=writer
+            [full-coverage-consumer]=full_coverage_ro [poller-ldbws]=ldbws_ro
+          )
+          # The internal reads (phase 4) default to db too.
+          declare -A source=(
+            [full-coverage-consumer]=POPULATION_SOURCE [trust-consumer]=TRACKED_TRAINS_SOURCE
+            [poller-ldbws]=SAMPLE_STATIONS_SOURCE
+          )
+          # db_sinks MANIFEST: how many INGEST_SINK entries are db.
+          db_sinks() { grep -A1 'name: INGEST_SINK$' <<<"$1" | grep -c -E 'value: "?db"?$' || true; }
+          for d in "${!sink[@]}"; do
+            dep=$(doc Deployment "distant-signal-${d}" <<<"${out}")
+            env_is "${dep}" INGEST_SINK "${sink[${d}]}" "${d}"
+          done
+          for d in "${!role[@]}"; do
+            dep=$(doc Deployment "distant-signal-${d}" <<<"${out}")
+            grep -q "postgres://distant_signal_${role[${d}]}:" <<<"${dep}" \
+              || fail "${d} must connect as distant_signal_${role[${d}]}"
+          done
+          for d in "${!source[@]}"; do
+            dep=$(doc Deployment "distant-signal-${d}" <<<"${out}")
+            env_is "${dep}" "${source[${d}]}" db "${d}"
+          done
+          sf=$(doc Deployment distant-signal-schedulefeed <<<"${out}")
+          n=$(db_sinks "${sf}")
+          [[ "${n}" == 2 ]] || fail "schedule-ingest and schedule-reference must both default to db (${n})"
+          for r in schedule_ingest schedule_reference; do
+            grep -q "postgres://distant_signal_${r}:" <<<"${sf}" || fail "schedulefeed must connect as distant_signal_${r}"
+          done
+          dep=$(doc Deployment distant-signal-ingest-writer <<<"${out}")
+          env_is "${dep}" INGEST_WRITER_STREAMS \
+            "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply" ingest-writer
+
+          # Each producer's rollback is its own `sink: http`, nothing else.
+          declare -A key=(
+            [poller-incidents]=pollers.incidents [poller-stations]=pollers.stations [poller-ldbws]=pollers.ldbws
+            [poller-tfl]=pollers.tfl [poller-tocs]=pollers.tocs [trust-consumer]=trustConsumer
+            [trust-backlog-consumer]=trustBacklogConsumer [full-coverage-consumer]=fullCoverageConsumer
+          )
+          for d in "${!key[@]}"; do
+            back=$(render "${all[@]}" --set "${key[${d}]}.ingest.sink=http")
+            dep=$(doc Deployment "distant-signal-${d}" <<<"${back}")
+            if grep -q 'name: INGEST_SINK$' <<<"${dep}"; then
+              fail "${key[${d}]}.ingest.sink=http must render ${d} without INGEST_SINK"
+            fi
+          done
+          # And each reader's is its own `internalReads.source: http`.
+          for d in "${!source[@]}"; do
+            back=$(render "${all[@]}" --set "${key[${d}]}.internalReads.source=http")
+            dep=$(doc Deployment "distant-signal-${d}" <<<"${back}")
+            if grep -q "name: ${source[${d}]}\$" <<<"${dep}"; then
+              fail "${key[${d}]}.internalReads.source=http must render ${d} without ${source[${d}]}"
+            fi
+          done
+          back=$(render "${all[@]}" --set scheduleFeed.ingest.sink=http)
+          sf=$(doc Deployment distant-signal-schedulefeed <<<"${back}")
+          n=$(db_sinks "${sf}")
+          [[ "${n}" == 1 ]] || fail "scheduleFeed.ingest.sink=http must leave only schedule-reference on db (${n})"
+
+          # A direct producer never falls back to the app role.
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if err=$(render "${all[@]}" --set postgresql.roles.perService.incidents.connect=false 2>&1 >/dev/null); then
+            fail "pollers.incidents on db without its connect must fail the render"
+          fi
+          grep -qF 'postgresql.roles.perService.incidents.connect: true' <<<"${err}" || fail "unexpected error: ${err}"
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if err=$(render "${all[@]}" --set postgresql.roles.perService.full_coverage_ro.connect=false 2>&1 >/dev/null); then
+            fail "fullCoverageConsumer's db reads without their connect must fail the render"
+          fi
+          grep -qF 'postgresql.roles.perService.full_coverage_ro.connect: true' <<<"${err}" || fail "unexpected error: ${err}"
+
+          # defaultUser off and the disabled island-of-Ireland pollers: no user
+          # needed (the render above). Enabled, each needs its own.
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render "${all[@]}" --set pollerIrishRailGtfs.enabled=true >/dev/null 2>&1; then
+            fail "an enabled island-of-Ireland poller without its Redis user must fail the render"
+          fi
+          render "${all[@]}" --set pollerIrishRailGtfs.enabled=true --set redis.acl.clients.pollerIrishRailGtfs=true >/dev/null
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if err=$(render "${all[@]}" --set redis.acl.clients.enricher=false 2>&1 >/dev/null); then
+            fail "defaultUser off with a deployed client on default must fail the render"
+          fi
+          grep -qF 'redis.acl.clients.enricher' <<<"${err}" || fail "unexpected error: ${err}"
+          echo "release A ingest defaults render OK"
 
       # Keyless OpenAI auth (enricher.llm.auth, docs/enricher-openai.md):
       # off by default, with exactly the old enricher (shared ServiceAccount,
@@ -1041,6 +1187,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1166,6 +1313,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1225,6 +1373,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1278,6 +1427,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1318,6 +1468,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1357,6 +1508,7 @@ jobs:
         run: |
           set -euo pipefail
           cm=$(helm template distant-signal charts/distant-signal \
+            -f charts/distant-signal/ci/http-sinks.yaml \
             --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
             --set trustConsumer.kafka.topic=test-topic \
             --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1381,6 +1533,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
+              -f charts/distant-signal/ci/http-sinks.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1422,6 +1575,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
+              -f charts/distant-signal/ci/http-sinks.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1488,6 +1642,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
+              -f charts/distant-signal/ci/http-sinks.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1536,6 +1691,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
+              -f charts/distant-signal/ci/http-sinks.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1587,6 +1743,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
+              -f charts/distant-signal/ci/http-sinks.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1642,6 +1799,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
+              -f charts/distant-signal/ci/http-sinks.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1699,6 +1857,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set enricher.llm.baseUrl=http://llm.example.com/v1
             --set enricher.llm.model=test-model
             --set api.sso.issuerUrl=https://sso.example.com
@@ -1772,6 +1931,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1834,6 +1994,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1933,6 +2094,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2028,6 +2190,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2116,6 +2279,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2213,6 +2377,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2340,6 +2505,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2375,6 +2541,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2402,6 +2569,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2489,9 +2657,12 @@ jobs:
           # shellcheck disable=SC2016 # as above
           grep -q 'postgres://distant_signal_writer:\$(PGPASSWORD)@' <<<"${dep}" \
             || fail "writer.connect: the ingest-writer must connect as distant_signal_writer"
-          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if render "${roles[@]}" --set postgresql.roles.perService.writer.connect=true >/dev/null 2>&1; then
-            fail "writer.connect without ingestWriter.enabled must fail the render"
+          # Release A: writer.connect defaults to true and is a no-op while
+          # the ingest-writer is off (nothing connects as the role).
+          ps=$(render "${roles[@]}" --set postgresql.roles.perService.writer.connect=true)
+          # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
+          if grep -q 'distant_signal_writer:\$(PGPASSWORD)@' <<<"${ps}"; then
+            fail "writer.connect without ingestWriter.enabled must connect nothing as the writer"
           fi
 
       # INF-7: with the bundled Postgres, api replicas x pool plus the other
@@ -2500,6 +2671,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2559,6 +2731,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2850,6 +3023,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2912,6 +3086,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2982,6 +3157,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            -f charts/distant-signal/ci/http-sinks.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN

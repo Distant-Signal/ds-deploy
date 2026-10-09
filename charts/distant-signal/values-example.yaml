@@ -72,11 +72,14 @@ aggregator:
 # here). Set `redis.enabled: false` together with `redis.externalUrl` to
 # point at a managed instance instead.
 #
-# The island-of-Ireland pollers enabled below write only to their own
-# ds:ingest:ioi-* streams, so each must connect as its own narrow ACL user
-# (security review H3; docs/redis-acl.md): redis.auth (for `default`'s
-# password while it stays on, M3), the ACL users at stage `narrow`, and the
-# three pollers' clients. Both Secrets are yours to create.
+# Since release A (2026-10-09) the stream producers (poller-ldbws,
+# poller-tfl, poller-tocs, full-coverage-consumer, and the island-of-Ireland
+# pollers enabled below) XADD to their own ds:ingest:* streams and the
+# ingest-writer applies them, so every client connects as its own narrow
+# ACL user and `default` is off (security review H3; docs/redis-acl.md,
+# steps 1-4): the ACL users at stage `narrow`, one client per Redis user,
+# and `defaultUser: "off"`. redis.auth stays for the rollout's earlier
+# steps. Both Secrets are yours to create.
 redis:
   auth:
     enabled: true
@@ -85,10 +88,33 @@ redis:
     enabled: true
     existingSecret: distant-signal-redis-users
     stage: narrow
+    defaultUser: "off"
     clients:
+      api: true
+      enricher: true
+      movementRelay: true
+      trustConsumer: true
+      fullCoverageConsumer: true
+      trustBacklogConsumer: true
+      ingestWriter: true
+      pollerIncidents: true
+      pollerLdbws: true
+      pollerTfl: true
+      pollerTocs: true
       pollerIrishRailGtfs: true
       pollerIrishRailLive: true
       pollerNirStations: true
+
+# The ingest-writer (release A's default sinks need it): it applies the
+# streams above and runs the train-domain loops that poller-stations' and
+# trust-consumer's `db` sinks rely on.
+ingestWriter:
+  enabled: true
+  image:
+    repository: registry.example.com/distant-signal/ingest-writer
+    tag: "0.1.0"
+  loops:
+    enabled: true
 
 enricher:
   image:
@@ -135,7 +161,25 @@ postgresql:
     enabled: true
     size: 20Gi
     storageClass: fast-ssd
-  # resources, config and shm are deliberately not overridden: values.yaml's
+  # Since release A (2026-10-09) the direct (db) producers connect only as
+  # their own narrow roles (docs/postgres-app-role.md): the separate roles,
+  # the setup Job that creates them, and the per-service roles (each
+  # producer's `connect` is already on by default). Their passwords are
+  # generated into the chart's Secret unless you set each role's
+  # existingSecret.
+  roles:
+    enabled: true
+    setupJob:
+      enabled: true
+    perService:
+      enabled: true
+  # The per-role CONNECTION LIMITs (two api replicas, the writer and the
+  # four direct producers) sum to 117, over the 97 that Postgres's default
+  # max_connections 100 leaves; the render refuses that (spec §6.6). 200 is
+  # what production runs at the default 5Gi limit (checked 2026-10-08).
+  config:
+    max_connections: 200
+  # resources, other config and shm are deliberately not overridden: values.yaml's
   # defaults (3Gi/5Gi, shared_buffers 1GB, a 1Gi /dev/shm) are sized
   # together, and its random_page_cost 1.1 already suits this SSD class.
   # If you lower the memory limit, scale shared_buffers,

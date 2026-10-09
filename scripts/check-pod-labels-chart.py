@@ -59,17 +59,24 @@ def sets(*pairs: str) -> tuple[str, ...]:
     return tuple(a for p in pairs for a in ("--set", p))
 
 
-BASE = sets(
-    "trustConsumer.kafka.brokers=k:9094",
-    "trustConsumer.kafka.topic=t",
-    "trustConsumer.kafka.saslMechanism=PLAIN",
-    "enricher.llm.baseUrl=http://l/v1",
-    "enricher.llm.model=m",
-    "api.sso.issuerUrl=https://sso.example.com",
-    "api.sso.clientId=c",
-    "api.sso.clientSecret=s",
-    "api.sso.redirectUrl=https://app.example.com/cb",
-    "api.sso.postLoginRedirectUrl=https://app.example.com/",
+# Release A (2026-10-09) put every ingest producer on its db/stream sink by
+# default; these checks predate it and test other switches, so they render
+# on ci/http-sinks.yaml (every producer back on http, the writer on app).
+BASE = (
+    "-f",
+    str(CHART / "ci" / "http-sinks.yaml"),
+    *sets(
+        "trustConsumer.kafka.brokers=k:9094",
+        "trustConsumer.kafka.topic=t",
+        "trustConsumer.kafka.saslMechanism=PLAIN",
+        "enricher.llm.baseUrl=http://l/v1",
+        "enricher.llm.model=m",
+        "api.sso.issuerUrl=https://sso.example.com",
+        "api.sso.clientId=c",
+        "api.sso.clientSecret=s",
+        "api.sso.redirectUrl=https://app.example.com/cb",
+        "api.sso.postLoginRedirectUrl=https://app.example.com/",
+    ),
 )
 EVERYTHING = (
     "-f",

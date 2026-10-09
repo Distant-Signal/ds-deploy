@@ -110,6 +110,9 @@ RENDER_FLAGS = [
     # A daily poller, for DistantSignalPollerStale's per-interval threshold.
     "pollers.stations.enabled=true",
     "pollers.stations.baseUrl=https://stations.example.com",
+    # Their own Redis users: release A's default sinks with default off.
+    "redis.acl.clients.pollerLdbws=true",
+    "redis.acl.clients.pollerIncidents=true",
     "archive.enabled=true",
     "archive.s3.bucket=archive-bucket",
     "archive.s3.existingSecret=archive-creds",
@@ -166,7 +169,19 @@ class Alert:
 
 def render(helm: str) -> list[dict[str, object]]:
     """Render the chart with every alert on; return the PrometheusRule documents."""
-    cmd = [helm, "template", RELEASE, str(CHART), "--namespace", NAMESPACE]
+    # Release A's defaults (2026-10-09: every producer on its db or stream
+    # sink) with the prerequisites they need, so the stream alerts render.
+    prereqs = str(CHART / "ci" / "ingest-prereqs.yaml")
+    cmd = [
+        helm,
+        "template",
+        RELEASE,
+        str(CHART),
+        "--namespace",
+        NAMESPACE,
+        "-f",
+        prereqs,
+    ]
     for flag in RENDER_FLAGS:
         cmd += ["--set", flag]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout  # noqa: S603  # fixed argv, no shell

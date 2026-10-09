@@ -1,0 +1,37 @@
+# Render-test values for CI: the least a fresh install adds so that release
+# A's ingest defaults (2026-10-09: every producer on its db or stream sink)
+# render. docs/ingest-phase5-runbook.md, "Release A", has the same list for
+# a real cluster, where these come after the Postgres role and Redis ACL
+# rollouts (docs/postgres-app-role.md, docs/redis-acl.md).
+postgresql:
+  # With the per-service roles connected, the role limits sum to 101 at
+  # Postgres's default max_connections 100 (97 usable). Production runs 200.
+  config:
+    max_connections: 200
+  roles:
+    enabled: true
+    setupJob:
+      enabled: true
+    perService:
+      enabled: true
+ingestWriter:
+  enabled: true
+  loops:
+    enabled: true
+redis:
+  acl:
+    enabled: true
+    # A placeholder: the Secret with one <user>-password key per ACL user.
+    existingSecret: example-redis-users
+    stage: narrow
+    defaultUser: "off"
+    # Every client whose workload renders by default. The disabled pollers
+    # (and so the island-of-Ireland ones) need no user.
+    clients:
+      api: true
+      enricher: true
+      movementRelay: true
+      trustConsumer: true
+      fullCoverageConsumer: true
+      trustBacklogConsumer: true
+      ingestWriter: true

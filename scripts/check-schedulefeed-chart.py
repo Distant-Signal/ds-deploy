@@ -109,7 +109,12 @@ CHART = REPO / "charts" / "distant-signal"
 EXAMPLE = "values-example.yaml"
 # CI's required-value flags (the kafka/LLM/SSO settings only satisfy the
 # chart's required-value checks).
+# Release A (2026-10-09) put every ingest producer on its db/stream sink by
+# default; these checks predate it and test other switches, so they render
+# on ci/http-sinks.yaml (every producer back on http, the writer on app).
 BASE = (
+    "-f",
+    str(CHART / "ci" / "http-sinks.yaml"),
     "--set",
     "trustConsumer.kafka.brokers=k:9094",
     "--set",
@@ -872,11 +877,19 @@ def check_reference_sink(c: Checker) -> None:
     )
 
     db: tuple[str, ...] = ("--set", "scheduleFeed.reference.ingest.sink=db")
-    # Security review H2: the db sink connects only as its narrow role.
-    code, out = c.render(*ON, *db)
+    # Security review H2: the db sink connects only as its narrow role. Its
+    # connect defaults to true since release A: off explicitly, and without
+    # the roles at all (connect's default needs perService.enabled).
+    no_connect = "postgresql.roles.perService.schedule_reference.connect=false"
+    code, out = c.render(*ON, *db, "--set", no_connect)
     c.check(
         ok=code != 0 and "perService.schedule_reference.connect" in out,
         message="sink db without its role: rendered, or failed without naming it",
+    )
+    code, out = c.render(*ON, *db)
+    c.check(
+        ok=code != 0 and "postgresql.roles.perService.enabled: true" in out,
+        message="sink db with no per-service roles: rendered, or failed unnamed",
     )
     db = (*db, *REFERENCE_ROLE)
     docs = c.docs(*ON, *NETPOL, *db)

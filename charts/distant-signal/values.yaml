@@ -339,7 +339,12 @@ postgresql:
         # enabled) as `distant_signal_writer` (plan 1B.9). The role is
         # created with the others whenever `enabled` is on, unused until
         # then.
-        connect: false
+        # Default true since release A (2026-10-09): it takes effect only
+        # while the component uses the role (deployed and, for a producer,
+        # on its `db` sink), and then needs `perService.enabled`,
+        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
+        # fails otherwise rather than fall back to the app role.
+        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -356,7 +361,12 @@ postgresql:
         # narrow role, not a member of `app`, holding only the CORPUS and
         # feed-marker grants (files/db-grants.yaml). Created with the others
         # whenever `enabled` is on, unused until then.
-        connect: false
+        # Default true since release A (2026-10-09): it takes effect only
+        # while the component uses the role (deployed and, for a producer,
+        # on its `db` sink), and then needs `perService.enabled`,
+        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
+        # fails otherwise rather than fall back to the app role.
+        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -374,7 +384,12 @@ postgresql:
         # narrow (files/db-grants.yaml): not a member of the app role,
         # exactly the spec §6.4 grants. Created with the others whenever
         # `enabled` is on, unused until then.
-        connect: false
+        # Default true since release A (2026-10-09): it takes effect only
+        # while the component uses the role (deployed and, for a producer,
+        # on its `db` sink), and then needs `perService.enabled`,
+        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
+        # fails otherwise rather than fall back to the app role.
+        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -391,7 +406,12 @@ postgresql:
         # 2b.3). The role is narrow, not a member of `app`: SELECT, INSERT
         # and UPDATE on `stations` and `ingest_freshness` only. It is created
         # with the others whenever `enabled` is on, unused until then.
-        connect: false
+        # Default true since release A (2026-10-09): it takes effect only
+        # while the component uses the role (deployed and, for a producer,
+        # on its `db` sink), and then needs `perService.enabled`,
+        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
+        # fails otherwise rather than fall back to the app role.
+        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -405,9 +425,14 @@ postgresql:
         # -- Connect poller-incidents' DB sink as `distant_signal_incidents`
         # (ingest plan 2c.3; a `narrow` role: exactly its grants in
         # files/db-grants.yaml, no app membership). Needs
-        # `pollers.incidents.ingest.sink: db`. Off: the DB sink connects as
-        # the app role.
-        connect: false
+        # `pollers.incidents.ingest.sink: db`. Off with that sink, the
+        # render fails (security review H2).
+        # Default true since release A (2026-10-09): it takes effect only
+        # while the component uses the role (deployed and, for a producer,
+        # on its `db` sink), and then needs `perService.enabled`,
+        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
+        # fails otherwise rather than fall back to the app role.
+        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -424,7 +449,12 @@ postgresql:
         # narrow role, not a member of `app`: the backlog, shared-movement
         # and reasons writes and the STANOX/CRS read only. Created with the
         # others whenever `enabled` is on, unused until then.
-        connect: false
+        # Default true since release A (2026-10-09): it takes effect only
+        # while the component uses the role (deployed and, for a producer,
+        # on its `db` sink), and then needs `perService.enabled`,
+        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
+        # fails otherwise rather than fall back to the app role.
+        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -442,7 +472,12 @@ postgresql:
         # forward-signal and outbox writes, SELECT only on
         # train_subscriptions, and the phase 4 reads. Created with the others whenever
         # `enabled` is on, unused until then.
-        connect: false
+        # Default true since release A (2026-10-09): it takes effect only
+        # while the component uses the role (deployed and, for a producer,
+        # on its `db` sink), and then needs `perService.enabled`,
+        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
+        # fails otherwise rather than fall back to the app role.
+        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -460,7 +495,12 @@ postgresql:
         # read-only role, not a member of `app`: SELECT on the line
         # populations and STANOX/CRS only. Created with the others whenever
         # `enabled` is on, unused until then.
-        connect: false
+        # Default true since release A (2026-10-09): it takes effect only
+        # while the component uses the role (deployed and on
+        # `internalReads.source: db`), and then needs `perService.enabled`,
+        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
+        # fails otherwise rather than fall back to the app role.
+        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -479,7 +519,12 @@ postgresql:
         # `ingest_sample_station_pins` and `ingest_custom_line_stations`
         # only, never the personal tables behind them. Created with the
         # others whenever `enabled` is on, unused until then.
-        connect: false
+        # Default true since release A (2026-10-09): it takes effect only
+        # while the component uses the role (deployed and on
+        # `internalReads.source: db`), and then needs `perService.enabled`,
+        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
+        # fails otherwise rather than fall back to the app role.
+        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -1009,17 +1054,17 @@ pollers:
     existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-incidents
     existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-incidents
     # Ingest architecture phase 2c (docs/superpowers/plans/2026-10-06-ingest-architecture-plan.md).
-    # Both OFF by default: nothing renders until a value changes.
     ingest:
-      # -- `http`: POST each snapshot to the api (today). `db`: write it to
-      # Postgres directly (INGEST_SINK=db) and XADD incident-text-changed
-      # from the poller: renders DATABASE_URL (the incidents role;
-      # `postgresql.roles.perService.incidents.connect` is required, the
-      # render fails without it: security review H2), REDIS_URL (the
-      # `poller-incidents` ACL user with
+      # -- `db` (the default since release A, 2026-10-09): write each
+      # snapshot to Postgres directly (INGEST_SINK=db) and XADD
+      # incident-text-changed from the poller: renders DATABASE_URL (the
+      # incidents role; `postgresql.roles.perService.incidents.connect`
+      # is required, the render fails without it: security review H2),
+      # REDIS_URL (the `poller-incidents` ACL user with
       # `redis.acl.clients.pollerIncidents`), and Postgres and Redis
-      # egress and admission. Rollback: `http`.
-      sink: http
+      # egress and admission. `http`: POST each snapshot to the api's
+      # `/private/incidents` (the rollback until phase 5 deletes it).
+      sink: db
       # -- INCIDENTS_ROW_HEARTBEAT, for BOTH writers (the api's
       # `POST /private/incidents` and the `db` sink), so they cannot
       # disagree. `true`: every listed incident's `fetched_at` is bumped on
@@ -1065,8 +1110,8 @@ pollers:
     ingestPath: /private/stations
     # Ingest architecture plan 2b: where the parsed feed goes.
     ingest:
-      # -- `http` (today's behaviour): POST it to `ingestPath`. `db`
-      # (INGEST_SINK=db): write Postgres directly and read the startup
+      # -- `db` (the default since release A, 2026-10-09;
+      # INGEST_SINK=db): write Postgres directly and read the startup
       # cursor from `ingest_freshness`, as the narrow
       # `distant_signal_stations` only (`postgresql.roles.perService.stations.connect`
       # is required; the render fails without it, security review H2).
@@ -1074,7 +1119,8 @@ pollers:
       # NetworkPolicies. `db` needs `ingestWriter.enabled` and
       # `ingestWriter.loops.enabled`: the writer's 10-minute CORPUS crosswalk
       # loop replaces the rebuild the api's POST triggers (plan 2b.2).
-      sink: http
+      # `http`: POST it to `ingestPath` (the rollback until phase 5).
+      sink: db
       database:
         # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
         # §6.6: one daily transaction, pool 1, role limit 2).
@@ -1153,8 +1199,10 @@ pollers:
       # `redis.acl.clients.pollerTfl`) and Redis egress and admission.
       # Deploy the notifier's `lineHistoryMaxAgeSeconds` first (plan
       # 3c.4): applied late, a snapshot's history rows carry their fetch
-      # time.
-      sink: http
+      # time. `stream` is the default since release A (2026-10-09), with
+      # `ingestWriter.streams.tfl: apply`; `http` is the rollback until
+      # phase 5.
+      sink: stream
     # -- TfL publishes no recommended cadence for the line-status endpoint,
     # and offers no push or conditional requests. 300s mirrors incidents.
     pollIntervalSecs: 300
@@ -1219,7 +1267,10 @@ pollers:
       # (`ingestWriter.streams.reference: apply`). Both stream sinks add
       # REDIS_URL (as the `poller-tocs` ACL user with
       # `redis.acl.clients.pollerTocs`) and Redis egress and admission.
-      sink: http
+      # `stream` is the default since release A (2026-10-09), with
+      # `ingestWriter.streams.reference: apply`; `http` is the rollback
+      # until phase 5.
+      sink: stream
     # -- RSPS5050 P-03-00 Rev A section 3: at least once every 24 hours.
     pollIntervalSecs: 86400
     apiKey: ""
@@ -1277,8 +1328,9 @@ pollers:
       # same values change). Either stream sink renders INGEST_SINK and
       # REDIS_URL (the `poller-ldbws` ACL user with
       # `redis.acl.clients.pollerLdbws`) and the Redis egress and
-      # admission. Rollback: `http`.
-      sink: http
+      # admission. `stream` is the default since release A (2026-10-09);
+      # rollback: `http`.
+      sink: stream
     # -- ldbws only: the api endpoint listing which stations to sample. This
     # is a SECOND api URL, separate from ingestPath -- see
     # crates/poller-ldbws/src/config.rs.
@@ -1315,8 +1367,10 @@ pollers:
       # (`postgresql.roles.perService.ldbws_ro.connect` is required; the
       # render fails without it, security review H2); the same list as the
       # api's, the two knobs above included. Adds Postgres egress and admission to
-      # the NetworkPolicies and the pool to the connection budgets.
-      source: http
+      # the NetworkPolicies and the pool to the connection budgets. `db` is
+      # the default since release A (2026-10-09); `http` is the rollback
+      # until phase 5.
+      source: db
       database:
         # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
         # §6.6: pool 1, role limit 2).
@@ -2107,10 +2161,14 @@ ingestWriter:
   # `postgresql.roles.perService.writer.connect`, as `line_status`'s row
   # policy binds only the writer's own role (M4).
   streams:
-    station-samples: "off"
-    full-coverage: "off"
-    tfl: "off"
-    reference: "off"
+    # Release A (2026-10-09): the four producer streams default to
+    # `apply`, paired with their producers' `stream` sinks. A producer
+    # rolled back to `http` may leave its stream on `apply` (it just
+    # sees no new entries, spec §13.1).
+    station-samples: apply
+    full-coverage: apply
+    tfl: apply
+    reference: apply
     # One stream per island-of-Ireland poller (security review H1,
     # 2026-10-08): ds:ingest:ioi-gtfs (pollerIrishRailGtfs: ioi-stations,
     # ioi-lines), ds:ingest:ioi-nir (pollerNirStations: the same two) and
@@ -3246,7 +3304,9 @@ trustConsumer:
     # (the render fails otherwise): the events that change a subscription
     # (resolutions, cancellations, reinstatements) wait in
     # train_event_outbox for the writer's 5 s train_event_outbox loop.
-    sink: http
+    # `db` is the default since release A (2026-10-09); `http` is the
+    # rollback until phase 5.
+    sink: db
     database:
       # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
       # §6.6: pool 2, role limit 3).
@@ -3269,8 +3329,10 @@ trustConsumer:
     # (`postgresql.roles.perService.trust_consumer.connect` is required; the
     # render fails without it, security review H2), with the api's CORPUS
     # fallback passed on. Adds Postgres egress and admission to the
-    # NetworkPolicies and the pool to the connection budgets.
-    source: http
+    # NetworkPolicies and the pool to the connection budgets. `db` is the
+    # default since release A (2026-10-09); `http` is the rollback until
+    # phase 5.
+    source: db
     database:
       # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
       # §6.6: pool 2).
@@ -3380,8 +3442,9 @@ fullCoverageConsumer:
     # (`postgresql.roles.perService.full_coverage_ro.connect` is required; the
     # render fails without it, security review H2); the api's CORPUS fallback is passed
     # on. Adds Postgres egress and admission to the NetworkPolicies and the
-    # pool to the connection budgets.
-    source: http
+    # pool to the connection budgets. `db` is the default since release A
+    # (2026-10-09); `http` is the rollback until phase 5.
+    source: db
     database:
       # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
       # §6.6: pool 2, role limit 3).
@@ -3407,8 +3470,10 @@ fullCoverageConsumer:
     # shadow`. `stream`: XADD only (with `ingestWriter.streams.full-coverage:
     # apply`, in the same values change). Uses this consumer's existing
     # Redis connection and user (`redis.acl.clients.fullCoverageConsumer`,
-    # whose ACL already allows the stream). Rollback: `http`.
-    sink: http
+    # whose ACL already allows the stream). `stream` is the default
+    # since release A (2026-10-09), with
+    # `ingestWriter.streams.full-coverage: apply`. Rollback: `http`.
+    sink: stream
   redisAutoclaimMinIdleSecs: 30
   redisGapCheckSecs: 60
   # -- Windowed full-coverage stats
@@ -3505,8 +3570,10 @@ trustBacklogConsumer:
     # render fails without it, security review H2). Replaces the api egress with
     # Postgres egress and admission in the NetworkPolicies, adds the pool
     # to the connection budgets, and passes `api.corpusFallback.enabled`
-    # on so the STANOX/CRS reload matches the api's.
-    sink: http
+    # on so the STANOX/CRS reload matches the api's. `db` is the
+    # default since release A (2026-10-09); `http` is the rollback
+    # until phase 5.
+    sink: db
     database:
       # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
       # §6.6: pool 3, role limit 4).
@@ -4177,8 +4244,9 @@ scheduleFeed:
     # Postgres egress and ingress, and this pool to the connection
     # budgets). Under `db` the CORPUS freshness gauge and the post-load
     # comparison come from the ingest-writer's CORPUS loop, so turn
-    # `ingestWriter` and its loops on first.
-    sink: http
+    # `ingestWriter` and its loops on first. `db` is the default since
+    # release A (2026-10-09); `http` is the rollback until phase 5.
+    sink: db
     database:
       # -- The pool under `sink: db` (DATABASE_MAX_CONNECTIONS; spec §6.6:
       # 1). Scans are sequential, so one connection is enough.
@@ -4373,8 +4441,9 @@ scheduleFeed:
       # required, the render fails without it, security review H2), the
       # schedulefeed pod may reach Postgres
       # (NetworkPolicy), and it waits for the schema gate before its first
-      # poll. Rollback is `http`: the api routes still exist.
-      sink: http
+      # poll. `db` is the default since release A (2026-10-09).
+      # Rollback is `http`: the api routes still exist.
+      sink: db
       database:
         # -- The `db` sink's pool size (`DATABASE_MAX_CONNECTIONS`; spec
         # §6.6: publishes are sequential, the final chunk holds one).

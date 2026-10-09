@@ -394,12 +394,33 @@ Validates the values.
 {{- fail "redis.acl.enabled with redis.acl.defaultUser on needs redis.auth.enabled: without it `default` stays passwordless with ~* &* +@all, and any pod that reaches Redis bypasses every ACL user (security review M3). Turn redis.auth on first (its password becomes default's), or set redis.acl.defaultUser: off." -}}
 {{- end -}}
 {{- if not (include "distant-signal.redisAclDefaultUserOn" .) -}}
+{{- $root := . -}}
 {{- range $client, $on := $acl.clients -}}
-{{- if not $on -}}
+{{- if and (not $on) (include "distant-signal.redisAclClientDeployed" (dict "root" $root "client" $client)) -}}
 {{- fail (printf "redis.acl.defaultUser off locks out redis.acl.clients.%s, which still connects as default: move it to its own user first (rollout step 2)." $client) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when the workload behind a redis.acl.clients key renders,
+so `defaultUser: "off"` would lock it out unless it has its own user. A
+disabled poller (the island-of-Ireland ones by default, D8), a disabled
+movement-relay or ingest-writer has no pod to lock out. An unknown key
+counts as deployed. Takes (dict "root" $ "client" <redis.acl.clients key>).
+*/}}
+{{- define "distant-signal.redisAclClientDeployed" -}}
+{{- $v := .root.Values -}}
+{{- $pollers := dict "pollerIncidents" "incidents" "pollerLdbws" "ldbws" "pollerTfl" "tfl" "pollerTocs" "tocs" "pollerStations" "stations" -}}
+{{- $own := dict "pollerIrishRailGtfs" "pollerIrishRailGtfs" "pollerIrishRailLive" "pollerIrishRailLive" "pollerNirStations" "pollerNirStations" "movementRelay" "movementRelay" "ingestWriter" "ingestWriter" -}}
+{{- if hasKey $pollers .client -}}
+{{- if (get $v.pollers (get $pollers .client) | default dict).enabled }}true{{ end -}}
+{{- else if hasKey $own .client -}}
+{{- if (get $v (get $own .client) | default dict).enabled }}true{{ end -}}
+{{- else -}}
 true
 {{- end -}}
 {{- end }}
@@ -1156,40 +1177,51 @@ true
 {{- end }}
 
 {{/*
+Release A (2026-10-09): the producer roles' `connect` defaults to true, so
+for them `connect` without a component that uses the role is a no-op (not
+connected, nothing fails) instead of the render failure it was: a deployer
+with that producer disabled or rolled back to `sink: http` needs no
+`connect: false` as well. True (non-empty) when a `connect` that is on
+should take effect: always for the services not listed here; for writer,
+schedule_ingest, schedule_reference, stations, incidents, trust_backlog, trust_consumer,
+full_coverage_ro and ldbws_ro only while their component uses the role (the
+read-only two: on internalReads.source db). Takes (dict "root" $ "service"
+...).
+*/}}
+{{- define "distant-signal.perServiceRoleUsed" -}}
+{{- $root := .root -}}
+{{- if eq .service "writer" -}}
+{{- if $root.Values.ingestWriter.enabled }}true{{ end -}}
+{{- else if eq .service "schedule_ingest" -}}
+{{- if include "distant-signal.scheduleIngestSinkDb" $root }}true{{ end -}}
+{{- else if eq .service "schedule_reference" -}}
+{{- if include "distant-signal.scheduleReferenceDbSink" $root }}true{{ end -}}
+{{- else if has .service (list "stations" "incidents") -}}
+{{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" .service "poller" (get $root.Values.pollers .service | default dict)) }}true{{ end -}}
+{{- else if eq .service "trust_backlog" -}}
+{{- if include "distant-signal.trustSinkDb" (dict "root" $root "service" .service) }}true{{ end -}}
+{{- else if eq .service "trust_consumer" -}}
+{{- if include "distant-signal.trustConsumerPool" $root | int }}true{{ end -}}
+{{- else if has .service (list "full_coverage_ro" "ldbws_ro") -}}
+{{- if include "distant-signal.internalReadsDb" (dict "root" $root "role" .service) }}true{{ end -}}
+{{- else -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
 True (non-empty) when the service connects as its own role. Takes (dict
-"root" $ "service" "api"|...).
+"root" $ "service" "api"|...). A `connect` the component does not use is
+not a connection (distant-signal.perServiceRoleUsed).
 */}}
 {{- define "distant-signal.perServiceConnects" -}}
 {{- $cfg := get .root.Values.postgresql.roles.perService .service -}}
-{{- if $cfg.connect -}}
+{{- if and $cfg.connect (include "distant-signal.perServiceRoleUsed" .) -}}
 {{- if not (include "distant-signal.perServiceEnabled" .root) -}}
 {{- fail (printf "postgresql.roles.perService.%s.connect needs postgresql.roles.perService.enabled (which creates the role) first." .service) -}}
 {{- end -}}
 {{- if not (include "distant-signal.postgresRolesEnabled" .root) -}}
 {{- fail (printf "postgresql.roles.perService.%s.connect needs postgresql.roles.enabled: the per-service roles are members of the app role." .service) -}}
-{{- end -}}
-{{- if and (eq .service "writer") (not .root.Values.ingestWriter.enabled) -}}
-{{- fail "postgresql.roles.perService.writer.connect needs ingestWriter.enabled: nothing else connects as the writer role." -}}
-{{- end -}}
-{{- if and (eq .service "schedule_ingest") (not (include "distant-signal.scheduleIngestSinkDb" .root)) -}}
-{{- fail "postgresql.roles.perService.schedule_ingest.connect needs scheduleFeed.enabled and scheduleFeed.ingest.sink=db: nothing else connects as the schedule_ingest role." -}}
-{{- end -}}
-{{- if and (eq .service "schedule_reference") (not (include "distant-signal.scheduleReferenceDbSink" .root)) -}}
-{{- fail "postgresql.roles.perService.schedule_reference.connect needs scheduleFeed.enabled and scheduleFeed.reference.ingest.sink: db: nothing else connects as the schedule_reference role." -}}
-{{- end -}}
-{{- if and (has .service (list "full_coverage_ro" "ldbws_ro")) (not (include "distant-signal.internalReadsDb" (dict "root" .root "role" .service))) -}}
-{{- fail (printf "postgresql.roles.perService.%s.connect needs %s.internalReads.source: db: nothing else connects as its role." .service (include "distant-signal.internalReadsValuesKey" .service)) -}}
-{{- end -}}
-{{- if hasKey .root.Values.pollers .service -}}
-{{- if not (include "distant-signal.pollerSinkDb" (dict "root" .root "name" .service "poller" (get .root.Values.pollers .service))) -}}
-{{- fail (printf "postgresql.roles.perService.%s.connect needs pollers.%s.enabled with pollers.%s.ingest.sink: db: nothing else connects as its role." .service .service .service) -}}
-{{- end -}}
-{{- end -}}
-{{- if and (eq .service "trust_backlog") (not (include "distant-signal.trustSinkDb" (dict "root" .root "service" .service))) -}}
-{{- fail "postgresql.roles.perService.trust_backlog.connect needs trustBacklogConsumer.ingest.sink: db: nothing else connects as its role." -}}
-{{- end -}}
-{{- if and (eq .service "trust_consumer") (not (include "distant-signal.trustConsumerPool" .root | int)) -}}
-{{- fail "postgresql.roles.perService.trust_consumer.connect needs trustConsumer.ingest.sink: db or trustConsumer.internalReads.source: db: nothing else connects as its role." -}}
 {{- end -}}
 true
 {{- end -}}
@@ -1607,6 +1639,174 @@ Redis credentials and the NetworkPolicy paths to Redis. Takes root.
 {{- end -}}
 true
 {{- end -}}
+{{- end -}}
+{{- end }}
+
+{{- /*
+Release A (2026-10-09): every ingest producer defaults to its new sink (db
+or stream), so a values file that has not done the Postgres per-service
+roles, the ingest-writer and the Redis ACL rollout cannot render. Rather
+than let the individual guards above fail one at a time, this lists every
+missing prerequisite at once, with the per-producer opt-out (`sink: http`).
+The guards stay as the backstop. Renders nothing; fails the render when
+anything is missing. Called first, from templates/zz-ingest-sink-preflight.yaml.
+Takes root.
+*/ -}}
+{{- define "distant-signal.ingestSinkPreflight" -}}
+{{- $v := .Values -}}
+{{- $root := . -}}
+{{- $missing := list -}}
+{{- $optOut := list -}}
+{{- /* The direct (db) writers: {svc: perService key, key: their sink value}. */ -}}
+{{- $db := list -}}
+{{- range $name := list "stations" "incidents" -}}
+{{- $p := get $v.pollers $name | default dict -}}
+{{- if and $p.enabled (eq (toString (dig "ingest" "sink" "http" $p)) "db") -}}
+{{- $db = append $db (dict "svc" $name "key" (printf "pollers.%s.ingest.sink" $name)) -}}
+{{- end -}}
+{{- end -}}
+{{- if eq (toString (dig "ingest" "sink" "http" $v.trustBacklogConsumer)) "db" -}}
+{{- $db = append $db (dict "svc" "trust_backlog" "key" "trustBacklogConsumer.ingest.sink") -}}
+{{- end -}}
+{{- if eq (toString (dig "ingest" "sink" "http" $v.trustConsumer)) "db" -}}
+{{- $db = append $db (dict "svc" "trust_consumer" "key" "trustConsumer.ingest.sink") -}}
+{{- end -}}
+{{- if $v.scheduleFeed.enabled -}}
+{{- if eq (toString (dig "ingest" "sink" "http" $v.scheduleFeed)) "db" -}}
+{{- $db = append $db (dict "svc" "schedule_ingest" "key" "scheduleFeed.ingest.sink") -}}
+{{- end -}}
+{{- if eq (toString (dig "reference" "ingest" "sink" "http" $v.scheduleFeed)) "db" -}}
+{{- $db = append $db (dict "svc" "schedule_reference" "key" "scheduleFeed.reference.ingest.sink") -}}
+{{- end -}}
+{{- end -}}
+{{- /* The stream producers: {client: redis.acl.clients key, stream, key, sink}. */ -}}
+{{- $streamed := list -}}
+{{- $streamOf := dict "ldbws" "station-samples" "tfl" "tfl" "tocs" "reference" -}}
+{{- range $name := list "ldbws" "tfl" "tocs" -}}
+{{- $p := get $v.pollers $name | default dict -}}
+{{- $sink := toString (dig "ingest" "sink" "http" $p) -}}
+{{- if and $p.enabled (has $sink (list "http+shadow" "stream")) -}}
+{{- $streamed = append $streamed (dict "client" (include "distant-signal.pollerRedisClient" $name) "stream" (get $streamOf $name) "key" (printf "pollers.%s.ingest.sink" $name) "sink" $sink) -}}
+{{- end -}}
+{{- end -}}
+{{- $fcSink := toString (dig "ingest" "sink" "http" $v.fullCoverageConsumer) -}}
+{{- if has $fcSink (list "http+shadow" "stream") -}}
+{{- $streamed = append $streamed (dict "client" "fullCoverageConsumer" "stream" "full-coverage" "key" "fullCoverageConsumer.ingest.sink" "sink" $fcSink) -}}
+{{- end -}}
+{{- /* Postgres: every direct writer connects as its own narrow role. */ -}}
+{{- $roles := false -}}
+{{- range $d := $db -}}
+{{- $roles = true -}}
+{{- $optOut = append $optOut (printf "%s: http" $d.key) -}}
+{{- if not (get $v.postgresql.roles.perService $d.svc | default dict).connect -}}
+{{- $missing = append $missing (printf "postgresql.roles.perService.%s.connect: true (%s: db; security review H2)" $d.svc $d.key) -}}
+{{- end -}}
+{{- if and (has $d.svc (list "stations" "trust_consumer")) (not (and $v.ingestWriter.enabled $v.ingestWriter.loops.enabled)) -}}
+{{- $missing = append $missing (printf "ingestWriter.enabled: true and ingestWriter.loops.enabled: true (%s: db; plans 2b.2 and 3b.3)" $d.key) -}}
+{{- end -}}
+{{- end -}}
+{{- /* The internal readers (phase 4) on internalReads.source db, each as
+     its own role: full_coverage_ro, ldbws_ro and trust_consumer (whose
+     reads share its sink's role and pool, plan 4.4). */ -}}
+{{- range $role := list "full_coverage_ro" "ldbws_ro" "trust_consumer" -}}
+{{- $key := include "distant-signal.internalReadsValuesKey" $role -}}
+{{- $values := ternary ($v.pollers.ldbws | default dict) (get $v (ternary "fullCoverageConsumer" "trustConsumer" (eq $role "full_coverage_ro")) | default dict) (eq $role "ldbws_ro") -}}
+{{- $deployed := ternary $values.enabled true (eq $role "ldbws_ro") -}}
+{{- if and $deployed (eq (toString (dig "internalReads" "source" "http" $values)) "db") -}}
+{{- $roles = true -}}
+{{- $optOut = append $optOut (printf "%s.internalReads.source: http" $key) -}}
+{{- if not (get $v.postgresql.roles.perService $role | default dict).connect -}}
+{{- $missing = append $missing (printf "postgresql.roles.perService.%s.connect: true (%s.internalReads.source: db; security review H2)" $role $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* Redis: the writer applies what the stream producers XADD. */ -}}
+{{- $writerApplies := false -}}
+{{- $writerReads := false -}}
+{{- $narrowFor := list -}}
+{{- range $s := $streamed -}}
+{{- $optOut = append $optOut (printf "%s: http" $s.key) -}}
+{{- $narrowFor = append $narrowFor (printf "redis.acl.clients.%s" $s.client) -}}
+{{- $missing = append $missing (printf "redis.acl.clients.%s: true (%s: %s; docs/redis-acl.md step 2)" $s.client $s.key $s.sink) -}}
+{{- $writerReads = true -}}
+{{- if eq $s.sink "stream" -}}
+{{- $writerApplies = true -}}
+{{- if not $v.ingestWriter.enabled -}}
+{{- $missing = append $missing (printf "ingestWriter.enabled: true (%s: stream)" $s.key) -}}
+{{- end -}}
+{{- if ne (toString (get $v.ingestWriter.streams $s.stream)) "apply" -}}
+{{- $missing = append $missing (printf "ingestWriter.streams.%s: apply (%s: stream; spec §13.1)" $s.stream $s.key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $v.ingestWriter.enabled -}}
+{{- range $name, $mode := $v.ingestWriter.streams -}}
+{{- if ne (toString $mode) "off" -}}
+{{- $writerReads = true -}}
+{{- $narrowFor = append $narrowFor "redis.acl.clients.ingestWriter" -}}
+{{- $optOut = append $optOut (printf "ingestWriter.streams.%s: \"off\"" $name) -}}
+{{- end -}}
+{{- if eq (toString $mode) "apply" -}}
+{{- $writerApplies = true -}}
+{{- end -}}
+{{- end -}}
+{{- if eq (toString (get $v.ingestWriter.streams "tfl")) "apply" -}}
+{{- $roles = true -}}
+{{- if not $v.postgresql.roles.perService.writer.connect -}}
+{{- $missing = append $missing "postgresql.roles.perService.writer.connect: true (ingestWriter.streams.tfl: apply; security review M4)" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $roles -}}
+{{- if not $v.postgresql.enabled -}}
+{{- $missing = append $missing "the bundled Postgres (postgresql.enabled: true): an external database gets no per-service roles" -}}
+{{- end -}}
+{{- if not $v.postgresql.roles.enabled -}}
+{{- $missing = append $missing "postgresql.roles.enabled: true (docs/postgres-app-role.md)" -}}
+{{- end -}}
+{{- if not $v.postgresql.roles.setupJob.enabled -}}
+{{- $missing = append $missing "postgresql.roles.setupJob.enabled: true (it creates the per-service roles)" -}}
+{{- end -}}
+{{- if not $v.postgresql.roles.perService.enabled -}}
+{{- $missing = append $missing "postgresql.roles.perService.enabled: true" -}}
+{{- end -}}
+{{- end -}}
+{{- if $writerReads -}}
+{{- $acl := $v.redis.acl -}}
+{{- if not (and $acl.enabled $acl.existingSecret) -}}
+{{- $missing = append $missing "redis.acl.enabled: true with redis.acl.existingSecret (one <user>-password key per user; docs/redis-acl.md step 1)" -}}
+{{- end -}}
+{{- if ne (toString $acl.stage) "narrow" -}}
+{{- $missing = append $missing (printf "redis.acl.stage: narrow, so that %s get their own rights, not +@all (docs/redis-acl.md step 3; security review H3)" (join ", " ($narrowFor | uniq))) -}}
+{{- end -}}
+{{- if $v.ingestWriter.enabled -}}
+{{- $missing = append $missing "redis.acl.clients.ingestWriter: true (docs/redis-acl.md step 2)" -}}
+{{- end -}}
+{{- if $writerApplies -}}
+{{- if include "distant-signal.redisAclDefaultUserOn" $root -}}
+{{- $missing = append $missing "redis.acl.defaultUser: off, quoted \"off\" in YAML (docs/redis-acl.md step 4; an apply needs it, security review H3)" -}}
+{{- end -}}
+{{- range $client, $on := $acl.clients -}}
+{{- if include "distant-signal.redisAclClientDeployed" (dict "root" $root "client" $client) -}}
+{{- $missing = append $missing (printf "redis.acl.clients.%s: true (defaultUser off would lock it out; docs/redis-acl.md step 2)" $client) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* Drop the client lines already met, and all but the first per client. */ -}}
+{{- $out := list -}}
+{{- $seen := dict -}}
+{{- range $m := $missing | uniq -}}
+{{- $skip := false -}}
+{{- if hasPrefix "redis.acl.clients." $m -}}
+{{- $client := trimPrefix "redis.acl.clients." (index (splitList ":" $m) 0) -}}
+{{- if or (get $v.redis.acl.clients $client) (hasKey $seen $client) }}{{ $skip = true }}{{ end -}}
+{{- $_ := set $seen $client true -}}
+{{- end -}}
+{{- if not $skip }}{{ $out = append $out $m }}{{ end -}}
+{{- end -}}
+{{- if $out -}}
+{{- fail (printf "Release A (2026-10-09) moved every ingest producer off the api's /private routes by default: each now writes Postgres as its own role or XADDs to a Redis stream the ingest-writer applies (docs/ingest-phase5-runbook.md, \"Release A\"). These values miss its prerequisites:\n  - %s\nMeet them, or keep producers on /private until you can, with: %s." (join "\n  - " $out) (join ", " ($optOut | uniq))) -}}
 {{- end -}}
 {{- end }}
 

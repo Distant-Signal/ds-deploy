@@ -1,0 +1,9 @@
+{{- /*
+Release A's prerequisites, checked in one place (distant-signal.ingestSinkPreflight
+in _helpers.tpl). Renders nothing. Named zz- because Helm renders the
+top-level templates in reverse name order and stops at the first failure:
+this runs before the deployments, so a values file that misses several
+prerequisites gets one message listing them all instead of the narrower
+guards' messages one at a time.
+*/ -}}
+{{- include "distant-signal.ingestSinkPreflight" . -}}

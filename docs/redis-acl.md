@@ -152,8 +152,13 @@ and every client's logs for `NOPERM`. `ACL LOG` must stay empty.
 
 ### 4. Turn `default` off (`defaultUser: "off"`)
 
-The chart refuses this while any `clients.<x>` is still false. Only Redis
-restarts. Verify `ACL GETUSER default` shows `off`, and that a plain
+The chart refuses this while any `clients.<x>` is still false. Since
+release A that counts only clients whose workload is deployed; on the
+chart before it, also set `clients.pollerIrishRailGtfs`,
+`pollerIrishRailLive` and `pollerNirStations` (no pods, so harmless), and
+set `ingestWriter`, `pollerIncidents`, `pollerLdbws`, `pollerTfl` and
+`pollerTocs` here too: on the `http` sinks those pods do not connect to
+Redis yet, and release A needs them. Only Redis restarts. Verify `ACL GETUSER default` shows `off`, and that a plain
 `redis-cli -a <old password> ping` gets `WRONGPASS`/`NOAUTH`.
 
 Exit: `ACL LIST` shows `default off`, `CLIENT LIST` no `user=default`, and
@@ -176,6 +181,20 @@ The chart enforces where the ingest switch-ons fall in this rollout:
 Rolling back step 4 (or 3) therefore means first moving those streams and
 producers back (`apply` to `shadow`, or the sinks to `http`) in the same or
 an earlier release.
+
+**Release A (2026-10-09)** makes those producers' `stream` sinks and the
+writer's four `apply` streams the chart defaults
+(`docs/ingest-phase5-runbook.md`, §0), so it needs step 4 done. Ship it
+only after step 4 has had **24 hours of an empty `ACL LOG`** and no
+`NOPERM`/`NOAUTH`/`WRONGPASS` in any client's logs. Without step 4 the
+release refuses to render, listing what is missing. After release A:
+
+- rolling back a producer is its `ingest.sink: http`; its stream may stay
+  on `apply`, which still needs step 4 in place;
+- rolling back step 4 needs every stream producer on `http` **and**
+  `ingestWriter.streams.<station-samples|full-coverage|tfl|reference>:
+  "off"` in the same or an earlier release; rolling back step 3 needs the
+  same (no stream may be on `shadow` either).
 
 ### Rollback
 

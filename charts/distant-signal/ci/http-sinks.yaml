@@ -1,0 +1,59 @@
+# Render-test values for CI: every ingest producer and internal reader back
+# on the api's /private routes, as the chart's defaults were before release
+# A (2026-10-09), and the writer reading no stream. The render checks of
+# features unrelated to the ingest cutover (archive, sftp, probes, ...) use
+# this as their base, so they need none of release A's prerequisites. It is
+# also release A's complete rollback (docs/ingest-phase5-runbook.md,
+# "Release A"), less `scheduleFeed.reference.ingest.sink`, which went to
+# `db` before release A, and less the writer's connect below. The
+# producers' connects stay on: unused, they are a no-op.
+pollers:
+  incidents:
+    ingest:
+      sink: http
+  stations:
+    ingest:
+      sink: http
+  tfl:
+    ingest:
+      sink: http
+  tocs:
+    ingest:
+      sink: http
+  ldbws:
+    ingest:
+      sink: http
+    internalReads:
+      source: http
+trustConsumer:
+  ingest:
+    sink: http
+  internalReads:
+    source: http
+trustBacklogConsumer:
+  ingest:
+    sink: http
+fullCoverageConsumer:
+  ingest:
+    sink: http
+  internalReads:
+    source: http
+scheduleFeed:
+  ingest:
+    sink: http
+  reference:
+    ingest:
+      sink: http
+ingestWriter:
+  streams:
+    station-samples: "off"
+    full-coverage: "off"
+    tfl: "off"
+    reference: "off"
+postgresql:
+  roles:
+    perService:
+      writer:
+        # The ingest-writer on the app role, as before release A, so the
+        # checks that enable the writer need no per-service roles.
+        connect: false
