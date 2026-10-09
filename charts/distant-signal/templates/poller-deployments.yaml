@@ -205,19 +205,6 @@ with $poller.extraEnv, which replaces an entry of the same name.
             - name: SAMPLE_MAX_STATIONS
               value: {{ $poller.sampleMaxStations | quote }}
             {{- end }}
-            {{- if hasKey $poller "dlrPilotStopPointId" }}
-            # tfl only: the DLR arrivals-diffing pilot -- see
-            # crates/poller-tfl/src/config.rs's dlr_pilot_enabled/
-            # dlr_pilot_stop_point_id docs. 2026-09-25 Signal Box Audit Low
-            # finding: both declared with a working default (off) but never
-            # wired into this chart -- harmless only because the pilot
-            # defaults to disabled either way, same "declared but unwired"
-            # gap as several other tunables closed in the same pass.
-            - name: DLR_PILOT_ENABLED
-              value: {{ $poller.dlrPilotEnabled | quote }}
-            - name: DLR_PILOT_STOP_POINT_ID
-              value: {{ $poller.dlrPilotStopPointId | quote }}
-            {{- end }}
             # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int $root.Values.workerHealth.port) | quote }}

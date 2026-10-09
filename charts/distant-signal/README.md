@@ -2485,8 +2485,6 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.incidents.ingest.database.maxConnections` | `2` | incidents only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `pollers.ldbws.ingest.sink` | `http` | ldbws only (ingest plan 3a.7): `http` POSTs each cycle to `ingestPath`; `http+shadow` also XADDs a copy to `ds:ingest:station-samples` (for `ingestWriter.streams.station-samples: shadow`); `stream` XADDs only and reads the startup cursor from the stream, and needs `ingestWriter.enabled` with `ingestWriter.streams.station-samples: apply` (the render fails otherwise; flip both together). Either stream sink renders `INGEST_SINK` and `REDIS_URL` (the `poller-ldbws` user with `redis.acl.clients.pollerLdbws`) and the Redis egress and admission. Rollback: `http`. |
 | `pollers.tfl.apiKeyEnvVar` | `TFL_APP_KEY` | tfl only: env var the key is passed in (the RDM pollers default to `RDM_API_KEY`). Do not change. |
-| `pollers.tfl.dlrPilotEnabled` | `false` | tfl only: DLR arrivals-diffing pilot (`DLR_PILOT_ENABLED`). |
-| `pollers.tfl.dlrPilotStopPointId` | `940GZZDLPOP` | tfl only: the DLR pilot's stop point (`DLR_PILOT_STOP_POINT_ID`). |
 | `pollers.ldbws.sampleStationsPath` | `/private/sample-stations` | ldbws only: second api endpoint listing which stations to sample. |
 | `pollers.ldbws.numRows` | `10` | ldbws only: LDBWS `numRows` query parameter. |
 | `pollers.ldbws.hourlyRequestBudget` | `0` | ldbws only (LEG-18): max LDBWS requests per rolling hour, spread evenly over cycles; skipped stations count in `ldbws_budget_skipped_polls_total`. `0` = no budget, env not rendered. |

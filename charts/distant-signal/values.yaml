@@ -1178,13 +1178,6 @@ pollers:
     extraEnv:
       - name: TFL_MODES
         value: "tube,dlr,overground,elizabeth-line,tram"
-    # -- Enables the DLR arrivals-diffing pilot -- see
-    # crates/poller-tfl/src/config.rs's dlr_pilot_enabled doc for why this
-    # defaults off (never yet run a clean cycle against a real deployment).
-    dlrPilotEnabled: false
-    # -- Poplar's Naptan id, the pilot's one fixed station -- see
-    # crates/poller-tfl/src/config.rs's dlr_pilot_stop_point_id doc.
-    dlrPilotStopPointId: "940GZZDLPOP"
     # One TfL line-status JSON document per tick.
     #
     # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
