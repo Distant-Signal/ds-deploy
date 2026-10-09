@@ -170,7 +170,7 @@ tests:
   # stream-only). GTFS's stations last landed at 0 and ds:ingest:ioi-gtfs
   # is in apply: over 2 days from 48h 1m, firing from 48h 11m. NIR's
   # stations are as old, but ds:ingest:ioi-nir is in shadow: silent. GTFS's
-  # lines land every minute. The legacy shared source is not checked.
+  # lines land every minute.
   - interval: 1m
     input_series:
       - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="island_of_ireland_stations_gtfs"}'
@@ -183,8 +183,6 @@ tests:
         values: '0x3000'
       - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-nir", mode="shadow"}'
         values: '1x3000'
-      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="island_of_ireland_stations"}'
-        values: '0x3000'
     alert_rule_test:
       - eval_time: 48h5m
         alertname: DistantSignalIngestSourceStale

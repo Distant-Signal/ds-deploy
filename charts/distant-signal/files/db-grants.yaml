@@ -447,16 +447,15 @@ row_policies:
   #     tocs, the four snapshot sources (ds_store::samples::sources) and the
   #     island-of-Ireland catalogue's per-network sources
   #     (ds_store::samples::island_of_ireland). The two unsuffixed
-  #     island_of_ireland_* names are what writers before the per-network
-  #     split recorded; they stay allowed so a writer still on that release
-  #     keeps applying during the rollout. Drop them a release later.
+  #     island_of_ireland_* names writers recorded before the per-network
+  #     split were dropped a release after it (batch 54; migration
+  #     20261010100100 deletes their rows).
   ingest_freshness:
     writer:
       writes: >-
         source IN ('tfl', 'tocs', 'station-samples', 'full-coverage-stats',
         'full-coverage-window-stats', 'station-full-coverage-samples',
         'island_of_ireland_stations_gtfs', 'island_of_ireland_lines_gtfs',
-        'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir',
-        'island_of_ireland_stations', 'island_of_ireland_lines')
+        'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir')
     stations: {writes: "source = 'stations'"}
     incidents: {writes: "source = 'incidents'"}

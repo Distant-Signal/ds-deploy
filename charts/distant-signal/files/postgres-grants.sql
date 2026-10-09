@@ -779,9 +779,9 @@ BEGIN
                v.cond
         FROM (VALUES
         ('line_status', 'writer', 'ALL', 'source = ''tfl'''),
-        ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''island_of_ireland_stations'', ''island_of_ireland_lines'')'),
-        ('ingest_freshness', 'writer', 'UPDATE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''island_of_ireland_stations'', ''island_of_ireland_lines'')'),
-        ('ingest_freshness', 'writer', 'DELETE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''island_of_ireland_stations'', ''island_of_ireland_lines'')'),
+        ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'')'),
+        ('ingest_freshness', 'writer', 'UPDATE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'')'),
+        ('ingest_freshness', 'writer', 'DELETE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'')'),
         ('ingest_freshness', 'stations', 'INSERT', 'source = ''stations'''),
         ('ingest_freshness', 'stations', 'UPDATE', 'source = ''stations'''),
         ('ingest_freshness', 'stations', 'DELETE', 'source = ''stations'''),

@@ -708,9 +708,10 @@ and network: `island_of_ireland_{stations,lines}_gtfs` from
 poller-irish-rail-gtfs, `_nir` from poller-nir-stations), and the
 stream-only ones only while the writer applies their stream
 (`whileStreamApplies`): their rows are written only on the stream path.
-An unsuffixed `island_of_ireland_stations`/`_lines` row is what writers
-recorded before the per-network split; it is no longer written or
-checked.
+The unsuffixed `island_of_ireland_stations`/`_lines` sources that writers
+recorded before the per-network split are gone: migration
+`20261010100100` deletes their rows and the writer may no longer write
+them.
 
 1. The source's poller: [DistantSignalPollerFailing](#distantsignalpollerfailing)
    / [DistantSignalPollerStale](#distantsignalpollerstale), its log.
