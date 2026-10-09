@@ -1250,8 +1250,9 @@ jobs:
           env_is "${dep}" LLM_AUTHENTIK_SCOPE profile
           if grep -q 'LLM_API_KEY' <<<"${dep}"; then fail "WIF must not render LLM_API_KEY"; fi
           if grep -q 'llm-api-key' <<<"${out}"; then fail "WIF must not render an llm-api-key Secret entry"; fi
-          # The volume holds ONLY the audience-bound token, read-only.
-          vol=$(awk '/^      volumes:/{f=1} f' <<<"${dep}")
+          # The volume holds ONLY the audience-bound token, read-only. Rendered
+          # YAML comments are dropped: the template's own comment names ca.crt.
+          vol=$(awk '/^      volumes:/{f=1} f && !/^ *#/' <<<"${dep}")
           grep -q 'audience: "test-enricher-client"' <<<"${vol}" || fail "authentik mode's audience must default to the client ID"
           grep -q 'expirationSeconds: 3600' <<<"${vol}" || fail "the projected token must expire after 3600s"
           grep -q 'path: token$' <<<"${vol}" || fail "the projected token must be at path token"

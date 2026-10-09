@@ -39,6 +39,10 @@ from typing import cast
 import yaml
 
 CHART = "charts/distant-signal"
+# Release A (2026-10-09) put every ingest producer on its db/stream sink by
+# default; these checks predate it and test other switches, so they render
+# on ci/http-sinks.yaml (every producer back on http, the writer on app).
+HTTP_SINKS = f"{CHART}/ci/http-sinks.yaml"
 ENRICHER = "distant-signal-enricher"
 
 
@@ -48,15 +52,19 @@ def sets(*pairs: str) -> tuple[str, ...]:
 
 
 # Everything a render needs except the enricher's LLM settings.
-BASE = sets(
-    "trustConsumer.kafka.brokers=k:9094",
-    "trustConsumer.kafka.topic=t",
-    "trustConsumer.kafka.saslMechanism=PLAIN",
-    "api.sso.issuerUrl=https://sso.example.com",
-    "api.sso.clientId=c",
-    "api.sso.clientSecret=s",
-    "api.sso.redirectUrl=https://app.example.com/cb",
-    "api.sso.postLoginRedirectUrl=https://app.example.com/",
+BASE = (
+    "-f",
+    HTTP_SINKS,
+    *sets(
+        "trustConsumer.kafka.brokers=k:9094",
+        "trustConsumer.kafka.topic=t",
+        "trustConsumer.kafka.saslMechanism=PLAIN",
+        "api.sso.issuerUrl=https://sso.example.com",
+        "api.sso.clientId=c",
+        "api.sso.clientSecret=s",
+        "api.sso.redirectUrl=https://app.example.com/cb",
+        "api.sso.postLoginRedirectUrl=https://app.example.com/",
+    ),
 )
 OPENAI = sets("enricher.llm.baseUrl=http://l/v1", "enricher.llm.model=m")
 ANTHROPIC = sets(
