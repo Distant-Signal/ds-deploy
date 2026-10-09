@@ -2263,6 +2263,16 @@ jobs:
           # No successful aggregator / notifier cycle for 15m.
           grep -q 'time() - max by (namespace, cycle) (distant_signal_aggregator_last_success_timestamp_seconds{namespace="[^"]*"}) > 900$' <<<"${rule}"
           grep -q 'distant_signal_notifier_last_success_timestamp_seconds{namespace="[^"]*", cycle!="template_sweep"}) > 900$' <<<"${rule}"
+          # notifier_forward_queue is unarchived (2026-10-08): its oldest row
+          # alerts past the longer trains retention (30d) + 2 grace days, and
+          # the limit follows aggregator.trainsRetentionDays.
+          grep -q 'distant_signal_notifier_forward_queue_oldest_age_seconds{namespace="[^"]*"}) > 2764800$' <<<"${rule}"
+          grep -q 'distant_signal_notifier_forward_queue_rows{namespace="[^"]*"}) > 50000$' <<<"${rule}"
+          fwdq=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set metrics.prometheusRule.enabled=true \
+            --set aggregator.trainsRetentionDays=60 \
+            --show-only templates/prometheusrule.yaml)
+          grep -q 'distant_signal_notifier_forward_queue_oldest_age_seconds{namespace="[^"]*"}) > 5356800$' <<<"${fwdq}"
           # R-040/R-097: stuck entries and TRUST parse drops alert, one
           # parse-drop clause per consumer.
           grep -q 'increase(distant_signal_movement_feed_long_pending_total{namespace="[^"]*"}\[1h\])) > 0$' <<<"${rule}"

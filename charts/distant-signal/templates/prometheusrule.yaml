@@ -49,6 +49,7 @@ so that clause fired on every rollout.
 {{- $bucketOn := and ($rule.scheduleBucket).enabled .Values.scheduleFeed.enabled (.Values.scheduleFeed.bucket).enabled }}
 {{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn $sftpOn $bucketOn }}
 {{- $notifierDroppedOn := ($rule.notifierPushDropped).enabled }}
+{{- $forwardQueueOn := ($rule.notifierForwardQueue).enabled }}
 {{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
 {{- $signupSpikeOn := ($rule.userSignupSpike).enabled }}
 {{- $archiveExpiryOn := and ($rule.archiveExpiry).enabled .Values.archive.enabled (.Values.archive.expiry).enabled }}
@@ -74,7 +75,7 @@ so that clause fired on every rollout.
 {{- $poolTimeoutsOn := ($rule.dbPoolAcquireTimeouts).enabled }}
 {{- $directWritesOn := ($rule.directWritesFailing).enabled }}
 {{- $feedMarkerOn := and ($rule.scheduleFeedMarkerStale).enabled .Values.scheduleFeed.enabled }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
 {{- $archiveHealthOn := and .Values.archive.enabled (or ($rule.archiveStale).enabled ($rule.archiveBatchChurn).enabled) }}
 {{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled }}
 apiVersion: monitoring.coreos.com/v1
@@ -910,6 +911,45 @@ spec:
             summary: "notifier dropped {{ "{{ $value | humanize }}" }} pushes ({{ "{{ $labels.reason }}" }})"
             description: "Over the last {{ .window }}. Delivery is at-most-once, so these users may never get them. The runbook covers each reason."
             runbook_url: {{ printf "%s#distantsignalnotifierpushdropped" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $forwardQueueOn }}
+    {{- $retentionDays := max (int .Values.aggregator.trainsRetentionDays) (int .Values.aggregator.untrackedTrainsRetentionDays) }}
+    {{- with $rule.notifierForwardQueue }}
+    - name: distant-signal.notifier-forward-queue
+      rules:
+        {{- /*
+        notifier_forward_queue is left unarchived (decision 2026-10-08), and
+        a row leaves only when the aggregator prunes its trains row (ON
+        DELETE CASCADE). The notifier samples the table after every
+        forward-queue cycle (15s); both gauges are registered at 0.
+        */}}
+        - alert: DistantSignalNotifierForwardQueueRetentionOverdue
+          expr: |
+            max by (namespace) (distant_signal_notifier_forward_queue_oldest_age_seconds{namespace="{{ $ns }}"}) > {{ mul (add $retentionDays (int .retentionGraceDays)) 86400 }}
+          for: {{ .retentionFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "notifier forward queue holds a row {{ "{{ $value | humanizeDuration }}" }} old"
+            description: "Over the {{ $retentionDays }}-day trains retention + {{ .retentionGraceDays }} days: the aggregator's trains prune is not removing it."
+            runbook_url: {{ printf "%s#distantsignalnotifierforwardqueueretentionoverdue" $runbook | quote }}
+        - alert: DistantSignalNotifierForwardQueueLarge
+          expr: |
+            max by (namespace) (distant_signal_notifier_forward_queue_rows{namespace="{{ $ns }}"}) > {{ int .maxRows }}
+          for: {{ .largeFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "notifier forward queue holds {{ "{{ $value | humanize }}" }} rows"
+            description: "Over {{ int .maxRows }}. It keeps a trains retention window of signals: a producer is flooding it, or it has outgrown being unarchived."
+            runbook_url: {{ printf "%s#distantsignalnotifierforwardqueuelarge" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $writerDownOn }}

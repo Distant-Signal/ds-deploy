@@ -1,0 +1,73 @@
+# promtool unit tests for DistantSignalNotifierForwardQueueRetentionOverdue
+# and DistantSignalNotifierForwardQueueLarge (see recorded-alerts.yaml's
+# header for how rules.yaml is rendered). Defaults: the oldest row over
+# (30-day aggregator.trainsRetentionDays + 2 grace days) = 2764800s, and
+# more than 50000 rows, each for 1h. The notifier samples both gauges every
+# forward-queue cycle (15s) and registers them at 0.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Exactly at the limit: quiet. One second over: pending, then fires
+  # after 1h.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_notifier_forward_queue_oldest_age_seconds{namespace="distant-signal", pod="a"}'
+        values: '2764800x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: DistantSignalNotifierForwardQueueRetentionOverdue
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_notifier_forward_queue_oldest_age_seconds{namespace="distant-signal", pod="a"}'
+        values: '2764801x90'
+      # A second pod (rollout overlap) with a younger view: max wins.
+      - series: 'distant_signal_notifier_forward_queue_oldest_age_seconds{namespace="distant-signal", pod="b"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: DistantSignalNotifierForwardQueueRetentionOverdue
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: DistantSignalNotifierForwardQueueRetentionOverdue
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: notifier forward queue holds a row 32d 0h 0m 1s old
+              description: "Over the 30-day trains retention + 2 days: the aggregator's trains prune is not removing it."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalnotifierforwardqueueretentionoverdue
+
+  # A healthy queue (production: about 315 rows): quiet. Over 50000 for an
+  # hour: fires; a 30-minute burst over it does not.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_notifier_forward_queue_rows{namespace="distant-signal", pod="a"}'
+        values: '315x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: DistantSignalNotifierForwardQueueLarge
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_notifier_forward_queue_rows{namespace="distant-signal", pod="a"}'
+        values: '60000x30 400x60'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: DistantSignalNotifierForwardQueueLarge
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_notifier_forward_queue_rows{namespace="distant-signal", pod="a"}'
+        values: '50001x90'
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: DistantSignalNotifierForwardQueueLarge
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: DistantSignalNotifierForwardQueueLarge
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: notifier forward queue holds 50k rows
+              description: "Over 50000. It keeps a trains retention window of signals: a producer is flooding it, or it has outgrown being unarchived."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalnotifierforwardqueuelarge

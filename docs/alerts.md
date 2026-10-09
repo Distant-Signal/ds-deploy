@@ -549,6 +549,55 @@ The notifier dropped decided notifications
 
 Design: [line-status notifications](superpowers/specs/2026-09-02-line-status-notifications-design.md#delivery-guarantee-at-most-once).
 
+### DistantSignalNotifierForwardQueueRetentionOverdue
+
+The oldest row in `notifier_forward_queue`
+(`notifier_forward_queue_oldest_age_seconds`, sampled by the notifier after
+every forward-queue cycle) is older than the longer of
+`aggregator.trainsRetentionDays` and `untrackedTrainsRetentionDays`, plus
+`notifierForwardQueue.retentionGraceDays` (30 + 2 days by default).
+
+Nothing deletes a forward-queue row once the notifier has read it, and the
+table is not archived (decision 2026-10-08): a row goes only when the
+aggregator prunes its `trains` row, through `ON DELETE CASCADE`. A train is
+pruned on the day after its `service_date` leaves the retention window, and
+its signals are written within about a day of that date, so a healthy oldest
+row is under retention + 1 day. An older one means the trains prune is not
+removing it:
+
+1. [DistantSignalRetentionStepFailing](#distantsignalretentionstepfailing)
+   for `task="trains"`, or
+   [DistantSignalAggregatorCycleFailing](#distantsignalaggregatorcyclefailing):
+   the prune is failing or the aggregator is not running.
+2. With the cold archive on in `retain` mode, a failing upload stops the
+   trains prune at that batch
+   ([DistantSignalArchiveUploadFailures](#distantsignalarchiveuploadfailures)).
+3. Otherwise compare the row's train with the prune's cutoff:
+
+   ```sql
+   SELECT q.id, q.created_at, t.service_date,
+          EXISTS (SELECT 1 FROM train_subscriptions s WHERE s.trains_id = t.id) AS tracked
+     FROM notifier_forward_queue q JOIN trains t ON t.id = q.trains_id
+    ORDER BY q.created_at LIMIT 5;
+   ```
+
+   A recent `service_date` on an old row means a signal was raised long
+   before its train ran; that row is pruned with its train, so raise
+   `retentionGraceDays` rather than deleting it.
+
+### DistantSignalNotifierForwardQueueLarge
+
+`notifier_forward_queue` holds more than `notifierForwardQueue.maxRows`
+rows (`notifier_forward_queue_rows`; 50000 by default) for `largeFor`.
+Production held 315 rows for a full 30-day window on 2026-10-09, all for
+tracked trains. Rows stay for the trains retention window whether or not the
+notifier has read them, so this is either a producer writing far more
+signals than usual (trust-consumer, through its DB sink or api's
+`/private/train-forward-signals`: check `GROUP BY trains_id` for one train
+with thousands of rows, or many rows with no `dedup_key`), or tracked trains
+have grown enough that the table should be pruned or archived on its own
+schedule. Raise `maxRows` only after ruling out the first.
+
 ## ingest-writer
 
 ### DistantSignalIngestWriterDown

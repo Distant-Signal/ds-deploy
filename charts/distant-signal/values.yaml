@@ -5297,6 +5297,31 @@ metrics:
       minDrops: 5
       for: 0m
       severity: warning
+    # notifier_forward_queue is not archived and nothing deletes a row the
+    # notifier has read: a row goes only when the aggregator prunes its
+    # trains row (ON DELETE CASCADE), so the table holds about
+    # aggregator.trainsRetentionDays of signals (decision 2026-10-08).
+    # DistantSignalNotifierForwardQueueRetentionOverdue: the oldest row
+    # (distant_signal_notifier_forward_queue_oldest_age_seconds) is older
+    # than the longer of aggregator.trainsRetentionDays and
+    # untrackedTrainsRetentionDays plus `retentionGraceDays`, for
+    # `retentionFor`: the trains prune is not running or not reaching it. A
+    # train is pruned on the day after its service_date leaves the window,
+    # and its signals are written within about a day of that service_date,
+    # so a healthy oldest row stays under retention + 1 day; 2 days of grace
+    # leaves a day of slack.
+    # DistantSignalNotifierForwardQueueLarge: more than `maxRows` rows
+    # (distant_signal_notifier_forward_queue_rows) for `largeFor`. Production
+    # held 315 rows for a full retention window (2026-10-09), so 50000 means
+    # a producer is flooding the queue, or tracked trains have grown enough
+    # to revisit archiving it; raise it as tracked trains grow.
+    notifierForwardQueue:
+      enabled: true
+      retentionGraceDays: 2
+      retentionFor: 1h
+      maxRows: 50000
+      largeFor: 1h
+      severity: warning
     # DistantSignalUserSignupSpike: more than `threshold` new user accounts
     # within `window`. Sign-up is open to any account the IdP admits (in
     # production, any Discord account), so a burst is either real growth or
