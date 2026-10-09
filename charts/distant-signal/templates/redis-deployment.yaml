@@ -155,7 +155,15 @@ spec:
                 print out
               }' /etc/redis-acl-template/users.acl.tpl > /etc/redis-acl/users.acl
           env:
-            {{- if and (include "distant-signal.redisAclDefaultUserOn" .) .Values.redis.auth.enabled }}
+            {{- if include "distant-signal.redisAclDefaultUserUnshared" . }}
+            # defaultUser on-unshared: default's own password, which no
+            # client is given (docs/redis-acl.md step 4).
+            - name: REDIS_ACL_PASSWORD_DEFAULT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.acl.existingSecret }}
+                  key: default-password
+            {{- else if and (include "distant-signal.redisAclDefaultUserOn" .) .Values.redis.auth.enabled }}
             - name: REDIS_ACL_PASSWORD_DEFAULT
               valueFrom:
                 secretKeyRef:

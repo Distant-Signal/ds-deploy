@@ -37,7 +37,7 @@ explains the format). The kinds:
 | `poller-ldbws`, `poller-tfl`, `poller-tocs`, the three island-of-Ireland pollers | final | XADD and XREVRANGE on their own `ds:ingest:*` stream (one each: the island-of-Ireland pollers have `ds:ingest:ioi-gtfs`, `-live` and `-nir`) |
 | `ingest-writer` | final | consumer-group and gauge commands on `ds:ingest:*` (never XADD, XTRIM or XDEL there); XADD, XTRIM, XLEN, XRANGE and MEMORY USAGE on `ds:dlq:*` |
 | `ds-admin` | admin | everything |
-| `default` | (values) | `defaultUser: "on"`: today's password and rights; `"off"`: disabled |
+| `default` | (values) | `defaultUser: "on"`: today's password and rights; `"on-unshared"`: on, with its own password that no client is given (step 4); `"off"`: disabled |
 
 Every user also has the connection handshake (`PING`, `HELLO`, `AUTH`,
 `CLIENT SETNAME`, `CLIENT SETINFO`, `CLIENT ID`).
@@ -150,19 +150,52 @@ kubectl -n distant-signal exec deploy/distant-signal-redis -- redis-cli --user d
 
 and every client's logs for `NOPERM`. `ACL LOG` must stay empty.
 
-### 4. Turn `default` off (`defaultUser: "off"`)
+### 4. Take `default` away from clients (`defaultUser: "on-unshared"`)
 
 The chart refuses this while any `clients.<x>` is still false. Since
-release A that counts only clients whose workload is deployed; on the
-chart before it, also set `clients.pollerIrishRailGtfs`,
-`pollerIrishRailLive` and `pollerNirStations` (no pods, so harmless), and
-set `ingestWriter`, `pollerIncidents`, `pollerLdbws`, `pollerTfl` and
-`pollerTocs` here too: on the `http` sinks those pods do not connect to
-Redis yet, and release A needs them. Only Redis restarts. Verify `ACL GETUSER default` shows `off`, and that a plain
-`redis-cli -a <old password> ping` gets `WRONGPASS`/`NOAUTH`.
+release A, it counts only clients whose workload is deployed. On the chart
+before release A, also set `clients.pollerIrishRailGtfs`,
+`pollerIrishRailLive` and `pollerNirStations` (they have no pods, so this
+is harmless). Set `ingestWriter`, `pollerIncidents`, `pollerLdbws`,
+`pollerTfl` and `pollerTocs` here too: on the `http` sinks those pods don't
+connect to Redis yet, and release A needs them.
 
-Exit: `ACL LIST` shows `default off`, `CLIENT LIST` no `user=default`, and
-`ACL LOG` empty for 7 days.
+`on-unshared` keeps `default` enabled with `~* &* +@all`, but with its own
+password. That password is the `default-password` key of
+`redis.acl.existingSecret`: a fresh random value (letters and digits) that
+no client is ever given. So no service can authenticate as `default`, and
+the old shared `redis.auth` password no longer works.
+
+**Why not `"off"`.** Prod ran with `defaultUser: "off"` on 2026-10-09 and
+found that Redis 7.4 ACL-checks the MULTI/EXEC blocks it replays from the
+AOF at startup as the `default` user. That replay comes from the fake AOF
+client, which is hard-wired to `default`. With `default` off, it rejected
+them: ACL LOG showed about 82k `xclaim` and 18k `xgroup|setid` entries in
+`context multi` from the fake client (`id=18446744073709551615`). The
+`trust-event-backlog` consumer group came back about 18 minutes behind,
+and about 10k entries were redelivered. The consumers' dedup keys absorbed
+it with no duplicate rows, but it happens again on every restart.
+`on-unshared` replays cleanly. `"off"` still renders, for anyone who
+accepts that.
+
+Steps:
+
+1. Add `default-password` to the users Secret (the SealedSecret in
+   Ranma-Config). Mint it with a script that never prints it.
+2. Set `redis.acl.defaultUser: "on-unshared"`. Only Redis restarts.
+3. Verify:
+   - `ACL GETUSER default` shows `on`;
+   - a plain `redis-cli -a <old shared password> ping` gets `WRONGPASS`;
+   - `CLIENT LIST` has no `user=default`;
+   - after the restart, `ACL LOG` has no `context multi` entries from the
+     fake client.
+
+Exit: `CLIENT LIST` has no `user=default`, and `ACL LOG` is empty for 7
+days.
+
+**Rotating `default-password`:** put a new value in the Secret and restart
+Redis. No client uses this password, so nothing else needs to restart, and
+no `-previous` key is needed.
 
 ### Ordering against the ingest streams (security review, 2026-10-08)
 
@@ -176,7 +209,7 @@ The chart enforces where the ingest switch-ons fall in this rollout:
   any stream not `off` need step 3 (`stage: narrow`) and their own
   `clients.<client>` (H3). So step 3 comes before the first `shadow`.
 - Any `ingestWriter.streams` entry on `apply` needs step 4
-  (`defaultUser: "off"`, H3). So step 4 comes before the first `apply`.
+  (`defaultUser: "on-unshared"` or `"off"`, H3). So step 4 comes before the first `apply`.
 
 Rolling back step 4 (or 3) therefore means first moving those streams and
 producers back (`apply` to `shadow`, or the sinks to `http`) in the same or
@@ -200,7 +233,7 @@ release refuses to render, listing what is missing. After release A:
 
 The previous step's values:
 
-- step 4 → `defaultUser: "on"`;
+- step 4 → `defaultUser: "on"` (from `on-unshared` or `off`);
 - step 3 → `stage: open` (every client back to `+@all`);
 - step 2 → `clients.<x>: false` (back to `default` with the shared
   password);

@@ -76,10 +76,12 @@ aggregator:
 # poller-tfl, poller-tocs, full-coverage-consumer, and the island-of-Ireland
 # pollers enabled below) XADD to their own ds:ingest:* streams and the
 # ingest-writer applies them, so every client connects as its own narrow
-# ACL user and `default` is off (security review H3; docs/redis-acl.md,
-# steps 1-4): the ACL users at stage `narrow`, one client per Redis user,
-# and `defaultUser: "off"`. redis.auth stays for the rollout's earlier
-# steps. Both Secrets are yours to create.
+# ACL user and no client has `default`'s password (security review H3;
+# docs/redis-acl.md, steps 1-4): the ACL users at stage `narrow`, one
+# client per Redis user, and `defaultUser: "on-unshared"` (default on with
+# its own password, a `default-password` key in the users Secret).
+# redis.auth stays for the rollout's earlier steps. Both Secrets are yours
+# to create.
 redis:
   auth:
     enabled: true
@@ -88,7 +90,7 @@ redis:
     enabled: true
     existingSecret: distant-signal-redis-users
     stage: narrow
-    defaultUser: "off"
+    defaultUser: "on-unshared"
     clients:
       api: true
       enricher: true

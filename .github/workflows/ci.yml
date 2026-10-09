@@ -1060,7 +1060,7 @@ jobs:
       # `sink: http` opt-out. With them, every producer renders its sink
       # and its own Postgres role, and the writer applies the four
       # producer streams. Each producer rolls back to `http` on its own.
-      # `defaultUser: "off"` needs no user for a client whose workload is
+      # `defaultUser: "on-unshared"` needs no user for a client whose workload is
       # off (the island-of-Ireland pollers by default).
       - name: helm template (release A ingest defaults)
         run: |
@@ -1179,7 +1179,7 @@ jobs:
           fi
           grep -qF 'postgresql.roles.perService.full_coverage_ro.connect: true' <<<"${err}" || fail "unexpected error: ${err}"
 
-          # defaultUser off and the disabled island-of-Ireland pollers: no user
+          # defaultUser on-unshared and the disabled island-of-Ireland pollers: no user
           # needed (the render above). Enabled, each needs its own.
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if render "${all[@]}" --set pollerIrishRailGtfs.enabled=true >/dev/null 2>&1; then
@@ -1188,7 +1188,7 @@ jobs:
           render "${all[@]}" --set pollerIrishRailGtfs.enabled=true --set redis.acl.clients.pollerIrishRailGtfs=true >/dev/null
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if err=$(render "${all[@]}" --set redis.acl.clients.enricher=false 2>&1 >/dev/null); then
-            fail "defaultUser off with a deployed client on default must fail the render"
+            fail "defaultUser on-unshared with a deployed client on default must fail the render"
           fi
           grep -qF 'redis.acl.clients.enricher' <<<"${err}" || fail "unexpected error: ${err}"
           echo "release A ingest defaults render OK"

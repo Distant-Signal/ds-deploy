@@ -2786,14 +2786,16 @@ redis:
   #   2. `clients.<client>: true`, one client at a time (plus Ranma's
   #      exporter, to the `exporter` user).
   #   3. `stage: narrow`: each user gets its spec §8.2 rights.
-  #   4. `defaultUser: "off"` (needs every client in `clients` on).
+  #   4. `defaultUser: "on-unshared"` (needs every client in `clients`
+  #      on, and a `default-password` key in `existingSecret`).
   # Rollback: the previous step's values.
   # Render guards (security review, 2026-10-08): `enabled` with
   # `defaultUser: "on"` needs `redis.auth.enabled` (M3); every ingest stream
   # producer (a `http+shadow`/`stream` sink, an island-of-Ireland poller)
   # and the ingest-writer with any stream not `off` needs `enabled`,
   # `stage: narrow` and its own `clients.<client>` (H3); and any
-  # `ingestWriter.streams` entry on `apply` needs `defaultUser: "off"` (H3).
+  # `ingestWriter.streams` entry on `apply` needs `defaultUser:
+  # "on-unshared"` or `"off"` (H3).
   acl:
     # -- Turn the ACL users on (needs `existingSecret`).
     enabled: false
@@ -2803,13 +2805,20 @@ redis:
     # get their final rights in both.
     stage: open
     # -- `"on"`: the `default` user keeps today's password (redis.auth)
-    # and rights. `"off"`: it is disabled (step 4). Quote it: a bare on/off
-    # is a YAML boolean (which is also accepted).
+    # and rights. `"on-unshared"` (step 4, recommended): `default` stays on
+    # with `~* &* +@all` but with its own password, the `default-password`
+    # key of `existingSecret`, which no client is given; every client must
+    # be on its own user. `"off"`: `default` is disabled, but then Redis
+    # refuses the MULTI/EXEC blocks it replays from the AOF at startup
+    # (docs/redis-acl.md). Quote it: a bare on/off is a YAML boolean
+    # (which is also accepted).
     defaultUser: "on"
     # -- Existing Secret (a SealedSecret in Ranma-Config) with one key per
     # user: `<user>-password` (letters and digits only), for every user in
     # files/redis-users.acl.tpl. An optional `<user>-password-previous`
-    # keeps the old password valid during a rotation. Required.
+    # keeps the old password valid during a rotation. With `defaultUser:
+    # "on-unshared"`, also `default-password` (fresh, never given to a
+    # client). Required.
     existingSecret: ""
     # -- Which clients connect as their own user (`REDIS_USERNAME` and
     # their own `REDIS_PASSWORD` from `existingSecret`) instead of

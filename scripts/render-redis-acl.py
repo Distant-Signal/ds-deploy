@@ -2,14 +2,19 @@
 # ruff: noqa: T201  # a CLI: the rendered file goes to stdout
 r"""Render charts/distant-signal/files/redis-users.acl.tpl as a users.acl.
 
-  uv run scripts/render-redis-acl.py [--stage open|narrow] [--default-user on|off]
-      [--no-default-password] [--passwords-from-env]
+  uv run scripts/render-redis-acl.py [--stage open|narrow]
+      [--default-user on|off|on-unshared] [--no-default-password]
+      [--passwords-from-env]
 
 Prints exactly the `users.acl.tpl` data the chart's redis-acl ConfigMap
 holds for the same `redis.acl.stage` and `redis.acl.defaultUser`
 (scripts/check-ingest-phase0-chart.py checks the two agree), with
-`${REDIS_ACL_PASSWORD_<USER>}` placeholders. --no-default-password renders
-the `default` user as `nopass`, as the chart does when redis.auth is off.
+`${REDIS_ACL_PASSWORD_<USER>}` placeholders. `on` and `on-unshared` render
+the same `default` line: they differ only in where the chart takes
+REDIS_ACL_PASSWORD_DEFAULT from (redis.auth's password, or the users
+Secret's own `default-password`). --no-default-password renders the
+`default` user as `nopass` (`on` only), as the chart does when redis.auth
+is off.
 
 --passwords-from-env fills the placeholders from the environment, as the
 Redis pod's initContainer does (an empty *_PREVIOUS is dropped), so a
@@ -111,15 +116,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Print the rendered file."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--stage", choices=("open", "narrow"), default="open")
-    parser.add_argument("--default-user", choices=("on", "off"), default="on")
+    parser.add_argument(
+        "--default-user", choices=("on", "off", "on-unshared"), default="on"
+    )
     parser.add_argument("--no-default-password", action="store_true")
     parser.add_argument("--passwords-from-env", action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.default_user == "on-unshared" and args.no_default_password:
+            msg = "--default-user on-unshared always has its own password"
+            raise AclError(msg)
         acl = render(
             TEMPLATE.read_text(encoding="utf-8"),
             stage=args.stage,
-            default_user=args.default_user == "on",
+            default_user=args.default_user != "off",
             default_password=not args.no_default_password,
         )
         if args.passwords_from_env:

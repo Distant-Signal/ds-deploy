@@ -21,10 +21,11 @@ ingestWriter:
 redis:
   acl:
     enabled: true
-    # A placeholder: the Secret with one <user>-password key per ACL user.
+    # A placeholder: the Secret with one <user>-password key per ACL user
+    # and default-password (defaultUser on-unshared).
     existingSecret: example-redis-users
     stage: narrow
-    defaultUser: "off"
+    defaultUser: "on-unshared"
     # Every client whose workload renders by default. The disabled pollers
     # (and so the island-of-Ireland ones) need no user.
     clients:

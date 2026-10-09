@@ -391,13 +391,13 @@ Validates the values.
 {{- fail (printf "redis.acl.stage must be open or narrow, not %q." (toString $acl.stage)) -}}
 {{- end -}}
 {{- if and (include "distant-signal.redisAclDefaultUserOn" .) (not .Values.redis.auth.enabled) -}}
-{{- fail "redis.acl.enabled with redis.acl.defaultUser on needs redis.auth.enabled: without it `default` stays passwordless with ~* &* +@all, and any pod that reaches Redis bypasses every ACL user (security review M3). Turn redis.auth on first (its password becomes default's), or set redis.acl.defaultUser: off." -}}
+{{- fail "redis.acl.enabled with redis.acl.defaultUser on needs redis.auth.enabled: without it `default` stays passwordless with ~* &* +@all, and any pod that reaches Redis bypasses every ACL user (security review M3). Turn redis.auth on first (its password becomes default's), or set redis.acl.defaultUser: \"on-unshared\" (default gets its own password, docs/redis-acl.md step 4)." -}}
 {{- end -}}
 {{- if not (include "distant-signal.redisAclDefaultUserOn" .) -}}
 {{- $root := . -}}
 {{- range $client, $on := $acl.clients -}}
 {{- if and (not $on) (include "distant-signal.redisAclClientDeployed" (dict "root" $root "client" $client)) -}}
-{{- fail (printf "redis.acl.defaultUser off locks out redis.acl.clients.%s, which still connects as default: move it to its own user first (rollout step 2)." $client) -}}
+{{- fail (printf "redis.acl.defaultUser %s locks out redis.acl.clients.%s, which still connects as default: move it to its own user first (rollout step 2)." (include "distant-signal.redisAclDefaultUserMode" $root) $client) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -426,18 +426,39 @@ true
 {{- end }}
 
 {{/*
-True (non-empty) when the `default` user stays on. Accepts "on"/"off" and
-YAML booleans.
+redis.acl.defaultUser as one of "on", "off" or "on-unshared". Accepts YAML
+booleans for on/off.
 */}}
-{{- define "distant-signal.redisAclDefaultUserOn" -}}
+{{- define "distant-signal.redisAclDefaultUserMode" -}}
 {{- $v := .Values.redis.acl.defaultUser -}}
 {{- if kindIs "bool" $v -}}
-{{- if $v }}true{{ end -}}
-{{- else if eq (toString $v) "on" -}}
-true
-{{- else if ne (toString $v) "off" -}}
-{{- fail (printf "redis.acl.defaultUser must be \"on\" or \"off\", not %q." (toString $v)) -}}
+{{- ternary "on" "off" $v -}}
+{{- else if has (toString $v) (list "on" "off" "on-unshared") -}}
+{{- toString $v -}}
+{{- else -}}
+{{- fail (printf "redis.acl.defaultUser must be \"on\", \"off\" or \"on-unshared\", not %q." (toString $v)) -}}
 {{- end -}}
+{{- end }}
+
+{{/*
+True (non-empty) when the `default` user stays on with the shared
+redis.auth password, so a client may still connect as it (`"on"`).
+`"on-unshared"` is not this: `default` is on, but with its own password
+that no client is given (docs/redis-acl.md step 4).
+*/}}
+{{- define "distant-signal.redisAclDefaultUserOn" -}}
+{{- if eq (include "distant-signal.redisAclDefaultUserMode" .) "on" }}true{{ end -}}
+{{- end }}
+
+{{/*
+True (non-empty) for `defaultUser: "on-unshared"`: `default` is on with
+`~* &* +@all` and the `default-password` key of redis.acl.existingSecret,
+which no client gets. Redis replays the AOF's MULTI/EXEC blocks as
+`default`, and refuses them while it is off (docs/redis-acl.md, "Why
+on-unshared").
+*/}}
+{{- define "distant-signal.redisAclDefaultUserUnshared" -}}
+{{- if eq (include "distant-signal.redisAclDefaultUserMode" .) "on-unshared" }}true{{ end -}}
 {{- end }}
 
 {{/*
@@ -467,9 +488,10 @@ default user in values. The Redis initContainer fills in the passwords.
 {{- define "distant-signal.redisAclFile" -}}
 {{- $root := . -}}
 {{- $stage := toString .Values.redis.acl.stage -}}
-{{- if include "distant-signal.redisAclDefaultUserOn" . -}}
+{{- if or (include "distant-signal.redisAclDefaultUserOn" .) (include "distant-signal.redisAclDefaultUserUnshared" .) -}}
 {{- /* Never nopass: distant-signal.redisAclEnabled refuses default on
-     without redis.auth (security review M3). */}}
+     without redis.auth (security review M3), and on-unshared always has
+     its own default-password. */}}
 user default reset on >${REDIS_ACL_PASSWORD_DEFAULT} ~* &* +@all
 {{- else }}
 user default reset off
@@ -1635,7 +1657,7 @@ Redis credentials and the NetworkPolicy paths to Redis. Takes root.
 {{- if $on -}}
 {{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "ingestWriter" "what" "an ingestWriter.streams entry not off") -}}
 {{- if and $apply (include "distant-signal.redisAclDefaultUserOn" .) -}}
-{{- fail "an ingestWriter.streams entry set to apply needs redis.acl.defaultUser: off (security review H3): while `default` is on, anything that can reach Redis with its password could XADD entries the writer applies. Move every client to its own user, then turn default off, before the first apply." -}}
+{{- fail "an ingestWriter.streams entry set to apply needs redis.acl.defaultUser: off or \"on-unshared\" (security review H3): while `default` is on with the shared redis.auth password, anything that can reach Redis with it could XADD entries the writer applies. Move every client to its own user, then take default off the shared password (docs/redis-acl.md step 4), before the first apply." -}}
 {{- end -}}
 true
 {{- end -}}
@@ -1784,11 +1806,11 @@ Takes root.
 {{- end -}}
 {{- if $writerApplies -}}
 {{- if include "distant-signal.redisAclDefaultUserOn" $root -}}
-{{- $missing = append $missing "redis.acl.defaultUser: off, quoted \"off\" in YAML (docs/redis-acl.md step 4; an apply needs it, security review H3)" -}}
+{{- $missing = append $missing "redis.acl.defaultUser: off or, recommended, \"on-unshared\", quoted in YAML (docs/redis-acl.md step 4; an apply needs it, security review H3)" -}}
 {{- end -}}
 {{- range $client, $on := $acl.clients -}}
 {{- if include "distant-signal.redisAclClientDeployed" (dict "root" $root "client" $client) -}}
-{{- $missing = append $missing (printf "redis.acl.clients.%s: true (defaultUser off would lock it out; docs/redis-acl.md step 2)" $client) -}}
+{{- $missing = append $missing (printf "redis.acl.clients.%s: true (defaultUser on-unshared or off would lock it out; docs/redis-acl.md step 2)" $client) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
