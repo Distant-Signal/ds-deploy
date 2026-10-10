@@ -3182,13 +3182,25 @@ enricher:
       # built-in prompt. Changing a prompt changes model_version, so the
       # sweep re-extracts. Empty (the default): the built-in prompts.
       configMap: ""
-    # Message Batches for the reconciliation sweep (provider: anthropic
-    # only). Off by default.
+    # Claude Message Batches (provider: anthropic only). Off by default.
+    # docs/enricher-anthropic.md, "LLM modes".
     batch:
-      # -- LLM_SWEEP_MODE: `sync` (default; one incident at a time, as the
-      # stream loop) or `batch` (the sweep submits Claude Message Batches
-      # at half price; results usually within an hour, at most 24 h). The
-      # stream loop and reclaim always stay synchronous.
+      # -- LLM_MODE: `normal` (default; the stream loop extracts each text
+      # change synchronously within seconds, the hourly sweep follows
+      # sweepMode), `batch` (the stream loop makes no LLM call; a sweep
+      # every sweepIntervalSecs batches at least minItems stale incidents
+      # and extracts fewer synchronously) or `batch-only` (as batch, but
+      # everything is batched: half price, results in minutes to hours).
+      # batch and batch-only ignore sweepMode.
+      mode: normal
+      # -- LLM_BATCH_SWEEP_INTERVAL_SECS: the sweep's interval in `batch`
+      # and `batch-only`. Empty: 120 (batch) or 300 (batch-only).
+      sweepIntervalSecs: ""
+      # -- LLM_SWEEP_MODE (mode `normal` only): `sync` (default; one
+      # incident at a time, as the stream loop) or `batch` (the hourly
+      # sweep submits Claude Message Batches at half price; results usually
+      # within an hour, at most 24 h). The stream loop and reclaim stay
+      # synchronous.
       sweepMode: sync
       # -- LLM_BATCH_MIN_ITEMS: a sweep with fewer incidents runs them
       # synchronously.
@@ -5361,8 +5373,9 @@ metrics:
       minFailures: 3
       for: 10m
       severity: warning
-    # Claude Message Batches (enricher.llm.batch.sweepMode: batch; rendered
-    # only then, as the metrics exist only then). Three alerts:
+    # Claude Message Batches (enricher.llm.batch.sweepMode: batch, or
+    # enricher.llm.batch.mode batch / batch-only; rendered only then, as the
+    # metrics exist only then). Three alerts:
     # DistantSignalEnricherBatchFailing: at least minFailures batches failed
     # to submit or were abandoned over `window`;
     # DistantSignalEnricherBatchResultsFailing: over `window`, more than

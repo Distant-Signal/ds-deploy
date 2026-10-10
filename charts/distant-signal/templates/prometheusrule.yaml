@@ -63,7 +63,8 @@ so that clause fired on every rollout.
 {{- $imagePullOn := and ($rule.statefulImagePull).enabled (or .Values.postgresql.enabled .Values.redis.enabled) }}
 {{- $healthOn := or $postgresDownOn $apiDbDownOn $privateRetiredOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
-{{- $enricherBatchesOn := and ($rule.enricherBatches).enabled (eq ((.Values.enricher.llm.batch).sweepMode | default "sync") "batch") }}
+{{- $enricherBatching := or (eq ((.Values.enricher.llm.batch).sweepMode | default "sync") "batch") (ne ((.Values.enricher.llm.batch).mode | default "normal") "normal") }}
+{{- $enricherBatchesOn := and ($rule.enricherBatches).enabled $enricherBatching }}
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
 {{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled ($rule.ingestShadowMismatch).enabled) }}
 {{- $outboxOn := and ($rule.trainEventOutbox).enabled .Values.ingestWriter.enabled }}
@@ -802,8 +803,9 @@ spec:
     {{- if $enricherBatchesOn }}
     {{- with $rule.enricherBatches }}
     {{- /*
-    Claude Message Batches (enricher.llm.batch.sweepMode: batch,
-    docs/enricher-anthropic.md "Batch mode"). The counters and the age gauge
+    Claude Message Batches (enricher.llm.batch.sweepMode: batch, or
+    enricher.llm.batch.mode: batch / batch-only; docs/enricher-anthropic.md
+    "Batch mode", "LLM modes"). The counters and the age gauge
     are registered at 0 in batch mode, so increase() sees the first event.
     */}}
     - name: distant-signal.enricher-batches

@@ -504,8 +504,9 @@ there.
 
 ### DistantSignalEnricherBatchFailing
 
-Only rendered in batch mode (`enricher.llm.batch.sweepMode: batch`, Claude
-only; [enricher-anthropic.md](enricher-anthropic.md#batch-mode)). At least
+Only rendered in batch mode (`enricher.llm.batch.sweepMode: batch`, or
+`enricher.llm.batch.mode` `batch`/`batch-only`; Claude only;
+[enricher-anthropic.md](enricher-anthropic.md#batch-mode)). At least
 `enricherBatches.minFailures` Message Batches failed to submit or were
 abandoned over the window
 (`distant_signal:enricher_llm_batch_failures:increase`, from
@@ -542,7 +543,9 @@ delay.
 - `expired`: the API didn't get to the request within 24 h (high demand, or
   the workspace's batch queue limits). Smaller batches
   (`enricher.llm.batch.maxItems`) or synchronous sweeps
-  (`sweepMode: sync`) for a while.
+  (`sweepMode: sync`, or `mode: normal` from `batch`/`batch-only`) for a
+  while. In `batch-only` an expired request means that text change waited
+  over a day: consider `mode: batch` or `normal`.
 - `errored`: an invalid request (enricher logs `Message Batch request
   errored` with the error type; a 400 would be a request shape the API
   rejects, e.g. a schema) or a server error.

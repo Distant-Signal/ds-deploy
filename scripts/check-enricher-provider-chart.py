@@ -14,11 +14,15 @@ LLM API. This renders the chart and checks:
     key from enricher.llm.anthropic.existingSecret (never the chart's own
     Secret), LLM_PROMPT_CACHE, and no batch env unless batch mode is on;
   - batch mode renders LLM_SWEEP_MODE and the LLM_BATCH_* knobs;
+  - enricher.llm.batch.mode batch / batch-only renders LLM_MODE (not
+    LLM_SWEEP_MODE), LLM_BATCH_SWEEP_INTERVAL_SECS only when set, and the
+    batch alerts;
   - with egress NetworkPolicies on, the enricher's internet rule opens the
     Claude base URL's port without enricher.llm.baseUrl being set;
   - every unusable combination refuses to render: no Claude key Secret, an
-    OpenAI workload identity mode, batch mode on openai, an unknown
-    provider, sweep mode or prompt-cache TTL;
+    OpenAI workload identity mode, batch mode or LLM mode batch /
+    batch-only on openai, an unknown provider, sweep mode, LLM mode or
+    prompt-cache TTL, a bad batch sweep interval;
   - keyless Claude auth (`anthropicWifAuthentik`) renders the Claude IDs,
     the generic projected-token path, an audience-bound token for the
     Authentik client, no API key anywhere, the token URLs' ports and the
@@ -30,6 +34,7 @@ PyYAML (pyproject.toml's lint group).
 """
 
 import argparse
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -38,11 +43,8 @@ from typing import cast
 
 import yaml
 
-CHART = "charts/distant-signal"
-# Release A (2026-10-09) put every ingest producer on its db/stream sink by
-# default; these checks predate it and test other switches, so they render
-# on ci/http-sinks.yaml (every producer back on http, the writer on app).
-HTTP_SINKS = f"{CHART}/ci/http-sinks.yaml"
+REPO = pathlib.Path(__file__).resolve().parent.parent
+CHART = str(REPO / "charts" / "distant-signal")
 ENRICHER = "distant-signal-enricher"
 
 
@@ -51,10 +53,13 @@ def sets(*pairs: str) -> tuple[str, ...]:
     return tuple(a for p in pairs for a in ("--set", p))
 
 
-# Everything a render needs except the enricher's LLM settings.
+# Everything a render needs except the enricher's LLM settings. Release A
+# (2026-10-09) put every ingest producer on its db/stream sink by default;
+# these checks test other switches, so they render on ci/http-sinks.yaml
+# (every producer back on http, the writer on app).
 BASE = (
     "-f",
-    HTTP_SINKS,
+    str(REPO / "charts" / "distant-signal" / "ci" / "http-sinks.yaml"),
     *sets(
         "trustConsumer.kafka.brokers=k:9094",
         "trustConsumer.kafka.topic=t",
@@ -179,6 +184,90 @@ def expect(
             c.failures.append(
                 f"{label}: {name} must be {value!r}, got {env.get(name)!r}"
             )
+
+
+BATCH_ALERTS = (
+    "DistantSignalEnricherBatchFailing",
+    "DistantSignalEnricherBatchResultsFailing",
+    "DistantSignalEnricherBatchStuck",
+)
+PROMETHEUS_RULE = sets("metrics.prometheusRule.enabled=true")
+
+
+def check_llm_modes(c: Checker) -> None:
+    """Check enricher.llm.batch.mode: env, interval, alerts, guards."""
+    expect(
+        c,
+        "mode normal",
+        enricher_env(c.docs("mode normal", *ANTHROPIC)),
+        {"LLM_MODE": None, "LLM_BATCH_SWEEP_INTERVAL_SECS": None},
+    )
+    for mode in ("batch", "batch-only"):
+        label = f"mode {mode}"
+        mode_set = sets(f"enricher.llm.batch.mode={mode}")
+        docs = c.docs(label, *ANTHROPIC, *mode_set, *PROMETHEUS_RULE)
+        expect(
+            c,
+            label,
+            enricher_env(docs),
+            {
+                "LLM_MODE": mode,
+                "LLM_SWEEP_MODE": None,
+                "LLM_BATCH_SWEEP_INTERVAL_SECS": None,
+                "LLM_BATCH_MIN_ITEMS": "20",
+                "LLM_BATCH_MAX_ITEMS": "2000",
+                "LLM_BATCH_POLL_SECS": "60",
+            },
+        )
+        rules = yaml.safe_dump(docs)
+        for alert in BATCH_ALERTS:
+            if alert not in rules:
+                c.failures.append(f"{label}: {alert} must render")
+        # sweepMode is ignored: batch here never adds LLM_SWEEP_MODE.
+        expect(
+            c,
+            f"{label} tuned",
+            enricher_env(
+                c.docs(
+                    f"{label} tuned",
+                    *ANTHROPIC,
+                    *mode_set,
+                    *sets(
+                        "enricher.llm.batch.sweepIntervalSecs=90",
+                        "enricher.llm.batch.sweepMode=batch",
+                    ),
+                )
+            ),
+            {
+                "LLM_MODE": mode,
+                "LLM_SWEEP_MODE": None,
+                "LLM_BATCH_SWEEP_INTERVAL_SECS": "90",
+            },
+        )
+        c.refuses(
+            f"{label} on openai",
+            f"enricher.llm.batch.mode={mode} needs enricher.llm.provider=anthropic",
+            *OPENAI,
+            *mode_set,
+        )
+    rules = yaml.safe_dump(c.docs("mode normal alerts", *ANTHROPIC, *PROMETHEUS_RULE))
+    if any(alert in rules for alert in BATCH_ALERTS):
+        c.failures.append("mode normal: no batch alert may render with sync sweeps")
+    c.refuses(
+        "unknown LLM mode",
+        "is not one of normal, batch, batch-only",
+        *ANTHROPIC,
+        *sets("enricher.llm.batch.mode=nightly"),
+    )
+    c.refuses(
+        "bad batch sweep interval",
+        "must be a positive whole number",
+        *ANTHROPIC,
+        *sets(
+            "enricher.llm.batch.mode=batch",
+            "enricher.llm.batch.sweepIntervalSecs=2m",
+        ),
+    )
 
 
 def check_openai_default(c: Checker) -> None:
@@ -499,6 +588,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_refusals(c)
     check_claude_wif(c)
     check_profiles(c)
+    check_llm_modes(c)
     for failure in c.failures:
         print(failure)
     if not c.failures:

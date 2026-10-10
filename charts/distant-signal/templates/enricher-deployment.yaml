@@ -35,6 +35,16 @@ number or `omit` for each sampling override. */}}
 {{- if not (has $sweepMode (list "sync" "batch")) }}
 {{- fail (printf "enricher.llm.batch.sweepMode=%q is not one of sync, batch." $sweepMode) }}
 {{- end }}
+{{- /* LLM_MODE (docs/enricher-anthropic.md "LLM modes"). batch and
+batch-only replace sweepMode (ignored then). */}}
+{{- $llmMode := $batch.mode | default "normal" }}
+{{- if not (has $llmMode (list "normal" "batch" "batch-only")) }}
+{{- fail (printf "enricher.llm.batch.mode=%q is not one of normal, batch, batch-only." $llmMode) }}
+{{- end }}
+{{- $batchSweepInterval := toString ($batch.sweepIntervalSecs | default "") }}
+{{- if and $batchSweepInterval (not (regexMatch "^[1-9][0-9]*$" $batchSweepInterval)) }}
+{{- fail (printf "enricher.llm.batch.sweepIntervalSecs=%q must be a positive whole number of seconds (or empty for the mode's default)." $batchSweepInterval) }}
+{{- end }}
 {{- $authMode := .Values.enricher.llm.auth | default "apiKey" }}
 {{- if $anthropic }}
 {{- /* The Claude API (enricher.llm.provider=anthropic): its own base URL,
@@ -61,6 +71,9 @@ model and key Secret, or keyless with anthropicWifAuthentik. */}}
 {{- else }}
 {{- if eq $authMode "anthropicWifAuthentik" }}
 {{- fail "enricher.llm.auth=anthropicWifAuthentik mints Claude API tokens: it needs enricher.llm.provider=anthropic." }}
+{{- end }}
+{{- if ne $llmMode "normal" }}
+{{- fail (printf "enricher.llm.batch.mode=%s needs enricher.llm.provider=anthropic: the enricher has no OpenAI Batch API support." $llmMode) }}
 {{- end }}
 {{- if eq $sweepMode "batch" }}
 {{- fail "enricher.llm.batch.sweepMode=batch needs enricher.llm.provider=anthropic: the enricher has no OpenAI Batch API support." }}
@@ -249,6 +262,9 @@ with enricher.extraEnv, which replaces an entry of the same name.
             {{- if include "distant-signal.enricherAnthropic" . }}
             {{- $claude := .Values.enricher.llm.anthropic }}
             {{- $batch := .Values.enricher.llm.batch | default dict }}
+            {{- $llmMode := $batch.mode | default "normal" }}
+            {{- $sweepMode := $batch.sweepMode | default "sync" }}
+            {{- $batchSweepInterval := toString ($batch.sweepIntervalSecs | default "") }}
             # The Claude API (enricher.llm.provider, docs/enricher-anthropic.md).
             - name: LLM_PROVIDER
               value: "anthropic"
@@ -269,9 +285,18 @@ with enricher.extraEnv, which replaces an entry of the same name.
             - name: LLM_THINKING
               value: {{ . | quote }}
             {{- end }}
-            {{- if eq ($batch.sweepMode | default "sync") "batch" }}
+            {{- if or (ne $llmMode "normal") (eq $sweepMode "batch") }}
+            {{- if ne $llmMode "normal" }}
+            - name: LLM_MODE
+              value: {{ $llmMode | quote }}
+            {{- with $batchSweepInterval }}
+            - name: LLM_BATCH_SWEEP_INTERVAL_SECS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- else }}
             - name: LLM_SWEEP_MODE
               value: "batch"
+            {{- end }}
             - name: LLM_BATCH_MIN_ITEMS
               value: {{ $batch.minItems | default 20 | quote }}
             - name: LLM_BATCH_MAX_ITEMS
