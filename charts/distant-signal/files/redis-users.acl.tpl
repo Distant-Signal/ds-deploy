@@ -46,15 +46,17 @@ movement-relay client ~movement-events ~movement-events-deadletter +xadd +xtrim 
 # (crates/movement-feed/src/redis_stream.rs). XGROUP CREATE ... MKSTREAM,
 # XREADGROUP, XACK, XAUTOCLAIM, XPENDING (summary and per consumer), XINFO
 # GROUPS/STREAM, EXISTS, XRANGE (replay), and XLEN + XADD on their
-# dead-letter stream (never XTRIM: the relay trims it).
-trust-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|createconsumer +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen)
-trust-backlog-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|createconsumer +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen)
+# dead-letter stream (never XTRIM: the relay trims it). XGROUP SETID moves
+# their group forward again after a Redis restart reloaded an older
+# position (common::redis_group, 2026-10-09).
+trust-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|createconsumer +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen)
+trust-backlog-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|createconsumer +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen)
 # Plus its phase 3a stream (spec §7.1), with final rights now.
-full-coverage-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|createconsumer +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen) (~ds:ingest:full-coverage +xadd +xrevrange)
+full-coverage-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|createconsumer +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen) (~ds:ingest:full-coverage +xadd +xrevrange)
 
 # enricher: crates/enricher/src/stream.rs (group `enricher` on
-# incident-text-changed).
-enricher client ~incident-text-changed +xreadgroup +xack +xautoclaim +xgroup|create +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id
+# incident-text-changed). XGROUP SETID as for the movement-events consumers.
+enricher client ~incident-text-changed +xreadgroup +xack +xautoclaim +xgroup|create +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id
 
 # api: XADD incident-text-changed MAXLEN ~ N (crates/api/src/data/queries.rs).
 # Write-only. Until phase 2c moves the publish to poller-incidents; the api

@@ -2430,7 +2430,10 @@ aggregator:
   # confirmation happening first. See also
   # trustBacklogConsumer.retentionDaysWarningAcknowledged below, which
   # exists purely to document that this decision has been made, not to
-  # gate anything itself.
+  # gate anything itself. trust-backlog-consumer reads the same value
+  # (TRUST_EVENT_BACKLOG_RETENTION_DAYS) and does not store an entry that
+  # arrived longer ago, so a rewound consumer group cannot re-insert rows
+  # past this window.
   trustEventBacklogRetentionDays: 1
   # -- How long to keep schedule_destination_departures rows, in whole
   # service dates. This table holds one row per departure (~377,000 per
