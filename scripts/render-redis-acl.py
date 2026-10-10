@@ -122,10 +122,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--no-default-password", action="store_true")
     parser.add_argument("--passwords-from-env", action="store_true")
     args = parser.parse_args(argv)
+    if args.default_user == "on-unshared" and args.no_default_password:
+        print(
+            "render-redis-acl: --default-user on-unshared always has its own password",
+            file=sys.stderr,
+        )
+        return 1
     try:
-        if args.default_user == "on-unshared" and args.no_default_password:
-            msg = "--default-user on-unshared always has its own password"
-            raise AclError(msg)
         acl = render(
             TEMPLATE.read_text(encoding="utf-8"),
             stage=args.stage,
