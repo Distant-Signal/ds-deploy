@@ -29,6 +29,11 @@ number or `omit` for each sampling override. */}}
 {{- fail (printf "enricher.llm.%s=%q must be a number or \"omit\"." $key $v) }}
 {{- end }}
 {{- end }}
+{{- with $llmValues.openaiPromptCache }}
+{{- if not (has . (list "explicit" "off" "omit")) }}
+{{- fail (printf "enricher.llm.openaiPromptCache=%q is not one of explicit, off, omit." .) }}
+{{- end }}
+{{- end }}
 {{- $prompts := $llmValues.prompts | default dict }}
 {{- $batch := .Values.enricher.llm.batch | default dict }}
 {{- $sweepMode := $batch.sweepMode | default "sync" }}
@@ -391,6 +396,10 @@ with enricher.extraEnv, which replaces an entry of the same name.
             {{- with .Values.enricher.llm.topP }}
             - name: LLM_TOP_P
               value: {{ . | toString | quote }}
+            {{- end }}
+            {{- with .Values.enricher.llm.openaiPromptCache }}
+            - name: LLM_OPENAI_PROMPT_CACHE
+              value: {{ . | quote }}
             {{- end }}
             {{- if (.Values.enricher.llm.prompts | default dict).configMap }}
             - name: LLM_PROMPTS_DIR

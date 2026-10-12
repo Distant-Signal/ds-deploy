@@ -3202,6 +3202,13 @@ enricher:
     # -- LLM_TOP_P: overrides the profile's top_p (none); a number or
     # "omit". Empty keeps the profile's.
     topP: ""
+    # -- LLM_OPENAI_PROMPT_CACHE (Chat Completions only): `explicit` caches
+    # the static system prompt (explicit-only mode, one breakpoint, a
+    # stable prompt_cache_key per profile and call), `off` disables caching
+    # and its cache writes, "omit" sends nothing (the endpoint's default).
+    # Empty keeps the profile's: explicit for gpt-6-luna, nothing otherwise
+    # (docs/enricher-openai.md, "Prompt caching").
+    openaiPromptCache: ""
     prompts:
       # -- Name of an existing ConfigMap of system-prompt overrides, mounted
       # at /etc/enricher/prompts (LLM_PROMPTS_DIR). Keys
