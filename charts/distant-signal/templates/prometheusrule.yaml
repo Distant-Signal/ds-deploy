@@ -803,10 +803,12 @@ spec:
     {{- if $enricherBatchesOn }}
     {{- with $rule.enricherBatches }}
     {{- /*
-    Claude Message Batches (enricher.llm.batch.sweepMode: batch, or
-    enricher.llm.batch.mode: batch / batch-only; docs/enricher-anthropic.md
-    "Batch mode", "LLM modes"). The counters and the age gauge
-    are registered at 0 in batch mode, so increase() sees the first event.
+    Claude Message Batches or OpenAI batches (enricher.llm.batch.sweepMode:
+    batch, or enricher.llm.batch.mode: batch / batch-only;
+    docs/enricher-anthropic.md "Batch mode", "LLM modes" and
+    docs/enricher-openai.md "Batch mode"). The counters (labelled
+    `provider`) and the age gauge are registered at 0 in batch mode, so
+    increase() sees the first event.
     */}}
     - name: distant-signal.enricher-batches
       rules:
@@ -860,6 +862,32 @@ spec:
             summary: "enricher Message Batch in flight for over a day"
             description: "The oldest in-flight batch was submitted {{ "{{ $value | humanizeDuration }}" }} ago; batches expire after 24 h."
             runbook_url: {{ printf "%s#distantsignalenricherbatchstuck" $runbook | quote }}
+        - alert: DistantSignalEnricherBatchInvalid
+          expr: |
+            sum by (namespace, provider) (increase(distant_signal_enricher_llm_batches_total{namespace="{{ $ns }}", event="validation_failed"}[{{ .window }}])) >= 1
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "enricher {{ "{{ $labels.provider }}" }} batch failed input validation"
+            description: "{{ "{{ $value | humanize }}" }} batches failed validation in {{ .window }}; nothing in them ran. The enricher log has the errors."
+            runbook_url: {{ printf "%s#distantsignalenricherbatchinvalid" $runbook | quote }}
+        - alert: DistantSignalEnricherBatchFileCleanupFailing
+          expr: |
+            sum by (namespace) (increase(distant_signal_enricher_llm_batch_files_total{namespace="{{ $ns }}", event="delete_failed"}[{{ .window }}])) >= {{ .minFailures }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "enricher cannot delete its OpenAI batch files"
+            description: "{{ "{{ $value | humanize }}" }} batch file deletions failed in {{ .window }}; the files stay until they expire (2 days)."
+            runbook_url: {{ printf "%s#distantsignalenricherbatchfilecleanupfailing" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $fcwOn }}

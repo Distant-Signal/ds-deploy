@@ -1,5 +1,5 @@
 # promtool unit tests for the distant-signal.enricher-batches group (Claude
-# Message Batches; see recorded-alerts.yaml's header for how rules.yaml is
+# Message Batches and OpenAI batches; see recorded-alerts.yaml's header for how rules.yaml is
 # rendered: scripts/check-alert-payloads.py renders it with
 # enricher.llm.batch.sweepMode=batch, so this group is present). Defaults:
 # window 6h, minFailures 2, resultFailureRatio 0.2, minResults 20,
@@ -81,3 +81,45 @@ tests:
       - eval_time: 55m
         alertname: DistantSignalEnricherBatchStuck
         exp_alerts: []
+
+  # An OpenAI batch fails input validation: fires per provider, even once.
+  # A Claude batch that merely ended doesn't.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_batches_total{namespace="distant-signal", pod="enricher", provider="openai", stage="primary", event="validation_failed"}'
+        values: '0x10 1x60'
+      - series: 'distant_signal_enricher_llm_batches_total{namespace="distant-signal", pod="enricher", provider="anthropic", stage="primary", event="ended"}'
+        values: '0+1x70'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalEnricherBatchInvalid
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DistantSignalEnricherBatchInvalid
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, provider: openai}
+            exp_annotations:
+              summary: enricher openai batch failed input validation
+              description: "1 batches failed validation in 6h; nothing in them ran. The enricher log has the errors."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalenricherbatchinvalid
+
+  # Two OpenAI batch file deletions fail: fires. One alone (below
+  # minFailures) doesn't, nor do successful deletions.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_batch_files_total{namespace="distant-signal", pod="enricher", provider="openai", event="delete_failed"}'
+        values: '0x10 1x20 2x60'
+      - series: 'distant_signal_enricher_llm_batch_files_total{namespace="distant-signal", pod="enricher", provider="openai", event="deleted"}'
+        values: '0+3x90'
+    alert_rule_test:
+      - eval_time: 28m
+        alertname: DistantSignalEnricherBatchFileCleanupFailing
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: DistantSignalEnricherBatchFileCleanupFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: enricher cannot delete its OpenAI batch files
+              description: "2 batch file deletions failed in 6h; the files stay until they expire (2 days)."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalenricherbatchfilecleanupfailing

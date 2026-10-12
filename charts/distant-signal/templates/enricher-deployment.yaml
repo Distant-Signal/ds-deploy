@@ -72,12 +72,6 @@ model and key Secret, or keyless with anthropicWifAuthentik. */}}
 {{- if eq $authMode "anthropicWifAuthentik" }}
 {{- fail "enricher.llm.auth=anthropicWifAuthentik mints Claude API tokens: it needs enricher.llm.provider=anthropic." }}
 {{- end }}
-{{- if ne $llmMode "normal" }}
-{{- fail (printf "enricher.llm.batch.mode=%s needs enricher.llm.provider=anthropic: the enricher has no OpenAI Batch API support." $llmMode) }}
-{{- end }}
-{{- if eq $sweepMode "batch" }}
-{{- fail "enricher.llm.batch.sweepMode=batch needs enricher.llm.provider=anthropic: the enricher has no OpenAI Batch API support." }}
-{{- end }}
 {{- if not .Values.enricher.llm.baseUrl }}
 {{- fail "enricher.llm.baseUrl is empty. Set it to the base URL of an OpenAI-compatible chat-completions endpoint (e.g. --set enricher.llm.baseUrl=http://vllm.internal:8000/v1). An empty value would deploy an enricher that fails every extraction request." }}
 {{- end }}
@@ -268,12 +262,12 @@ with enricher.extraEnv, which replaces an entry of the same name.
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "enricher" "user" "enricher") }}
-            {{- if include "distant-signal.enricherAnthropic" . }}
-            {{- $claude := .Values.enricher.llm.anthropic }}
             {{- $batch := .Values.enricher.llm.batch | default dict }}
             {{- $llmMode := $batch.mode | default "normal" }}
             {{- $sweepMode := $batch.sweepMode | default "sync" }}
             {{- $batchSweepInterval := toString ($batch.sweepIntervalSecs | default "") }}
+            {{- if include "distant-signal.enricherAnthropic" . }}
+            {{- $claude := .Values.enricher.llm.anthropic }}
             # The Claude API (enricher.llm.provider, docs/enricher-anthropic.md).
             - name: LLM_PROVIDER
               value: "anthropic"
@@ -294,7 +288,15 @@ with enricher.extraEnv, which replaces an entry of the same name.
             - name: LLM_THINKING
               value: {{ . | quote }}
             {{- end }}
+            {{- else }}
+            - name: LLM_BASE_URL
+              value: {{ .Values.enricher.llm.baseUrl | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.enricher.llm.model | quote }}
+            {{- end }}
             {{- if or (ne $llmMode "normal") (eq $sweepMode "batch") }}
+            # Batches, on either provider (docs/enricher-anthropic.md "LLM
+            # modes", docs/enricher-openai.md "Batch mode").
             {{- if ne $llmMode "normal" }}
             - name: LLM_MODE
               value: {{ $llmMode | quote }}
@@ -312,12 +314,6 @@ with enricher.extraEnv, which replaces an entry of the same name.
               value: {{ $batch.maxItems | default 2000 | quote }}
             - name: LLM_BATCH_POLL_SECS
               value: {{ $batch.pollIntervalSecs | default 60 | quote }}
-            {{- end }}
-            {{- else }}
-            - name: LLM_BASE_URL
-              value: {{ .Values.enricher.llm.baseUrl | quote }}
-            - name: LLM_MODEL
-              value: {{ .Values.enricher.llm.model | quote }}
             {{- end }}
             {{- if eq (.Values.enricher.llm.auth | default "apiKey") "anthropicWifAuthentik" }}
             {{- $wi := .Values.enricher.llm.workloadIdentity }}

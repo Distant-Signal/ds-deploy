@@ -505,9 +505,11 @@ there.
 ### DistantSignalEnricherBatchFailing
 
 Only rendered in batch mode (`enricher.llm.batch.sweepMode: batch`, or
-`enricher.llm.batch.mode` `batch`/`batch-only`; Claude only;
-[enricher-anthropic.md](enricher-anthropic.md#batch-mode)). At least
-`enricherBatches.minFailures` Message Batches failed to submit or were
+`enricher.llm.batch.mode` `batch`/`batch-only`;
+[enricher-anthropic.md](enricher-anthropic.md#batch-mode) for Claude,
+[enricher-openai.md](enricher-openai.md#batch-mode) for OpenAI; the
+metrics' `provider` label says which). At least
+`enricherBatches.minFailures` batches failed to submit or were
 abandoned over the window
 (`distant_signal:enricher_llm_batch_failures:increase`, from
 `enricher_llm_batches_total{event=~"submit_failed|abandoned"}`). The sweep's
@@ -518,13 +520,17 @@ sweep succeeds.
   primary batch` / `Message Batches API call failed` log lines carry the
   status and `request-id`), or recording it in `enricher_llm_batches`
   failed (then the batch is canceled). A 401/403 is the credential (with
-  keyless auth, a rule scope too narrow for batches: use
-  `workspace:developer`); 413 a batch too large (lower
-  `enricher.llm.batch.maxItems`); 429/529 the API's limits.
+  keyless Claude auth, a rule scope too narrow for batches: use
+  `workspace:developer`; on OpenAI, a key or service account without
+  `api.batch.write`); 413 a batch too large (lower
+  `enricher.llm.batch.maxItems`); 429/529 the API's limits. OpenAI logs
+  `OpenAI Batch API call failed` with `what` (`upload`, `create`, ...).
 - `abandoned`: the API no longer knows a batch (404), its results are gone
-  (over 29 days), or it was submitted under another `model_version`. One or
-  two right after a model or prompt change are expected (in-flight batches
-  are canceled); more mean batches are lost: check the logs.
+  (Claude: over 29 days; OpenAI: the output file expired, 2 days after
+  the batch), it was submitted under another `model_version`, or to another
+  provider. One or two right after a model, prompt or provider change are
+  expected (in-flight batches are canceled); more mean batches are lost:
+  check the logs.
 
 Poll failures (`event="poll_failed"`) don't count here: a transient one is
 retried next poll, and a persistent one shows up as
@@ -546,8 +552,8 @@ delay.
   (`sweepMode: sync`, or `mode: normal` from `batch`/`batch-only`) for a
   while. In `batch-only` an expired request means that text change waited
   over a day: consider `mode: batch` or `normal`.
-- `errored`: an invalid request (enricher logs `Message Batch request
-  errored` with the error type; a 400 would be a request shape the API
+- `errored`: an invalid request (enricher logs `batch request errored`
+  with the error type or code; a 400 would be a request shape the API
   rejects, e.g. a schema) or a server error.
 - `canceled`: someone canceled the batch in the Console, or the enricher
   canceled it after a model change.
@@ -564,6 +570,36 @@ batch id and the Console's Batches page. A row whose batch the API has
 forgotten is dropped on the next poll (404 → `abandoned`); to drop one by
 hand, `DELETE FROM enricher_llm_batches WHERE batch_id = '<id>'` (its
 incidents go into the next sweep).
+
+### DistantSignalEnricherBatchInvalid
+
+Only rendered in batch mode. At least one batch failed input validation
+over the window (`enricher_llm_batches_total{event="validation_failed"}`,
+per `provider`). Today only OpenAI reports this: the batch's status is
+`failed`, so its input file was rejected before anything ran and there are
+no results (nothing billed). The enricher drops the row, deletes the input
+file and logs `batch failed input validation` with the API's errors (line
+number, code, message). The incidents go into the next sweep, which will
+fail the same way until the cause is fixed, so this doesn't clear by
+itself:
+
+- a model the Batch API doesn't serve, or a request field it rejects (e.g.
+  after a profile change): fix the profile, or set `sweepMode: sync`;
+- a file over the limits (50,000 requests, 200 MB): lower
+  `enricher.llm.batch.maxItems`.
+
+### DistantSignalEnricherBatchFileCleanupFailing
+
+Only rendered in batch mode; only OpenAI batches have files. At least
+`enricherBatches.minFailures` deletions of batch input, output or error
+files failed over the window
+(`enricher_llm_batch_files_total{event="delete_failed"}`; the enricher logs
+`could not delete a batch file` with the file id). Batch files are not
+covered by zero data retention, so the enricher deletes them once it has
+processed a batch. A file it couldn't delete still expires 2 days after it
+was created (`expires_after`), so nothing is kept for long. Usually the
+credential lacks the files permission (`api.batch.write` covers it), or the
+API is failing. To delete by hand: `DELETE /v1/files/<id>`.
 
 ## full-coverage windows
 

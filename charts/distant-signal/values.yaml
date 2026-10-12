@@ -3210,7 +3210,9 @@ enricher:
       # built-in prompt. Changing a prompt changes model_version, so the
       # sweep re-extracts. Empty (the default): the built-in prompts.
       configMap: ""
-    # Claude Message Batches (provider: anthropic only). Off by default.
+    # The provider's batch API (Claude Message Batches or the OpenAI Batch
+    # API; OpenAI needs `api.batch.write` on the key or the WIF service
+    # account, docs/enricher-openai.md "Batch mode"). Off by default.
     # docs/enricher-anthropic.md, "LLM modes".
     batch:
       # -- LLM_MODE: `normal` (default; the stream loop extracts each text
@@ -3226,9 +3228,8 @@ enricher:
       sweepIntervalSecs: ""
       # -- LLM_SWEEP_MODE (mode `normal` only): `sync` (default; one
       # incident at a time, as the stream loop) or `batch` (the hourly
-      # sweep submits Claude Message Batches at half price; results usually
-      # within an hour, at most 24 h). The stream loop and reclaim stay
-      # synchronous.
+      # sweep submits batches at half price; results usually within an
+      # hour, at most 24 h). The stream loop and reclaim stay synchronous.
       sweepMode: sync
       # -- LLM_BATCH_MIN_ITEMS: a sweep with fewer incidents runs them
       # synchronously.
