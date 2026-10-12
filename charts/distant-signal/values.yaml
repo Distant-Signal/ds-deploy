@@ -3217,6 +3217,12 @@ enricher:
       # built-in prompt. Changing a prompt changes model_version, so the
       # sweep re-extracts. Empty (the default): the built-in prompts.
       configMap: ""
+    # -- CARRY_FORWARD_SEMANTIC_NOOPS: when true (the default), a text
+    # change that only touches HTML, whitespace, entities, case or in-word
+    # punctuation re-stamps the existing extraction instead of re-running
+    # the LLM. false re-runs the LLM for every text change. Must be a
+    # boolean.
+    carryForwardSemanticNoops: true
     # The provider's batch API (Claude Message Batches or the OpenAI Batch
     # API; OpenAI needs `api.batch.write` on the key or the WIF service
     # account, docs/enricher-openai.md "Batch mode"). Off by default.
@@ -3233,8 +3239,8 @@ enricher:
       # -- LLM_BATCH_SWEEP_INTERVAL_SECS: the sweep's interval in `batch`
       # and `batch-only`. Empty: 120 (batch) or 300 (batch-only).
       sweepIntervalSecs: ""
-      # -- LLM_SWEEP_MODE (mode `normal` only): `sync` (default; one
-      # incident at a time, as the stream loop) or `batch` (the hourly
+      # -- LLM_SWEEP_MODE (mode `normal` only): `sync` (default; up to
+      # LLM_MAX_IN_FLIGHT incidents at a time) or `batch` (the hourly
       # sweep submits batches at half price; results usually within an
       # hour, at most 24 h). The stream loop and reclaim stay synchronous.
       sweepMode: sync
@@ -3286,8 +3292,9 @@ enricher:
   logLevel: info
   # -- Extra env vars. The enricher's off-by-default settings (provider
   # policy: LLM_REASONING_EFFORT, LLM_MAX_TOKENS, LLM_MAX_IN_FLIGHT,
-  # LLM_RATE_LIMIT_RETRIES, LLM_RATE_LIMIT_RETRY_SECS, LLM_GATEWAY_RETRIES;
-  # and CARRY_FORWARD_SEMANTIC_NOOPS) are set here -- see the README.
+  # LLM_RATE_LIMIT_RETRIES, LLM_RATE_LIMIT_RETRY_SECS, LLM_GATEWAY_RETRIES)
+  # are set here -- see the README. An entry replaces a chart-rendered env
+  # var of the same name.
   extraEnv: []
   # Reads one incident at a time off Redis and calls out to the LLM
   # over HTTP. Almost all of its wall-clock is waiting on that call, so

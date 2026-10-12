@@ -2173,6 +2173,7 @@ they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 | `enricher.llm.topP` | `""` | `LLM_TOP_P`: overrides the profile's `top_p` (none); a number (quoted) or `omit`. |
 | `enricher.llm.openaiPromptCache` | `""` | `LLM_OPENAI_PROMPT_CACHE` (Chat Completions only): `explicit` caches the static system prompt (explicit-only mode, one breakpoint, a stable `prompt_cache_key` per profile and call), `off` disables caching and its cache writes, `omit` sends nothing (the endpoint's default). Empty keeps the profile's: `explicit` for gpt-6-luna, nothing otherwise. Any other value aborts the render. See [docs/enricher-openai.md](../../docs/enricher-openai.md#prompt-caching). |
 | `enricher.llm.prompts.configMap` | `""` | An existing ConfigMap of system-prompt overrides, mounted at `/etc/enricher/prompts` (`LLM_PROMPTS_DIR`): keys `<profile>.<call>.txt` or `<call>.txt` (`primary`, `adversarial`, `severity_adversarial`); a call with neither keeps the built-in prompt. A prompt change changes `model_version`, so incidents re-extract. |
+| `enricher.llm.carryForwardSemanticNoops` | `true` | `CARRY_FORWARD_SEMANTIC_NOOPS`: a text change that only touches HTML, whitespace, entities, case or in-word punctuation re-stamps the existing extraction instead of re-running the LLM (`enricher_extraction_carried_forward_total`). `false` re-runs the LLM for every text change; the edit class then only labels `enricher_extraction_rerun_total` and `enricher_extraction_churn_total` (`edit_class`). Must be a boolean. |
 | `enricher.llm.batch.mode` | `normal` | `LLM_MODE`. `normal`: the stream loop extracts each text change synchronously; the hourly sweep follows `sweepMode`. `batch`: the stream loop and reclaim make no LLM call; a sweep every `sweepIntervalSecs` batches at least `minItems` stale incidents and extracts fewer synchronously. `batch-only`: as `batch`, but everything is batched (half price; results in minutes to hours). Both ignore `sweepMode`. Either provider (OpenAI needs `api.batch.write`: docs/enricher-openai.md, "Batch mode"). Any other value aborts the render. See [docs/enricher-anthropic.md](../../docs/enricher-anthropic.md#llm-modes). |
 | `enricher.llm.batch.sweepIntervalSecs` | `""` | `LLM_BATCH_SWEEP_INTERVAL_SECS`: the sweep's interval in mode `batch`/`batch-only`. Empty: 120 (`batch`) or 300 (`batch-only`). Anything but a positive whole number aborts the render. |
 | `enricher.llm.batch.sweepMode` | `sync` | `LLM_SWEEP_MODE` (mode `normal` only). `batch` sends the reconciliation sweep's extractions through the provider's batch API (Claude Message Batches, or the OpenAI Batch API with provider `openai`, which needs `api.batch.write`: docs/enricher-openai.md, "Batch mode"), at half price, results usually within an hour (at most 24 h); the stream loop and reclaim stay synchronous. Any other value aborts the render. |
@@ -2205,11 +2206,10 @@ same requests as before and never retries a call in-process.
 |---|---|---|
 | `LLM_REASONING_EFFORT` | unset | Sent as `reasoning_effort` (e.g. `low`, or `none` for OpenAI's gpt-6-luna). Reasoning models whose default effort is high need it, or they can spend their whole budget thinking and return empty content (`outcome="empty_content"`). Prefer `enricher.llm.reasoningEffort`. |
 | `LLM_MAX_TOKENS` | unset | Sent as `max_tokens` (e.g. `8192`). Leave unset for OpenAI's gpt-6-luna, which rejects `max_tokens`. |
-| `LLM_MAX_IN_FLIGHT` | unset | Cap on concurrent LLM HTTP requests across the stream, sweep and reclaim loops. |
+| `LLM_MAX_IN_FLIGHT` | unset | Cap on concurrent LLM HTTP requests across the stream, sweep and reclaim loops. Also how many incidents the synchronous sweep extracts at once (unset: one at a time). |
 | `LLM_RATE_LIMIT_RETRIES` | `0` | In-call retries on HTTP 429. Each waits `Retry-After` (at least `LLM_RATE_LIMIT_RETRY_SECS`); a `Retry-After` over 600 s fails the call instead. A 429 whose body says the account is out of quota or at its billing limit (`insufficient_quota`, `outcome="quota_exhausted"`) is never retried. |
 | `LLM_RATE_LIMIT_RETRY_SECS` | `20` | Minimum wait before a 429 retry. |
 | `LLM_GATEWAY_RETRIES` | `0` | In-call retries on 502/503/504 and client timeouts. A 502/503/504 retry waits the response's `Retry-After` (over 600 s fails the call instead), or else 2 s, 4 s, ... up to 30 s; a client timeout retries at once. Above `0` it also stops a timeout or 504 feeding the per-text retry backoff. (429, 502 and 503 never feed it.) |
-| `CARRY_FORWARD_SEMANTIC_NOOPS` | `false` | When `true`, a text change that only touches HTML, whitespace, entities, case or in-word punctuation re-stamps the existing extraction instead of re-running the LLM (`enricher_extraction_carried_forward_total`). With it off, the edit class only labels `enricher_extraction_rerun_total` and `enricher_extraction_churn_total` (`edit_class`). |
 
 For example, for a slow, rate-limited hosted reasoning model:
 
@@ -2223,7 +2223,6 @@ enricher:
     - { name: LLM_MAX_IN_FLIGHT, value: "3" }
     - { name: LLM_RATE_LIMIT_RETRIES, value: "3" }
     - { name: LLM_GATEWAY_RETRIES, value: "2" }
-    - { name: CARRY_FORWARD_SEMANTIC_NOOPS, value: "true" }
 ```
 
 #### Keyless OpenAI auth (workload identity federation)

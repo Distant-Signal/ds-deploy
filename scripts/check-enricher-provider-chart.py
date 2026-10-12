@@ -27,7 +27,10 @@ LLM API. This renders the chart and checks:
     the generic projected-token path, an audience-bound token for the
     Authentik client, no API key anywhere, the token URLs' ports and the
     token-exchange alert, and refuses to render without its IDs, a
-    dedicated ServiceAccount, with a key Secret, or on openai.
+    dedicated ServiceAccount, with a key Secret, or on openai;
+  - CARRY_FORWARD_SEMANTIC_NOOPS renders "true" by default, "false" from
+    enricher.llm.carryForwardSemanticNoops=false or an extraEnv entry, and
+    a non-boolean value refuses to render.
 
 Exit 1 with one line per failed check. Needs helm on PATH (or --helm) and
 PyYAML (pyproject.toml's lint group).
@@ -614,6 +617,42 @@ def check_profiles(c: Checker) -> None:
     )
 
 
+def check_carry_forward(c: Checker) -> None:
+    """Check enricher.llm.carryForwardSemanticNoops: on by default, guarded."""
+    for label, args, want in [
+        ("carry-forward default", OPENAI, "true"),
+        ("carry-forward default (anthropic)", ANTHROPIC, "true"),
+        (
+            "carry-forward off",
+            (*OPENAI, *sets("enricher.llm.carryForwardSemanticNoops=false")),
+            "false",
+        ),
+        (
+            "carry-forward off via extraEnv",
+            (
+                *OPENAI,
+                *sets("enricher.extraEnv[0].name=CARRY_FORWARD_SEMANTIC_NOOPS"),
+                "--set-string",
+                "enricher.extraEnv[0].value=false",
+            ),
+            "false",
+        ),
+    ]:
+        expect(
+            c,
+            label,
+            enricher_env(c.docs(label, *args)),
+            {"CARRY_FORWARD_SEMANTIC_NOOPS": want},
+        )
+    c.refuses(
+        "carry-forward not a boolean",
+        "must be a boolean",
+        *OPENAI,
+        "--set-string",
+        "enricher.llm.carryForwardSemanticNoops=false",
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run every check; print failures."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
@@ -628,6 +667,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_claude_wif(c)
     check_profiles(c)
     check_llm_modes(c)
+    check_carry_forward(c)
     for failure in c.failures:
         print(failure)
     if not c.failures:
