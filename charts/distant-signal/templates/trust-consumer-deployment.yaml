@@ -11,6 +11,12 @@ spec:
   # 0 is an explicit, `helm get values`-inspectable step rather than an
   # out-of-band `kubectl scale`.
   replicas: {{ .Values.trustConsumer.replicaCount }}
+  # trustConsumer.updateStrategy, default Recreate (rollout deadlock,
+  # 2026-10-10; see trust-backlog-consumer-deployment.yaml and
+  # distant-signal.workerStrategy). The gap is safe: the consumer group
+  # keeps every entry, and the new pod replays its own PEL.
+  strategy:
+    {{- include "distant-signal.workerStrategyBlock" (dict "root" . "key" "trustConsumer") | nindent 4 }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "trust-consumer") | nindent 6 }}

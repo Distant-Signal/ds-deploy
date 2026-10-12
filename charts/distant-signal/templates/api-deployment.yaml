@@ -52,7 +52,9 @@ TRUST consumers' with their ingest.sink db (trust-backlog-consumer 3,
 trust-consumer 2; plan 3b; trust-consumer's one pool also when its
 internalReads.source is db), and the other phase 4 readers' with
 <component>.internalReads.source db (full-coverage-consumer 2,
-poller-ldbws 1), all summed; plus
+poller-ldbws 1), all summed (the enricher's, the TRUST consumers' and
+full-coverage-consumer's times their replicas plus any updateStrategy
+surge); plus
 postgresql.connectionBudget (clients outside this chart, such as the
 postgres-exporter and pg_dump, and admin psql sessions) and 2 for pgBackRest
 when postgresql.pgbackrest.enabled. The total must fit in max_connections
@@ -74,7 +76,10 @@ limit is unknown here.
 {{- $apiPods := int (include "distant-signal.apiPods" .) }}
 {{- $apiPool := mul $apiPods (int (include "distant-signal.apiMaxConnections" .)) }}
 {{- include "distant-signal.postgresRoleBudgetCheck" . }}
-{{- $pools := add 10 5 5 1 (ternary 2 0 (.Values.archive.enabled | default false)) (include "distant-signal.apiMaintenancePool" .) (include "distant-signal.ingestWriterPool" .) (include "distant-signal.scheduleIngestPool" .) (include "distant-signal.scheduleReferencePool" .) (include "distant-signal.pollerDbPools" .) (include "distant-signal.trustSinkPools" .) (include "distant-signal.internalReadsPools" .) }}
+{{- /* The enricher's and the TRUST/phase 4 workers' pools count once per
+     pod that can hold one: replicas plus any <component>.updateStrategy
+     surge (distant-signal.workerPods; one pod under the default Recreate). */}}
+{{- $pools := add 10 5 (include "distant-signal.servicePool" (dict "root" . "service" "enricher")) 1 (ternary 2 0 (.Values.archive.enabled | default false)) (include "distant-signal.apiMaintenancePool" .) (include "distant-signal.ingestWriterPool" .) (include "distant-signal.scheduleIngestPool" .) (include "distant-signal.scheduleReferencePool" .) (include "distant-signal.pollerDbPools" .) (include "distant-signal.trustSinkPools" .) (include "distant-signal.internalReadsPools" .) }}
 {{- $budget := .Values.postgresql.connectionBudget | default dict }}
 {{- $pgbackrest := ternary 2 0 (dig "pgbackrest" "enabled" false .Values.postgresql) }}
 {{- $reserved := add (int (dig "externalClients" 2 $budget)) (int (dig "adminSessions" 3 $budget)) $pgbackrest }}

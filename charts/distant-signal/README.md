@@ -754,6 +754,29 @@ Any other poller on `ingest.sink: db` fails too: it has no narrow role.
 These sinks therefore need the bundled Postgres with `postgresql.roles`;
 an external database cannot use them.
 
+### Rollout strategy and connection limits
+
+A per-service role's computed CONNECTION LIMIT covers every pod that can
+hold a pool at once, plus 1 for the startup probe connection. On
+2026-10-10 trust-backlog-consumer took the Deployment default rollout
+(RollingUpdate, one surge pod) with a role limit of pool + 1 = 4: the old
+pod held 3 backends, the surge pod could not connect past the limit, so it
+never became Ready and the old pod was never stopped. Each Postgres
+workload's rollout is now:
+
+| Workload | Rollout | Per-service limit |
+|---|---|---|
+| trust-backlog-consumer, trust-consumer, full-coverage-consumer, enricher | `<component>.updateStrategy`, default `Recreate` | (replicas + maxSurge) × pool + 1; maxSurge is 0 under Recreate |
+| aggregator, notifier, ingest-writer, schedulefeed (schedule-ingest, schedule-reference), every poller | fixed `Recreate` (two copies would double-write) | pool + 1 (writer: pool + lock session) |
+| api | `api.strategy.type`, Recreate or RollingUpdate (maxSurge 1, maxUnavailable 0) | (replicas + 1) × pool + 2 + the api-maintenance pool |
+| movement-relay | RollingUpdate, maxSurge 1 (no Postgres) | none |
+
+The limits are applied by the setup Job, a **post-upgrade hook**: an
+upgrade stuck waiting on its pods never reaches it, so raising a limit by
+values cannot unstick it. `ALTER ROLE ... CONNECTION LIMIT` by hand, or
+delete the old pod, or patch the live Deployment to Recreate; see
+docs/ingest-phase5-runbook.md §0.5 "Rollout deadlock".
+
 ## Release A: the ingest cutover defaults
 
 Since release A (2026-10-09) every ingest producer defaults to its new
@@ -2162,6 +2185,7 @@ they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 | `enricher.reclaimIntervalSecs` | `60` | How often the reclaim loop checks for stream entries stuck unacked past `reclaimMinIdleSecs` (a timed-out request, or a crash between processing and acking). |
 | `enricher.reclaimMinIdleSecs` | `1000` | How long a pending entry must sit unacked before it's eligible for reclaim, i.e. the retry delay for a failed extraction. Entries whose incident is still being processed are skipped, so this is not a correctness bound; keeping it above `3 * llmRequestTimeoutSecs` avoids needless claim-and-skip passes. |
 | `enricher.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one incident is up to three LLM calls of `llmRequestTimeoutSecs`. |
+| `enricher.updateStrategy` | `{type: Recreate}` | The Deployment's rollout. `Recreate` stops the old pod before the new one starts (a gap of seconds; unacked entries stay pending and are reclaimed. A surge pod also has its own in-flight dedupe, so an incident could be extracted, and paid for, twice). `RollingUpdate` takes `rollingUpdate.maxSurge` (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge above 0 is added to the replicas in the computed CONNECTION LIMIT and the max_connections budget. A surge with a role sized for one pod deadlocked the 2026-10-10 rollout: see "Rollout strategy and connection limits" below and docs/ingest-phase5-runbook.md "Rollout deadlock". |
 | `enricher.logLevel` | `info` | `RUST_LOG` value. |
 | `enricher.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. The off-by-default enricher settings below are set here. |
 | `enricher.resources` | requests `50m`/`128Mi`, limit `256Mi` | Container resource requests/limits. |
@@ -2312,6 +2336,7 @@ falls back to (see `movementRelay`).
 | `trustConsumer.healthPort` | `8081` | Port for `/healthz` (readiness) and `/livez` (liveness). |
 | `trustConsumer.progressStallSecs` | `300` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
 | `trustConsumer.replicaCount` | `1` | Replicas. Exists so trust-consumer can be scaled to 0 through `helm upgrade`. |
+| `trustConsumer.updateStrategy` | `{type: Recreate}` | The Deployment's rollout. `Recreate` stops the old pod before the new one starts (a gap of seconds; the consumer group keeps every entry and the new pod replays its own pending entries). `RollingUpdate` takes `rollingUpdate.maxSurge` (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge above 0 is added to the replicas in the computed CONNECTION LIMIT and the max_connections budget. A surge with a role sized for one pod deadlocked the 2026-10-10 rollout: see "Rollout strategy and connection limits" below and docs/ingest-phase5-runbook.md "Rollout deadlock". |
 | `trustConsumer.redisAutoclaimMinIdleSecs` | `30` | How long an entry may sit unacknowledged in this consumer's pending list before the periodic sweep reclaims it. |
 | `trustConsumer.redisGapCheckSecs` | `60` | How often the consumer group's position is compared with the stream's oldest entry to detect a gap. |
 | `trustConsumer.metricsPort` | `9095` | Prometheus `/metrics` port. |
@@ -2353,6 +2378,7 @@ its own.
 | `fullCoverageConsumer.progressStallSecs` | `900` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
 | `fullCoverageConsumer.metricsPort` | `9093` | Prometheus `/metrics` port. |
 | `fullCoverageConsumer.replicaCount` | `1` | Replicas. |
+| `fullCoverageConsumer.updateStrategy` | `{type: Recreate}` | The Deployment's rollout. `Recreate` stops the old pod before the new one starts (a gap of seconds; the consumer group keeps every entry and the new pod replays its own pending entries). `RollingUpdate` takes `rollingUpdate.maxSurge` (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge above 0 is added to the replicas in the computed CONNECTION LIMIT and the max_connections budget. A surge with a role sized for one pod deadlocked the 2026-10-10 rollout: see "Rollout strategy and connection limits" below and docs/ingest-phase5-runbook.md "Rollout deadlock". |
 | `fullCoverageConsumer.ingest.sink` | `stream` | Ingest plan 3a.8: `http` POSTs the three outputs to the api; `http+shadow` also XADDs what the api accepted to `ds:ingest:full-coverage` (for `ingestWriter.streams.full-coverage: shadow`); `stream` XADDs only, and needs `ingestWriter.enabled` with `ingestWriter.streams.full-coverage: apply` (the render fails otherwise; flip both together). Renders `INGEST_SINK` only when not `http`; uses the consumer's existing Redis user. Rollback: `http`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), with `ingestWriter.streams.full-coverage: apply`. |
 | `fullCoverageConsumer.redisAutoclaimMinIdleSecs` | `30` | See `trustConsumer.redisAutoclaimMinIdleSecs`. |
 | `fullCoverageConsumer.redisGapCheckSecs` | `60` | See `trustConsumer.redisGapCheckSecs`. |
@@ -2395,6 +2421,7 @@ Always reads movement-relay's stream (there is no Kafka mode).
 | `trustBacklogConsumer.redisGapCheckSecs` | `60` | See `trustConsumer.redisGapCheckSecs`. |
 | `trustBacklogConsumer.healthPort` | `8083` | Port for `/healthz` (readiness) and `/livez` (liveness). |
 | `trustBacklogConsumer.progressStallSecs` | `300` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
+| `trustBacklogConsumer.updateStrategy` | `{type: Recreate}` | The Deployment's rollout. `Recreate` stops the old pod before the new one starts (a gap of seconds; the consumer group keeps every entry and the new pod replays its own pending entries). `RollingUpdate` takes `rollingUpdate.maxSurge` (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge above 0 is added to the replicas in the computed CONNECTION LIMIT and the max_connections budget. A surge with a role sized for one pod deadlocked the 2026-10-10 rollout: see "Rollout strategy and connection limits" below and docs/ingest-phase5-runbook.md "Rollout deadlock". |
 | `trustBacklogConsumer.metricsPort` | `9096` | Prometheus `/metrics` port. |
 | `trustBacklogConsumer.retentionDaysWarningAcknowledged` | `false` | Documentation-only flag; the binary does not read it. The retention safeguard is `aggregator.trustEventBacklogRetentionDays`. |
 | `trustBacklogConsumer.logLevel` | `info` | `RUST_LOG` value. |

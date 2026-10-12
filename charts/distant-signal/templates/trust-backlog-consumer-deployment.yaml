@@ -11,6 +11,14 @@ spec:
   # Streams consumer name ("trust-event-backlog-1", see main.rs), so more
   # than one replica would fight over the same consumer identity.
   replicas: 1
+  # trustBacklogConsumer.updateStrategy, default Recreate (rollout deadlock,
+  # 2026-10-10): under the old default surge the new pod could not connect
+  # as distant_signal_trust_backlog while the old one held its pool, so it
+  # never became Ready and the old pod was never stopped. See
+  # distant-signal.workerStrategy. The gap is safe: the consumer group keeps
+  # every entry, and the new pod replays its own PEL (same consumer name).
+  strategy:
+    {{- include "distant-signal.workerStrategyBlock" (dict "root" . "key" "trustBacklogConsumer") | nindent 4 }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "trust-backlog-consumer") | nindent 6 }}

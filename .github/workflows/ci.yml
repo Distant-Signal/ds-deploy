@@ -2288,6 +2288,79 @@ jobs:
             fi
           }
 
+      # Rollout deadlock (2026-10-10, docs/ingest-phase5-runbook.md "Rollout
+      # deadlock"): the Postgres workers that used the Deployment default
+      # surge now default to Recreate (with `rollingUpdate: null` for
+      # server-side apply), and a <component>.updateStrategy surge counts in
+      # the per-service CONNECTION LIMIT: (replicas + maxSurge) x pool + 1.
+      - name: helm template (worker rollout strategy)
+        run: |
+          set -euo pipefail
+          base=(
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          limit() { grep -o -- "--variable=$1_connection_limit=[0-9]*" <<<"$2" | head -1 | cut -d= -f3; }
+          limit_is() { local got; got=$(limit "$1" "$2"); [[ "${got}" == "$3" ]] || fail "$4 (got ${got})"; }
+          strategy() { awk -v n="distant-signal-$1" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: Deployment\n" && $0 ~ "\n  name: " n "\n" {print}' <<<"$2" | grep -A4 '^  strategy:'; }
+
+          out=$(render)
+          for w in enricher trust-consumer full-coverage-consumer trust-backlog-consumer; do
+            s=$(strategy "${w}" "${out}")
+            grep -q '^    type: Recreate$' <<<"${s}" || fail "${w} must default to Recreate"
+            grep -q '^    rollingUpdate: null$' <<<"${s}" || fail "${w}'s Recreate must null rollingUpdate (server-side apply)"
+          done
+          # One pod each under Recreate: pool + 1.
+          limit_is trust_backlog "${out}" 4 "trust_backlog must default to 4"
+          limit_is trust_consumer "${out}" 3 "trust_consumer must default to 3"
+          limit_is full_coverage_ro "${out}" 3 "full_coverage_ro must default to 3"
+          limit_is enricher "${out}" 6 "enricher must default to 6"
+
+          out=$(render --set trustBacklogConsumer.updateStrategy.type=RollingUpdate \
+            --set trustBacklogConsumer.updateStrategy.rollingUpdate.maxSurge=1 \
+            --set trustBacklogConsumer.updateStrategy.rollingUpdate.maxUnavailable=0)
+          s=$(strategy trust-backlog-consumer "${out}")
+          grep -q '^      maxSurge: 1$' <<<"${s}" || fail "maxSurge must render"
+          grep -q '^      maxUnavailable: 0$' <<<"${s}" || fail "maxUnavailable must render"
+          limit_is trust_backlog "${out}" 7 "a surge pod's pool must count: (1 + 1) x 3 + 1 = 7"
+
+          out=$(render --set trustBacklogConsumer.updateStrategy.type=RollingUpdate)
+          s=$(strategy trust-backlog-consumer "${out}")
+          grep -q '^      maxSurge: 0$' <<<"${s}" || fail "RollingUpdate must default to maxSurge 0"
+          grep -q '^      maxUnavailable: 1$' <<<"${s}" || fail "RollingUpdate must default to maxUnavailable 1"
+          limit_is trust_backlog "${out}" 4 "maxSurge 0 adds no pod"
+
+          # 25% of 2 replicas rounds up to 1 surge pod: (2 + 1) x 2 + 1 = 7.
+          out=$(render --set trustConsumer.replicaCount=2 --set trustConsumer.updateStrategy.type=RollingUpdate \
+            --set-string trustConsumer.updateStrategy.rollingUpdate.maxSurge=25%)
+          limit_is trust_consumer "${out}" 7 "a percentage surge must round up"
+
+          # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
+          {
+            if render --set enricher.updateStrategy.type=Rolling >/dev/null 2>&1; then
+              fail "an unknown updateStrategy type must fail the render"
+            fi
+            if render --set enricher.updateStrategy.type=RollingUpdate \
+                --set enricher.updateStrategy.rollingUpdate.maxUnavailable=0 >/dev/null 2>&1; then
+              fail "maxSurge 0 with maxUnavailable 0 must fail the render"
+            fi
+            if render --set trustBacklogConsumer.updateStrategy.type=RollingUpdate \
+                --set trustBacklogConsumer.updateStrategy.rollingUpdate.maxSurge=60 >/dev/null 2>&1; then
+              fail "a surge past max_connections must fail the role budget"
+            fi
+          }
+
       # Reboot resilience: redis must roll with Recreate (single RWO AOF
       # volume, INF-1); postgres needs a startupProbe so WAL redo is never
       # killed by liveness (INF-4); the frontend probes must hit the

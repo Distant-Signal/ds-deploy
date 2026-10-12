@@ -12,6 +12,12 @@ spec:
   # same single-consumer-group-per-deployment reasoning as trust-consumer's
   # own replicaCount (see that Deployment's own comment).
   replicas: {{ .Values.fullCoverageConsumer.replicaCount }}
+  # fullCoverageConsumer.updateStrategy, default Recreate (rollout deadlock,
+  # 2026-10-10; see trust-backlog-consumer-deployment.yaml and
+  # distant-signal.workerStrategy). The gap is safe: the consumer group
+  # keeps every entry, and the new pod replays its own PEL.
+  strategy:
+    {{- include "distant-signal.workerStrategyBlock" (dict "root" . "key" "fullCoverageConsumer") | nindent 4 }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "full-coverage-consumer") | nindent 6 }}

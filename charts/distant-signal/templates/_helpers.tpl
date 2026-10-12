@@ -1111,13 +1111,13 @@ app.connectionLimitSlack.
      trust-consumer's one pool also serves its phase 4 reads. */ -}}
 {{- range $service := list "trust_backlog" "trust_consumer" -}}
 {{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" $service)) -}}
-{{- $total = add $total (include "distant-signal.trustSinkPool" (dict "root" $root "service" $service)) -}}
+{{- $total = add $total (mul (include "distant-signal.workerPods" (dict "root" $root "service" $service)) (include "distant-signal.trustSinkPool" (dict "root" $root "service" $service))) -}}
 {{- end -}}
 {{- end -}}
 {{- /* Phase 4: the readers on internalReads.source db, as the app role. */ -}}
 {{- range $role := list "full_coverage_ro" "ldbws_ro" -}}
 {{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" $role)) -}}
-{{- $total = add $total (include "distant-signal.internalReadsPool" (dict "root" $root "role" $role)) -}}
+{{- $total = add $total (mul (include "distant-signal.workerPods" (dict "root" $root "service" $role)) (include "distant-signal.internalReadsPool" (dict "root" $root "role" $role))) -}}
 {{- end -}}
 {{- end -}}
 {{- $total -}}
@@ -1497,15 +1497,22 @@ under internalReads.source db, else 0. Takes (dict "root" $ "role" ...).
 {{- end }}
 
 {{/*
-Both TRUST consumers' pools under ingest.sink db, summed (the api's
-INF-7 budget check). Takes root.
+Both TRUST consumers' pools under ingest.sink db, each times its pods
+(distant-signal.workerPods), summed (the api's INF-7 budget check). Takes
+root.
 */}}
 {{- define "distant-signal.trustSinkPools" -}}
-{{- add (include "distant-signal.trustSinkPool" (dict "root" . "service" "trust_backlog")) (include "distant-signal.trustSinkPool" (dict "root" . "service" "trust_consumer")) -}}
+{{- $root := . -}}
+{{- $total := 0 -}}
+{{- range $service := list "trust_backlog" "trust_consumer" -}}
+{{- $total = add $total (mul (include "distant-signal.workerPods" (dict "root" $root "service" $service)) (include "distant-signal.trustSinkPool" (dict "root" $root "service" $service))) -}}
+{{- end -}}
+{{- $total -}}
 {{- end }}
 
 {{/*
-The phase 4 readers' pools under internalReads.source db, summed (the
+The phase 4 readers' pools under internalReads.source db, each times its
+pods (distant-signal.workerPods), summed (the
 api's INF-7 budget check); trust-consumer's is counted once, with its sink,
 in distant-signal.trustSinkPools. Takes root.
 */}}
@@ -1513,7 +1520,7 @@ in distant-signal.trustSinkPools. Takes root.
 {{- $root := . -}}
 {{- $total := 0 -}}
 {{- range $role := list "full_coverage_ro" "ldbws_ro" -}}
-{{- $total = add $total (include "distant-signal.internalReadsPool" (dict "root" $root "role" $role)) -}}
+{{- $total = add $total (mul (include "distant-signal.workerPods" (dict "root" $root "service" $role)) (include "distant-signal.internalReadsPool" (dict "root" $root "role" $role))) -}}
 {{- end -}}
 {{- $total -}}
 {{- end }}
@@ -1585,6 +1592,9 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 */}}
 {{- define "distant-signal.servicePool" -}}
 {{- $root := .root -}}
+{{- /* A worker with an updateStrategy: its pool times its pods (replicas plus
+     any RollingUpdate surge; distant-signal.workerPods). 1 at the defaults. */ -}}
+{{- $pods := int (include "distant-signal.workerPods" .) -}}
 {{- if eq .service "api" -}}
 {{- mul (int (include "distant-signal.apiPods" $root)) (int (include "distant-signal.apiMaxConnections" $root)) -}}
 {{- else if eq .service "aggregator" -}}
@@ -1599,18 +1609,19 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 {{- else if has .service (list "full_coverage_ro" "ldbws_ro") -}}
 {{- /* A phase 4 reader: <component>.internalReads.database. */ -}}
 {{- $values := ternary $root.Values.pollers.ldbws $root.Values.fullCoverageConsumer (eq .service "ldbws_ro") -}}
-{{- int $values.internalReads.database.maxConnections -}}
+{{- mul $pods (int $values.internalReads.database.maxConnections) -}}
 {{- else if hasKey $root.Values.pollers .service -}}
 {{- /* A poller that writes directly (phase 2): pollers.<name>.ingest.database. */ -}}
 {{- int (get $root.Values.pollers .service).ingest.database.maxConnections -}}
 {{- else if eq .service "trust_backlog" -}}
 {{- /* Phase 3b: trustBacklogConsumer.ingest.database.maxConnections. */ -}}
-{{- int $root.Values.trustBacklogConsumer.ingest.database.maxConnections -}}
+{{- mul $pods (int $root.Values.trustBacklogConsumer.ingest.database.maxConnections) -}}
 {{- else if eq .service "trust_consumer" -}}
 {{- /* Phase 3b and 4.4: its one pool serves the sink and the reads. */ -}}
-{{- max (int $root.Values.trustConsumer.ingest.database.maxConnections) (int $root.Values.trustConsumer.internalReads.database.maxConnections) -}}
+{{- mul $pods (max (int $root.Values.trustConsumer.ingest.database.maxConnections) (int $root.Values.trustConsumer.internalReads.database.maxConnections)) -}}
 {{- else -}}
-5
+{{- /* The notifier's and the enricher's crate default. */ -}}
+{{- mul $pods 5 -}}
 {{- end -}}
 {{- end }}
 
@@ -1960,7 +1971,14 @@ api connects as its own role, else api.database.maxConnections.
 
 {{/*
 A per-service role's CONNECTION LIMIT: the explicit value, else computed
-from its pool. Takes (dict "root" $ "service" ...).
+from its pool. The pool is every pod's that can hold one at once
+(distant-signal.servicePool): the api's replicas plus one surge pod, and a
+worker's replicas plus its updateStrategy's surge (distant-signal.workerPods;
+none under the default Recreate). A limit sized for one pod while two run
+deadlocks a rollout (2026-10-10): the surge pod cannot connect, so it never
+becomes Ready and the old pod is never stopped. The +1 covers the startup
+probe connection (common::startup), whose backend can outlive its close by
+a moment. Takes (dict "root" $ "service" ...).
 */}}
 {{- define "distant-signal.perServiceConnectionLimit" -}}
 {{- $root := .root -}}
@@ -2091,6 +2109,103 @@ RollingUpdate surge pod (maxSurge 1). Each has its own pool. Takes root.
 */}}
 {{- define "distant-signal.apiPods" -}}
 {{- add (int .Values.api.replicaCount) (ternary 1 0 (eq (include "distant-signal.apiStrategy" .) "RollingUpdate")) -}}
+{{- end }}
+
+{{/*
+Rollout deadlock (2026-10-10): the `updateStrategy` of the Postgres
+workloads that used to take the Deployment default (RollingUpdate,
+maxSurge 25% = 1 pod, maxUnavailable 25% = 0): enricher, trustConsumer,
+fullCoverageConsumer and trustBacklogConsumer. Under a surge the new pod
+connects while the old one still holds its pool, so a per-service role
+sized for one pod (pool + 1) refuses the new pod's connections, its
+schema gate never passes, it never becomes Ready, and the old pod is never
+stopped. `Recreate` (the default) stops the old pod before the new one
+starts. Every other Postgres workload with a per-service role is a fixed
+`Recreate` already (aggregator, notifier, ingest-writer, schedulefeed, the
+pollers), for its own correctness reasons; the api has api.strategy.
+
+The values keys that have one, by their per-service role key.
+*/}}
+{{- define "distant-signal.workerStrategyKeys" -}}
+{{- dict "enricher" "enricher" "trust_backlog" "trustBacklogConsumer" "trust_consumer" "trustConsumer" "full_coverage_ro" "fullCoverageConsumer" | toJson -}}
+{{- end }}
+
+{{/*
+A worker's updateStrategy, validated, as JSON: {"type": ..., "maxSurge":
+..., "maxUnavailable": ...} (the last two only for RollingUpdate, defaulting
+to 0 and 1). Takes (dict "root" $ "key" <values key>).
+*/}}
+{{- define "distant-signal.workerStrategy" -}}
+{{- $values := get .root.Values .key | default dict -}}
+{{- $cfg := $values.updateStrategy | default dict -}}
+{{- $type := toString (default "Recreate" $cfg.type) -}}
+{{- if eq $type "Recreate" -}}
+{{- dict "type" "Recreate" | toJson -}}
+{{- else if eq $type "RollingUpdate" -}}
+{{- $ru := $cfg.rollingUpdate | default dict -}}
+{{- $surge := toString (ternary $ru.maxSurge 0 (hasKey $ru "maxSurge")) -}}
+{{- $unavailable := toString (ternary $ru.maxUnavailable 1 (hasKey $ru "maxUnavailable")) -}}
+{{- range $name, $v := dict "maxSurge" $surge "maxUnavailable" $unavailable -}}
+{{- if not (regexMatch "^[0-9]+%?$" $v) -}}
+{{- fail (printf "%s.updateStrategy.rollingUpdate.%s must be a whole number or a percentage, not %q." $.key $name $v) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq (trimSuffix "%" $surge) "0") (eq (trimSuffix "%" $unavailable) "0") -}}
+{{- fail (printf "%s.updateStrategy.rollingUpdate: maxSurge and maxUnavailable cannot both be 0." .key) -}}
+{{- end -}}
+{{- dict "type" "RollingUpdate" "maxSurge" $surge "maxUnavailable" $unavailable | toJson -}}
+{{- else -}}
+{{- fail (printf "%s.updateStrategy.type must be Recreate or RollingUpdate, not %q." .key $type) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The Deployment `strategy:` body for a worker (indent it under `strategy:`).
+Recreate renders `rollingUpdate: null`: a live Deployment that had the
+default RollingUpdate keeps its defaulted `rollingUpdate` block under
+server-side apply, and the API server then rejects `type: Recreate`
+("rollingUpdate: Forbidden"); see redis-deployment.yaml. Takes (dict
+"root" $ "key" <values key>).
+*/}}
+{{- define "distant-signal.workerStrategyBlock" -}}
+{{- $s := include "distant-signal.workerStrategy" . | fromJson -}}
+type: {{ $s.type }}
+{{- if eq $s.type "Recreate" }}
+rollingUpdate: null
+{{- else }}
+rollingUpdate:
+  maxSurge: {{ if hasSuffix "%" $s.maxSurge }}{{ $s.maxSurge | quote }}{{ else }}{{ $s.maxSurge }}{{ end }}
+  maxUnavailable: {{ if hasSuffix "%" $s.maxUnavailable }}{{ $s.maxUnavailable | quote }}{{ else }}{{ $s.maxUnavailable }}{{ end }}
+{{- end }}
+{{- end }}
+
+{{/*
+The most pods of a worker that can hold a pool at once: its replicas (at
+least 1, so a role sized while scaled to 0 still fits the first pod) plus
+its RollingUpdate surge (maxSurge, a percentage rounded up as Kubernetes
+does); 0 surge for Recreate. 1 for a per-service role key that has no
+updateStrategy (a fixed single-replica Recreate workload). Takes (dict
+"root" $ "service" <per-service role key>).
+*/}}
+{{- define "distant-signal.workerPods" -}}
+{{- $keys := include "distant-signal.workerStrategyKeys" . | fromJson -}}
+{{- if hasKey $keys .service -}}
+{{- $key := get $keys .service -}}
+{{- $values := get .root.Values $key | default dict -}}
+{{- $replicas := max 1 (int (default 1 $values.replicaCount)) -}}
+{{- $s := include "distant-signal.workerStrategy" (dict "root" .root "key" $key) | fromJson -}}
+{{- $surge := 0 -}}
+{{- if eq $s.type "RollingUpdate" -}}
+{{- if hasSuffix "%" $s.maxSurge -}}
+{{- $surge = div (add (mul $replicas (int (trimSuffix "%" $s.maxSurge))) 99) 100 -}}
+{{- else -}}
+{{- $surge = int $s.maxSurge -}}
+{{- end -}}
+{{- end -}}
+{{- add $replicas $surge -}}
+{{- else -}}
+1
+{{- end -}}
 {{- end }}
 
 {{/*

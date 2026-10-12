@@ -138,6 +138,15 @@ metadata:
     {{- include "distant-signal.labels" (dict "root" . "component" "enricher") | nindent 4 }}
 spec:
   replicas: 1
+  # enricher.updateStrategy, default Recreate (rollout deadlock, 2026-10-10;
+  # see trust-backlog-consumer-deployment.yaml and
+  # distant-signal.workerStrategy). Also: the enricher's in-flight dedupe is
+  # per process (crates/enricher/src/main.rs), so a surge pod running beside
+  # the old one could extract the same incident twice, paying for both LLM
+  # calls. The gap is safe: unacked stream entries stay pending and are
+  # reclaimed, and the sweep re-queues anything missed.
+  strategy:
+    {{- include "distant-signal.workerStrategyBlock" (dict "root" . "key" "enricher") | nindent 4 }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "enricher") | nindent 6 }}
