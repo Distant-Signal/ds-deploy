@@ -516,7 +516,8 @@ DistantSignalEnricherBatchStuck.
 
 Only rendered in batch mode. Over the window, more than
 `enricherBatches.resultFailureRatio` of the batch requests that ended were
-`errored`, `expired` or `canceled`, with at least `minResults` ended
+`errored`, `expired`, `canceled` or `auth_expired`, with at least
+`minResults` ended
 (`distant_signal:enricher_llm_batch_requests_failed:increase` over
 `:requests:increase`, from `enricher_llm_batch_requests_total`). None of
 these is billed, and each incident goes into a later sweep, so the cost is
@@ -533,6 +534,8 @@ delay.
   rejects, e.g. a schema) or a server error.
 - `canceled`: someone canceled the batch in the Console, or the enricher
   canceled it after a model change.
+- `auth_expired`: OpenAI's `token_expired`; see
+  DistantSignalEnricherBatchAuthExpired, which fires on the first one.
 
 ### DistantSignalEnricherBatchStuck
 
@@ -563,6 +566,36 @@ itself:
   after a profile change): fix the profile, or set `sweepMode: sync`;
 - a file over the limits (50,000 requests, 200 MB): lower
   `enricher.llm.batch.maxItems`.
+
+### DistantSignalEnricherBatchAuthExpired
+
+Only rendered in batch mode; today only OpenAI with keyless auth
+(`LLM_AUTH=openai-wif-*`) produces it. At least one batch had requests fail
+with `token_expired` over the window
+(`enricher_llm_batches_total{event="auth_expired"}`, once per batch, per
+`provider`; the requests themselves are
+`enricher_llm_batch_requests_total{result="auth_expired"}`, and a batch
+that failed outright with `token_expired` counts too). The enricher logs
+`batch_auth_expired` with the batch id and how many requests.
+
+OpenAI authorises a batch with the token that created it some time after
+the create call, when it starts validating or running it. Federated OpenAI
+tokens last about 900 s, so a batch that waits in OpenAI's queue longer
+than its token's remaining life fails every request, unrun and unbilled
+(the 2026-10-13 eval: a 3,996-request batch created with a token issued 11
+minutes earlier). The enricher mints a fresh token for every submission
+(upload and create) unless the cached one has at least 80% of its life
+left, and logs and records the remaining life at creation
+(`token_remaining_secs` on `created an OpenAI batch`,
+`enricher_llm_batch_submit_token_remaining_seconds`).
+
+The dropped incidents go into the next sweep's batch (with a new token);
+they are not backed off, and nothing is resubmitted before that sweep. If
+this keeps firing even with a fresh token at submission, OpenAI's queue is
+outlasting a whole token lifetime: set `enricher.llm.batch.sweepMode: sync`
+(or `mode: normal` from `batch`/`batch-only`) until it clears, or use an API
+key (its batches don't depend on a short-lived token). See
+[enricher-openai.md](enricher-openai.md#batch-mode).
 
 ### DistantSignalEnricherBatchFileCleanupFailing
 

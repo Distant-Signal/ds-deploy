@@ -5164,15 +5164,19 @@ metrics:
       severity: warning
     # Claude Message Batches (enricher.llm.batch.sweepMode: batch, or
     # enricher.llm.batch.mode batch / batch-only; rendered only then, as the
-    # metrics exist only then). Three alerts:
+    # metrics exist only then). Alerts with tunables here:
     # DistantSignalEnricherBatchFailing: at least minFailures batches failed
     # to submit or were abandoned over `window`;
     # DistantSignalEnricherBatchResultsFailing: over `window`, more than
     # resultFailureRatio of the batch requests that ended were errored,
-    # expired or canceled, with at least minResults ended;
+    # expired, canceled or auth_expired, with at least minResults ended;
     # DistantSignalEnricherBatchStuck: a batch still in flight
     # maxAgeSeconds after submission (a batch expires after 24 h, so the
     # default, 26 h, means the enricher is not finishing it).
+    # DistantSignalEnricherBatchInvalid, DistantSignalEnricherBatchAuthExpired
+    # (an OpenAI batch whose requests failed token_expired) and
+    # DistantSignalEnricherBatchFileCleanupFailing use window, for and
+    # severity (cleanup also minFailures).
     enricherBatches:
       enabled: true
       window: 6h

@@ -787,7 +787,7 @@ spec:
             sum by (namespace) (increase(distant_signal_enricher_llm_batches_total{namespace="{{ $ns }}", event=~"submit_failed|abandoned"}[{{ .window }}]))
         - record: distant_signal:enricher_llm_batch_requests_failed:increase
           expr: |
-            sum by (namespace) (increase(distant_signal_enricher_llm_batch_requests_total{namespace="{{ $ns }}", result=~"errored|expired|canceled"}[{{ .window }}]))
+            sum by (namespace) (increase(distant_signal_enricher_llm_batch_requests_total{namespace="{{ $ns }}", result=~"errored|expired|canceled|auth_expired"}[{{ .window }}]))
         - record: distant_signal:enricher_llm_batch_requests:increase
           expr: |
             sum by (namespace) (increase(distant_signal_enricher_llm_batch_requests_total{namespace="{{ $ns }}"}[{{ .window }}]))
@@ -845,6 +845,19 @@ spec:
             summary: "enricher {{ "{{ $labels.provider }}" }} batch failed input validation"
             description: "{{ "{{ $value | humanize }}" }} batches failed validation in {{ .window }}; nothing in them ran. The enricher log has the errors."
             runbook_url: {{ printf "%s#distantsignalenricherbatchinvalid" $runbook | quote }}
+        - alert: DistantSignalEnricherBatchAuthExpired
+          expr: |
+            sum by (namespace, provider) (increase(distant_signal_enricher_llm_batches_total{namespace="{{ $ns }}", event="auth_expired"}[{{ .window }}])) >= 1
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "enricher {{ "{{ $labels.provider }}" }} batch hit an expired token"
+            description: "{{ "{{ $value | humanize }}" }} batches had requests fail token_expired in {{ .window }}; those did not run and go into the next sweep."
+            runbook_url: {{ printf "%s#distantsignalenricherbatchauthexpired" $runbook | quote }}
         - alert: DistantSignalEnricherBatchFileCleanupFailing
           expr: |
             sum by (namespace) (increase(distant_signal_enricher_llm_batch_files_total{namespace="{{ $ns }}", event="delete_failed"}[{{ .window }}])) >= {{ .minFailures }}
