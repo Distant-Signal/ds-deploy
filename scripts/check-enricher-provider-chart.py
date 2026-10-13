@@ -540,7 +540,56 @@ def check_profiles(c: Checker) -> None:
             "LLM_TEMPERATURE": None,
             "LLM_TOP_P": None,
             "LLM_OPENAI_PROMPT_CACHE": None,
+            "LLM_ADVERSARIAL_MODEL": None,
+            "LLM_ADVERSARIAL_PROFILE": None,
         },
+    )
+    expect(
+        c,
+        "adversarial model",
+        enricher_env(
+            c.docs(
+                "adversarial model",
+                *ANTHROPIC,
+                *sets(
+                    "enricher.llm.anthropic.model=claude-sonnet-5-5",
+                    "enricher.llm.adversarialModel=claude-haiku-5-5",
+                    "enricher.llm.adversarialProfile=claude-haiku-5",
+                ),
+            )
+        ),
+        {
+            "LLM_MODEL": "claude-sonnet-5-5",
+            "LLM_ADVERSARIAL_MODEL": "claude-haiku-5-5",
+            "LLM_ADVERSARIAL_PROFILE": "claude-haiku-5",
+        },
+    )
+    c.refuses(
+        "adversarial model of the other provider",
+        "is not a Claude model",
+        *ANTHROPIC,
+        *sets("enricher.llm.adversarialModel=gpt-6-luna"),
+    )
+    c.refuses(
+        "Claude adversarial model on openai",
+        "is a Claude model",
+        *OPENAI,
+        *sets("enricher.llm.adversarialModel=claude-haiku-5-5"),
+    )
+    c.refuses(
+        "adversarial profile without a model",
+        "needs enricher.llm.adversarialModel",
+        *ANTHROPIC,
+        *sets("enricher.llm.adversarialProfile=claude-haiku-5"),
+    )
+    c.refuses(
+        "unknown adversarial profile",
+        "enricher.llm.adversarialProfile=",
+        *ANTHROPIC,
+        *sets(
+            "enricher.llm.adversarialModel=claude-haiku-5-5",
+            "enricher.llm.adversarialProfile=fast",
+        ),
     )
     expect(
         c,

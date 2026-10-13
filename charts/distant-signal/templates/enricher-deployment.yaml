@@ -12,16 +12,31 @@ to show for it.
 {{- /* Profiles (crates/enricher/src/profile.rs): a known name, and a
 number or `omit` for each sampling override. */}}
 {{- $llmValues := .Values.enricher.llm }}
-{{- with $llmValues.profile }}
+{{- range $key := list "profile" "adversarialProfile" }}
+{{- with get $llmValues $key }}
 {{- if not (has . (list "openai-gpt-6-luna" "openai-default" "claude-haiku-5" "claude-default")) }}
-{{- fail (printf "enricher.llm.profile=%q is not one of openai-gpt-6-luna, openai-default, claude-haiku-5, claude-default." .) }}
+{{- fail (printf "enricher.llm.%s=%q is not one of openai-gpt-6-luna, openai-default, claude-haiku-5, claude-default." $key .) }}
 {{- end }}
 {{- if and $anthropic (hasPrefix "openai-" .) }}
-{{- fail (printf "enricher.llm.profile=%q is an OpenAI profile but enricher.llm.provider is anthropic." .) }}
+{{- fail (printf "enricher.llm.%s=%q is an OpenAI profile but enricher.llm.provider is anthropic." $key .) }}
 {{- end }}
 {{- if and (not $anthropic) (hasPrefix "claude-" .) }}
-{{- fail (printf "enricher.llm.profile=%q is a Claude profile but enricher.llm.provider is openai." .) }}
+{{- fail (printf "enricher.llm.%s=%q is a Claude profile but enricher.llm.provider is openai." $key .) }}
 {{- end }}
+{{- end }}
+{{- end }}
+{{- /* LLM_ADVERSARIAL_MODEL: same provider only (profile.rs,
+resolve_adversarial); a profile needs a model. */}}
+{{- with $llmValues.adversarialModel }}
+{{- if and $anthropic (not (hasPrefix "claude-" .)) }}
+{{- fail (printf "enricher.llm.adversarialModel=%q is not a Claude model but enricher.llm.provider is anthropic: the adversarial calls use the primary's provider." .) }}
+{{- end }}
+{{- if and (not $anthropic) (hasPrefix "claude-" .) }}
+{{- fail (printf "enricher.llm.adversarialModel=%q is a Claude model but enricher.llm.provider is openai: the adversarial calls use the primary's provider." .) }}
+{{- end }}
+{{- end }}
+{{- if and $llmValues.adversarialProfile (not $llmValues.adversarialModel) }}
+{{- fail "enricher.llm.adversarialProfile needs enricher.llm.adversarialModel." }}
 {{- end }}
 {{- range $key := list "temperature" "topP" }}
 {{- $v := toString (get $llmValues $key | default "") }}
@@ -395,6 +410,14 @@ with enricher.extraEnv, which replaces an entry of the same name.
             {{- /* Profiles (docs/enricher-anthropic.md, "Tuning per model"). */}}
             {{- with .Values.enricher.llm.profile }}
             - name: LLM_PROFILE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.enricher.llm.adversarialModel }}
+            - name: LLM_ADVERSARIAL_MODEL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.enricher.llm.adversarialProfile }}
+            - name: LLM_ADVERSARIAL_PROFILE
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.enricher.llm.temperature }}
