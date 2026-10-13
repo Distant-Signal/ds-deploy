@@ -65,14 +65,15 @@ checks:
     metrics.prometheusRule.scheduleBucket.enabled=false; six alerts with
     both sources; five (no SourcesDisagree) and no schedule-sftp group with
     the bucket only;
-  - schedule-reference's sink (`scheduleFeed.reference.ingest.sink`,
-    ingest architecture plan 2a): `http` (the default) gives `reference` no
-    INGEST_SINK or database env and the pod no Postgres egress or postgres
-    ingress; `db` gives `reference` (only) INGEST_SINK=db, DATABASE_URL
-    (after PGPASSWORD), DATABASE_MAX_CONNECTIONS and the api's
-    CORPUS_FALLBACK_ENABLED, the schedulefeed policy Postgres egress and the
-    postgres policy `schedulefeed` ingress (and nothing for
-    schedulefeed-sftp); an unknown sink refuses to render.
+  - the db sinks (ingest architecture plans 2a and 2d; the only sinks
+    since release B): `reference` gets DATABASE_URL (after PGPASSWORD) as
+    distant_signal_schedule_reference, DATABASE_MAX_CONNECTIONS and the
+    api's CORPUS_FALLBACK_ENABLED, and no INGEST_SINK or /private URL;
+    `ingest` connects as distant_signal_schedule_ingest; each refuses to
+    render without its role; the schedulefeed policy has Postgres egress
+    and the postgres policy `schedulefeed` ingress (and nothing for
+    schedulefeed-sftp); the retired `scheduleFeed.reference.ingest.sink`
+    refuses anything but `db`.
 
 --baseline DIR renders DIR (a copy of charts/distant-signal from another
 commit, e.g. the merge base) and this chart with the same flags, for the
@@ -109,12 +110,13 @@ CHART = REPO / "charts" / "distant-signal"
 EXAMPLE = "values-example.yaml"
 # CI's required-value flags (the kafka/LLM/SSO settings only satisfy the
 # chart's required-value checks).
-# Release A (2026-10-09) put every ingest producer on its db/stream sink by
-# default; these checks predate it and test other switches, so they render
-# on ci/http-sinks.yaml (every producer back on http, the writer on app).
+# Every ingest producer writes Postgres or a Redis stream (release B, ingest
+# phase 5, removed the /private HTTP paths), which needs the Postgres
+# per-service roles, the ingest-writer and the Redis ACL, so these checks
+# render on ci/ingest-prereqs.yaml, the least a fresh install adds.
 BASE = (
     "-f",
-    str(CHART / "ci" / "http-sinks.yaml"),
+    str(CHART / "ci" / "ingest-prereqs.yaml"),
     "--set",
     "trustConsumer.kafka.brokers=k:9094",
     "--set",
@@ -155,17 +157,6 @@ BUCKET = (
     "scheduleFeed.bucket.name=example-ds-ingest",
     "--set",
     "scheduleFeed.bucket.existingSecret=distant-signal-schedulefeed-bucket",
-)
-# schedule-reference's db sink as its narrow role (security review H2).
-REFERENCE_ROLE = (
-    "--set",
-    "postgresql.roles.enabled=true",
-    "--set",
-    "postgresql.roles.setupJob.enabled=true",
-    "--set",
-    "postgresql.roles.perService.enabled=true",
-    "--set",
-    "postgresql.roles.perService.schedule_reference.connect=true",
 )
 SFTP_OFF = ("--set", "scheduleFeed.sftp.enabled=false")
 ONE_POD = ("--set", "scheduleFeed.sftp.separateDeployment=false")
@@ -856,94 +847,90 @@ def postgres_egress(policy: Doc) -> bool:
     return False
 
 
-DB_ENV = {"INGEST_SINK", "PGPASSWORD", "DATABASE_URL", "DATABASE_MAX_CONNECTIONS"}
+DB_ENV = {"PGPASSWORD", "DATABASE_URL", "DATABASE_MAX_CONNECTIONS"}
 
 
 def check_reference_sink(c: Checker) -> None:
-    """schedule-reference's sink: http renders nothing new; db wires Postgres."""
+    """schedule-reference and schedule-ingest write Postgres, each as its role."""
+    # Security review H2: each connects only as its narrow role.
+    for role in ("schedule_reference", "schedule_ingest"):
+        off = f"postgresql.roles.perService.{role}.connect=false"
+        code, out = c.render(*ON, "--set", off)
+        c.check(
+            ok=code != 0 and f"perService.{role}.connect" in out,
+            message=f"{role} without its role: rendered, or failed without naming it",
+        )
     docs = c.docs(*ON, *NETPOL)
-    reference = env(container(docs, "reference"))
-    c.check(
-        ok=not (DB_ENV | {"CORPUS_FALLBACK_ENABLED"}) & set(reference),
-        message=f"sink http: reference has {sorted(DB_ENV & set(reference))}",
-    )
-    c.check(
-        ok=not postgres_egress(schedulefeed_policy(docs)),
-        message="sink http: schedulefeed may reach postgres",
-    )
-    c.check(
-        ok="schedulefeed" not in postgres_clients(docs),
-        message="sink http: postgres admits schedulefeed",
-    )
-
-    db: tuple[str, ...] = ("--set", "scheduleFeed.reference.ingest.sink=db")
-    # Security review H2: the db sink connects only as its narrow role. Its
-    # connect defaults to true since release A: off explicitly, and without
-    # the roles at all (connect's default needs perService.enabled).
-    no_connect = "postgresql.roles.perService.schedule_reference.connect=false"
-    code, out = c.render(*ON, *db, "--set", no_connect)
-    c.check(
-        ok=code != 0 and "perService.schedule_reference.connect" in out,
-        message="sink db without its role: rendered, or failed without naming it",
-    )
-    code, out = c.render(*ON, *db)
-    c.check(
-        ok=code != 0 and "postgresql.roles.perService.enabled: true" in out,
-        message="sink db with no per-service roles: rendered, or failed unnamed",
-    )
-    db = (*db, *REFERENCE_ROLE)
-    docs = c.docs(*ON, *NETPOL, *db)
-    check_no_duplicate_env(c, "sink db", docs)
+    check_no_duplicate_env(c, "db sinks", docs)
     entries = env_list(container(docs, "reference"))
     names = [str(e["name"]) for e in entries]
     reference = env(container(docs, "reference"))
     c.check(
         ok=set(reference) >= DB_ENV,
-        message=f"sink db: reference lacks {sorted(DB_ENV - set(reference))}",
+        message=f"reference lacks {sorted(DB_ENV - set(reference))}",
     )
     c.check(
-        ok=reference.get("INGEST_SINK", {}).get("value") == "db",
-        message=f"sink db: INGEST_SINK={reference.get('INGEST_SINK')}",
+        ok="INGEST_SINK" not in reference
+        and not any(
+            str(v.get("value", "")).find("/private/") >= 0 for v in reference.values()
+        ),
+        message="reference must render no INGEST_SINK and no /private URL (release B)",
+    )
+    c.check(
+        ok=str(reference.get("DATABASE_URL", {}).get("value", "")).startswith(
+            "postgres://distant_signal_schedule_reference:"
+        ),
+        message="reference must connect as distant_signal_schedule_reference",
+    )
+    ingest = env(container(docs, "ingest"))
+    c.check(
+        ok=str(ingest.get("DATABASE_URL", {}).get("value", "")).startswith(
+            "postgres://distant_signal_schedule_ingest:"
+        ),
+        message="ingest must connect as distant_signal_schedule_ingest",
     )
     c.check(
         ok=reference.get("DATABASE_MAX_CONNECTIONS", {}).get("value") == "3",
-        message="sink db: DATABASE_MAX_CONNECTIONS is not the default 3",
+        message="reference: DATABASE_MAX_CONNECTIONS is not the default 3",
     )
     c.check(
         ok=reference.get("CORPUS_FALLBACK_ENABLED", {}).get("value") == "false",
-        message="sink db: CORPUS_FALLBACK_ENABLED is not the api's (false)",
+        message="reference: CORPUS_FALLBACK_ENABLED is not the api's (false)",
     )
     c.check(
         ok="PGPASSWORD" in names
         and "DATABASE_URL" in names
         and names.index("PGPASSWORD") < names.index("DATABASE_URL"),
-        message=f"sink db: PGPASSWORD must precede DATABASE_URL: {names}",
+        message=f"reference: PGPASSWORD must precede DATABASE_URL: {names}",
     )
-    for other in ("ingest", "sftp"):
-        leaked = DB_ENV & set(env(container(docs, other)))
-        c.check(ok=not leaked, message=f"sink db: {other} has {sorted(leaked)}")
+    leaked = DB_ENV & set(env(container(docs, "sftp")))
+    c.check(ok=not leaked, message=f"sftp has {sorted(leaked)}")
     c.check(
         ok=postgres_egress(schedulefeed_policy(docs)),
-        message="sink db: schedulefeed has no postgres egress",
+        message="schedulefeed has no postgres egress",
     )
     c.check(
         ok="schedulefeed" in postgres_clients(docs),
-        message="sink db: postgres does not admit schedulefeed",
+        message="postgres does not admit schedulefeed",
     )
     c.check(
         ok=bool(sftp_policy(docs)) and not postgres_egress(sftp_policy(docs)),
-        message="sink db: no schedulefeed-sftp policy, or it may reach postgres",
+        message="no schedulefeed-sftp policy, or it may reach postgres",
     )
     c.check(
         ok=SFTP_COMPONENT not in postgres_clients(docs),
-        message="sink db: postgres admits schedulefeed-sftp",
+        message="postgres admits schedulefeed-sftp",
     )
 
-    code, out = c.render(*ON, "--set", "scheduleFeed.reference.ingest.sink=redis")
-    c.check(
-        ok=code != 0 and "scheduleFeed.reference.ingest.sink" in out,
-        message="sink redis: rendered, or failed without naming the value",
-    )
+    # Release B: the retired switch refuses anything but `db`, which renders.
+    for bad in ("http", "redis"):
+        code, out = c.render(*ON, "--set", f"scheduleFeed.reference.ingest.sink={bad}")
+        c.check(
+            ok=code != 0 and f"scheduleFeed.reference.ingest.sink: {bad}" in out,
+            message=f"sink {bad}: rendered, or failed without naming the value",
+        )
+    code, out = c.render(*ON, "--set", "scheduleFeed.reference.ingest.sink=db")
+    c.check(ok=code == 0, message=f"a pinned sink db must render: {out[-300:]}")
 
 
 def check_audit_and_override(c: Checker) -> None:

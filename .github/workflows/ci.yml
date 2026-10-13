@@ -531,13 +531,20 @@ jobs:
       # test: the schema gate and every db-source query as the role.
       # ingest-writer's line_status_rls test (plan 3c.3) runs above, as the
       # writer, reading DATABASE_URL_WRITER/_AGGREGATOR/_API itself.
+      # ds-store's schedule::publish tests run as schedule_reference (the
+      # other suites seed schedule products as the owner,
+      # MIGRATION_DATABASE_URL; ds_store::test_support::schedule_fixture_pool):
+      # since release B the app role (and so the api role) no longer holds
+      # the *_publish_keys tables or analyze_publish_keys (db-grants.yaml
+      # app_revokes).
       - name: DB-backed tests as each service's own role (Stage 0b)
         run: |
           # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
           uv run --no-sync scripts/test-postgres-roles.py --mode per-service -- sh -c '
             skip="--skip corpus::db_tests --skip crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests --skip reads::db_tests"
             DATABASE_URL="$DATABASE_URL_API" cargo test -p api -- --ignored --test-threads=1 $skip &&
-            DATABASE_URL="$DATABASE_URL_API" cargo test -p ds-store -- --ignored --test-threads=1 $skip &&
+            DATABASE_URL="$DATABASE_URL_API" cargo test -p ds-store -- --ignored --test-threads=1 $skip --skip schedule::publish:: &&
+            DATABASE_URL="$DATABASE_URL_SCHEDULE_REFERENCE" cargo test -p ds-store schedule::publish:: -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_AGGREGATOR" cargo test -p aggregator -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_NOTIFIER" cargo test -p notifier -- --ignored --test-threads=1 $skip &&
             DATABASE_URL="$DATABASE_URL_WRITER" cargo test -p ingest-writer -- --ignored --test-threads=1 &&
@@ -1061,12 +1068,12 @@ jobs:
       # endpoint, SSO, and a Kafka connection. movement-relay falls back to
       # trustConsumer.kafka.*, so these --set dummy values configure it too.
       # They exist only to satisfy the guard rails for this smoke test; they
-      # are not meant to be real settings. Since release A (2026-10-09) the
-      # defaults also put every ingest producer on its db or stream sink,
-      # which needs the Postgres per-service roles, the ingest-writer and
-      # the Redis ACL: ci/ingest-prereqs.yaml is the least a fresh install
-      # adds (the next step checks the failure without it). The later checks
-      # of features unrelated to the cutover use ci/http-sinks.yaml instead.
+      # are not meant to be real settings. Every ingest producer writes
+      # Postgres or a Redis stream (release B, ingest phase 5, removed the
+      # /private HTTP paths), which needs the Postgres per-service roles,
+      # the ingest-writer and the Redis ACL: ci/ingest-prereqs.yaml is the
+      # least a fresh install adds (the next step checks the failure
+      # without it), and every later check renders on it too.
       - name: helm template (default values)
         run: |
           helm template distant-signal charts/distant-signal \
@@ -1083,16 +1090,16 @@ jobs:
             --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
             > /dev/null
 
-      # Release A (2026-10-09, docs/ingest-phase5-runbook.md "Release A"):
-      # every producer defaults to its new sink, and every internal reader
-      # to its direct read (`internalReads.source: db`). Without the prerequisites
-      # the render fails once, listing all of them and the per-producer
-      # `sink: http` opt-out. With them, every producer renders its sink
-      # and its own Postgres role, and the writer applies the four
-      # producer streams. Each producer rolls back to `http` on its own.
+      # Release B (ingest phase 5, docs/ingest-phase5-runbook.md): every
+      # producer has only its db or stream sink and every internal reader
+      # its direct read; no /private URL, internal OAuth credential,
+      # INGEST_SINK or *_SOURCE renders. Without the prerequisites the
+      # render fails once, listing all of them (with no `sink: http`
+      # opt-out left). A retired switch set to anything but its one value
+      # fails, naming it; pinned to that value it renders.
       # `defaultUser: "on-unshared"` needs no user for a client whose workload is
       # off (the island-of-Ireland pollers by default).
-      - name: helm template (release A ingest defaults)
+      - name: helm template (release B ingest sinks)
         run: |
           set -euo pipefail
           base=(
@@ -1113,16 +1120,15 @@ jobs:
           env_is() { grep -A1 "name: $2\$" <<<"$1" | grep -q "value: \"$3\"" || fail "$4: $2 must be \"$3\""; }
 
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if err=$(render 2>&1 >/dev/null); then fail "release A's defaults rendered without their prerequisites"; fi
+          if err=$(render 2>&1 >/dev/null); then fail "the defaults rendered without their prerequisites"; fi
           grep -q 'zz-ingest-sink-preflight.yaml' <<<"${err}" || fail "the preflight must be the first failure: ${err}"
           for want in 'postgresql.roles.enabled: true' 'postgresql.roles.perService.enabled: true' \
               'ingestWriter.loops.enabled: true' 'redis.acl.stage: narrow' 'redis.acl.defaultUser: off' \
-              'redis.acl.clients.fullCoverageConsumer: true' 'trustConsumer.ingest.sink: http' \
-              'trustBacklogConsumer.ingest.sink: http' 'fullCoverageConsumer.ingest.sink: http'; do
+              'redis.acl.clients.fullCoverageConsumer: true'; do
             grep -qF -- "${want}" <<<"${err}" || fail "the preflight must name ${want}: ${err}"
           done
-          if grep -q -E 'pollerIrishRail|pollerNirStations' <<<"${err}"; then
-            fail "the preflight must not ask for the disabled island-of-Ireland pollers' users: ${err}"
+          if grep -q -E 'pollerIrishRail|pollerNirStations|sink: http' <<<"${err}"; then
+            fail "the preflight must not ask for the disabled island-of-Ireland pollers' users or offer an http opt-out: ${err}"
           fi
 
           all=(-f charts/distant-signal/ci/ingest-prereqs.yaml
@@ -1132,75 +1138,70 @@ jobs:
               --set "redis.acl.clients.poller${p^}=true")
           done
           out=$(render "${all[@]}")
-          declare -A sink=(
-            [poller-incidents]=db [poller-stations]=db [trust-consumer]=db [trust-backlog-consumer]=db
-            [poller-ldbws]=stream [poller-tfl]=stream [poller-tocs]=stream [full-coverage-consumer]=stream
-          )
           declare -A role=(
             [poller-incidents]=incidents [poller-stations]=stations [trust-consumer]=trust_consumer
             [trust-backlog-consumer]=trust_backlog [ingest-writer]=writer
             [full-coverage-consumer]=full_coverage_ro [poller-ldbws]=ldbws_ro
           )
-          # The internal reads (phase 4) default to db too.
-          declare -A source=(
-            [full-coverage-consumer]=POPULATION_SOURCE [trust-consumer]=TRACKED_TRAINS_SOURCE
-            [poller-ldbws]=SAMPLE_STATIONS_SOURCE
-          )
-          # db_sinks MANIFEST: how many INGEST_SINK entries are db.
-          db_sinks() { grep -A1 'name: INGEST_SINK$' <<<"$1" | grep -c -E 'value: "?db"?$' || true; }
-          for d in "${!sink[@]}"; do
-            dep=$(doc Deployment "distant-signal-${d}" <<<"${out}")
-            env_is "${dep}" INGEST_SINK "${sink[${d}]}" "${d}"
-          done
           for d in "${!role[@]}"; do
             dep=$(doc Deployment "distant-signal-${d}" <<<"${out}")
             grep -q "postgres://distant_signal_${role[${d}]}:" <<<"${dep}" \
               || fail "${d} must connect as distant_signal_${role[${d}]}"
           done
-          for d in "${!source[@]}"; do
+          # The stream producers reach Redis as their own users.
+          declare -A user=(
+            [poller-ldbws]=poller-ldbws [poller-tfl]=poller-tfl [poller-tocs]=poller-tocs
+            [poller-incidents]=poller-incidents [full-coverage-consumer]=full-coverage-consumer
+          )
+          for d in "${!user[@]}"; do
             dep=$(doc Deployment "distant-signal-${d}" <<<"${out}")
-            env_is "${dep}" "${source[${d}]}" db "${d}"
+            env_is "${dep}" REDIS_USERNAME "${user[${d}]}" "${d}"
           done
           sf=$(doc Deployment distant-signal-schedulefeed <<<"${out}")
-          n=$(db_sinks "${sf}")
-          [[ "${n}" == 2 ]] || fail "schedule-ingest and schedule-reference must both default to db (${n})"
           for r in schedule_ingest schedule_reference; do
             grep -q "postgres://distant_signal_${r}:" <<<"${sf}" || fail "schedulefeed must connect as distant_signal_${r}"
           done
+          # No producer is wired to the api any more.
+          for d in poller-incidents poller-stations poller-ldbws poller-tfl poller-tocs trust-consumer \
+              trust-backlog-consumer full-coverage-consumer schedulefeed; do
+            dep=$(doc Deployment "distant-signal-${d}" <<<"${out}")
+            if grep -E -q '/private/|name: INTERNAL_OAUTH_|name: INGEST_SINK$|name: [A-Z_]+_SOURCE$|name: API_[A-Z_]*URL$' <<<"${dep}"; then
+              fail "${d} must render no /private URL, internal OAuth, INGEST_SINK or *_SOURCE"
+            fi
+          done
+          secret=$(doc Secret distant-signal <<<"${out}")
+          if grep -q 'internal-oauth-' <<<"${secret}"; then
+            fail "the chart Secret must hold no internal-oauth-* key"
+          fi
+          api=$(doc Deployment distant-signal-api <<<"${out}")
+          if grep -E -q 'name: (INTERNAL_OAUTH_GROUP_[A-LN-Z][A-Z_]*|API_PRIVATE_ROUTES|API_PRIVATE_REQUEST_TIMEOUT_SECS)$' <<<"${api}"; then
+            fail "the api keeps only INTERNAL_OAUTH_ISSUER_URL, _CLIENT_ID and _GROUP_MCP"
+          fi
+          grep -q 'name: INTERNAL_OAUTH_GROUP_MCP$' <<<"${api}" || fail "the api must keep INTERNAL_OAUTH_GROUP_MCP"
           dep=$(doc Deployment distant-signal-ingest-writer <<<"${out}")
           env_is "${dep}" INGEST_WRITER_STREAMS \
             "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply" ingest-writer
 
-          # Each producer's rollback is its own `sink: http`, nothing else.
-          declare -A key=(
-            [poller-incidents]=pollers.incidents [poller-stations]=pollers.stations [poller-ldbws]=pollers.ldbws
-            [poller-tfl]=pollers.tfl [poller-tocs]=pollers.tocs [trust-consumer]=trustConsumer
-            [trust-backlog-consumer]=trustBacklogConsumer [full-coverage-consumer]=fullCoverageConsumer
-          )
-          for d in "${!key[@]}"; do
-            back=$(render "${all[@]}" --set "${key[${d}]}.ingest.sink=http")
-            dep=$(doc Deployment "distant-signal-${d}" <<<"${back}")
-            if grep -q 'name: INGEST_SINK$' <<<"${dep}"; then
-              fail "${key[${d}]}.ingest.sink=http must render ${d} without INGEST_SINK"
-            fi
+          # The retired switches: anything but their one value fails, naming it.
+          for kv in pollers.stations.ingest.sink=http pollers.tfl.ingest.sink=http+shadow \
+              trustConsumer.ingest.sink=http trustBacklogConsumer.ingest.sink=http \
+              fullCoverageConsumer.ingest.sink=http fullCoverageConsumer.internalReads.source=http \
+              trustConsumer.internalReads.source=http pollers.ldbws.internalReads.source=http \
+              scheduleFeed.ingest.sink=http scheduleFeed.reference.ingest.sink=http \
+              ingestWriter.streams.tfl=shadow; do
+            # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+            if err=$(render "${all[@]}" --set "${kv}" 2>&1 >/dev/null); then fail "${kv} must fail the render"; fi
+            grep -qF -- "${kv%%=*}: ${kv#*=}" <<<"${err}" || fail "${kv}: the render must name it: ${err}"
           done
-          # And each reader's is its own `internalReads.source: http`.
-          for d in "${!source[@]}"; do
-            back=$(render "${all[@]}" --set "${key[${d}]}.internalReads.source=http")
-            dep=$(doc Deployment "distant-signal-${d}" <<<"${back}")
-            if grep -q "name: ${source[${d}]}\$" <<<"${dep}"; then
-              fail "${key[${d}]}.internalReads.source=http must render ${d} without ${source[${d}]}"
-            fi
-          done
-          back=$(render "${all[@]}" --set scheduleFeed.ingest.sink=http)
-          sf=$(doc Deployment distant-signal-schedulefeed <<<"${back}")
-          n=$(db_sinks "${sf}")
-          [[ "${n}" == 1 ]] || fail "scheduleFeed.ingest.sink=http must leave only schedule-reference on db (${n})"
+          # Pinned to the one value they have left, they render (production
+          # pins scheduleFeed.reference.ingest.sink: db).
+          render "${all[@]}" --set scheduleFeed.reference.ingest.sink=db --set trustConsumer.ingest.sink=db \
+            --set pollers.ldbws.ingest.sink=stream --set fullCoverageConsumer.internalReads.source=db >/dev/null
 
           # A direct producer never falls back to the app role.
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if err=$(render "${all[@]}" --set postgresql.roles.perService.incidents.connect=false 2>&1 >/dev/null); then
-            fail "pollers.incidents on db without its connect must fail the render"
+            fail "pollers.incidents without its connect must fail the render"
           fi
           grep -qF 'postgresql.roles.perService.incidents.connect: true' <<<"${err}" || fail "unexpected error: ${err}"
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
@@ -1221,7 +1222,7 @@ jobs:
             fail "defaultUser on-unshared with a deployed client on default must fail the render"
           fi
           grep -qF 'redis.acl.clients.enricher' <<<"${err}" || fail "unexpected error: ${err}"
-          echo "release A ingest defaults render OK"
+          echo "release B ingest sinks render OK"
 
       # Keyless OpenAI auth (enricher.llm.auth, docs/enricher-openai.md):
       # off by default, with exactly the old enricher (shared ServiceAccount,
@@ -1235,7 +1236,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1362,7 +1363,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1422,7 +1423,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1463,8 +1464,11 @@ jobs:
           grep -q 'medium: Memory' <<<"${out}"
           grep -q 'sizeLimit: 1Gi' <<<"${out}"
           grep -q 'memory: 5Gi' <<<"${out}"
+          # Without postgresql.config, max_connections is Postgres's 100:
+          # the app role's limit comes down so the role limits still fit.
           bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
-            --set postgresql.config=null --set postgresql.shm.enabled=false)
+            --set postgresql.config=null --set postgresql.shm.enabled=false \
+            --set postgresql.roles.app.connectionLimit=60)
           if grep -E -q 'args:|/dev/shm|name: dshm' <<<"${bare}"; then
             echo "postgres config/shm rendered despite being disabled" >&2; exit 1
           fi
@@ -1476,7 +1480,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1517,7 +1521,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1557,7 +1561,7 @@ jobs:
         run: |
           set -euo pipefail
           cm=$(helm template distant-signal charts/distant-signal \
-            -f charts/distant-signal/ci/http-sinks.yaml \
+            -f charts/distant-signal/ci/ingest-prereqs.yaml \
             --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
             --set trustConsumer.kafka.topic=test-topic \
             --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1582,7 +1586,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
-              -f charts/distant-signal/ci/http-sinks.yaml \
+              -f charts/distant-signal/ci/ingest-prereqs.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1624,7 +1628,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
-              -f charts/distant-signal/ci/http-sinks.yaml \
+              -f charts/distant-signal/ci/ingest-prereqs.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1691,7 +1695,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
-              -f charts/distant-signal/ci/http-sinks.yaml \
+              -f charts/distant-signal/ci/ingest-prereqs.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1740,7 +1744,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
-              -f charts/distant-signal/ci/http-sinks.yaml \
+              -f charts/distant-signal/ci/ingest-prereqs.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1792,7 +1796,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
-              -f charts/distant-signal/ci/http-sinks.yaml \
+              -f charts/distant-signal/ci/ingest-prereqs.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1848,7 +1852,7 @@ jobs:
           set -euo pipefail
           render() {
             helm template distant-signal charts/distant-signal \
-              -f charts/distant-signal/ci/http-sinks.yaml \
+              -f charts/distant-signal/ci/ingest-prereqs.yaml \
               --set trustConsumer.kafka.brokers=kafka.example.com:9094 \
               --set trustConsumer.kafka.topic=test-topic \
               --set trustConsumer.kafka.saslMechanism=PLAIN \
@@ -1906,7 +1910,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set enricher.llm.baseUrl=http://llm.example.com/v1
             --set enricher.llm.model=test-model
             --set api.sso.issuerUrl=https://sso.example.com
@@ -1970,17 +1974,18 @@ jobs:
           expect_env MOVEMENT_CONSUMER_GROUPS trust-consumer,full-coverage-consumer,trust-event-backlog \
             "movement-relay must create every consumer group" <<<"${relay}"
 
-      # INF-3 Redis AUTH. Off (the default) must render no REDIS_PASSWORD,
-      # no --requirepass and no redis-password Secret key. On must give all
-      # six Redis clients REDIS_PASSWORD from the Secret (never inline),
-      # start Redis with --requirepass and authenticate its probes;
-      # requirePass=false (rollout step 1) must leave the Redis pod alone;
-      # an external Redis without existingSecret must fail the render.
+      # INF-3 Redis AUTH under the Redis ACL users, which every install has
+      # since release B (ingest phase 5): Redis runs with --aclfile, never
+      # --requirepass, so redis.auth changes nothing on the Redis pod and
+      # gives no client the shared password; every client's REDIS_PASSWORD
+      # is its own ACL user's, from redis.acl.existingSecret (never inline),
+      # and REDIS_URL stays credential-free. An external Redis renders with
+      # or without redis.auth.
       - name: helm template (redis auth)
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1996,54 +2001,44 @@ jobs:
           fail() { echo "$1" >&2; exit 1; }
 
           off=$(render)
-          if grep -E -q 'REDIS_PASSWORD|REDISCLI_AUTH|requirepass|redis-password' <<<"${off}"; then
-            fail "redis.auth disabled but auth settings rendered"
+          if grep -E -q 'requirepass|  redis-password:' <<<"${off}"; then
+            fail "with the ACL users Redis must not use --requirepass or a redis-password key"
           fi
+          n_pw=$(grep -c 'name: REDIS_PASSWORD' <<<"${off}" || true)
+          n_acl=$(grep -A3 'name: REDIS_PASSWORD' <<<"${off}" | grep -c 'name: example-redis-users' || true)
+          [[ "${n_pw}" -ge 7 && "${n_pw}" -eq "${n_acl}" ]] \
+            || fail "every REDIS_PASSWORD must come from redis.acl.existingSecret (${n_acl} of ${n_pw})"
+          grep -A1 'name: REDIS_URL' <<<"${off}" | grep 'value:' | grep -q -v '@' \
+            || fail "REDIS_URL must stay credential-free"
+          redis=$(render --show-only templates/redis-deployment.yaml)
+          grep -q -- '- --aclfile' <<<"${redis}" || fail "redis must start with --aclfile"
+          grep -q 'name: REDISCLI_AUTH' <<<"${redis}" || fail "redis probes must authenticate"
 
           on=$(render --set redis.auth.enabled=true \
             --set redis.auth.existingSecret=redis-auth --set redis.auth.existingSecretKey=pw)
-          n_pw=$(grep -c 'name: REDIS_PASSWORD' <<<"${on}" || true)
-          [[ "${n_pw}" -eq 7 ]] \
-            || fail "expected REDIS_PASSWORD on the six clients plus redis"
-          n_secret=$(grep -A3 'name: REDIS_PASSWORD' <<<"${on}" | grep -c 'name: redis-auth' || true)
-          [[ "${n_secret}" -eq 7 ]] \
-            || fail "REDIS_PASSWORD must come from redis.auth.existingSecret"
-          grep -A1 'name: REDIS_URL' <<<"${on}" | grep 'value:' | grep -q -v '@' \
-            || fail "REDIS_URL must stay credential-free"
-          redis=$(render --set redis.auth.enabled=true --set redis.auth.existingSecret=redis-auth \
-            --show-only templates/redis-deployment.yaml)
-          # shellcheck disable=SC2016 # "$(REDIS_PASSWORD)" is Kubernetes env-var syntax matched literally, not a shell expansion
-          grep -A1 -- '- --requirepass' <<<"${redis}" | grep -q -- '- "$(REDIS_PASSWORD)"' \
-            || fail "redis must start with --requirepass from the Secret"
-          grep -q 'name: REDISCLI_AUTH' <<<"${redis}" || fail "redis probes must authenticate"
-
-          gen=$(render --set redis.auth.enabled=true)
-          grep -q '  redis-password: ' <<<"${gen}" || fail "chart-generated redis-password missing"
-
-          step1=$(render --set redis.auth.enabled=true --set redis.auth.requirePass=false \
-            --set redis.auth.existingSecret=redis-auth --show-only templates/redis-deployment.yaml)
-          redis_default=$(render --show-only templates/redis-deployment.yaml)
-          [[ "${step1}" = "${redis_default}" ]] \
-            || fail "requirePass=false must leave the Redis Deployment unchanged"
-
-          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if render --set redis.enabled=false --set redis.externalUrl=redis://ext:6379 \
-              --set redis.auth.enabled=true >/dev/null 2>&1; then
-            fail "external Redis with auth but no existingSecret must fail the render"
+          if grep -A3 'name: REDIS_PASSWORD' <<<"${on}" | grep -q 'name: redis-auth'; then
+            fail "no client may get the shared redis.auth password with the ACL users on"
           fi
+          redis_auth=$(render --set redis.auth.enabled=true --set redis.auth.existingSecret=redis-auth \
+            --show-only templates/redis-deployment.yaml)
+          [[ "${redis_auth}" = "${redis}" ]] || fail "redis.auth must leave the Redis Deployment unchanged"
+
+          render --set redis.enabled=false --set redis.externalUrl=redis://ext:6379 >/dev/null
           render --set redis.enabled=false --set redis.externalUrl=redis://ext:6379 \
             --set redis.auth.enabled=true --set redis.auth.existingSecret=ext >/dev/null
           render --set redis.auth.enabled=true --set networkPolicy.enabled=true >/dev/null
 
-      # postgresql.roles (docs/postgres-app-role.md): off renders nothing new;
-      # on, every pool is the app role, api migrates as the owner, the
-      # pgBackRest CronJobs run as the backup role, and turning it on without
-      # initScript leaves the Postgres pod (and so Postgres) untouched.
+      # postgresql.roles (docs/postgres-app-role.md), on in every install
+      # since release B (ingest phase 5; ci/ingest-prereqs.yaml): the api,
+      # aggregator, enricher and notifier pools are the app role until their
+      # own connect, the ingest components are their own roles, api migrates
+      # as the owner, the pgBackRest CronJobs run as the backup role, and
+      # without initScript the Postgres pod gets no initdb script.
       - name: helm template (postgres roles)
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2067,20 +2062,18 @@ jobs:
           render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
           fail() { echo "$1" >&2; exit 1; }
 
-          off=$(render "${pgbackrest[@]}" --set networkPolicy.enabled=true)
-          if grep -E -q 'postgres-roles|MIGRATION_DATABASE_URL|DS_PG_|_owner|_app:|PGBACKREST_PG1_USER=' <<<"${off}"; then
-            fail "postgresql.roles disabled but role settings rendered"
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set postgresql.roles.enabled=false >/dev/null 2>&1; then
+            fail "postgresql.roles off must fail the render (the release B preflight)"
           fi
-          # The DATABASE_URL / MIGRATION_DATABASE_URL values of every container.
-          off_urls=$(grep -A1 -E 'name: (MIGRATION_)?DATABASE_URL$' <<<"${off}")
-          n_super=$(grep -c 'value: "postgres://distant_signal:' <<<"${off_urls}" || true)
-          [[ "${n_super}" -eq 4 ]] || fail "roles off: the four DATABASE_URLs must stay the superuser's"
-
           on=$(render "${pgbackrest[@]}" --set networkPolicy.enabled=true \
-            --set postgresql.roles.enabled=true --set postgresql.roles.setupJob.enabled=true \
             --set postgresql.roles.app.existingSecret=pg-roles \
             --set postgresql.roles.owner.existingSecret=pg-roles)
+          # The DATABASE_URL / MIGRATION_DATABASE_URL values of every container.
           on_urls=$(grep -A1 -E 'name: (MIGRATION_)?DATABASE_URL$' <<<"${on}")
+          if grep -q 'value: "postgres://distant_signal:' <<<"${on_urls}"; then
+            fail "no service may connect as the superuser"
+          fi
           # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax matched literally, not a shell expansion
           n_app=$(grep -c 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${on_urls}" || true)
           [[ "${n_app}" -eq 4 ]] || fail "api, aggregator, enricher and notifier must connect as the app role"
@@ -2114,12 +2107,13 @@ jobs:
             || fail "the backup password key must default to postgres-backup-password"
           if grep -q 'PASSWORD=' <<<"${on}"; then fail "no password may be passed on a command line"; fi
 
-          # Flipping roles.enabled on an existing cluster (initScript off) must
-          # not touch the Postgres pod, so Postgres does not restart.
-          sts_off=$(render "${pgbackrest[@]}" --show-only templates/postgres-statefulset.yaml)
-          sts_on=$(render "${pgbackrest[@]}" --set postgresql.roles.enabled=true \
-            --set postgresql.roles.initScript=false --show-only templates/postgres-statefulset.yaml)
-          [[ "${sts_off}" = "${sts_on}" ]] || fail "roles.enabled with initScript=false must leave the StatefulSet unchanged"
+          # An existing cluster (initScript off) gets no initdb script on the
+          # Postgres pod.
+          sts=$(render "${pgbackrest[@]}" --set postgresql.roles.initScript=false \
+            --show-only templates/postgres-statefulset.yaml)
+          if grep -q -E 'docker-entrypoint-initdb.d|postgres-grants.sql' <<<"${sts}"; then
+            fail "initScript=false must leave the initdb script off the StatefulSet"
+          fi
 
           limit=$(render --set postgresql.roles.enabled=true --set postgresql.roles.app.connectionLimit=40)
           grep -q "'--variable=app_connection_limit=40'" <<<"${limit}" || fail "an explicit connectionLimit must win"
@@ -2143,7 +2137,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2214,17 +2208,14 @@ jobs:
           pg=$(doc NetworkPolicy distant-signal-postgres <<<"${moved}")
           grep -q -- '- postgres-roles$' <<<"${pg}" || fail "the setup Job must be admitted to Postgres"
 
-          # Without the role split the Job migrates as the bootstrap superuser,
-          # with an external database as its URL.
-          plain=$(render --set migrate.job.enabled=true --show-only templates/migrate-job.yaml)
-          # shellcheck disable=SC2016 # "$(PG_MIGRATION_PASSWORD)" is Kubernetes env-var syntax, matched literally
-          grep -A1 'name: MIGRATION_DATABASE_URL$' <<<"${plain}" \
-            | grep -q 'value: "postgres://distant_signal:\$(PG_MIGRATION_PASSWORD)@' \
-            || fail "roles off: the Job must migrate as postgresql.auth.username"
-          ext=$(render --set migrate.job.enabled=true --set postgresql.enabled=false \
-            --set externalDatabase.existingSecret=ext-db --show-only templates/migrate-job.yaml)
-          grep -A4 'name: MIGRATION_DATABASE_URL$' <<<"${ext}" | grep -q 'name: ext-db' \
-            || fail "an external database: the Job must read externalDatabase.existingSecret"
+          # The role split (and so the owner) is a prerequisite since release
+          # B (ingest phase 5): with an external database, which gets no
+          # per-service roles, the render fails (the preflight).
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set migrate.job.enabled=true --set postgresql.enabled=false \
+              --set externalDatabase.existingSecret=ext-db >/dev/null 2>&1; then
+            fail "an external database must fail the render (no per-service roles)"
+          fi
 
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if render --set api.migrateOnStartup=false >/dev/null 2>&1; then
@@ -2239,7 +2230,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2401,7 +2392,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2499,7 +2490,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2530,7 +2521,11 @@ jobs:
           # No "new series" clause (`x unless x offset <window>`): the
           # counters are registered at 0 on startup, and every rollout makes
           # new per-pod series, so that clause fired on every rollout.
-          if grep -n ' unless ' <<<"${rule}"; then
+          # (`unless on (...)` joins are fine. The one exception is
+          # DistantSignalIngestClockSkew's second arm: its counter is NOT
+          # registered at 0, so a new series above 0 is a real clamp; it
+          # renders since every render here has the ingest-writer on.)
+          if grep -n -E ' unless .* offset ' <<<"${rule}" | grep -v 'observed_at_clamped_total'; then
             echo "PrometheusRule must not use an 'x unless x offset' new-series clause" >&2; exit 1
           fi
           echo "${names}"
@@ -2538,16 +2533,13 @@ jobs:
           # or, with the bundled Postgres, its StatefulSet's ready replicas.
           grep -q 'max by (namespace) (pg_up{namespace="[^"]*"}) == 0$' <<<"${rule}"
           grep -q 'kube_statefulset_status_replicas_ready{namespace="[^"]*", statefulset="distant-signal-postgres"}) < 1$' <<<"${rule}"
-          external_pg=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+          # pgUpSelector narrows pg_up. (An external database cannot render
+          # since release B, ingest phase 5: it gets no per-service roles.)
+          selected_pg=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set metrics.prometheusRule.enabled=true \
-            --set postgresql.enabled=false \
-            --set externalDatabase.url=postgres://u:p@db.example.com/ds \
             --set metrics.prometheusRule.postgresDown.pgUpSelector='job="pg"' \
             --show-only templates/prometheusrule.yaml)
-          grep -q 'pg_up{namespace="[^"]*", job="pg"}' <<<"${external_pg}"
-          if grep -q 'kube_statefulset_status_replicas_ready' <<<"${external_pg}"; then
-            echo "PostgresDown must not read the bundled StatefulSet with postgresql.enabled=false" >&2; exit 1
-          fi
+          grep -q 'pg_up{namespace="[^"]*", job="pg"}' <<<"${selected_pg}"
           grep -q 'min by (namespace) (distant_signal_api_db_up{namespace="[^"]*"}) == 0$' <<<"${rule}"
           # The three consumers' failed api calls (one recorded series each).
           n_api=$(grep -c 'label_replace(sum by (namespace) (increase(distant_signal_[a-z_]*_errors_total{namespace="[^"]*", operation=~"[a-z_|]*"}\[5m\])), "consumer"' <<<"${rule}" || true)
@@ -2587,6 +2579,7 @@ jobs:
             --set metrics.prometheusRule.enabled=true \
             --set pollers.ldbws.enabled=true \
             --set pollers.ldbws.baseUrl=https://ldbws.example.com \
+            --set redis.acl.clients.pollerLdbws=true \
             --show-only templates/prometheusrule.yaml)
           grep -q 'alert: DistantSignalPollerFailing' <<<"${pollers}"
           # ...including the mostly-failing clause (failure ratio over 15m).
@@ -2599,6 +2592,7 @@ jobs:
             --set metrics.prometheusRule.enabled=true \
             --set pollers.incidents.enabled=true \
             --set pollers.incidents.baseUrl=https://incidents.example.com \
+            --set redis.acl.clients.pollerIncidents=true \
             --show-only templates/prometheusrule.yaml)
           grep -q 'alert: DistantSignalPollerFailing' <<<"${no_ldbws}"
           if grep -q 'alert: DistantSignalLdbws' <<<"${no_ldbws}"; then
@@ -2627,7 +2621,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2640,6 +2634,7 @@ jobs:
             --set api.sso.postLoginRedirectUrl=https://app.example.com/
             --set pollers.ldbws.enabled=true
             --set pollers.ldbws.baseUrl=https://ldbws.example.com
+            --set redis.acl.clients.pollerLdbws=true
           )
           knobs='HOURLY_REQUEST_BUDGET|SAMPLE_PINNED_LINES_ONLY|SAMPLE_MAX_STATIONS'
           off=$(helm template distant-signal charts/distant-signal "${base[@]}" \
@@ -2663,7 +2658,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2683,15 +2678,18 @@ jobs:
             grep -q -- "- ${c}\$" <<<"${pm}" || { echo "PodMonitor must select ${c}" >&2; exit 1; }
           done
 
-      # Ingest plan 1B.9: ingestWriter (off by default) is one Recreate
-      # replica with its own NetworkPolicy (egress to Postgres only),
-      # PodMonitor entry, IngestWriterDown alert and, with perService, the
-      # distant_signal_writer role; its loops stay off until loops.enabled.
+      # Ingest plan 1B.9: the ingest-writer is one Recreate replica with its
+      # own NetworkPolicy (egress to Postgres and Redis), PodMonitor entry,
+      # IngestWriterDown alert and the distant_signal_writer role. Since
+      # release B (ingest phase 5) every install runs it with its loops and
+      # the four producer streams on `apply` (ci/ingest-prereqs.yaml):
+      # without it, or with a stream on the removed `shadow`, the render
+      # fails.
       - name: helm template (ingest-writer)
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2710,10 +2708,13 @@ jobs:
           doc() { awk -v k="$1" -v n="$2" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: " k "\n" && $0 ~ "\n  name: " n "\n" {print}'; }
           env_is() { grep -A1 "name: $2\$" <<<"$1" | grep -q "value: \"$3\"" || fail "$2 must be \"$3\""; }
 
-          off=$(render)
-          if grep -q -i 'ingest-writer\|IngestWriter' <<<"${off}"; then fail "ingestWriter off must render nothing of it"; fi
+          for off in ingestWriter.enabled=false ingestWriter.loops.enabled=false; do
+            # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+            if err=$(render --set "${off}" 2>&1 >/dev/null); then fail "${off} must fail the render"; fi
+            grep -qF "${off%%=*}: true" <<<"${err}" || fail "${off}: the render must name it: ${err}"
+          done
 
-          on=$(render --set ingestWriter.enabled=true --set ingestWriter.image.tag=test)
+          on=$(render --set ingestWriter.image.tag=test)
           dep=$(doc Deployment distant-signal-ingest-writer <<<"${on}")
           [[ -n "${dep}" ]] || fail "no ingest-writer Deployment rendered"
           grep -q '^  replicas: 1$' <<<"${dep}" || fail "the ingest-writer must run one replica"
@@ -2721,40 +2722,29 @@ jobs:
           grep -q 'image: "ghcr.io/fasterspeeding/distant-signal/ingest-writer:test"' <<<"${dep}" \
             || fail "ingestWriter.image must set the image"
           grep -q 'path: /livez' <<<"${dep}" || fail "the ingest-writer needs the worker liveness probe"
-          env_is "${dep}" INGEST_WRITER_LOOPS false
+          env_is "${dep}" INGEST_WRITER_LOOPS true
           env_is "${dep}" RECONCILIATION_SWEEP_INTERVAL_SECS 300
           env_is "${dep}" DATABASE_MAX_CONNECTIONS 6
-          loops=$(render --set ingestWriter.enabled=true --set ingestWriter.loops.enabled=true \
-            --show-only templates/ingest-writer-deployment.yaml)
-          env_is "${loops}" INGEST_WRITER_LOOPS true
+          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply"
 
+          # Plan 3a.3: a stream not off brings Redis (env, user, egress, admission),
+          # as its own narrow Redis user (security review H3; the guards
+          # themselves: scripts/check-ingest-phase0-chart.py).
+          env_is "${dep}" REDIS_USERNAME ingest-writer
+          grep -q 'name: REDIS_URL$' <<<"${dep}" || fail "a stream on needs REDIS_URL"
+          grep -q 'fieldPath: metadata.name' <<<"${dep}" || fail "a stream on needs POD_NAME"
           np=$(doc NetworkPolicy distant-signal-ingest-writer <<<"${on}")
           grep -q 'port: 5432' <<<"${np}" || fail "the ingest-writer must be allowed out to Postgres"
-          if grep -q -E 'port: 6379|ipBlock' <<<"${np}"; then
-            fail "with every stream off the ingest-writer gets neither Redis nor the internet"
-          fi
-          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:off,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:off,station-samples:off,tfl:off"
-          if grep -q 'name: REDIS_URL$' <<<"${dep}"; then fail "with every stream off the ingest-writer gets no REDIS_URL"; fi
-          # Plan 3a.3: a stream not off brings Redis (env, user, egress, admission).
-          # Its own narrow Redis user (security review H3; the guards
-          # themselves: scripts/check-ingest-phase0-chart.py).
-          st=$(render --set ingestWriter.enabled=true --set ingestWriter.streams.station-samples=shadow \
-            --set redis.auth.enabled=true --set redis.auth.existingSecret=redis-auth \
-            --set redis.acl.enabled=true --set redis.acl.existingSecret=acl --set redis.acl.stage=narrow \
-            --set redis.acl.clients.ingestWriter=true)
-          sdep=$(doc Deployment distant-signal-ingest-writer <<<"${st}")
-          env_is "${sdep}" REDIS_USERNAME ingest-writer
-          grep -q 'name: REDIS_URL$' <<<"${sdep}" || fail "a stream on needs REDIS_URL"
-          grep -q 'fieldPath: metadata.name' <<<"${sdep}" || fail "a stream on needs POD_NAME"
-          snp=$(doc NetworkPolicy distant-signal-ingest-writer <<<"${st}")
-          grep -q 'port: 6379' <<<"${snp}" || fail "a stream on needs egress to Redis"
-          rnp=$(doc NetworkPolicy distant-signal-redis <<<"${st}")
-          grep -q -- '- ingest-writer$' <<<"${rnp}" \
-            || fail "Redis must admit the ingest-writer once a stream is on"
-          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if render --set ingestWriter.enabled=true --set ingestWriter.streams.tfl=on >/dev/null 2>&1; then
-            fail "an unknown stream mode must fail the render"
-          fi
+          grep -q 'port: 6379' <<<"${np}" || fail "a stream on needs egress to Redis"
+          if grep -q 'ipBlock' <<<"${np}"; then fail "the ingest-writer gets no internet egress"; fi
+          rnp=$(doc NetworkPolicy distant-signal-redis <<<"${on}")
+          grep -q -- '- ingest-writer$' <<<"${rnp}" || fail "Redis must admit the ingest-writer"
+          for mode in on shadow; do
+            # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+            if render --set "ingestWriter.streams.ioi-gtfs=${mode}" >/dev/null 2>&1; then
+              fail "stream mode ${mode} must fail the render"
+            fi
+          done
           pg=$(doc NetworkPolicy distant-signal-postgres <<<"${on}")
           grep -q -- '- ingest-writer$' <<<"${pg}" || fail "Postgres must admit the ingest-writer"
           pm=$(doc PodMonitor distant-signal <<<"${on}")
@@ -2763,37 +2753,30 @@ jobs:
           grep -q 'alert: DistantSignalIngestWriterDown$' <<<"${rule}" || fail "IngestWriterDown must render"
           grep -q 'deployment="distant-signal-ingest-writer"' <<<"${rule}" || fail "IngestWriterDown must name the Deployment"
 
-          # The writer role: created with perService, used only with connect.
-          roles=(--set postgresql.roles.enabled=true --set postgresql.roles.setupJob.enabled=true
-            --set postgresql.roles.perService.enabled=true)
-          ps=$(render "${roles[@]}")
-          grep -q "'--variable=writer_connection_limit=7'" <<<"${ps}" || fail "the writer role's limit must be its pool (6) + the lock session"
-          grep -q 'name: DS_PG_WRITER_PASSWORD$' <<<"${ps}" || fail "the setup Job must get the writer's password"
-          ps=$(render "${roles[@]}" --set ingestWriter.enabled=true)
-          dep=$(doc Deployment distant-signal-ingest-writer <<<"${ps}")
+          # The writer role.
+          grep -q "'--variable=writer_connection_limit=7'" <<<"${on}" || fail "the writer role's limit must be its pool (6) + the lock session"
+          grep -q 'name: DS_PG_WRITER_PASSWORD$' <<<"${on}" || fail "the setup Job must get the writer's password"
           # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
-          grep -q 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${dep}" || fail "without connect the ingest-writer connects as app"
-          grep -q "'--variable=app_connection_limit=82'" <<<"${ps}" || fail "the writer's pool (6) and lock session must count in app's limit (75)"
-          ps=$(render "${roles[@]}" --set ingestWriter.enabled=true --set postgresql.roles.perService.writer.connect=true)
-          dep=$(doc Deployment distant-signal-ingest-writer <<<"${ps}")
-          # shellcheck disable=SC2016 # as above
           grep -q 'postgres://distant_signal_writer:\$(PGPASSWORD)@' <<<"${dep}" \
-            || fail "writer.connect: the ingest-writer must connect as distant_signal_writer"
-          # Release A: writer.connect defaults to true and is a no-op while
-          # the ingest-writer is off (nothing connects as the role).
-          ps=$(render "${roles[@]}" --set postgresql.roles.perService.writer.connect=true)
-          # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
-          if grep -q 'distant_signal_writer:\$(PGPASSWORD)@' <<<"${ps}"; then
-            fail "writer.connect without ingestWriter.enabled must connect nothing as the writer"
+            || fail "the ingest-writer must connect as distant_signal_writer"
+          # Security review M4: tfl on apply needs the writer's own role.
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if err=$(render --set postgresql.roles.perService.writer.connect=false 2>&1 >/dev/null); then
+            fail "the writer as the app role with tfl on apply must fail the render"
           fi
+          grep -qF 'perService.writer.connect' <<<"${err}" || fail "unexpected error: ${err}"
 
       # INF-7: with the bundled Postgres, api replicas x pool plus the other
-      # pools must fit in max_connections - 3, or rendering fails.
+      # pools must fit in max_connections - 3, or rendering fails. Since
+      # release B every install has the per-service roles, whose CONNECTION
+      # LIMITs have a budget of their own (the app role's computed limit
+      # grows with the api's pool); app's limit is pinned here so that the
+      # pool budget is the one tested.
       - name: helm template (Postgres connection budget)
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2804,6 +2787,7 @@ jobs:
             --set api.sso.clientSecret=test-secret
             --set api.sso.redirectUrl=https://app.example.com/callback
             --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set postgresql.roles.app.connectionLimit=60
             --show-only templates/api-deployment.yaml
           )
           if helm template distant-signal charts/distant-signal "${base[@]}" \
@@ -2812,23 +2796,29 @@ jobs:
           fi
           helm template distant-signal charts/distant-signal "${base[@]}" \
             --set api.replicaCount=2 --set postgresql.config.max_connections=100 \
-            --set api.database.maxConnections=30 > /dev/null
+            --set api.database.maxConnections=25 > /dev/null
           helm template distant-signal charts/distant-signal "${base[@]}" \
             --set api.replicaCount=2 > /dev/null
           # R-048: the budget also reserves postgresql.connectionBudget
           # (exporter + pg_dump 2, admin psql 3) and 2 for pgBackRest. Pools
-          # other than api are 21, so at the default max_connections of 200
-          # api may have 197 - 21 - 5 = 171.
+          # other than api are 35 (the ingest-writer's and the TRUST and
+          # full-coverage consumers' included), so at the default
+          # max_connections of 200 api may have 197 - 35 - 5 = 157.
           helm template distant-signal charts/distant-signal "${base[@]}" \
-            --set api.database.maxConnections=171 > /dev/null
+            --set api.database.maxConnections=157 > /dev/null
           if helm template distant-signal charts/distant-signal "${base[@]}" \
-              --set api.database.maxConnections=172 > /dev/null 2>&1; then
-            echo "172 + 21 + 5 reserved must exceed 197" >&2; exit 1
+              --set api.database.maxConnections=158 > /dev/null 2>&1; then
+            echo "158 + 35 + 5 reserved must exceed 197" >&2; exit 1
           fi
           if helm template distant-signal charts/distant-signal "${base[@]}" \
-              --set api.database.maxConnections=160 \
+              --set api.database.maxConnections=150 \
               --set postgresql.connectionBudget.adminSessions=20 > /dev/null 2>&1; then
             echo "postgresql.connectionBudget.adminSessions must count" >&2; exit 1
+          fi
+          # Without the pin, the role limits fail first (app's computed limit).
+          if helm template distant-signal charts/distant-signal "${base[@]}" \
+              --set postgresql.roles.app.connectionLimit= --set api.database.maxConnections=150 > /dev/null 2>&1; then
+            echo "the role limits must fail the render once app's computed limit exceeds the budget" >&2; exit 1
           fi
           pgbackrest=(
             --set postgresql.pgbackrest.enabled=true
@@ -2840,9 +2830,9 @@ jobs:
             --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds
           )
           helm template distant-signal charts/distant-signal "${base[@]}" "${pgbackrest[@]}" \
-            --set api.database.maxConnections=169 > /dev/null
+            --set api.database.maxConnections=155 > /dev/null
           if helm template distant-signal charts/distant-signal "${base[@]}" "${pgbackrest[@]}" \
-              --set api.database.maxConnections=170 > /dev/null 2>&1; then
+              --set api.database.maxConnections=156 > /dev/null 2>&1; then
             echo "pgBackRest must reserve 2 connections" >&2; exit 1
           fi
 
@@ -2853,7 +2843,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -2914,9 +2904,6 @@ jobs:
           all=$(render "${ioi[@]}" --set pollerIrishRailGtfs.enabled=true \
             --set pollerIrishRailLive.enabled=true \
             --set pollerNirStations.enabled=true \
-            --set api.internalOauth.groups.irishRailGtfs=svc-poller-irish-rail-gtfs \
-            --set api.internalOauth.groups.irishRailLive=svc-poller-irish-rail-live \
-            --set api.internalOauth.groups.nirStations=svc-poller-nir-stations \
             --show-only templates/networkpolicy.yaml)
           for c in aggregator:8090 enricher:8090 notifier:8090 trust-consumer:8081 \
               trust-backlog-consumer:8083 full-coverage-consumer:8082 movement-relay:8083 \
@@ -2959,10 +2946,21 @@ jobs:
             grep -q 'port: 53$' <<<"${out}" || fail "${c} must get an egress policy allowing DNS"
           done
           for d in api:postgres api:redis frontend:api aggregator:postgres enricher:postgres \
-              enricher:redis schedulefeed:api; do
+              enricher:redis schedulefeed:postgres trust-consumer:postgres trust-consumer:redis \
+              trust-backlog-consumer:postgres full-coverage-consumer:postgres full-coverage-consumer:redis; do
             out=$(egress_of "${d%%:*}" "${eg}")
             grep -q "component: ${d##*:}\$" <<<"${out}" || fail "${d%%:*} egress must reach ${d##*:}"
           done
+          # Release B (ingest phase 5): no producer calls the api any more, so
+          # none may reach it, and the api admits none of them.
+          for c in schedulefeed trust-consumer trust-backlog-consumer full-coverage-consumer; do
+            out=$(egress_of "${c}" "${eg}")
+            if grep -q 'component: api$' <<<"${out}"; then fail "${c} must not reach the api"; fi
+          done
+          api_in=$(policy distant-signal-api <<<"${eg}" | awk '/^  ingress:/{f=1} /^  egress:/{f=0} f')
+          if grep -E -q -- '- (poller-[a-z-]+|trust-consumer|trust-backlog-consumer|full-coverage-consumer|schedulefeed)$' <<<"${api_in}"; then
+            fail "the api must admit no ingest producer"
+          fi
           for c in api enricher schedulefeed notifier; do
             out=$(egress_of "${c}" "${eg}")
             grep -q 'cidr: 0.0.0.0/0' <<<"${out}" || fail "${c} egress must reach the internet"
@@ -3016,7 +3014,6 @@ jobs:
           # internet_ports_of <component> <render>: the ports after ::/0.
           internet_ports_of() { egress_of "$1" "$2" | awk '/cidr: "::\/0"/{f=1} f && /port:/{print $2}' | sort -n | tr '\n' ' '; }
           eg=$(render "${ioi[@]}" --set networkPolicy.egress.enabled=true --set pollerIrishRailLive.enabled=true \
-            --set api.internalOauth.groups.irishRailLive=svc-poller-irish-rail-live \
             --show-only templates/networkpolicy.yaml)
           for c in 'notifier:443 ' 'api:443 ' 'trust-consumer:443 9094 ' 'full-coverage-consumer:443 9094 ' \
               'movement-relay:443 9094 ' 'poller-irish-rail-live:80 443 '; do
@@ -3145,7 +3142,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -3208,7 +3205,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -3251,21 +3248,23 @@ jobs:
           eg=$(doc NetworkPolicy distant-signal-api-maintenance <<<"${out}")
           grep -q 'port: 5432' <<<"${eg}" || fail "the CronJob must be allowed out to Postgres"
 
-          # The api role: its own with perService.api.connect, else app.
-          roles=(--set postgresql.roles.enabled=true --set postgresql.roles.setupJob.enabled=true)
-          cj=$(render "${on[@]}" "${roles[@]}" --show-only templates/api-maintenance-cronjob.yaml)
+          # The api role: its own with perService.api.connect, else app (the
+          # roles are on in every install since release B).
+          cj=$(render "${on[@]}" --show-only templates/api-maintenance-cronjob.yaml)
           # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
-          grep -q 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${cj}" || fail "roles on: the CronJob must connect as app"
-          cj=$(render "${on[@]}" "${roles[@]}" --set postgresql.roles.perService.enabled=true \
-            --set postgresql.roles.perService.api.connect=true --show-only templates/api-maintenance-cronjob.yaml)
+          grep -q 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${cj}" || fail "the CronJob must connect as app"
+          cj=$(render "${on[@]}" --set postgresql.roles.perService.api.connect=true \
+            --show-only templates/api-maintenance-cronjob.yaml)
           # shellcheck disable=SC2016 # as above
           grep -q 'postgres://distant_signal_api:\$(PGPASSWORD)@' <<<"${cj}" || fail "api.connect: the CronJob must connect as the api role"
-          # Its 2 connections count: the app limit 75 -> 77, the INF-7 budget 171 -> 169.
-          out=$(render "${on[@]}" "${roles[@]}")
+          # Its 2 connections count: the app limit 75 -> 77, and (app's limit
+          # pinned, so the pool budget is the one tested) the INF-7 budget
+          # 157 -> 155.
           grep -q "'--variable=app_connection_limit=77'" <<<"${out}" || fail "the CronJob's pool must count in the app role's limit"
-          render "${on[@]}" --set api.database.maxConnections=169 >/dev/null
+          pinned=(--set postgresql.roles.app.connectionLimit=60)
+          render "${on[@]}" "${pinned[@]}" --set api.database.maxConnections=155 >/dev/null
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if render "${on[@]}" --set api.database.maxConnections=170 >/dev/null 2>&1; then
+          if render "${on[@]}" "${pinned[@]}" --set api.database.maxConnections=156 >/dev/null 2>&1; then
             fail "the CronJob's pool must count in the INF-7 budget"
           fi
 
@@ -3279,7 +3278,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
-            -f charts/distant-signal/ci/http-sinks.yaml
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -3305,7 +3304,9 @@ jobs:
           fail() { echo "$1" >&2; exit 1; }
 
           off=$(render)
-          if grep -n -i -E 'pgbackrest|archive_mode|archive_command' <<<"${off}"; then
+          # (The roles setup SQL, on since release B, names pgBackRest in its
+          # comments: SQL comment lines are skipped.)
+          if grep -v -E '^ *--' <<<"${off}" | grep -n -i -E 'pgbackrest|archive_mode|archive_command'; then
             fail "pgBackRest is off by default but rendered"
           fi
           grep -q 'image: "postgres:16' <<<"${off}" || fail "the default Postgres image must stay postgres:16"

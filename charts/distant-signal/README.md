@@ -406,11 +406,6 @@ pollers:
     baseUrl: https://rdm.example.com/incidents
     existingSecret: distant-signal-rdm
     existingSecretApiKeyKey: incidents-api-key
-    # A single existingSecret toggle covers both this poller's RDM apiKey
-    # AND its own internal-oauth username/password (all three keys must
-    # live in the same referenced Secret).
-    existingSecretInternalOauthUsernameKey: incidents-oauth-username
-    existingSecretInternalOauthPasswordKey: incidents-oauth-password
   ldbws:
     enabled: true
     baseUrl: https://rdm.example.com/LDBWS/api/20220120
@@ -703,20 +698,21 @@ rights). The render fails:
 
 - with `redis.acl.enabled` and `defaultUser` on but `redis.auth.enabled`
   off (`default` would be passwordless, M3);
-- for `pollers.<ldbws|tfl|tocs>.ingest.sink` `http+shadow` or `stream`,
-  `fullCoverageConsumer.ingest.sink` `http+shadow` or `stream`, an enabled
-  island-of-Ireland poller, or any `ingestWriter.streams` entry not `off`,
+- for an enabled `pollers.<ldbws|tfl|tocs|incidents>`, the
+  full-coverage-consumer, an enabled island-of-Ireland poller, or any
+  `ingestWriter.streams` entry not `off`,
   unless `redis.acl.enabled`, `redis.acl.stage: narrow` and that
   component's own `redis.acl.clients.<client>` are all set (H3);
 - for any `ingestWriter.streams` entry on `apply` unless
-  `redis.acl.defaultUser: "off"` (H3), which in turn needs every client on
+  `redis.acl.defaultUser` is `"off"` or `"on-unshared"` (H3), which in turn needs every client on
   its own user. Only clients whose workload renders count: a disabled
   poller (the island-of-Ireland ones by default), movement-relay or
   ingest-writer has no pod to lock out, so its `clients.<client>` may stay
   `false`.
 
-So the ACL rollout through `stage: narrow` comes before the first stream
-`shadow`, and `defaultUser: "off"` before the first `apply`.
+Since release B (ingest phase 5) the stream producers always XADD and the
+writer always applies, so the ACL at its last step is a prerequisite of
+every install (see "Release B" below).
 
 ## Per-service Postgres roles (optional)
 
@@ -738,21 +734,21 @@ its `postgresql.roles.perService.<role>.connect` is on (which needs
 `postgresql.roles.enabled`, `setupJob.enabled` and `perService.enabled`):
 it never falls back to `distant_signal_app` or the superuser.
 
-| Values | Needs `perService.<role>.connect` |
+| Component | Needs `perService.<role>.connect` |
 |---|---|
-| `pollers.stations.ingest.sink: db` | `stations` |
-| `pollers.incidents.ingest.sink: db` | `incidents` |
-| `trustBacklogConsumer.ingest.sink: db` | `trust_backlog` |
-| `trustConsumer.ingest.sink: db` or `trustConsumer.internalReads.source: db` | `trust_consumer` |
-| `fullCoverageConsumer.internalReads.source: db` | `full_coverage_ro` |
-| `pollers.ldbws.internalReads.source: db` | `ldbws_ro` |
-| `scheduleFeed.ingest.sink: db` | `schedule_ingest` |
-| `scheduleFeed.reference.ingest.sink: db` | `schedule_reference` |
+| `pollers.stations` (enabled) | `stations` |
+| `pollers.incidents` (enabled) | `incidents` |
+| trust-backlog-consumer | `trust_backlog` |
+| trust-consumer (its writes and its reads) | `trust_consumer` |
+| full-coverage-consumer's reads | `full_coverage_ro` |
+| `pollers.ldbws` (enabled; its reads) | `ldbws_ro` |
+| `scheduleFeed` (enabled): schedule-ingest | `schedule_ingest` |
+| `scheduleFeed` (enabled): schedule-reference | `schedule_reference` |
 | `ingestWriter.streams.tfl: apply` (M4: `line_status`'s row policy binds the writer's role only) | `writer` |
 
-Any other poller on `ingest.sink: db` fails too: it has no narrow role.
-These sinks therefore need the bundled Postgres with `postgresql.roles`;
-an external database cannot use them.
+Since release B these components always write or read Postgres directly,
+so every install needs the bundled Postgres with `postgresql.roles`; an
+external database cannot render the chart.
 
 ### Rollout strategy and connection limits
 
@@ -777,41 +773,47 @@ values cannot unstick it. `ALTER ROLE ... CONNECTION LIMIT` by hand, or
 delete the old pod, or patch the live Deployment to Recreate; see
 docs/ingest-phase5-runbook.md §0.5 "Rollout deadlock".
 
-## Release A: the ingest cutover defaults
+## Release B: the producers' only paths
 
-Since release A (2026-10-09) every ingest producer defaults to its new
-sink and every internal reader to its direct read, off the api's
-`/private` routes:
+Since release A (2026-10-09) every ingest producer wrote to its new sink
+and every internal reader read Postgres directly by default; release B
+(ingest phase 5) removed the api's `/private` routes and the producers'
+HTTP paths, so these are now the only paths, with no switch:
 
-| Producer | Value | Default |
-|---|---|---|
-| poller-stations, poller-incidents | `pollers.<name>.ingest.sink` | `db` |
-| trust-consumer, trust-backlog-consumer | `<consumer>.ingest.sink` | `db` |
-| schedule-ingest, schedule-reference | `scheduleFeed.ingest.sink`, `scheduleFeed.reference.ingest.sink` | `db` |
-| poller-ldbws, poller-tfl, poller-tocs | `pollers.<name>.ingest.sink` | `stream` |
-| full-coverage-consumer | `fullCoverageConsumer.ingest.sink` | `stream` |
-| ingest-writer | `ingestWriter.streams.<station-samples\|full-coverage\|tfl\|reference>` | `apply` |
-| full-coverage-consumer, trust-consumer, poller-ldbws (reads) | `<reader>.internalReads.source` | `db` |
+| Producer | Writes |
+|---|---|
+| poller-stations, poller-incidents | Postgres, each as its own role (poller-incidents also XADDs `incident-text-changed`) |
+| trust-consumer, trust-backlog-consumer | Postgres, each as its own role |
+| schedule-ingest, schedule-reference | Postgres, each as its own role |
+| poller-ldbws, poller-tfl, poller-tocs | `ds:ingest:station-samples`, `ds:ingest:tfl`, `ds:ingest:reference` |
+| full-coverage-consumer | `ds:ingest:full-coverage` |
+| ingest-writer | applies the four streams (`ingestWriter.streams.<name>: apply`) |
+| full-coverage-consumer, trust-consumer, poller-ldbws (reads) | read Postgres, each as its own read role |
 
-The producers' `postgresql.roles.perService.<role>.connect` (and the
-writer's) default to `true` as well; a `connect` whose component does not
-use the role (disabled, or back on `http`) is a no-op.
+No producer gets a `/private` URL, an internal OAuth credential,
+`INGEST_SINK` or a `*_SOURCE` any more (the binaries still accept those two
+for one release, only with their one value). The producers'
+`postgresql.roles.perService.<role>.connect` (and the writer's) default to
+`true`; a `connect` whose component is not deployed is a no-op.
 
-Those defaults need the per-service Postgres roles, the ingest-writer with
-its loops, and the Redis ACL through `defaultUser: "off"`. A values file
-without them fails the render once, from
-`templates/zz-ingest-sink-preflight.yaml`, listing every missing setting
-and the per-producer opt-out (`<producer>.ingest.sink: http`, or
-`ingestWriter.streams.<name>: "off"` for the writer). `ci/ingest-prereqs.yaml`
-is the least a fresh install adds (including `max_connections: 200`: the
-role limits sum to 101 against the default 100); `values-example.yaml`
-carries the same. `ci/http-sinks.yaml` puts every producer back on `http`.
+Every install therefore needs the per-service Postgres roles, the
+ingest-writer with its loops, and the Redis ACL through `defaultUser:
+"on-unshared"` (or `"off"`). A values file without them fails the render
+once, from `templates/zz-ingest-sink-preflight.yaml`, listing every missing
+setting. `ci/ingest-prereqs.yaml` is the least a fresh install adds
+(including `max_connections: 200`: the role limits exceed the default
+100's budget); `values-example.yaml` carries the same.
 
-The rollback for each producer is its own `ingest.sink: http` (the
-writer's stream may stay on `apply`), and for each reader its own
-`internalReads.source: http`. See `docs/ingest-phase5-runbook.md`,
-"Release A", for the prerequisites in production, the rollback values and
-what to watch during the settle.
+The retired switches (`pollers.<name>.ingest.sink`,
+`<consumer>.ingest.sink`, `scheduleFeed.ingest.sink`,
+`scheduleFeed.reference.ingest.sink`, `<reader>.internalReads.source`) are
+gone from `values.yaml`. A values file that still sets one to anything but
+its one value (`db` for the direct writers, `stream` for the stream
+producers, `db` for the reads), or an `ingestWriter.streams` entry to the
+removed `shadow`, fails the render, naming it; set to that value, it is a
+harmless leftover (delete it when convenient). There is no per-producer
+rollback: going back to the HTTP paths means the previous chart release and
+images (`docs/ingest-phase5-runbook.md`).
 
 ## Migrations, maintenance and the ingest-writer (optional)
 
@@ -908,13 +910,13 @@ PodMonitor scrapes it; `DistantSignalIngestWriterDown` fires when it is down
 (see `docs/alerts.md`).
 
 From phase 3 it also consumes the Redis ingest streams, each with its own
-mode in `ingestWriter.streams` (`INGEST_WRITER_STREAMS`; every one `off` by
-default): `shadow` decodes, validates and acks without writing, `apply`
-writes, recording each entry's key in `ingest_dedup` in the same
+mode in `ingestWriter.streams` (`INGEST_WRITER_STREAMS`; the four producer
+streams `apply` by default, the island-of-Ireland ones `off`): `apply`
+writes (release B removed the cutover's `shadow` mode), recording each entry's key in `ingest_dedup` in the same
 transaction (pruned hourly after 48 h) so a redelivered entry applies once.
 It trims dead-letter entries older than 7 days hourly (`XTRIM … MINID ~`).
 Once any stream is not `off` the writer gets `REDIS_URL`, its Redis user
-(`redis.acl.clients.ingestWriter`, else the shared `redis.auth` password),
+(`redis.acl.clients.ingestWriter`),
 `POD_NAME` (its consumer name) and NetworkPolicy egress to Redis, and
 Redis admits it. It refuses to start a stream it has no handlers for yet:
 station-samples and full-coverage get theirs in plan 3a.6, the others in
@@ -922,12 +924,11 @@ station-samples and full-coverage get theirs in plan 3a.6, the others in
 
 ### schedule-reference's db sink (ingest plan 2a)
 
-`scheduleFeed.reference.ingest.sink: db` makes schedule-reference write its
-products to Postgres directly through `ds_store` instead of the api's
-`/private` routes (off by default: `http`). Only the `reference` container
-gets `DATABASE_URL`; it connects as `distant_signal_schedule_reference` with
-`postgresql.roles.perService.schedule_reference.connect`, else as the app
-role, with a pool of `scheduleFeed.reference.ingest.database.maxConnections`
+schedule-reference writes its products to Postgres directly through
+`ds_store` (its only path since release B removed the api's `/private`
+routes). Only the `reference` container gets its `DATABASE_URL`; it connects
+as `distant_signal_schedule_reference`
+(`postgresql.roles.perService.schedule_reference.connect`), with a pool of `scheduleFeed.reference.ingest.database.maxConnections`
 (3), counted in the connection budgets, and waits for the schema gate before
 its first poll. The schedulefeed NetworkPolicy gains Postgres egress and the
 postgres policy admits `schedulefeed`. It counts
@@ -1105,13 +1106,9 @@ compatibility.
 values; the `tls` block is shaped for cert-manager's `cluster-issuer`
 annotation but is issuer-agnostic.
 
-> **Security warning.** Enabling `ingress.api.enabled` publishes `/private/*`
-> to the internet as well. Those ingestion endpoints are protected by
-> internal-service OAuth2 (`require_internal_oauth`, `crates/api/src/auth.rs`,
-> delegated to Authentik) — there is no other authentication in front of
-> them. If you do not need external API access, leave
-> `ingress.api.enabled: false`; the frontend reaches the api over the
-> in-cluster Service either way.
+> If you do not need external API access, leave `ingress.api.enabled:
+> false`; the frontend reaches the api over the in-cluster Service either
+> way.
 >
 > Until 2026-09-25 it also published the api's `/metrics` endpoint the same
 > way, because api served `/metrics` on its own public HTTP port rather
@@ -1265,8 +1262,8 @@ The Distant-Signal-MCP is a separate release (its own `ds-mcp` namespace)
 that calls this api's **public** routes in-cluster, directly, not through
 the frontend. Without help it would have no `X-Real-IP`, so every MCP user
 would share the MCP pod's single anonymous bucket. Instead it proves who it
-is with the same internal OAuth2 client-credentials tokens the `/private/*`
-callers use, and gets its own, **finite** budget (`api.rateLimit.mcp`, 5x
+is with an internal OAuth2 client-credentials token (the only internal
+token the api verifies since release B removed `/private`), and gets its own, **finite** budget (`api.rateLimit.mcp`, 5x
 the public defaults), keyed on the caller (`svc:mcp`, one bucket for the
 whole service). It is not exempt: all other validation and timeouts apply,
 and a runaway loop or leaked credential is capped by that budget.
@@ -1291,27 +1288,25 @@ the request is as far as any handler is concerned. Rejections are counted in
 token's `exp`), POST a client-credentials grant to the token endpoint:
 
 ```
-POST <internalOauth.tokenUrl>          # e.g. https://sso.example.com/application/o/token/
+POST <the provider's token endpoint>   # e.g. https://sso.example.com/application/o/token/
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=client_credentials&client_id=<internalOauth.clientId>
+grant_type=client_credentials&client_id=<api.internalOauth.clientId>
 &username=<the MCP service account's username>&password=<its app password/token>
-&scope=<internalOauth.scope, default "groups">
+&scope=groups
 ```
 
-(the same request the pollers make, `crates/common/src/oauth_client.rs`),
 then send `Authorization: Bearer <access_token>` on every api call. The
-token's `aud` must be `internalOauth.clientId` (the same value as
-`api.internalOauth.clientId`), its `iss` must be `api.internalOauth.issuerUrl`,
+token's `aud` must be `api.internalOauth.clientId`, its `iss` must be `api.internalOauth.issuerUrl`,
 and its `groups` claim must contain `api.internalOauth.groups.mcp`. Cache
 the token until shortly before `exp`; don't fetch one per request. On `401`
 refresh the token once; on `429` honour `Retry-After`.
 
 **Operator steps.** In Authentik, under the existing internal-service OAuth2
-provider (the one whose client id is `internalOauth.clientId`): create a
+provider (the one whose client id is `api.internalOauth.clientId`): create a
 service account for the MCP (e.g. `srv-ds-mcp`) and a group of the same name
 (`srv-ds-mcp`), add the account to the group, and give the MCP its username
-and app password. Do not add it to any `/private/*` caller group. Then, in
+and app password. Then, in
 this chart's values: set `api.internalOauth.groups.mcp` to that group (the
 default is `srv-ds-mcp`), optionally tune `api.rateLimit.mcp`, and, when
 `networkPolicy.enabled`, add the MCP's namespace to
@@ -1324,17 +1319,17 @@ cluster-level default-deny policy needs the same allowance.
 
 ## Enabling the pollers
 
-| Poller | Base URL env var | Ingest path | Default cadence (s) |
+| Poller | Base URL env var | Writes | Default cadence (s) |
 |---|---|---|---|
-| `incidents` | `RDM_INCIDENTS_BASE_URL` | `/private/incidents` | 300 |
-| `stations` | `RDM_STATIONS_BASE_URL` | `/private/stations` | 86400 |
-| `tocs` | `RDM_TOCS_BASE_URL` | `/private/tocs` | 86400 |
-| `ldbws` | `LDBWS_BASE_URL` | `/private/station-samples` | 60 |
-| `tfl` | `TFL_BASE_URL` | `/private/tfl-line-status` | 300 |
+| `incidents` | `RDM_INCIDENTS_BASE_URL` | Postgres (`distant_signal_incidents`) | 300 |
+| `stations` | `RDM_STATIONS_BASE_URL` | Postgres (`distant_signal_stations`) | 86400 |
+| `tocs` | `RDM_TOCS_BASE_URL` | `ds:ingest:reference` | 86400 |
+| `ldbws` | `LDBWS_BASE_URL` | `ds:ingest:station-samples` | 60 |
+| `tfl` | `TFL_BASE_URL` | `ds:ingest:tfl` | 300 |
 
-`ldbws` additionally sets `NUM_ROWS` and `API_SAMPLE_STATIONS_URL`
-(`/private/sample-stations`), which is a second api endpoint separate from
-its ingest path.
+`ldbws` additionally sets `NUM_ROWS`, and reads its sample stations from
+Postgres as `distant_signal_ldbws_ro`. Each needs its role's or Redis
+user's `connect`/`redis.acl.clients.poller<Name>` (the render says which).
 
 **All five are disabled by default.** The four RDM feeds are real, and
 production runs all four, but each base URL and API key comes from the
@@ -1429,16 +1424,9 @@ exits with code 2.
 
 `secrets` is currently empty — reserved for any future chart-wide secret
 that isn't tied to one specific service. The shared internal-token header
-this block used to hold is retired; see "internalOauth (shared,
-non-secret)" below for what replaced it.
-
-### internalOauth (shared, non-secret)
-
-| Key | Default | Description |
-|---|---|---|
-| `internalOauth.tokenUrl` | `""` | Authentik's client-credentials token endpoint. Required whenever any real caller is enabled. |
-| `internalOauth.clientId` | `""` | The shared OAuth2 Provider's client_id — same value as `api.internalOauth.clientId`. Required. |
-| `internalOauth.scope` | `groups` | Scope requested on every client-credentials POST. |
+this block used to hold is retired, and so is the top-level
+`internalOauth` block (the producers' token endpoint and client id), which
+release B (ingest phase 5) removed with the producers' `/private` paths.
 
 ### postgresql
 
@@ -1515,47 +1503,47 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.roles.perService.notifier.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.notifier.existingSecretPasswordKey` | `postgres-notifier-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.notifier.connectionLimit` | `""` | CONNECTION LIMIT. |
-| `postgresql.roles.perService.writer.connect` | `true` | Connect the ingest-writer (`ingestWriter.enabled` required) as `distant_signal_writer`. The role is created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component uses the role (deployed and, for a producer, on its `db` sink), and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
+| `postgresql.roles.perService.writer.connect` | `true` | Connect the ingest-writer (`ingestWriter.enabled` required) as `distant_signal_writer`. The role is created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component is deployed, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
 | `postgresql.roles.perService.writer.password` | `""` | Password. |
 | `postgresql.roles.perService.writer.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.writer.existingSecretPasswordKey` | `postgres-writer-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.writer.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `ingestWriter.database.maxConnections` + 1 (the loop-lock session). |
-| `postgresql.roles.perService.schedule_ingest.connect` | `true` | Connect schedule-ingest (`scheduleFeed.ingest.sink: db` required) as `distant_signal_schedule_ingest`: a narrow role, not a member of app, with only the CORPUS and feed-marker grants. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component uses the role (deployed and, for a producer, on its `db` sink), and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
+| `postgresql.roles.perService.schedule_ingest.connect` | `true` | Connect schedule-ingest (`scheduleFeed.enabled`) as `distant_signal_schedule_ingest`: a narrow role, not a member of app, with only the CORPUS and feed-marker grants. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component is deployed, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
 | `postgresql.roles.perService.schedule_ingest.password` | `""` | Password. |
 | `postgresql.roles.perService.schedule_ingest.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.schedule_ingest.existingSecretPasswordKey` | `postgres-schedule-ingest-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.schedule_ingest.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `scheduleFeed.ingest.database.maxConnections` + 1. |
-| `postgresql.roles.perService.schedule_reference.connect` | `true` | Connect schedule-reference's db sink (`scheduleFeed.reference.ingest.sink: db` required) as `distant_signal_schedule_reference`, a narrow role (not a member of app; exactly its `files/db-grants.yaml` grants). Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component uses the role (deployed and, for a producer, on its `db` sink), and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
+| `postgresql.roles.perService.schedule_reference.connect` | `true` | Connect schedule-reference (`scheduleFeed.enabled`) as `distant_signal_schedule_reference`, a narrow role (not a member of app; exactly its `files/db-grants.yaml` grants). Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component is deployed, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
 | `postgresql.roles.perService.schedule_reference.password` | `""` | Password. |
 | `postgresql.roles.perService.schedule_reference.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.schedule_reference.existingSecretPasswordKey` | `postgres-schedule-reference-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.schedule_reference.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `scheduleFeed.reference.ingest.database.maxConnections` + 1. |
-| `postgresql.roles.perService.stations.connect` | `true` | Connect poller-stations (`pollers.stations.enabled` with `ingest.sink: db` required) as `distant_signal_stations` (plan 2b.3). A narrow role, not a member of `app`: SELECT, INSERT and UPDATE on `stations` and `ingest_freshness` only. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component uses the role (deployed and, for a producer, on its `db` sink), and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
+| `postgresql.roles.perService.stations.connect` | `true` | Connect poller-stations (`pollers.stations.enabled`) as `distant_signal_stations` (plan 2b.3). A narrow role, not a member of `app`: SELECT, INSERT and UPDATE on `stations` and `ingest_freshness` only. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component is deployed, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
 | `postgresql.roles.perService.stations.password` | `""` | Password. |
 | `postgresql.roles.perService.stations.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.stations.existingSecretPasswordKey` | `postgres-stations-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.stations.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `pollers.stations.ingest.database.maxConnections` + 1. |
-| `postgresql.roles.perService.incidents.connect` | `true` | Connect poller-incidents' DB sink (`pollers.incidents.ingest.sink: db` required) as `distant_signal_incidents`, a `narrow` role (exactly its `db-grants.yaml` grants, never an app member). The role is created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component uses the role (deployed and, for a producer, on its `db` sink), and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
+| `postgresql.roles.perService.incidents.connect` | `true` | Connect poller-incidents (`pollers.incidents.enabled`) as `distant_signal_incidents`, a `narrow` role (exactly its `db-grants.yaml` grants, never an app member). The role is created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component is deployed, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
 | `postgresql.roles.perService.incidents.password` | `""` | Password. |
 | `postgresql.roles.perService.incidents.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.incidents.existingSecretPasswordKey` | `postgres-incidents-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.incidents.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `pollers.incidents.ingest.database.maxConnections` + 1. |
-| `postgresql.roles.perService.trust_backlog.connect` | `true` | Connect trust-backlog-consumer (`trustBacklogConsumer.ingest.sink: db` required) as `distant_signal_trust_backlog` (plan 3b.2). A narrow role, not a member of `app`: the backlog, shared-movement and reasons writes and the STANOX/CRS read only. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component uses the role (deployed and, for a producer, on its `db` sink), and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
+| `postgresql.roles.perService.trust_backlog.connect` | `true` | Connect trust-backlog-consumer as `distant_signal_trust_backlog` (plan 3b.2). A narrow role, not a member of `app`: the backlog, shared-movement and reasons writes and the STANOX/CRS read only. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component is deployed, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
 | `postgresql.roles.perService.trust_backlog.password` | `""` | Password. |
 | `postgresql.roles.perService.trust_backlog.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.trust_backlog.existingSecretPasswordKey` | `postgres-trust-backlog-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.trust_backlog.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `trustBacklogConsumer.ingest.database.maxConnections` + 1. |
-| `postgresql.roles.perService.trust_consumer.connect` | `true` | Connect trust-consumer (`trustConsumer.ingest.sink: db` or `trustConsumer.internalReads.source: db` required) as `distant_signal_trust_consumer` (plans 3b.4, D1, and 4.4). A narrow role, not a member of `app`: the train-event, forward-signal and `train_event_outbox` writes, SELECT only on `train_subscriptions`, and the phase 4 reads. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component uses the role (deployed and, for a producer, on its `db` sink), and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
+| `postgresql.roles.perService.trust_consumer.connect` | `true` | Connect trust-consumer as `distant_signal_trust_consumer` (plans 3b.4, D1, and 4.4). A narrow role, not a member of `app`: the train-event, forward-signal and `train_event_outbox` writes, SELECT only on `train_subscriptions`, and the phase 4 reads. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while the component is deployed, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled` (the render fails otherwise, never falling back to the app role). |
 | `postgresql.roles.perService.trust_consumer.password` | `""` | Password. |
 | `postgresql.roles.perService.trust_consumer.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.trust_consumer.existingSecretPasswordKey` | `postgres-trust-consumer-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.trust_consumer.connectionLimit` | `""` | CONNECTION LIMIT. Empty: its one pool (the larger of `trustConsumer.ingest.database.maxConnections` and `trustConsumer.internalReads.database.maxConnections`) + 1. |
-| `postgresql.roles.perService.full_coverage_ro.connect` | `true` | Connect full-coverage-consumer's direct reads (`fullCoverageConsumer.internalReads.source: db` required) as `distant_signal_full_coverage_ro` (ingest plan 4.7). A narrow, read-only role, not a member of `app`: SELECT on the line populations and STANOX/CRS only. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while `fullCoverageConsumer.internalReads.source` is `db`, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled`. |
+| `postgresql.roles.perService.full_coverage_ro.connect` | `true` | Connect full-coverage-consumer's direct reads as `distant_signal_full_coverage_ro` (ingest plan 4.7). A narrow, read-only role, not a member of `app`: SELECT on the line populations and STANOX/CRS only. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): always takes effect (the consumer always runs), and needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled`. |
 | `postgresql.roles.perService.full_coverage_ro.password` | `""` | Password. |
 | `postgresql.roles.perService.full_coverage_ro.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.full_coverage_ro.existingSecretPasswordKey` | `postgres-full-coverage-ro-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.full_coverage_ro.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `fullCoverageConsumer.internalReads.database.maxConnections` + 1. |
-| `postgresql.roles.perService.ldbws_ro.connect` | `true` | Connect poller-ldbws's direct sample-station read (`pollers.ldbws.internalReads.source: db` required) as `distant_signal_ldbws_ro` (ingest plan 4.7). A narrow, read-only role, not a member of `app`: SELECT on the views `ingest_sample_station_pins` and `ingest_custom_line_stations` only. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while poller-ldbws is enabled with `internalReads.source: db`, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled`. |
+| `postgresql.roles.perService.ldbws_ro.connect` | `true` | Connect poller-ldbws's direct sample-station read as `distant_signal_ldbws_ro` (ingest plan 4.7). A narrow, read-only role, not a member of `app`: SELECT on the views `ingest_sample_station_pins` and `ingest_custom_line_stations` only. Created with the others whenever `perService.enabled`, unused until then. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): takes effect only while poller-ldbws is enabled, and then needs `perService.enabled`, `postgresql.roles.enabled` and `setupJob.enabled`. |
 | `postgresql.roles.perService.ldbws_ro.password` | `""` | Password. |
 | `postgresql.roles.perService.ldbws_ro.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.ldbws_ro.existingSecretPasswordKey` | `postgres-ldbws-ro-password` | Key within `existingSecret` (and in the chart's Secret). |
@@ -1738,7 +1726,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.backup.resources` | requests `20m`/`32Mi`, limit `128Mi` | CronJob pod resources. The work happens in the Postgres container. |
 | `postgresql.pgbackrest.backup.podSecurityContext` | `{}` | Merged over the CronJob pods' securityContext (non-root uid 65532 by default). |
 | `metrics.prometheusRule.ingestWriterDown` | see `values.yaml` | `DistantSignalIngestWriterDown`: `enabled`, `for` (5m), `severity` (critical). Renders only with `ingestWriter.enabled`. |
-| `metrics.prometheusRule.ingestStreamBacklog` / `ingestStreamStalled` / `ingestDeadLetters` / `ingestDeadLetterExpiring` / `ingestUnsupportedSchema` / `ingestProducerXaddFailing` / `ingestStreamMemoryHigh` / `ingestClockSkew` / `ingestShadowMismatch` | see `values.yaml` | The ingest stream alerts (ingest spec §14.2): `DistantSignalIngestStreamBacklog` (pending over 600s or 0.5 of MAXLEN: warning; 0.8: critical, which replaces the warning once it fires; `maxlen` per stream, kept in step with `crates/ingest-stream/src/budget.rs`), `…StreamStalled` (XADDs succeed but nothing applied for `stallAfterSecs` per stream; critical), `…DeadLetters` (any in 15m), `…DeadLetterExpiring` (within 4h of the 7-day trim), `…UnsupportedSchema` (critical), `…ProducerXaddFailing` (every XADD failed for 10m; critical), `…StreamMemoryHigh` (over 0.75 of 512 MiB), `…ClockSkew` (an observed time clamped, D13), `…ShadowMismatch` (the rollout's compare step: while a producer is on `http+shadow`, the writer's rows for a schema differ from the api's by over 2% across 1h, for 30m; also records `distant_signal:ingest_stream_rows_vs_http:ratio`). Each has `enabled`, `for`, `severity`. Render only with `ingestWriter.enabled`, and silent until a stream is on. Runbooks: `docs/alerts.md`, `docs/ingest-streams-deadletter.md`. |
+| `metrics.prometheusRule.ingestStreamBacklog` / `ingestStreamStalled` / `ingestDeadLetters` / `ingestDeadLetterExpiring` / `ingestUnsupportedSchema` / `ingestProducerXaddFailing` / `ingestStreamMemoryHigh` / `ingestClockSkew` | see `values.yaml` | The ingest stream alerts (ingest spec §14.2): `DistantSignalIngestStreamBacklog` (pending over 600s or 0.5 of MAXLEN: warning; 0.8: critical, which replaces the warning once it fires; `maxlen` per stream, kept in step with `crates/ingest-stream/src/budget.rs`), `…StreamStalled` (XADDs succeed but nothing applied for `stallAfterSecs` per stream; critical), `…DeadLetters` (any in 15m), `…DeadLetterExpiring` (within 4h of the 7-day trim), `…UnsupportedSchema` (critical), `…ProducerXaddFailing` (every XADD failed for 10m; critical), `…StreamMemoryHigh` (over 0.75 of 512 MiB), `…ClockSkew` (an observed time clamped, D13). (`…ShadowMismatch` went with the producers' `http+shadow` sink in release B.) Each has `enabled`, `for`, `severity`. Render only with `ingestWriter.enabled`, and silent until a stream is on. Runbooks: `docs/alerts.md`, `docs/ingest-streams-deadletter.md`. |
 | `metrics.prometheusRule.writerLoopStale` / `.writerLoopUnowned` | see `values.yaml` | `DistantSignalWriterLoopStale`: a loop's newest success (`loop_last_success_timestamp_seconds`) older than `maxAgeSeconds` (1800; `maxAgeSecondsByCycle` per loop, `excludeCycles` [canary]), for 10m. `DistantSignalWriterLoopUnowned`: no process holds a loop's lock (`sum by (loop) (loop_lock_held) < 1`) for 15m (`forByLoop` per loop). Each has `enabled`, `for`, `severity`; render only with `ingestWriter.enabled` and `ingestWriter.loops.enabled`. |
 | `metrics.prometheusRule.ingestApplyWritesNothing` | see `values.yaml` | `DistantSignalIngestApplyWritesNothing`: over `window` (15m) the writer applied entries of a stream but wrote no row (`ingest_stream_row_writes_total{outcome="written"}` flat), for 5m; `excludeStreams` (the daily `ds:ingest:reference`). Renders only with `ingestWriter.enabled`. |
 | `metrics.prometheusRule.ingestSourceStale` | see `values.yaml` | `DistantSignalIngestSourceStale`: an `ingest_freshness` row (`ingest_freshness_timestamp_seconds{source}`, read by the writer every 60s) older than its `maxAgeSeconds` entry (incidents and tfl 900, stations and tocs 172800, the stream-only snapshot sources 1800, the island-of-Ireland catalogues' per-network sources 172800), for 10m; a source in `whileStreamApplies` only while the writer applies that stream. Renders only with `ingestWriter.enabled`. |
@@ -1749,10 +1737,9 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `metrics.prometheusRule.postgresDown` | see `values.yaml` | `DistantSignalPostgresDown`: `enabled`, `for` (3m), `severity` (critical) and `pgUpSelector`, extra label matchers for postgres_exporter's `pg_up` (see [Alerts](#alerts)). |
 | `metrics.prometheusRule.statefulImagePull` | see `values.yaml` | `DistantSignalStatefulImagePullFailing`: `enabled`, `for` (5m), `postgresSeverity` and `redisSeverity` (both critical). One rule per bundled component (`postgresql.enabled` / `redis.enabled`). |
 | `metrics.prometheusRule.apiDatabaseDown` | see `values.yaml` | `DistantSignalApiDatabaseDown`: `enabled`, `for` (2m) and `severity` (critical). |
-| `metrics.prometheusRule.apiPrivateRouteRetired` | see `values.yaml` | `DistantSignalApiPrivateRouteRetiredCalled`: `enabled`, `window` (15m), `for` (0m) and `severity` (warning). Renders only while `api.privateRoutes.enabled` is `false`. |
 | `metrics.prometheusRule.schemaGateWaiting` | see `values.yaml` | `DistantSignalSchemaGateWaiting`: `enabled`, `for` (10m) and `severity` (critical). |
 | `metrics.prometheusRule.consumerApiErrors` | see `values.yaml` | `DistantSignalConsumerApiCallsFailing`: `enabled`, `window` (5m), `minErrors` (3), `for` (10m) and `severity` (warning). |
-| `metrics.prometheusRule.api5xx` | see `values.yaml` | `DistantSignalApiPublic5xx` / `DistantSignalApiIngest5xx`: `enabled`, `window` (5m), `routeLabel` (`exported_endpoint`: the route label as Prometheus stores it behind the PodMonitor), and per scope (`public`, `ingest`) `ratio` (0.05), `minErrors` (3 / 30), `for` (10m) and `severity` (warning). |
+| `metrics.prometheusRule.api5xx` | see `values.yaml` | `DistantSignalApiPublic5xx`: `enabled`, `window` (5m), `routeLabel` (`exported_endpoint`: the route label as Prometheus stores it behind the PodMonitor), and under `public` `ratio` (0.05), `minErrors` (3), `for` (10m) and `severity` (warning). (The `ingest` scope went with `/private` in release B.) |
 | `metrics.prometheusRule.cycleStalled` | see `values.yaml` | `DistantSignalAggregatorCycleFailing` / `DistantSignalNotifierCycleFailing`: `enabled`, `maxAgeSeconds` (900), `for` (0m) and `severity` (warning). |
 | `metrics.prometheusRule.pgbackrest` | see `values.yaml` | The pgBackRest alerts' windows, ages, `archiverSelector` and severity (see [Alerts](#alerts)). |
 
@@ -1793,20 +1780,9 @@ Used only when `postgresql.enabled` is `false`.
 | `api.sso.postLoginRedirectUrl` | `""` | **Required.** Where sign-in and sign-out send the browser afterwards — the frontend's root URL. |
 | `api.sessionTtlDays` | `14` | Session lifetime in days. A fixed expiry stamped at sign-in, not a sliding window. |
 | `api.internalOauth.issuerUrl` | `""` | **Required.** OIDC issuer base URL for the internal-service OAuth2 provider (may be the same Authentik instance as `api.sso.*`, a different Application/Provider). |
-| `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token — same value as the top-level `internalOauth.clientId`. |
-| `api.internalOauth.groups.incidents` | `svc-poller-incidents` | Required Authentik group for the incidents poller. Not secret. |
-| `api.internalOauth.groups.stations` | `svc-poller-stations` | Required Authentik group for the stations poller. Not secret. |
-| `api.internalOauth.groups.tocs` | `svc-poller-tocs` | Required Authentik group for the TOCs poller. Not secret. |
-| `api.internalOauth.groups.ldbws` | `svc-poller-ldbws` | Required Authentik group for the LDBWS poller. Not secret. |
-| `api.internalOauth.groups.tfl` | `svc-poller-tfl` | Required Authentik group for the TfL poller. Not secret. |
-| `api.internalOauth.groups.trustConsumer` | `svc-trust-consumer` | Required Authentik group for trust-consumer (also accepted on `GET /private/stanox-crs`). Not secret. |
-| `api.internalOauth.groups.scheduleIngest` | `svc-schedule-ingest` | Required Authentik group for schedule-ingest. Not secret. |
-| `api.internalOauth.groups.scheduleReference` | `svc-schedule-reference` | Required Authentik group for schedule-reference (also accepted on `POST /private/stanox-crs`). Not secret. |
-| `api.internalOauth.groups.fullCoverage` | `svc-full-coverage-consumer` | Required Authentik group for full-coverage-consumer. Not secret. |
-| `api.internalOauth.groups.trustBacklog` | `svc-trust-backlog-consumer` | Required Authentik group for trust-backlog-consumer. Not secret. |
-| `api.internalOauth.groups.corpus` | `svc-corpus-ingest` | Required Authentik group on `POST /private/corpus-locations` (Network Rail CORPUS loads). Add the schedule-ingest service account to it before setting `scheduleFeed.corpus.enabled`. Not secret. |
-| `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account. Opens no `/private/*` route: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. Must differ from every other group (api refuses to start otherwise). See "Distant-Signal-MCP as a service caller" below. |
-| `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). `/private/*` is never limited. |
+| `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token (the internal provider's client id; must differ from `api.sso.clientId`). |
+| `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account, the only internal-token use left since release B removed `/private`: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. See "Distant-Signal-MCP as a service caller" below. |
+| `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). |
 | `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off. |
 | `api.rateLimit.login.perMinute` / `.burst` | `10` / `20` | Per client IP, `/public/auth/login` and `/public/auth/callback`. |
 | `api.rateLimit.tripPlan.perMinute` / `.burst` | `20` / `10` | Per client IP, `/Trips/plan`. |
@@ -1839,10 +1815,8 @@ Used only when `postgresql.enabled` is `false`.
 | `api.adminGroup` | `""` | SSO group whose members may end any user's sessions (`POST /api/admin/users/revoke-sessions`). Empty: nobody is an admin. Read at login. See `docs/session-revocation.md`. |
 | `api.oidcStoredGroupsExtra` | `""` | Extra IdP groups kept on the user at login besides `chatbotAccessGroup` and `adminGroup`; every other group is dropped. Comma-separated; `""` keeps none. Nothing reads extra groups today: distant-signal-mcp takes its groups straight from Authentik. |
 | `api.timeouts.requestTimeoutSecs` | `30` | Public requests still running after this get a 408. |
-| `api.timeouts.privateRequestTimeoutSecs` | `300` | The same for the `/private` ingest routes, which take bodies up to 100 MB. |
 | `api.timeouts.headerReadTimeoutSecs` | `10` | Disconnect an HTTP/1 client that has not sent its full headers within this. |
 | `api.timeouts.unavailableRetryAfterSecs` | `30` | `Retry-After` (seconds, 1-3600) on a 503. A route that cannot reach the database answers `503 {"error":"service_unavailable","retryable":true}` instead of a 500. |
-| `api.privateRoutes.enabled` | `true` | Ingest phase 5, step 5.1 (`API_PRIVATE_ROUTES`): `false` retires `/private/*`, which then answers a 404 counted in `distant_signal_api_private_route_retired_total{route,method}` and alerted on by `DistantSignalApiPrivateRouteRetiredCalled`. Set `false` only once every producer is on its `db`/`stream` sink (docs/ingest-phase5-runbook.md); rollback: `true`. |
 | `api.corpusFallback.enabled` | `false` | Use Network Rail CORPUS as a fallback for TIPLOC/STANOX→CRS lookups the timetable has no CRS for; the timetable always wins a conflict. Does nothing until CORPUS is loaded (`scheduleFeed.corpus.enabled`). Review `corpus_compare` (in the api image) first. |
 | `api.scheduleProvisionalAfterDays` | `7` | Days after today a service date's timetable counts as firm (`SCHEDULE_PROVISIONAL_AFTER_DAYS`, 0-60). Train search, `/Train/by-uid` and `/Trips/plan` report a later date as `provisional: true`, because late STP changes (engineering works) can still land. |
 | `api.tripPlanGraphCache.dates` | `2` | Service dates whose connections graph `/Trips/plan` keeps built (about 100 MB each). `0` disables the cache. |
@@ -1919,7 +1893,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.enabled` | `false` | Deploy the ingest-writer (one replica, `Recreate`). Needs its image (plan 1B.6). |
 | `ingestWriter.image` | `ghcr.io/fasterspeeding/distant-signal/ingest-writer`, tag `""` (appVersion), digest `""`, `IfNotPresent` | Image; same shape as `api.image`. |
 | `ingestWriter.loops.enabled` | `false` | Run the train-domain loops (`INGEST_WRITER_LOOPS`) with the api's intervals. |
-| `ingestWriter.streams.station-samples` | `apply` | Mode of `ds:ingest:station-samples` (`INGEST_WRITER_STREAMS`): `off` (not read), `shadow` (decode, validate, ack, write nothing) or `apply`. Any stream not `off` gives the writer `REDIS_URL`, its Redis user (`redis.acl.clients.ingestWriter`) and the NetworkPolicy paths to Redis. The writer refuses a stream it has no handlers for yet (plan 3a.6). Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"): paired with the producer's `stream` sink. A producer rolled back to `http` may leave its stream on `apply` (it sees no new entries); any stream not `off` keeps needing the Redis ACL (stage `narrow`, `defaultUser: "off"` for `apply`). |
+| `ingestWriter.streams.station-samples` | `apply` | Mode of `ds:ingest:station-samples` (`INGEST_WRITER_STREAMS`): `off` (not read) or `apply` (release B removed `shadow`; the render refuses it). Any stream not `off` gives the writer `REDIS_URL`, its Redis user (`redis.acl.clients.ingestWriter`) and the NetworkPolicy paths to Redis. The writer refuses a stream it has no handlers for yet (plan 3a.6). An enabled producer of the stream needs it on `apply` (the render fails otherwise); any stream not `off` needs the Redis ACL (stage `narrow`, `defaultUser: "on-unshared"` or `"off"` for `apply`). |
 | `ingestWriter.streams.full-coverage` | `apply` | Mode of `ds:ingest:full-coverage`, as `station-samples` (handlers: plan 3a.6). Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), as `station-samples`. |
 | `ingestWriter.streams.tfl` | `apply` | Mode of `ds:ingest:tfl`, as `station-samples` (handlers: plan 3c). `apply` needs `postgresql.roles.perService.writer.connect` (security review M4: `line_status`'s row policy binds only the writer's own role; the render fails otherwise). Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), as `station-samples`. |
 | `ingestWriter.streams.reference` | `apply` | Mode of `ds:ingest:reference` (tocs), as `station-samples` (handlers: plan 3c). Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), as `station-samples`. |
@@ -2098,9 +2072,9 @@ used for and why persistence defaults on.
 | `redis.acl.clients.fullCoverageConsumer` | `false` | full-coverage-consumer, as user `full-coverage-consumer`. |
 | `redis.acl.clients.trustBacklogConsumer` | `false` | trust-backlog-consumer, as user `trust-backlog-consumer`. |
 | `redis.acl.clients.ingestWriter` | `false` | ingest-writer, as user `ingest-writer` (only once an `ingestWriter.streams` entry is not `off`). |
-| `redis.acl.clients.pollerIncidents` | `false` | poller-incidents' DB sink (`pollers.incidents.ingest.sink: db`), as user `poller-incidents`. |
-| `redis.acl.clients.pollerLdbws` | `false` | poller-ldbws' stream sinks (`pollers.ldbws.ingest.sink: http+shadow` or `stream`), as user `poller-ldbws` (`~ds:ingest:station-samples +xadd +xrevrange`). |
-| `redis.acl.clients.pollerTfl` / `.pollerTocs` | `false` | poller-tfl's and poller-tocs's stream sinks (`pollers.<name>.ingest.sink: http+shadow` or `stream`, ingest plan 3c.2), as users `poller-tfl` and `poller-tocs`. |
+| `redis.acl.clients.pollerIncidents` | `false` | poller-incidents (its `incident-text-changed` XADD), as user `poller-incidents`. |
+| `redis.acl.clients.pollerLdbws` | `false` | poller-ldbws (its stream sink), as user `poller-ldbws` (`~ds:ingest:station-samples +xadd +xrevrange`). |
+| `redis.acl.clients.pollerTfl` / `.pollerTocs` | `false` | poller-tfl's and poller-tocs's stream sinks (ingest plan 3c.2), as users `poller-tfl` and `poller-tocs`. |
 | `redis.acl.clients.pollerIrishRailGtfs` / `.pollerIrishRailLive` / `.pollerNirStations` | `false` | The island-of-Ireland pollers (each one's only sink is its own `ds:ingest:ioi-gtfs`, `ds:ingest:ioi-live` or `ds:ingest:ioi-nir`, D8), as users `poller-irish-rail-gtfs`, `poller-irish-rail-live` and `poller-nir-stations`. |
 | `redis.image.repository` | `redis` | Redis image repository (upstream image; this repo builds no Redis image). |
 | `redis.image.tag` | `7.4.11@sha256:…` | Redis 7.4, digest-pinned in the tag. |
@@ -2321,16 +2295,9 @@ falls back to (see `movementRelay`).
 | `trustConsumer.kafka.existingSecret` | `""` | Read the SASL credential from this pre-existing Secret instead. |
 | `trustConsumer.kafka.existingSecretUsernameKey` | `kafka-sasl-username` | Key for the SASL username. |
 | `trustConsumer.kafka.existingSecretPasswordKey` | `kafka-sasl-password` | Key for the SASL password. |
-| `trustConsumer.existingSecret` | `""` | Read this service's internal OAuth2 credential from a pre-existing Secret instead of the chart-rendered one. |
-| `trustConsumer.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-trust-consumer`). |
-| `trustConsumer.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
-| `trustConsumer.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-trust-consumer` | Key for the OAuth2 username in `trustConsumer.existingSecret`. |
-| `trustConsumer.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-trust-consumer` | Key for the OAuth2 password in `trustConsumer.existingSecret`. |
-| `trustConsumer.ingest.sink` | `db` | Where each batch's train events and forward signals go (`INGEST_SINK`, ingest architecture plan 3b.3, D1): `http`, api's `/private/train-events` and `/private/train-forward-signals`; or `db`, Postgres directly in one transaction, `XACKing` `movement-events` only after the commit, as `distant_signal_trust_consumer` only (`postgresql.roles.perService.trust_consumer.connect`; the render fails without it, security review H2). Adds the NetworkPolicy Postgres egress and admission and the pool to the connection budgets. The tracked-trains and STANOX/CRS reads stay on the api until phase 4. `db` needs `ingestWriter.enabled` and `ingestWriter.loops.enabled` (the render fails otherwise): resolutions, cancellations and reinstatements wait in `train_event_outbox` for the writer's 5 s `train_event_outbox` loop, since the `trust_consumer` role may not write `train_subscriptions`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"); `http` is the rollback until phase 5. |
 | `trustConsumer.ingest.database.maxConnections` | `2` | The pool under `sink: db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `trustConsumer.referenceReloadSecs` | `60` | How often the active-tracked-trains reference set is reloaded from api. |
-| `trustConsumer.stanoxCrsReloadSecs` | `3600` | How often the live STANOX-to-CRS table is reloaded from api's `/private/stanox-crs`. |
-| `trustConsumer.internalReads.source` | `db` | Where the tracked trains and STANOX/CRS come from (ingest plan 4.4/4.7): `http`, the api's `/private/tracked-trains` and `/private/stanox-crs`; `db` (`TRACKED_TRAINS_SOURCE` and `STANOX_CRS_SOURCE=db`), the view `ingest_active_tracked_trains` (no user ids) and `stanox_crs` directly, as the app role (the `trust_consumer` role comes with plan 3b), passing `api.corpusFallback.enabled` on. Adds the Postgres NetworkPolicy egress and admission and the pool to the connection budgets. Rollback: `http`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"); `http` is the rollback until phase 5. |
+| `trustConsumer.stanoxCrsReloadSecs` | `3600` | How often the live STANOX-to-CRS table is reloaded from Postgres. |
 | `trustConsumer.internalReads.database.maxConnections` | `2` | Its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `trustConsumer.retentionDays` | `90` | Days `train_movement_events` rows are kept before pruning. |
 | `trustConsumer.healthPort` | `8081` | Port for `/healthz` (readiness) and `/livez` (liveness). |
@@ -2363,15 +2330,9 @@ its own.
 | `fullCoverageConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `fullCoverageConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `fullCoverageConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `fullCoverageConsumer.existingSecret` | `""` | Read this service's internal OAuth2 credential from a pre-existing Secret instead of the chart-rendered one. |
-| `fullCoverageConsumer.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-full-coverage-consumer`). |
-| `fullCoverageConsumer.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
-| `fullCoverageConsumer.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-full-coverage-consumer` | Key for the OAuth2 username in `fullCoverageConsumer.existingSecret`. |
-| `fullCoverageConsumer.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-full-coverage-consumer` | Key for the OAuth2 password in `fullCoverageConsumer.existingSecret`. |
 | `fullCoverageConsumer.shadowLines` | `*` | Comma-separated line ids to compute, or `*` for every catalogued line with at least one TIPLOC. Does not decide whether the stats are shown; that is `api`/`aggregator.fullCoverageEnabledDefault` and each line's `full_coverage_enabled`. |
 | `fullCoverageConsumer.populationReloadSecs` | `300` | How often the per-line schedule population is reloaded from api. |
 | `fullCoverageConsumer.stanoxCrsReloadSecs` | `3600` | How often the STANOX-to-CRS table is reloaded from api. |
-| `fullCoverageConsumer.internalReads.source` | `db` | Where the line populations and STANOX/CRS come from (ingest plan 4.3/4.7): `http`, one conditional `/private/schedule-line-population` GET per (line, date) and `/private/stanox-crs`; `db` (`POPULATION_SOURCE` and `STANOX_CRS_SOURCE=db`), one version query per reload and then only the changed populations, plus `stanox_crs`, directly, as the app role or, with `postgresql.roles.perService.full_coverage_ro.connect`, `distant_signal_full_coverage_ro`, passing `api.corpusFallback.enabled` on. Adds the Postgres NetworkPolicy egress and admission and the pool to the connection budgets. Rollback: `http`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"); `http` is the rollback until phase 5. |
 | `fullCoverageConsumer.internalReads.database.maxConnections` | `2` | Its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `fullCoverageConsumer.statsWriteIntervalSecs` | `60` | How often computed stats are posted to api. |
 | `fullCoverageConsumer.healthPort` | `8082` | Port for `/healthz` (readiness) and `/livez` (liveness). |
@@ -2379,7 +2340,6 @@ its own.
 | `fullCoverageConsumer.metricsPort` | `9093` | Prometheus `/metrics` port. |
 | `fullCoverageConsumer.replicaCount` | `1` | Replicas. |
 | `fullCoverageConsumer.updateStrategy` | `{type: Recreate}` | The Deployment's rollout. `Recreate` stops the old pod before the new one starts (a gap of seconds; the consumer group keeps every entry and the new pod replays its own pending entries). `RollingUpdate` takes `rollingUpdate.maxSurge` (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge above 0 is added to the replicas in the computed CONNECTION LIMIT and the max_connections budget. A surge with a role sized for one pod deadlocked the 2026-10-10 rollout: see "Rollout strategy and connection limits" below and docs/ingest-phase5-runbook.md "Rollout deadlock". |
-| `fullCoverageConsumer.ingest.sink` | `stream` | Ingest plan 3a.8: `http` POSTs the three outputs to the api; `http+shadow` also XADDs what the api accepted to `ds:ingest:full-coverage` (for `ingestWriter.streams.full-coverage: shadow`); `stream` XADDs only, and needs `ingestWriter.enabled` with `ingestWriter.streams.full-coverage: apply` (the render fails otherwise; flip both together). Renders `INGEST_SINK` only when not `http`; uses the consumer's existing Redis user. Rollback: `http`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), with `ingestWriter.streams.full-coverage: apply`. |
 | `fullCoverageConsumer.redisAutoclaimMinIdleSecs` | `30` | See `trustConsumer.redisAutoclaimMinIdleSecs`. |
 | `fullCoverageConsumer.redisGapCheckSecs` | `60` | See `trustConsumer.redisGapCheckSecs`. |
 | `fullCoverageConsumer.windowedStats.enabled` | `false` | Windowed full-coverage stats (`docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md`). Off: only the whole-day rows are written. Turn on only after api and schedule-reference support it; `aggregator.fullCoverageWindow.mode` is a separate switch. |
@@ -2409,12 +2369,6 @@ Always reads movement-relay's stream (there is no Kafka mode).
 | `trustBacklogConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `trustBacklogConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `trustBacklogConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `trustBacklogConsumer.existingSecret` | `""` | Read this service's internal OAuth2 credential from a pre-existing Secret instead of the chart-rendered one. |
-| `trustBacklogConsumer.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-trust-backlog-consumer`). |
-| `trustBacklogConsumer.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
-| `trustBacklogConsumer.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-trust-backlog-consumer` | Key for the OAuth2 username in `trustBacklogConsumer.existingSecret`. |
-| `trustBacklogConsumer.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-trust-backlog-consumer` | Key for the OAuth2 password in `trustBacklogConsumer.existingSecret`. |
-| `trustBacklogConsumer.ingest.sink` | `db` | Where each batch goes (`INGEST_SINK`, ingest architecture plan 3b.1): `http`, api's `/private/trust-event-backlog` and `/private/train-reasons`, with STANOX/CRS from `/private/stanox-crs`; or `db`, Postgres directly (the same ds-store writers the routes call), `XACKing` `movement-events` only after the commit, as `distant_signal_trust_backlog` only (`postgresql.roles.perService.trust_backlog.connect`; the render fails without it, security review H2). Replaces the api egress with Postgres egress and admission in the NetworkPolicies, adds the pool to the connection budgets, and passes `api.corpusFallback.enabled` on. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"); `http` is the rollback until phase 5. |
 | `trustBacklogConsumer.ingest.database.maxConnections` | `3` | The pool under `sink: db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `trustBacklogConsumer.stanoxCrsReloadSecs` | `3600` | How often the STANOX-to-CRS table is reloaded from api. |
 | `trustBacklogConsumer.redisAutoclaimMinIdleSecs` | `30` | See `trustConsumer.redisAutoclaimMinIdleSecs`. |
@@ -2551,15 +2505,10 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.<name>.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollers.<name>.baseUrl` | `""` (tfl: `https://api.tfl.gov.uk`) | Upstream feed base URL. Required when enabled; empty aborts the render. |
 | `pollers.<name>.baseUrlEnvVar` | per-poller | Env var the binary reads the base URL from. Do not change. |
-| `pollers.<name>.ingestPath` | per-poller | Path on the api Service this poller POSTs results to. |
 | `pollers.<name>.pollIntervalSecs` | 300 / 86400 / 86400 / 60 / 300 | Poll cadence (incidents / stations / tocs / ldbws / tfl). |
 | `pollers.<name>.apiKey` | `""` | RDM API key (tfl: TfL subscription key). Rendered into the chart Secret when `existingSecret` is empty. |
 | `pollers.<name>.existingSecret` | `""` | Read the API key AND the internal-oauth username/password below from this pre-existing Secret instead. |
 | `pollers.<name>.existingSecretApiKeyKey` | `rdm-<name>-api-key` | Key within `pollers.<name>.existingSecret`. |
-| `pollers.<name>.internalOauthUsername` | `""` | This poller's own Authentik service-account username. Never auto-generated. |
-| `pollers.<name>.internalOauthPassword` | `""` | This poller's own Authentik app-password. Never auto-generated. |
-| `pollers.<name>.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-poller-<name>` | Key within `pollers.<name>.existingSecret`. |
-| `pollers.<name>.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-poller-<name>` | Key within `pollers.<name>.existingSecret`. |
 | `pollers.<name>.logLevel` | `info` | `RUST_LOG` value. |
 | `pollers.<name>.extraEnv` | `[]` (tfl: `TFL_MODES`) | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `pollers.<name>.resources` | requests `25m`/`64Mi`-`128Mi`, limit `128Mi`-`192Mi` | Container resource requests/limits. |
@@ -2568,20 +2517,14 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.<name>.affinity` | `{}` | Pod affinity rules. |
 | `pollers.<name>.podAnnotations` | `{}` | Pod annotations. |
 | `pollers.<name>.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
-| `pollers.stations.ingest.sink` | `db` | stations only (ingest architecture plan 2b): `http` POSTs the feed to `ingestPath`; `db` (`INGEST_SINK=db`) writes Postgres directly and reads the startup cursor from `ingest_freshness`, as `distant_signal_stations` only (`postgresql.roles.perService.stations.connect`; the render fails without it, security review H2). Adds the Postgres NetworkPolicy egress and admission. `db` needs `ingestWriter.enabled` and `ingestWriter.loops.enabled` (the writer's CORPUS crosswalk loop replaces the rebuild the api's POST triggers); the render fails otherwise. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"); `http` is the rollback until phase 5. |
 | `pollers.stations.ingest.database.maxConnections` | `1` | stations only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
-| `pollers.incidents.ingest.sink` | `db` | incidents only (ingest plan 2c.2): `http` POSTs snapshots to the api; `db` writes Postgres directly (DATABASE_URL: the incidents role with `perService.incidents.connect`; the render fails without it, security review H2) and XADDs `incident-text-changed` from the poller (the `poller-incidents` user with `redis.acl.clients.pollerIncidents`), with Postgres and Redis egress and admission. Rollback: `http`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"); `http` is the rollback until phase 5. |
-| `pollers.tfl.ingest.sink` / `pollers.tocs.ingest.sink` | `stream` | tfl and tocs (ingest plan 3c.2): `http` POSTs each snapshot to `ingestPath`; `http+shadow` also XADDs a copy to `ds:ingest:tfl` / `ds:ingest:reference` for the ingest-writer's `shadow` mode (the POST stays authoritative); `stream` XADDs only (the ingest-writer applies it with `ingestWriter.streams.tfl` / `.reference: apply`) and reads the startup cursor from the stream. The stream sinks add `REDIS_URL` (the `poller-<name>` user with `redis.acl.clients.poller<Name>`) and Redis egress and admission. For tfl, deploy `notifier.lineHistoryMaxAgeSeconds` first. Rollback: `http`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), with `ingestWriter.streams.tfl` / `.reference: apply`. |
-| `pollers.incidents.ingest.rowHeartbeat` | `true` | incidents only (plan 2c.6): `INCIDENTS_ROW_HEARTBEAT` for both writers (the api's `POST /private/incidents` and the `db` sink). `false` writes only changed rows (about 600k fewer `incidents` updates a day); readers show the feed's snapshot time. Rendered only when `false`. Rollback: `true`. |
+| `pollers.incidents.ingest.rowHeartbeat` | `true` | incidents only (plan 2c.6): `INCIDENTS_ROW_HEARTBEAT` for poller-incidents' writes. `false` writes only changed rows (about 600k fewer `incidents` updates a day); readers show the feed's snapshot time. Rendered only when `false`. Rollback: `true`. |
 | `pollers.incidents.ingest.database.maxConnections` | `2` | incidents only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
-| `pollers.ldbws.ingest.sink` | `stream` | ldbws only (ingest plan 3a.7): `http` POSTs each cycle to `ingestPath`; `http+shadow` also XADDs a copy to `ds:ingest:station-samples` (for `ingestWriter.streams.station-samples: shadow`); `stream` XADDs only and reads the startup cursor from the stream, and needs `ingestWriter.enabled` with `ingestWriter.streams.station-samples: apply` (the render fails otherwise; flip both together). Either stream sink renders `INGEST_SINK` and `REDIS_URL` (the `poller-ldbws` user with `redis.acl.clients.pollerLdbws`) and the Redis egress and admission. Rollback: `http`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), with `ingestWriter.streams.station-samples: apply`. |
 | `pollers.tfl.apiKeyEnvVar` | `TFL_APP_KEY` | tfl only: env var the key is passed in (the RDM pollers default to `RDM_API_KEY`). Do not change. |
-| `pollers.ldbws.sampleStationsPath` | `/private/sample-stations` | ldbws only: second api endpoint listing which stations to sample. |
 | `pollers.ldbws.numRows` | `10` | ldbws only: LDBWS `numRows` query parameter. |
 | `pollers.ldbws.hourlyRequestBudget` | `0` | ldbws only (LEG-18): max LDBWS requests per rolling hour, spread evenly over cycles; skipped stations count in `ldbws_budget_skipped_polls_total`. `0` = no budget, env not rendered. |
 | `pollers.ldbws.samplePinnedLinesOnly` | `false` | ldbws only (LEG-18): sample only stations on lines some user has pinned. |
 | `pollers.ldbws.sampleMaxStations` | `0` | ldbws only (LEG-18): cap on sample stations, chosen line-fairly by api, most-pinned lines first. `0` = no cap. |
-| `pollers.ldbws.internalReads.source` | `db` | ldbws only (ingest plan 4.5/4.7): `http` asks the api's `sampleStationsPath`; `db` (`SAMPLE_STATIONS_SOURCE=db`) computes the same list in the poller from the line catalogue in its image and the views `ingest_custom_line_stations` and `ingest_sample_station_pins`, as the app role or, with `postgresql.roles.perService.ldbws_ro.connect`, `distant_signal_ldbws_ro`. Adds the Postgres NetworkPolicy egress and admission and the pool to the connection budgets. Rollback: `http`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"); `http` is the rollback until phase 5. |
 | `pollers.ldbws.internalReads.database.maxConnections` | `1` | ldbws only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 
 ### pollerIrishRailGtfs
@@ -2753,15 +2696,9 @@ one-pod layout.
 | `scheduleFeed.ingest.pollIntervalSecs` | `120` | Seconds between scans of the watch folder. |
 | `scheduleFeed.ingest.retentionKeepDeliveries` | `2` | Complete deliveries kept on disk (current plus fallback). |
 | `scheduleFeed.ingest.stabilityCycles` | `5` | Consecutive unchanged scans before a file is treated as complete. |
-| `scheduleFeed.ingest.sink` | `db` | Where each delivery's record and each CORPUS load go (`INGEST_SINK`, ingest architecture plan 2d): `http`, api's `/private/schedule-feed-ingests` and `/private/corpus-locations`; or `db`, Postgres directly with the same validation (adds `DATABASE_URL`, the NetworkPolicy Postgres egress and ingress, and the pool to the connection budgets). Under `db` the CORPUS freshness gauge and post-load comparison come from the ingest-writer's CORPUS loop: turn `ingestWriter` and its loops on first. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"); `http` is the rollback until phase 5. |
 | `scheduleFeed.ingest.database.maxConnections` | `1` | The pool under `sink: db` (`DATABASE_MAX_CONNECTIONS`). |
 | `scheduleFeed.ingest.extraEnv` | `[]` | Extra env entries for the schedule-ingest container. One named like a chart-set var (say `RUST_LOG`) replaces it, so each name is rendered once; the rest follow the chart's own. |
 | `scheduleFeed.ingest.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`) for one scan cycle, including posting a delivery to api. |
-| `scheduleFeed.ingest.existingSecret` | `""` | Read schedule-ingest's internal OAuth2 credential from this pre-existing Secret. |
-| `scheduleFeed.ingest.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-schedule-ingest`). |
-| `scheduleFeed.ingest.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
-| `scheduleFeed.ingest.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-schedule-ingest` | Key for the OAuth2 username. |
-| `scheduleFeed.ingest.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-schedule-ingest` | Key for the OAuth2 password. |
 | `scheduleFeed.ingest.resources` | requests `50m`/`128Mi`, limit `256Mi` | schedule-ingest container resource requests/limits. |
 | `scheduleFeed.reference.image.repository` | `ghcr.io/fasterspeeding/distant-signal/schedule-reference` | schedule-reference image repository. |
 | `scheduleFeed.reference.image.tag` | `""` | Empty means "use the chart's appVersion". |
@@ -2769,16 +2706,10 @@ one-pod layout.
 | `scheduleFeed.reference.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `scheduleFeed.reference.pollIntervalSecs` | `1800` | How often the storage folder is checked for a new complete delivery. |
 | `scheduleFeed.reference.forwardPublishDays` | `28` | Days beyond today each delivery publishes the per-date timetable products for (`SCHEDULE_FORWARD_PUBLISH_DAYS`, 28-60, never below the 28-day tracking horizon): how far ahead train search, `/Train/by-uid` stops, service modes and `/Trips/plan` reach. Each day costs ~190 MB of Postgres and ~30 s of publish cycle. Raising it fills the new dates on the next delivery. |
-| `scheduleFeed.reference.ingest.sink` | `db` | Where the products go (`INGEST_SINK`, ingest plan 2a): `http`, the api's `/private` routes; `db`, Postgres directly (the container gets `DATABASE_URL`, the pod Postgres egress, and the schema gate runs before the first poll). Rollback is `http`. Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A") (production has run it since 2026-10-08). |
 | `scheduleFeed.reference.ingest.database.maxConnections` | `3` | The `db` sink's pool (`DATABASE_MAX_CONNECTIONS`). |
 | `scheduleFeed.reference.healthPort` | `8091` | Health port. Must differ from `workerHealth.port`, which the ingest container in the same pod uses. |
 | `scheduleFeed.reference.progressStallSecs` | `7200` | `/livez` stall window: one cycle publishes every derived product of a full timetable. |
 | `scheduleFeed.reference.metricsPort` | `9092` | Prometheus `/metrics` port. Must differ from `metrics.port`, which the ingest container uses. |
-| `scheduleFeed.reference.existingSecret` | `""` | Read schedule-reference's internal OAuth2 credential from this pre-existing Secret. |
-| `scheduleFeed.reference.internalOauthUsername` | `""` | Internal OAuth2 service-account username (Authentik `svc-schedule-reference`). |
-| `scheduleFeed.reference.internalOauthPassword` | `""` | Internal OAuth2 service-account app password. |
-| `scheduleFeed.reference.existingSecretInternalOauthUsernameKey` | `internal-oauth-username-schedule-reference` | Key for the OAuth2 username. |
-| `scheduleFeed.reference.existingSecretInternalOauthPasswordKey` | `internal-oauth-password-schedule-reference` | Key for the OAuth2 password. |
 | `scheduleFeed.reference.resources` | requests `250m`/`3Gi`, limit `4Gi` | schedule-reference container resource requests/limits: the largest in the chart, since it parses the whole timetable. |
 | `scheduleFeed.service.type` | `LoadBalancer` | `LoadBalancer`, or `NodePort` behind an external load balancer. Not an Ingress: SFTP is not HTTP. |
 | `scheduleFeed.service.annotations` | `{}` | Service annotations. |
@@ -2827,7 +2758,7 @@ progress before `/livez` fails.
 | `ingress.annotations` | `{}` | Annotations on the Ingress, e.g. `cert-manager.io/cluster-issuer`. |
 | `ingress.frontend.enabled` | `true` | Publish the frontend host (only when `ingress.enabled`). |
 | `ingress.frontend.host` | `""` | Hostname for the web UI. Required when enabled. |
-| `ingress.api.enabled` | `false` | Publish the api host. **Also exposes `/private/*`.** |
+| `ingress.api.enabled` | `false` | Publish the api host. |
 | `ingress.api.host` | `""` | Hostname for the api. Required when enabled. |
 | `ingress.tls` | `[]` | TLS blocks passed through verbatim. |
 
@@ -2895,9 +2826,8 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalStatefulImagePullFailing` | critical | A container or init container of the bundled Postgres or Redis pod has waited in `ImagePullBackOff`, `ErrImagePull` or `InvalidImageName` for 5m (kube-state-metrics' `kube_pod_[init_]container_status_waiting_reason`). Both are single pods replaced without overlap, so this is an outage; the cluster's generic `KubeContainerWaiting` stays a warning. |
 | `DistantSignalApiDatabaseDown` | critical | api's own `SELECT 1` probe through its request pool (`api_db_up`, every 15s) is 0 on some replica for 2m: a rotated password, an exhausted pool, `max_connections`, a NetworkPolicy, or the database itself. |
 | `DistantSignalSchemaGateWaiting` | critical | A service's schema gate (`db_schema_ready`) is 0 on some pod for 10m: the database lacks the newest migration in its image, or its role lacks a `files/db-grants.yaml` grant. One alert per component. |
-| `DistantSignalConsumerApiCallsFailing` | warning | trust-consumer, trust-backlog-consumer or full-coverage-consumer failed at least 3 calls to api within 5m, continuously for 10m (`*_errors_total` for the operations that call api: trust-consumer `reload_tracked_trains`, `post_train_events`, `reload_stanox_crs`, `startup_reference_load`, and `db_write` under `ingest.sink: db`; trust-backlog-consumer `post_batch`, `post_train_reasons`, `reload_stanox_crs`, and `db_write`, `db_write_reasons` under `ingest.sink: db`; full-coverage-consumer `reload_line_population_fetch`, `post_line_stats`, `post_station_samples`, `reload_stanox_crs`). One alert per consumer. |
-| `DistantSignalApiPublic5xx` | warning | More than 5% of api's public requests (every route but `/private/*`, `/public/health`, `/public/ready` and unmatched paths) answered 5xx over 5m, with at least 3 of them, for 10m (`http_requests_total` by `exported_endpoint`). A dependency-unavailable 503 counts. |
-| `DistantSignalApiIngest5xx` | warning | The same for the `/private/*` ingest routes, with at least 30 5xx in 5m. |
+| `DistantSignalConsumerApiCallsFailing` | warning | trust-consumer, trust-backlog-consumer or full-coverage-consumer failed at least 3 reads or writes within 5m, continuously for 10m (`*_errors_total` for: trust-consumer `reload_tracked_trains`, `reload_stanox_crs`, `startup_reference_load`, `db_write`; trust-backlog-consumer `reload_stanox_crs`, `db_write`, `db_write_reasons`; full-coverage-consumer `reload_line_population_fetch`, `reload_stanox_crs`). One alert per consumer. |
+| `DistantSignalApiPublic5xx` | warning | More than 5% of api's public requests (every route but `/metrics`, `/public/health`, `/public/ready` and unmatched paths) answered 5xx over 5m, with at least 3 of them, for 10m (`http_requests_total` by `exported_endpoint`). A dependency-unavailable 503 counts. |
 | `DistantSignalAggregatorCycleFailing` | warning | No successful aggregation cycle for 15m (`aggregator_last_success_timestamp_seconds{cycle}`, the process start until the first success; `aggregator_cycles_total{cycle,result}` counts both outcomes). |
 | `DistantSignalNotifierCycleFailing` | warning | No successful run of a notifier loop (`line_status`, `forward_queue`, `skip_check`; not the hourly `template_sweep`) for 15m (`notifier_last_success_timestamp_seconds{cycle}`). |
 | `DistantSignalMovementLagHigh` | warning | A consumer group's `movement_relay_stream_lag` plus `movement_relay_stream_pending` (delivered but un-ACKed: a consumer whose downstream fails keeps reading, so its backlog sits in pending) is above 25% of the stream cap (`movement_relay_stream_maxlen`, falling back to `movementRelay.streamMaxLen`) for 10m. |
@@ -2921,7 +2851,6 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalEnricherBatchInvalid` | warning | Batch mode only: at least one batch failed input validation (`enricher_llm_batches_total{event="validation_failed"}`, OpenAI's `failed` status) over 6h, for 15m, per `provider`. Nothing in it ran. |
 | `DistantSignalEnricherBatchFileCleanupFailing` | warning | Batch mode on OpenAI only: at least 2 batch file deletions failed (`enricher_llm_batch_files_total{event="delete_failed"}`) over 6h, for 15m (`enricherBatches.minFailures`). The files expire on their own after 2 days. |
 | `DistantSignalFullCoverageWindowFeedStale` | warning | full-coverage-consumer has marked its windows `feed_stale` (`full_coverage_consumer_window_feed_stale` is 1) for 15m. |
-| `DistantSignalFullCoverageWindowPostErrors` | warning | At least 3 POSTs to `/private/full-coverage-window-stats` failed (`full_coverage_consumer_errors_total{operation="post_window_stats"}`) within 5m, continuously for 10m (`postErrorsThreshold`, `postErrorsWindow`, `postErrorsFor`): one POST lost to an api rollout does not fire. |
 | `DistantSignalFullCoverageWindowStatsStalled` | warning | No window rows posted (`full_coverage_consumer_window_rows_posted_total`) over 10m, for 15m. |
 | `DistantSignalComponentMemoryHigh` | warning | A container in this release's pods (`pod=~"<fullname>-.*"`) has a working set (cadvisor) above 80% of its memory limit (kube-state-metrics) for 10m. |
 | `DistantSignalNotifierPushDropped` | warning | The notifier dropped at least 5 decided pushes (`notifier_push_dropped_total{reason}`) within the last 1h. Delivery is at-most-once. |

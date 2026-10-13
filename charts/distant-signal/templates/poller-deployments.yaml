@@ -1,14 +1,14 @@
 {{/*
 One template, five Deployments. Everything that differs between the pollers
-lives in the `.Values.pollers` map (baseUrlEnvVar, ingestPath, cadence, and
-ldbws's two extra vars), so this file never branches on a poller's name,
-except for poller-incidents' Redis and row-heartbeat settings (ingest plan
-2c), which are that poller's alone (distant-signal.pollerIncidentsIngestEnv),
-and poller-ldbws's direct sample-station read (pollers.ldbws.internalReads,
-plan 4.7).
-The phase 2 db sink itself (INGEST_SINK, DATABASE_URL) and the phase 3
-stream sinks (INGEST_SINK, REDIS_URL; plans 3a.7 and 3c.2) are the shared
-pollers.<name>.ingest block.
+lives in the `.Values.pollers` map (baseUrlEnvVar, cadence, and ldbws's
+extra vars), so this file branches on a poller's name only for its sink:
+stations and incidents write Postgres directly (DATABASE_URL, phase 2),
+ldbws, tfl and tocs XADD to their ds:ingest:* stream (REDIS_URL; plans 3a.7
+and 3c.2), poller-incidents also publishes incident-text-changed and has
+its row-heartbeat setting (ingest plan 2c,
+distant-signal.pollerIncidentsIngestEnv), and poller-ldbws reads its sample
+stations from Postgres (pollers.ldbws.internalReads, plan 4.7). Release B
+(ingest phase 5) removed their /private HTTP paths.
 
 Go templates iterate maps in sorted key order, so the rendered document
 order is stable: incidents, ldbws, stations, tfl, tocs.
@@ -134,54 +134,27 @@ with $poller.extraEnv, which replaces an entry of the same name.
                 secretKeyRef:
                   name: {{ include "distant-signal.pollerSecretName" (dict "root" $root "poller" $poller) }}
                   key: {{ include "distant-signal.pollerSecretKey" (dict "root" $root "name" $name "poller" $poller) }}
-            - name: INTERNAL_OAUTH_TOKEN_URL
-              value: {{ $root.Values.internalOauth.tokenUrl | quote }}
-            - name: INTERNAL_OAUTH_CLIENT_ID
-              value: {{ $root.Values.internalOauth.clientId | quote }}
-            - name: INTERNAL_OAUTH_SCOPE
-              value: {{ $root.Values.internalOauth.scope | quote }}
-            - name: INTERNAL_OAUTH_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.pollerSecretName" (dict "root" $root "poller" $poller) }}
-                  key: {{ include "distant-signal.pollerOauthUsernameSecretKey" (dict "root" $root "name" $name "poller" $poller) }}
-            - name: INTERNAL_OAUTH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.pollerSecretName" (dict "root" $root "poller" $poller) }}
-                  key: {{ include "distant-signal.pollerOauthPasswordSecretKey" (dict "root" $root "name" $name "poller" $poller) }}
-            - name: API_INGEST_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" $root) $poller.ingestPath | quote }}
             {{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" $name "poller" $poller) }}
-            # Ingest architecture phase 2 (pollers.<name>.ingest.sink: db):
-            # write Postgres directly instead of POSTing to API_INGEST_URL,
-            # as the app role or, with postgresql.roles.perService.<name>.connect,
-            # the poller's own role.
-            - name: INGEST_SINK
-              value: "db"
-            {{- include "distant-signal.databaseEnvFor" (dict "root" $root "service" (ternary $name "" (hasKey $root.Values.postgresql.roles.perService $name))) | nindent 12 }}
+            # Ingest architecture phase 2 (stations, incidents): the poller
+            # writes Postgres directly, as its own role
+            # (postgresql.roles.perService.<name>.connect).
+            {{- include "distant-signal.databaseEnvFor" (dict "root" $root "service" $name) | nindent 12 }}
             - name: DATABASE_MAX_CONNECTIONS
               value: {{ $poller.ingest.database.maxConnections | int | quote }}
             {{- end }}
             {{- if include "distant-signal.pollerSinkStream" (dict "root" $root "name" $name "poller" $poller) }}
-            # Ingest architecture phase 3 (pollers.<name>.ingest.sink:
-            # http+shadow or stream): XADD each snapshot to the poller's
-            # ds:ingest:* stream, as its own ACL user with
-            # redis.acl.clients.poller<Name>.
-            - name: INGEST_SINK
-              value: {{ $poller.ingest.sink | quote }}
+            # Ingest architecture phase 3 (ldbws, tfl, tocs): XADD each
+            # snapshot to the poller's ds:ingest:* stream, as its own ACL
+            # user (redis.acl.clients.poller<Name>); the ingest-writer
+            # applies it.
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" $root | quote }}
             {{- include "distant-signal.redisClientAuthEnv" (dict "root" $root "client" (include "distant-signal.pollerRedisClient" $name) "user" (printf "poller-%s" $name)) }}
             {{- end }}
-            {{- if $poller.sampleStationsPath }}
-            # ldbws only: a SECOND api endpoint, listing which stations to
-            # sample (crates/poller-ldbws/src/config.rs).
-            - name: API_SAMPLE_STATIONS_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" $root) $poller.sampleStationsPath | quote }}
-            {{- end }}
             {{- if eq $name "ldbws" }}
-            {{- with include "distant-signal.internalReadsEnv" (dict "root" $root "role" "ldbws_ro" "sources" (list "SAMPLE_STATIONS_SOURCE")) | trim }}{{ . | nindent 12 }}{{- end }}
+            # The sample-station list comes from Postgres (plan 4.5), as
+            # the ldbws_ro role.
+            {{- with include "distant-signal.internalReadsEnv" (dict "root" $root "role" "ldbws_ro") | trim }}{{ . | nindent 12 }}{{- end }}
             {{- end }}
             {{- if $poller.numRows }}
             # ldbws only: LDBWS's own `numRows` query parameter.
@@ -219,12 +192,11 @@ with $poller.extraEnv, which replaces an entry of the same name.
 
 {{- /*
 poller-incidents' ingest settings (pollers.incidents.ingest, ingest plan
-2c.2/2c.6). Nothing renders with the defaults (sink http, rowHeartbeat
-true), so the default render is unchanged. Takes root.
+2c.2/2c.6). Takes root.
 */ -}}
 {{- define "distant-signal.pollerIncidentsIngestEnv" }}
 {{- if include "distant-signal.pollerIncidentsDbSink" . }}
-            # pollers.incidents.ingest.sink db: INGEST_SINK, DATABASE_URL and
+            # DATABASE_URL and
             # DATABASE_MAX_CONNECTIONS come from the shared phase 2 block
             # above. The incident-text-changed XADD, best effort.
             - name: REDIS_URL

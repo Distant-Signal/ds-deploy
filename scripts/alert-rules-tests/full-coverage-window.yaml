@@ -4,39 +4,23 @@
 rule_files: [rules.yaml]
 evaluation_interval: 1m
 tests:
-  # One POST fails at 5m (an api Recreate rollout, ~20-25 s down), then
-  # two more in one minute at 25m (a slower rollout): neither reaches 3
-  # failures in 5m, so the alert never fires.
+  # Window rows are written (XADDed to ds:ingest:full-coverage) every
+  # minute until 10m, then none: zero over the 10m window from 20m, firing
+  # once that has held for 15m. (DistantSignalFullCoverageWindowPostErrors
+  # went with the /private POST in release B, ingest phase 5.)
   - interval: 1m
     input_series:
-      - series: 'distant_signal_full_coverage_consumer_errors_total{namespace="distant-signal", pod="fcc", operation="post_window_stats"}'
-        values: '0x5 1x19 3x20'
+      - series: 'distant_signal_full_coverage_consumer_window_rows_posted_total{namespace="distant-signal", pod="fcc"}'
+        values: '0+40x10 400x50'
     alert_rule_test:
-      - eval_time: 8m
-        alertname: DistantSignalFullCoverageWindowPostErrors
-        exp_alerts: []
-      - eval_time: 20m
-        alertname: DistantSignalFullCoverageWindowPostErrors
+      - eval_time: 25m
+        alertname: DistantSignalFullCoverageWindowStatsStalled
         exp_alerts: []
       - eval_time: 40m
-        alertname: DistantSignalFullCoverageWindowPostErrors
-        exp_alerts: []
-  # Every POST fails from 5m (about one a minute, e.g. an api without the
-  # route answering 404): 3 or more per 5m from about 8m, firing once that
-  # has held for 10m.
-  - interval: 1m
-    input_series:
-      - series: 'distant_signal_full_coverage_consumer_errors_total{namespace="distant-signal", pod="fcc", operation="post_window_stats"}'
-        values: '0x5 1+1x40'
-    alert_rule_test:
-      - eval_time: 14m
-        alertname: DistantSignalFullCoverageWindowPostErrors
-        exp_alerts: []
-      - eval_time: 22m
-        alertname: DistantSignalFullCoverageWindowPostErrors
+        alertname: DistantSignalFullCoverageWindowStatsStalled
         exp_alerts:
           - exp_labels: {severity: warning, namespace: distant-signal}
             exp_annotations:
-              summary: full-coverage window stats POSTs failing
-              description: "5 window-stats POSTs failed in 5m, for 10m. A 404 means api lacks the route."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalfullcoveragewindowposterrors
+              summary: no full-coverage window rows written
+              description: "None over 10m for 15m: a stuck replay, a population that never loaded, or failing stream writes."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalfullcoveragewindowstatsstalled

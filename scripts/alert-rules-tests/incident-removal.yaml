@@ -22,7 +22,7 @@ tests:
           - exp_labels: {severity: warning, namespace: distant-signal}
             exp_annotations:
               summary: no incident snapshot fit to infer ended incidents in 2h
-              description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents and api logs."
+              description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents' log."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalincidentremovalstalled
 
   # Healthy: inference applied every poll, with one shrink skip after a
@@ -61,5 +61,5 @@ tests:
           - exp_labels: {severity: warning, namespace: distant-signal}
             exp_annotations:
               summary: no incident snapshot fit to infer ended incidents in 2h
-              description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents and api logs."
+              description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents' log."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalincidentremovalstalled

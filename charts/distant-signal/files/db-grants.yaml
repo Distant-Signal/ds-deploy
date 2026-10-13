@@ -118,10 +118,9 @@ roles:
     used_by: ingest-writer
   schedule_reference:
     name: distant_signal_schedule_reference
-    # Narrow from the start (plan 2a.6): nothing connects as it until
-    # schedule-reference's db sink (scheduleFeed.reference.ingest.sink: db
-    # with perService.schedule_reference.connect), and the flip should run
-    # on the final grants.
+    # Narrow from the start (plan 2a.6). schedule-reference connects as it
+    # with perService.schedule_reference.connect (its only sink since
+    # release B).
     status: narrow
     phase: 2a
     groups: [schema_gate]
@@ -130,8 +129,7 @@ roles:
   stations:
     name: distant_signal_stations
     # Plan 2b.3: narrow from creation (it never was a member of app): SIU on
-    # stations and ingest_freshness, nothing else. Used once
-    # pollers.stations.ingest.sink is db with
+    # stations and ingest_freshness, nothing else. Used with
     # postgresql.roles.perService.stations.connect. The CORPUS crosswalk
     # rebuild stays with the writer's loop (spec §9.3), so no crosswalk grants.
     status: narrow
@@ -152,9 +150,7 @@ roles:
     used_by: poller-incidents
   schedule_ingest:
     name: distant_signal_schedule_ingest
-    # Narrow from the start (plan 2d.2): nothing connects as it until
-    # scheduleFeed.ingest.sink=db, and that flip should exercise the final
-    # grants. The CORPUS load rewrites the derived crosswalk in its own
+    # Narrow from the start (plan 2d.2). The CORPUS load rewrites the derived crosswalk in its own
     # transaction (ds_store::corpus::crosswalk::write, restricted to the
     # current `stations`), hence its corpus_* crosswalk grants and SELECT
     # on stations, which spec §6.4's table leaves out.
@@ -166,8 +162,7 @@ roles:
   trust_backlog:
     name: distant_signal_trust_backlog
     # Plan 3b.2: narrow from creation (it never was a member of app). Used
-    # once trustBacklogConsumer.ingest.sink is db with
-    # postgresql.roles.perService.trust_backlog.connect. Beyond spec §6.4:
+    # with postgresql.roles.perService.trust_backlog.connect. Beyond spec §6.4:
     # SELECT on tiploc_crs and corpus_stanox_crs, which list_stanox_crs
     # reads with the api's CORPUS fallback on (CORPUS_FALLBACK_ENABLED).
     status: narrow
@@ -178,9 +173,8 @@ roles:
   trust_consumer:
     name: distant_signal_trust_consumer
     # Plan 3b.4: narrow from creation (it never was a member of app). Used
-    # once trustConsumer.ingest.sink is db with
-    # postgresql.roles.perService.trust_consumer.connect. Its reads (tracked
-    # trains, STANOX/CRS) stay on the api until phase 4. SELECT only on
+    # with postgresql.roles.perService.trust_consumer.connect. Its reads (tracked
+    # trains, STANOX/CRS) use it too (phase 4). SELECT only on
     # train_subscriptions (decided 2026-10-08): the events that update a
     # subscription go into train_event_outbox, which the writer's loop
     # applies (ds_store::tracking::outbox).
@@ -193,8 +187,7 @@ roles:
     used_by: trust-consumer (train events and forward signals, direct by decision D1; its reads from phase 4)
   full_coverage_ro:
     name: distant_signal_full_coverage_ro
-    # Plan 4.3/4.7: narrow from creation (never a member of app). Used once
-    # fullCoverageConsumer.internalReads.source is db with
+    # Plan 4.3/4.7: narrow from creation (never a member of app). Used with
     # postgresql.roles.perService.full_coverage_ro.connect: SELECT on the
     # line populations and STANOX/CRS only. Beyond spec §6.4: SELECT on
     # tiploc_crs and corpus_stanox_crs, which list_stanox_crs reads with the
@@ -207,8 +200,7 @@ roles:
     used_by: full-coverage-consumer (reads)
   ldbws_ro:
     name: distant_signal_ldbws_ro
-    # Plan 4.5/4.7: narrow from creation (never a member of app). Used once
-    # pollers.ldbws.internalReads.source is db with
+    # Plan 4.5/4.7: narrow from creation (never a member of app). Used with
     # postgresql.roles.perService.ldbws_ro.connect: SELECT on its two views
     # only (pin counts, custom-line stations), never the personal tables.
     status: narrow
@@ -292,8 +284,9 @@ tables:
   # docs/enricher-anthropic.md): inserted at submission, deleted once the
   # results are written (crates/enricher/src/batch.rs). No UPDATE.
   enricher_llm_batches: {class: internal, grants: {enricher: SID}}
-  # The publish staging keys (UNLOGGED). The api publishes until
-  # schedule-reference's db sink is on (phase 2a); then schedule_reference.
+  # The publish staging keys (UNLOGGED). Only schedule-reference's publish
+  # uses them, as schedule_reference; the app role lost them in release B
+  # (app_revokes below), with the api's /private publish routes.
   schedule_calling_points_full_publish_keys: {class: internal, grants: {schedule_reference: SID}}
   schedule_destination_departures_publish_keys: {class: internal, grants: {schedule_reference: SID}}
 
@@ -356,16 +349,15 @@ tables:
   schedule_network_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
   schedule_line_population: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, full_coverage_ro: S}}
   # Each line population's slim per-train summary (2026-10-08), written in
-  # the same transaction as schedule_line_population (the api's ingest
-  # endpoint until phase 2a), read by the api's line pages; the aggregator
+  # the same transaction as schedule_line_population by schedule-reference,
+  # read by the api's line pages; the aggregator
   # prunes old dates. The one-off backfill is `ds-migrate
   # backfill-line-train-summaries`, as the schema owner (phase 5 prep, Q2);
   # the api image's deprecated backfill_line_train_summaries binary, which
   # writes with the api's credentials, goes in step 5.4b.
   line_train_summaries: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
   # Each schedule's vehicle (train, bus, ferry) per service date, published
-  # by schedule-reference (through the api's ingest endpoint until phase
-  # 2a); the aggregator prunes old dates; the notifier skips live alerts for
+  # by schedule-reference; the aggregator prunes old dates; the notifier skips live alerts for
   # a bus or ferry.
   schedule_services: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
   # Every TIPLOC's display name, location type and parent station, published
@@ -415,6 +407,20 @@ sequences:
 # Functions in schema public (extension members excluded), by signature.
 functions:
   "analyze_publish_keys(text)": {grants: [schedule_reference]}
+
+# What the app role (distant_signal_app, and so every observed role, which
+# inherits from it) loses: every privilege on `tables`, EXECUTE on
+# `functions`. postgres-roles.sql grants app DML on every table and EXECUTE
+# on every routine on each run; postgres-grants.sql, run right after it,
+# revokes these again. Each must be listed above, and no observed role may
+# be granted it. Release B (ingest phase 5, 2026-10-12): app held these only
+# for the api's /private schedule publish routes (/schedule-calling-points-full,
+# /schedule-destination-departures), which are gone; schedule-reference
+# publishes as schedule_reference, with its own grants above. The wider
+# narrowing of app's members is step 5.5 (docs/ingest-phase5-runbook.md).
+app_revokes:
+  tables: [schedule_calling_points_full_publish_keys, schedule_destination_departures_publish_keys]
+  functions: ["analyze_publish_keys(text)"]
 
 # Row-level restrictions (spec §6.4, decision D10): table -> {role: SQL
 # condition}. Each becomes a RESTRICTIVE policy `ds_grants_<role>` on the

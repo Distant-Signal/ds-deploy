@@ -585,8 +585,7 @@ stations incidents schedule_ingest schedule_reference trust_backlog trust_consum
 
 {{/*
 In-cluster base URL of the api Service. Consumed by the frontend
-(API_BASE_URL), by every poller (API_INGEST_URL / API_SAMPLE_STATIONS_URL)
-and by the helm test pod. Takes root.
+(API_BASE_URL) and by the helm test pod. Takes root.
 */}}
 {{- define "distant-signal.apiBaseUrl" -}}
 {{- printf "http://%s:%d" (include "distant-signal.apiFullname" .) (int .Values.api.service.port) }}
@@ -717,104 +716,6 @@ Resolved Secret name/key for one poller's RDM API key. Call as:
 {{- end }}
 
 {{/*
-Resolved Secret name/key for one poller's own OAuth2 username/password
-(distinct from its RDM apiKey, same Secret object, same existingSecret
-toggle). Call as:
-  {{ include "distant-signal.pollerSecretName" (dict "root" $ "poller" $p) }}
-  {{ include "distant-signal.pollerOauthUsernameSecretKey" (dict "root" $ "name" $name "poller" $p) }}
-  {{ include "distant-signal.pollerOauthPasswordSecretKey" (dict "root" $ "name" $name "poller" $p) }}
-*/}}
-{{- define "distant-signal.pollerOauthUsernameSecretKey" -}}
-{{- if .poller.existingSecret }}
-{{- .poller.existingSecretInternalOauthUsernameKey }}
-{{- else }}
-{{- printf "internal-oauth-username-poller-%s" .name }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.pollerOauthPasswordSecretKey" -}}
-{{- if .poller.existingSecret }}
-{{- .poller.existingSecretInternalOauthPasswordKey }}
-{{- else }}
-{{- printf "internal-oauth-password-poller-%s" .name }}
-{{- end }}
-{{- end }}
-
-{{/*
-Resolved Secret name/key for trust-consumer's own OAuth2 credential.
-*/}}
-{{- define "distant-signal.trustConsumerSecretName" -}}
-{{- default (include "distant-signal.secretName" .) .Values.trustConsumer.existingSecret }}
-{{- end }}
-
-{{- define "distant-signal.trustConsumerOauthUsernameSecretKey" -}}
-{{- if .Values.trustConsumer.existingSecret }}
-{{- .Values.trustConsumer.existingSecretInternalOauthUsernameKey }}
-{{- else }}
-{{- print "internal-oauth-username-trust-consumer" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.trustConsumerOauthPasswordSecretKey" -}}
-{{- if .Values.trustConsumer.existingSecret }}
-{{- .Values.trustConsumer.existingSecretInternalOauthPasswordKey }}
-{{- else }}
-{{- print "internal-oauth-password-trust-consumer" }}
-{{- end }}
-{{- end }}
-
-{{/*
-Resolved Secret name/key for full-coverage-consumer's own OAuth2
-credential -- own service account, per Decision 5, mirroring
-trust-consumer's own pattern above.
-*/}}
-{{- define "distant-signal.fullCoverageConsumerSecretName" -}}
-{{- default (include "distant-signal.secretName" .) .Values.fullCoverageConsumer.existingSecret }}
-{{- end }}
-
-{{- define "distant-signal.fullCoverageConsumerOauthUsernameSecretKey" -}}
-{{- if .Values.fullCoverageConsumer.existingSecret }}
-{{- .Values.fullCoverageConsumer.existingSecretInternalOauthUsernameKey }}
-{{- else }}
-{{- print "internal-oauth-username-full-coverage-consumer" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.fullCoverageConsumerOauthPasswordSecretKey" -}}
-{{- if .Values.fullCoverageConsumer.existingSecret }}
-{{- .Values.fullCoverageConsumer.existingSecretInternalOauthPasswordKey }}
-{{- else }}
-{{- print "internal-oauth-password-full-coverage-consumer" }}
-{{- end }}
-{{- end }}
-
-{{/*
-Resolved Secret name/key for trust-backlog-consumer's own OAuth2
-credential -- own service account, mirroring full-coverage-consumer's own
-pattern above (docs/superpowers/plans/2026-09-05-trust-event-backlog-plan.md
-Task 12).
-*/}}
-{{- define "distant-signal.trustBacklogConsumerSecretName" -}}
-{{- default (include "distant-signal.secretName" .) .Values.trustBacklogConsumer.existingSecret }}
-{{- end }}
-
-{{- define "distant-signal.trustBacklogConsumerOauthUsernameSecretKey" -}}
-{{- if .Values.trustBacklogConsumer.existingSecret }}
-{{- .Values.trustBacklogConsumer.existingSecretInternalOauthUsernameKey }}
-{{- else }}
-{{- print "internal-oauth-username-trust-backlog-consumer" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.trustBacklogConsumerOauthPasswordSecretKey" -}}
-{{- if .Values.trustBacklogConsumer.existingSecret }}
-{{- .Values.trustBacklogConsumer.existingSecretInternalOauthPasswordKey }}
-{{- else }}
-{{- print "internal-oauth-password-trust-backlog-consumer" }}
-{{- end }}
-{{- end }}
-
-{{/*
 movement-relay's effective Kafka connection settings. Each
 movementRelay.kafka.* field falls back to the matching trustConsumer.kafka.*
 field when left empty, so an install configures its one RDM Train Movements
@@ -846,9 +747,7 @@ movementRelay.kafka.existingSecret, or an inline saslUsername/saslPassword
 (rendered into the chart Secret as movement-relay-kafka-sasl-*). Otherwise
 movement-relay reads trust-consumer's credential exactly as trust-consumer
 itself would (trustConsumer.kafka.existingSecret or the chart Secret, with
-trustConsumer.kafka.existingSecret*Key). No OAuth username/password keys
-here (unlike every other crate in this repo): movement-relay never calls
-api.
+trustConsumer.kafka.existingSecret*Key).
 */}}
 {{- define "distant-signal.movementRelayOwnKafkaCredential" -}}
 {{- if or .Values.movementRelay.kafka.existingSecret .Values.movementRelay.kafka.saslUsername .Values.movementRelay.kafka.saslPassword }}true{{ end }}
@@ -875,51 +774,6 @@ api.
 {{- .Values.movementRelay.kafka.existingSecretPasswordKey }}
 {{- else }}
 {{- .Values.trustConsumer.kafka.existingSecretPasswordKey }}
-{{- end }}
-{{- end }}
-
-{{/*
-Resolved Secret name/key for schedule-ingest's / schedule-reference's own
-OAuth2 credentials -- two independent service accounts sharing one Pod,
-each with its own existingSecret toggle.
-*/}}
-{{- define "distant-signal.scheduleIngestSecretName" -}}
-{{- default (include "distant-signal.secretName" .) .Values.scheduleFeed.ingest.existingSecret }}
-{{- end }}
-
-{{- define "distant-signal.scheduleIngestOauthUsernameSecretKey" -}}
-{{- if .Values.scheduleFeed.ingest.existingSecret }}
-{{- .Values.scheduleFeed.ingest.existingSecretInternalOauthUsernameKey }}
-{{- else }}
-{{- print "internal-oauth-username-schedule-ingest" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.scheduleIngestOauthPasswordSecretKey" -}}
-{{- if .Values.scheduleFeed.ingest.existingSecret }}
-{{- .Values.scheduleFeed.ingest.existingSecretInternalOauthPasswordKey }}
-{{- else }}
-{{- print "internal-oauth-password-schedule-ingest" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.scheduleReferenceSecretName" -}}
-{{- default (include "distant-signal.secretName" .) .Values.scheduleFeed.reference.existingSecret }}
-{{- end }}
-
-{{- define "distant-signal.scheduleReferenceOauthUsernameSecretKey" -}}
-{{- if .Values.scheduleFeed.reference.existingSecret }}
-{{- .Values.scheduleFeed.reference.existingSecretInternalOauthUsernameKey }}
-{{- else }}
-{{- print "internal-oauth-username-schedule-reference" }}
-{{- end }}
-{{- end }}
-
-{{- define "distant-signal.scheduleReferenceOauthPasswordSecretKey" -}}
-{{- if .Values.scheduleFeed.reference.existingSecret }}
-{{- .Values.scheduleFeed.reference.existingSecretInternalOauthPasswordKey }}
-{{- else }}
-{{- print "internal-oauth-password-schedule-reference" }}
 {{- end }}
 {{- end }}
 
@@ -1099,27 +953,8 @@ app.connectionLimitSlack.
 {{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "writer")) -}}
 {{- $total = add $total (include "distant-signal.ingestWriterPool" $root) -}}
 {{- end -}}
-{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "schedule_ingest")) -}}
-{{- $total = add $total (include "distant-signal.scheduleIngestPool" $root) -}}
-{{- end -}}
-{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "schedule_reference")) -}}
-{{- $total = add $total (include "distant-signal.scheduleReferencePool" $root) -}}
-{{- end -}}
-{{- /* Phase 2: the pollers that write directly, as the app role. */ -}}
-{{- $total = add $total (include "distant-signal.pollerAppPools" $root) -}}
-{{- /* Phase 3b: the TRUST consumers that write directly, as the app role;
-     trust-consumer's one pool also serves its phase 4 reads. */ -}}
-{{- range $service := list "trust_backlog" "trust_consumer" -}}
-{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" $service)) -}}
-{{- $total = add $total (mul (include "distant-signal.workerPods" (dict "root" $root "service" $service)) (include "distant-signal.trustSinkPool" (dict "root" $root "service" $service))) -}}
-{{- end -}}
-{{- end -}}
-{{- /* Phase 4: the readers on internalReads.source db, as the app role. */ -}}
-{{- range $role := list "full_coverage_ro" "ldbws_ro" -}}
-{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" $role)) -}}
-{{- $total = add $total (mul (include "distant-signal.workerPods" (dict "root" $root "service" $role)) (include "distant-signal.internalReadsPool" (dict "root" $root "role" $role))) -}}
-{{- end -}}
-{{- end -}}
+{{- /* Every other ingest component connects only as its own narrow role
+     (distant-signal.requireNarrowRole): none counts against app. */ -}}
 {{- $total -}}
 {{- else -}}
 {{- fail (printf "postgresql.roles.%s.connectionLimit must be set." .role) -}}
@@ -1174,16 +1009,15 @@ Every helper takes root unless it says otherwise.
 distant-signal.perServiceKeys: the services this chart can move to their
 own role, space-separated. Each must be a created (not `planned`) role in
 db-grants.yaml. `writer` is the ingest-writer's (ingestWriter, plan 1B.9);
-`schedule_ingest` is schedule-ingest's under scheduleFeed.ingest.sink=db
-(plan 2d.2); `schedule_reference` is schedule-reference's db sink's (plan
-2a); `stations` and `incidents` are poller-stations' and poller-incidents'
-(pollers.<name>.ingest.sink db, plans 2b.3 and 2c.3). All four are narrow
-roles.
+`schedule_ingest` is schedule-ingest's (plan 2d.2); `schedule_reference`
+is schedule-reference's (plan 2a); `stations` and `incidents` are
+poller-stations' and poller-incidents' (plans 2b.3 and 2c.3). All four are
+narrow roles.
 `trust_backlog` and `trust_consumer` are trust-backlog-consumer's and
-trust-consumer's under their ingest.sink db (plan 3b; trust_consumer also
-for its internalReads.source db, plan 4.4), narrow. `full_coverage_ro` and
-`ldbws_ro` are the phase 4 readers' (<component>.internalReads.source db,
-plan 4.7), narrow and read-only.
+trust-consumer's (plan 3b; trust_consumer also for its reads, plan 4.4),
+narrow. `full_coverage_ro` and `ldbws_ro` are the phase 4 readers' (plan
+4.7), narrow and read-only. Each of these producers and readers connects
+only as its role (distant-signal.requireNarrowRole).
 */}}
 {{- define "distant-signal.perServiceKeys" -}}
 api aggregator enricher notifier writer schedule_ingest schedule_reference stations incidents trust_backlog trust_consumer full_coverage_ro ldbws_ro
@@ -1199,15 +1033,14 @@ true
 {{- end }}
 
 {{/*
-Release A (2026-10-09): the producer roles' `connect` defaults to true, so
-for them `connect` without a component that uses the role is a no-op (not
-connected, nothing fails) instead of the render failure it was: a deployer
-with that producer disabled or rolled back to `sink: http` needs no
-`connect: false` as well. True (non-empty) when a `connect` that is on
-should take effect: always for the services not listed here; for writer,
-schedule_ingest, schedule_reference, stations, incidents, trust_backlog, trust_consumer,
-full_coverage_ro and ldbws_ro only while their component uses the role (the
-read-only two: on internalReads.source db). Takes (dict "root" $ "service"
+The producer roles' `connect` defaults to true (since release A,
+2026-10-09), and for them `connect` without a component that uses the role
+is a no-op (not connected, nothing fails): a deployer with that producer
+disabled needs no `connect: false` as well. True (non-empty) when a
+`connect` that is on should take effect: always for the services not listed
+here; for writer, schedule_ingest, schedule_reference, stations, incidents,
+trust_backlog, trust_consumer, full_coverage_ro and ldbws_ro only while
+their component is deployed. Takes (dict "root" $ "service"
 ...).
 */}}
 {{- define "distant-signal.perServiceRoleUsed" -}}
@@ -1250,27 +1083,23 @@ true
 {{- end }}
 
 {{/*
-True (non-empty) when the poller is enabled and pollers.<name>.ingest.sink
-is `db` (ingest architecture phase 2: it writes Postgres directly). Fails on
-a sink other than `http` or `db`. poller-stations' `db` sink also needs the
-ingest-writer's loops (plan 2b.2): with no POST to the api, the writer's
-10-minute CORPUS crosswalk loop is what gives a new station its fills.
-Takes (dict "root" $ "name" <pollers key> "poller" <its values>).
+Release B (ingest phase 5): every producer has exactly one sink, its new
+one, and no `/private` path. The helpers below keep their names, but "the
+sink is db/stream" now means "the component is enabled"; each still runs
+the guards its sink needs.
+
+True (non-empty) when pollers.<name> is enabled and writes Postgres
+directly (stations and incidents, plans 2b and 2c). poller-stations also
+needs the ingest-writer's loops (plan 2b.2): its CORPUS crosswalk loop is
+what gives a new station its fills. Takes (dict "root" $ "name" <pollers
+key> "poller" <its values>).
 */}}
 {{- define "distant-signal.pollerSinkDb" -}}
-{{- $ingest := .poller.ingest | default dict -}}
-{{- $sink := toString ($ingest.sink | default "http") -}}
-{{- if not (has $sink (list "http" "db" "http+shadow" "stream")) -}}
-{{- fail (printf "pollers.%s.ingest.sink must be http, db, http+shadow or stream, not %q." .name $sink) -}}
-{{- end -}}
-{{- if and .poller.enabled (eq $sink "db") -}}
+{{- if and .poller.enabled (has .name (list "stations" "incidents")) -}}
 {{- if and (eq .name "stations") (not (and .root.Values.ingestWriter.enabled .root.Values.ingestWriter.loops.enabled)) -}}
-{{- fail "pollers.stations.ingest.sink=db needs ingestWriter.enabled and ingestWriter.loops.enabled: without the api's POST, the ingest-writer's CORPUS crosswalk loop rebuilds the crosswalk after a stations refresh (ingest architecture plan 2b.2)." -}}
+{{- fail "pollers.stations needs ingestWriter.enabled and ingestWriter.loops.enabled: poller-stations writes Postgres directly, and the ingest-writer's CORPUS crosswalk loop rebuilds the crosswalk after a stations refresh (ingest architecture plan 2b.2)." -}}
 {{- end -}}
-{{- if not (has .name (include "distant-signal.narrowOnlyServices" .root | splitList " ")) -}}
-{{- fail (printf "pollers.%s.ingest.sink=db: poller-%s has no narrow Postgres role (only stations and incidents write directly), and would connect as the shared app role (security review H2)." .name .name) -}}
-{{- end -}}
-{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" .name "what" (printf "pollers.%s.ingest.sink=db" .name)) -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" .name "what" (printf "pollers.%s (a direct writer)" .name)) -}}
 true
 {{- end -}}
 {{- end }}
@@ -1285,76 +1114,65 @@ trustConsumer.
 {{- end }}
 
 {{/*
-True (non-empty) when the TRUST consumer behind the role writes Postgres
-directly: <consumer>.ingest.sink is `db` (trust-backlog-consumer, plan 3b.1;
-trust-consumer, plan 3b.3). Fails on a sink other than `http` or `db`, and
-for trust-consumer's `db` without the ingest-writer's loops (its
-train_event_outbox loop applies the subscription changes).
-Takes (dict "root" $ "service" "trust_backlog"|"trust_consumer").
+The TRUST consumer behind the role writes Postgres directly (trust-backlog-
+consumer, plan 3b.1; trust-consumer, plan 3b.3): always true, after the
+guards: trust-consumer needs the ingest-writer's loops (its
+train_event_outbox loop applies the subscription changes), and each
+connects only as its own role. Takes (dict "root" $ "service"
+"trust_backlog"|"trust_consumer").
 */}}
 {{- define "distant-signal.trustSinkDb" -}}
 {{- $key := include "distant-signal.trustSinkValuesKey" .service -}}
-{{- $ingest := (get .root.Values $key).ingest | default dict -}}
-{{- $sink := toString ($ingest.sink | default "http") -}}
-{{- if not (has $sink (list "http" "db")) -}}
-{{- fail (printf "%s.ingest.sink must be http or db, not %q." $key $sink) -}}
-{{- end -}}
-{{- if eq $sink "db" -}}
 {{- if and (eq .service "trust_consumer") (not (and .root.Values.ingestWriter.enabled .root.Values.ingestWriter.loops.enabled)) -}}
-{{- fail "trustConsumer.ingest.sink=db needs ingestWriter.enabled and ingestWriter.loops.enabled: the ingest-writer's train_event_outbox loop applies the events that change a subscription (resolutions, cancellations, reinstatements), which the trust_consumer role may not write (ingest architecture plan 3b.3)." -}}
+{{- fail "trustConsumer needs ingestWriter.enabled and ingestWriter.loops.enabled: trust-consumer writes Postgres directly, and the ingest-writer's train_event_outbox loop applies the events that change a subscription (resolutions, cancellations, reinstatements), which the trust_consumer role may not write (ingest architecture plan 3b.3)." -}}
 {{- end -}}
-{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" .service "what" (printf "%s.ingest.sink=db" $key)) -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" .service "what" $key) -}}
 true
+{{- end }}
+
+{{/*
+The stream each stream producer XADDs to (plans 3a.7, 3a.8, 3c.2), by its
+redis.acl.clients key's component: pollers ldbws, tfl and tocs, and the
+full-coverage-consumer.
+*/}}
+{{- define "distant-signal.producerStream" -}}
+{{- get (dict "ldbws" "station-samples" "tfl" "tfl" "tocs" "reference" "fullCoverageConsumer" "full-coverage") . -}}
+{{- end }}
+
+{{/*
+A stream producer's guards: its own Redis ACL user, and the ingest-writer
+applying its stream (with no writer applying it, nothing would reach the
+database). Renders nothing. Takes (dict "root" $ "client" <redis.acl.clients
+key> "stream" <stream> "what" <values key, for the messages>).
+*/}}
+{{- define "distant-signal.requireStreamApplied" -}}
+{{- include "distant-signal.requireOwnRedisUser" (dict "root" .root "client" .client "what" .what) -}}
+{{- if not (and .root.Values.ingestWriter.enabled (eq (toString (get .root.Values.ingestWriter.streams .stream)) "apply")) -}}
+{{- fail (printf "%s XADDs to ds:ingest:%s and needs ingestWriter.enabled and ingestWriter.streams.%s: apply: with no writer applying the stream, nothing would reach the database." .what .stream .stream) -}}
 {{- end -}}
 {{- end }}
 
 {{/*
-True (non-empty) when the poller is enabled and pollers.<name>.ingest.sink
-is a stream sink (`http+shadow` or `stream`; ingest phase 3): it XADDs its
-snapshots to its ds:ingest:* stream, so it gets INGEST_SINK, REDIS_URL and
-its Redis credentials (the `poller-<name>` ACL user under
+True (non-empty) when pollers.<name> is enabled and is a stream producer
+(ldbws on station-samples, plan 3a.7; tfl on tfl and tocs on reference,
+plan 3c.2): it XADDs its snapshots to its ds:ingest:* stream, so it gets
+REDIS_URL and its Redis credentials (the `poller-<name>` ACL user under
 redis.acl.clients.poller<Name>), and the NetworkPolicy paths to Redis.
-Only the stream producers take those sinks (plan 3a.7: ldbws on
-station-samples; 3c.2: tfl on tfl, tocs on reference); any other poller
-fails the render, as does `stream` without the ingest-writer applying its
-stream. Takes (dict "root" $ "name" <pollers key> "poller" <its values>).
+Takes (dict "root" $ "name" <pollers key> "poller" <its values>).
 */}}
 {{- define "distant-signal.pollerSinkStream" -}}
-{{- $sink := toString (dig "ingest" "sink" "http" (.poller | default dict)) -}}
-{{- if has $sink (list "http+shadow" "stream") -}}
-{{- $streams := dict "ldbws" "station-samples" "tfl" "tfl" "tocs" "reference" -}}
-{{- if not (hasKey $streams .name) -}}
-{{- fail (printf "pollers.%s.ingest.sink %s: poller-%s has no stream sink (only ldbws, tfl and tocs take http+shadow or stream)." .name $sink .name) -}}
-{{- end -}}
-{{- if .poller.enabled -}}
-{{- include "distant-signal.requireOwnRedisUser" (dict "root" .root "client" (include "distant-signal.pollerRedisClient" .name) "what" (printf "pollers.%s.ingest.sink=%s" .name $sink)) -}}
-{{- $stream := get $streams .name -}}
-{{- if and (eq $sink "stream") (not (and .root.Values.ingestWriter.enabled (eq (toString (get .root.Values.ingestWriter.streams $stream)) "apply"))) -}}
-{{- fail (printf "pollers.%s.ingest.sink=stream needs ingestWriter.enabled and ingestWriter.streams.%s: apply (flip both in the same values change, spec §13.1): with no writer applying the stream, nothing would reach the database." .name $stream) -}}
-{{- end -}}
+{{- if and .poller.enabled (has .name (list "ldbws" "tfl" "tocs")) -}}
+{{- include "distant-signal.requireStreamApplied" (dict "root" .root "client" (include "distant-signal.pollerRedisClient" .name) "stream" (include "distant-signal.producerStream" .name) "what" (printf "pollers.%s" .name)) -}}
 true
-{{- end -}}
 {{- end -}}
 {{- end }}
 
 {{/*
-fullCoverageConsumer.ingest.sink (ingest architecture plan 3a.8): the value
-for INGEST_SINK when it is http+shadow or stream, empty for http (nothing
-renders). Fails on any other value, and on stream without
-ingestWriter.streams.full-coverage: apply. Takes root.
+full-coverage-consumer is a stream producer (plan 3a.8: ds:ingest:full-
+coverage): its guards. Renders nothing. Takes root.
 */}}
-{{- define "distant-signal.fullCoverageConsumerIngestSink" -}}
-{{- $sink := toString (dig "ingest" "sink" "http" .Values.fullCoverageConsumer) -}}
-{{- if not (has $sink (list "http" "http+shadow" "stream")) -}}
-{{- fail (printf "fullCoverageConsumer.ingest.sink must be http, http+shadow or stream, not %q." $sink) -}}
-{{- end -}}
-{{- if and (eq $sink "stream") (not (and .Values.ingestWriter.enabled (eq (toString (get .Values.ingestWriter.streams "full-coverage")) "apply"))) -}}
-{{- fail "fullCoverageConsumer.ingest.sink=stream needs ingestWriter.enabled and ingestWriter.streams.full-coverage: apply (flip both in the same values change, spec §13.1): with no writer applying the stream, nothing would reach the database." -}}
-{{- end -}}
-{{- if ne $sink "http" -}}
-{{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "fullCoverageConsumer" "what" (printf "fullCoverageConsumer.ingest.sink=%s" $sink)) -}}
-{{- $sink -}}
-{{- end -}}
+{{- define "distant-signal.fullCoverageConsumerStream" -}}
+{{- include "distant-signal.requireStreamApplied" (dict "root" . "client" "fullCoverageConsumer" "stream" "full-coverage" "what" "fullCoverageConsumer") -}}
 {{- end }}
 
 {{/*
@@ -1366,27 +1184,9 @@ The redis.acl.clients key of a poller in .Values.pollers: poller<Name>
 {{- end }}
 
 {{/*
-The Postgres pools of the pollers that write directly (pollers.<name>.ingest.sink:
-db) and do not connect as their own per-service role, summed: they count
-against the app role. Takes root.
-*/}}
-{{- define "distant-signal.pollerAppPools" -}}
-{{- $root := . -}}
-{{- $total := 0 -}}
-{{- range $name, $poller := .Values.pollers -}}
-{{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" $name "poller" $poller) -}}
-{{- if not (and (hasKey $root.Values.postgresql.roles.perService $name) (include "distant-signal.perServiceConnects" (dict "root" $root "service" $name))) -}}
-{{- $total = add $total (int $poller.ingest.database.maxConnections) -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-{{- $total -}}
-{{- end }}
-
-{{/*
-Every poller that writes Postgres directly (pollers.<name>.ingest.sink db),
-their pools summed whichever role they connect as: the max_connections
-budget in api-deployment.yaml. Takes root.
+Every poller that writes Postgres directly (distant-signal.pollerSinkDb),
+their pools summed: the max_connections budget in api-deployment.yaml.
+Takes root.
 */}}
 {{- define "distant-signal.pollerDbPools" -}}
 {{- $root := . -}}
@@ -1400,8 +1200,8 @@ budget in api-deployment.yaml. Takes root.
 {{- end }}
 
 {{/*
-The TRUST consumer's Postgres pool (<consumer>.ingest.database.maxConnections)
-under ingest.sink db, else 0; trust-consumer's is its one pool
+The TRUST consumer's Postgres pool: trust-backlog-consumer's
+ingest.database.maxConnections; trust-consumer's one pool
 (distant-signal.trustConsumerPool). Takes (dict "root" $ "service" ...).
 */}}
 {{- define "distant-signal.trustSinkPool" -}}
@@ -1409,39 +1209,30 @@ under ingest.sink db, else 0; trust-consumer's is its one pool
 {{- include "distant-signal.trustConsumerPool" .root -}}
 {{- else if include "distant-signal.trustSinkDb" . -}}
 {{- int (get .root.Values (include "distant-signal.trustSinkValuesKey" .service)).ingest.database.maxConnections -}}
-{{- else -}}
-0
 {{- end -}}
 {{- end }}
 
 {{/*
 trust-consumer's one Postgres pool (plans 3b.3 and 4.4: one DATABASE_URL
 for the sink and the readers): the larger of
-trustConsumer.ingest.database.maxConnections (with ingest.sink db) and
-trustConsumer.internalReads.database.maxConnections (with
-internalReads.source db), else 0. Takes root.
+trustConsumer.ingest.database.maxConnections and
+trustConsumer.internalReads.database.maxConnections. Takes root.
 */}}
 {{- define "distant-signal.trustConsumerPool" -}}
 {{- $tc := .Values.trustConsumer -}}
-{{- $pool := 0 -}}
 {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer") -}}
-{{- $pool = max $pool (int $tc.ingest.database.maxConnections) -}}
+{{- max (int $tc.ingest.database.maxConnections) (int $tc.internalReads.database.maxConnections) -}}
 {{- end -}}
-{{- if include "distant-signal.internalReadsDb" (dict "root" . "role" "trust_consumer") -}}
-{{- $pool = max $pool (int $tc.internalReads.database.maxConnections) -}}
-{{- end -}}
-{{- $pool -}}
 {{- end }}
 
 {{/*
-Ingest architecture phase 4 (plan 4.7): the internal readers. Each reader's
-`internalReads.source` (http, the default, or db) switches every *_SOURCE
-of that component; under db it connects to Postgres with a pool of
-`internalReads.database.maxConnections`, as the app role or, with
-postgresql.roles.perService.<role>.connect, its read-only role. The readers,
-by their db-grants.yaml role: full_coverage_ro (fullCoverageConsumer),
-ldbws_ro (pollers.ldbws), trust_consumer (trustConsumer; the role is plan
-3b's, and its reads share the sink's one pool: distant-signal.trustConsumerPool).
+Ingest architecture phase 4 (plan 4.7): the internal readers read their
+reference data from Postgres directly, each with a pool of
+`internalReads.database.maxConnections`, as its read-only role
+(postgresql.roles.perService.<role>.connect). The readers, by their
+db-grants.yaml role: full_coverage_ro (fullCoverageConsumer), ldbws_ro
+(pollers.ldbws), trust_consumer (trustConsumer; the role is plan 3b's, and
+its reads share the sink's one pool: distant-signal.trustConsumerPool).
 
 distant-signal.internalReadsValuesKey: the values path of a reader's role.
 */}}
@@ -1454,36 +1245,25 @@ distant-signal.internalReadsValuesKey: the values path of a reader's role.
 {{- end }}
 
 {{/*
-True (non-empty) when the reader behind the role reads Postgres directly:
-its component runs (pollers.ldbws.enabled; the two consumers always do) and
-its internalReads.source is db. Fails on a source other than http or db.
-Takes (dict "root" $ "role" "full_coverage_ro"|"ldbws_ro"|"trust_consumer").
+True (non-empty) when the reader behind the role runs (pollers.ldbws.enabled;
+the two consumers always do), after its role guard. Takes (dict "root" $
+"role" "full_coverage_ro"|"ldbws_ro"|"trust_consumer").
 */}}
 {{- define "distant-signal.internalReadsDb" -}}
-{{- $values := dict -}}
 {{- $enabled := true -}}
-{{- if eq .role "full_coverage_ro" -}}
-{{- $values = .root.Values.fullCoverageConsumer -}}
-{{- else if eq .role "ldbws_ro" -}}
-{{- $values = .root.Values.pollers.ldbws -}}
-{{- $enabled = $values.enabled -}}
-{{- else if eq .role "trust_consumer" -}}
-{{- $values = .root.Values.trustConsumer -}}
+{{- if eq .role "ldbws_ro" -}}
+{{- $enabled = .root.Values.pollers.ldbws.enabled -}}
 {{- end -}}
 {{- $key := include "distant-signal.internalReadsValuesKey" .role -}}
-{{- $source := toString (dig "internalReads" "source" "http" $values) -}}
-{{- if not (has $source (list "http" "db")) -}}
-{{- fail (printf "%s.internalReads.source must be http or db, not %q." $key $source) -}}
-{{- end -}}
-{{- if and $enabled (eq $source "db") -}}
-{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" .role "what" (printf "%s.internalReads.source=db" $key)) -}}
+{{- if $enabled -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" .root "service" .role "what" (printf "%s's direct reads" $key)) -}}
 true
 {{- end -}}
 {{- end }}
 
 {{/*
 A reader's Postgres pool (<component>.internalReads.database.maxConnections)
-under internalReads.source db, else 0. Takes (dict "root" $ "role" ...).
+when it runs, else 0. Takes (dict "root" $ "role" ...).
 */}}
 {{- define "distant-signal.internalReadsPool" -}}
 {{- if include "distant-signal.internalReadsDb" . -}}
@@ -1497,24 +1277,22 @@ under internalReads.source db, else 0. Takes (dict "root" $ "role" ...).
 {{- end }}
 
 {{/*
-Both TRUST consumers' pools under ingest.sink db, each times its pods
-(distant-signal.workerPods), summed (the api's INF-7 budget check). Takes
-root.
+Both TRUST consumers' pools, each times its pods (distant-signal.workerPods),
+summed (the api's INF-7 budget check). Takes root.
 */}}
 {{- define "distant-signal.trustSinkPools" -}}
 {{- $root := . -}}
 {{- $total := 0 -}}
 {{- range $service := list "trust_backlog" "trust_consumer" -}}
-{{- $total = add $total (mul (include "distant-signal.workerPods" (dict "root" $root "service" $service)) (include "distant-signal.trustSinkPool" (dict "root" $root "service" $service))) -}}
+{{- $total = add $total (mul (include "distant-signal.workerPods" (dict "root" $root "service" $service)) (include "distant-signal.trustSinkPool" (dict "root" $root "service" $service) | int)) -}}
 {{- end -}}
 {{- $total -}}
 {{- end }}
 
 {{/*
-The phase 4 readers' pools under internalReads.source db, each times its
-pods (distant-signal.workerPods), summed (the
-api's INF-7 budget check); trust-consumer's is counted once, with its sink,
-in distant-signal.trustSinkPools. Takes root.
+The phase 4 readers' pools, each times its pods (distant-signal.workerPods),
+summed (the api's INF-7 budget check); trust-consumer's is counted once,
+with its sink, in distant-signal.trustSinkPools. Takes root.
 */}}
 {{- define "distant-signal.internalReadsPools" -}}
 {{- $root := . -}}
@@ -1526,31 +1304,20 @@ in distant-signal.trustSinkPools. Takes root.
 {{- end }}
 
 {{/*
-A reader's container env under internalReads.source db: the *_SOURCE
-switches (`sources`, a list of env names), DATABASE_URL as the reader's own
-role when postgresql.roles.perService.<role>.connect (else the app role),
-its pool and, with `corpus` (a reader of STANOX/CRS), the api's CORPUS
-fallback, so those reads return what GET /private/stanox-crs does. Nothing
-under http. With `database` false the caller renders DATABASE_URL itself
-(trust-consumer: one block for its sink and its reads). Takes (dict "root"
-$ "role" ... "sources" (list ...) "corpus" bool ["database" bool]).
+A reader's container env: DATABASE_URL as the reader's own role, its pool
+and, with `corpus` (a reader of STANOX/CRS), the CORPUS fallback, so those
+reads return what the api's public STANOX/CRS view does. With `database`
+false the caller renders DATABASE_URL itself (trust-consumer: one block for
+its sink and its reads). Takes (dict "root" $ "role" ... "corpus" bool
+["database" bool]).
 */}}
 {{- define "distant-signal.internalReadsEnv" -}}
 {{- if include "distant-signal.internalReadsDb" (dict "root" .root "role" .role) }}
 {{- $root := .root }}
-# <component>.internalReads.source: db (ingest architecture plan 4.7): read
-# the reference data from Postgres directly instead of the api's /private
-# GETs.
-{{- range .sources }}
-- name: {{ . }}
-  value: "db"
-{{- end }}
 {{- if not (and (hasKey . "database") (not .database)) }}
-{{- $service := "" }}
-{{- if hasKey $root.Values.postgresql.roles.perService .role }}
-{{- $service = .role }}
-{{- end }}
-{{ include "distant-signal.databaseEnvFor" (dict "root" $root "service" $service) }}
+# The reference data comes from Postgres directly (ingest architecture
+# plan 4.7), as the reader's own role.
+{{ include "distant-signal.databaseEnvFor" (dict "root" $root "service" .role) }}
 - name: DATABASE_MAX_CONNECTIONS
   value: {{ include "distant-signal.internalReadsPool" (dict "root" $root "role" .role) | quote }}
 {{- end }}
@@ -1628,13 +1395,16 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 {{- /*
 The ingest-writer's INGEST_WRITER_STREAMS from ingestWriter.streams (plan
 3a.3): "<stream>:<mode>" joined by commas, in key order. Fails on a mode
-other than off/shadow/apply. Takes root.
+other than off or apply (release B removed shadow). Takes root.
 */ -}}
 {{- define "distant-signal.ingestWriterStreams" -}}
 {{- $items := list -}}
 {{- range $name, $mode := .Values.ingestWriter.streams -}}
-{{- if not (has (toString $mode) (list "off" "shadow" "apply")) -}}
-{{- fail (printf "ingestWriter.streams.%s must be off, shadow or apply, not %q." $name (toString $mode)) -}}
+{{- if eq (toString $mode) "shadow" -}}
+{{- fail (printf "ingestWriter.streams.%s: shadow was removed in release B (ingest phase 5), with the producers' HTTP paths it was compared against: use off or apply." $name) -}}
+{{- end -}}
+{{- if not (has (toString $mode) (list "off" "apply")) -}}
+{{- fail (printf "ingestWriter.streams.%s must be off or apply, not %q." $name (toString $mode)) -}}
 {{- end -}}
 {{- if eq $name "island-of-ireland" -}}
 {{- /* Removed (security review H1): one stream per poller now. An old
@@ -1676,121 +1446,111 @@ true
 {{- end }}
 
 {{- /*
-Release A (2026-10-09): every ingest producer defaults to its new sink (db
-or stream), so a values file that has not done the Postgres per-service
-roles, the ingest-writer and the Redis ACL rollout cannot render. Rather
-than let the individual guards above fail one at a time, this lists every
-missing prerequisite at once, with the per-producer opt-out (`sink: http`).
-The guards stay as the backstop. Renders nothing; fails the render when
-anything is missing. Called first, from templates/zz-ingest-sink-preflight.yaml.
-Takes root.
+Release B (ingest phase 5): every ingest producer writes Postgres as its own
+role or XADDs to a Redis stream the ingest-writer applies, with no
+`/private` path to fall back to, so a values file that has not done the
+Postgres per-service roles, the ingest-writer and the Redis ACL rollout
+cannot render. Rather than let the individual guards fail one at a time,
+this lists every missing prerequisite at once. It also refuses the retired
+switches (`ingest.sink`, `internalReads.source`, a writer stream in
+`shadow`) set to anything but the one value release B knows; set to that
+value they are harmless leftovers. The guards stay as the backstop. Renders
+nothing; fails the render when anything is wrong. Called first, from
+templates/zz-ingest-sink-preflight.yaml. Takes root.
 */ -}}
 {{- define "distant-signal.ingestSinkPreflight" -}}
 {{- $v := .Values -}}
 {{- $root := . -}}
+{{- /* The retired switches: {path: the only value release B accepts}. */ -}}
+{{- $retired := list -}}
+{{- $checks := list -}}
+{{- range $name := list "incidents" "stations" "ldbws" "tfl" "tocs" -}}
+{{- $p := get $v.pollers $name | default dict -}}
+{{- $checks = append $checks (dict "key" (printf "pollers.%s.ingest.sink" $name) "value" (dig "ingest" "sink" "" $p) "want" (ternary "db" "stream" (has $name (list "incidents" "stations")))) -}}
+{{- end -}}
+{{- $checks = append $checks (dict "key" "pollers.ldbws.internalReads.source" "value" (dig "ldbws" "internalReads" "source" "" ($v.pollers | default dict)) "want" "db") -}}
+{{- $checks = append $checks (dict "key" "trustConsumer.ingest.sink" "value" (dig "ingest" "sink" "" $v.trustConsumer) "want" "db") -}}
+{{- $checks = append $checks (dict "key" "trustConsumer.internalReads.source" "value" (dig "internalReads" "source" "" $v.trustConsumer) "want" "db") -}}
+{{- $checks = append $checks (dict "key" "trustBacklogConsumer.ingest.sink" "value" (dig "ingest" "sink" "" $v.trustBacklogConsumer) "want" "db") -}}
+{{- $checks = append $checks (dict "key" "fullCoverageConsumer.ingest.sink" "value" (dig "ingest" "sink" "" $v.fullCoverageConsumer) "want" "stream") -}}
+{{- $checks = append $checks (dict "key" "fullCoverageConsumer.internalReads.source" "value" (dig "internalReads" "source" "" $v.fullCoverageConsumer) "want" "db") -}}
+{{- $checks = append $checks (dict "key" "scheduleFeed.ingest.sink" "value" (dig "ingest" "sink" "" $v.scheduleFeed) "want" "db") -}}
+{{- $checks = append $checks (dict "key" "scheduleFeed.reference.ingest.sink" "value" (dig "reference" "ingest" "sink" "" $v.scheduleFeed) "want" "db") -}}
+{{- range $c := $checks -}}
+{{- $value := toString $c.value -}}
+{{- if and (ne $value "") (ne $value $c.want) -}}
+{{- $retired = append $retired (printf "%s: %s (only %s is left)" $c.key $value $c.want) -}}
+{{- end -}}
+{{- end -}}
+{{- range $name, $mode := $v.ingestWriter.streams -}}
+{{- if eq (toString $mode) "shadow" -}}
+{{- $retired = append $retired (printf "ingestWriter.streams.%s: shadow (only off and apply are left)" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if $retired -}}
+{{- fail (printf "Release B (ingest phase 5) removed the api's /private routes and every producer's HTTP path, so these values select a path that no longer exists:\n  - %s\nDelete these keys (docs/ingest-phase5-runbook.md, \"Release B\"); to go back to the HTTP paths, roll back to the previous chart release and images." (join "\n  - " $retired)) -}}
+{{- end -}}
 {{- $missing := list -}}
-{{- $optOut := list -}}
-{{- /* The direct (db) writers: {svc: perService key, key: their sink value}. */ -}}
+{{- /* The direct (db) writers: {svc: perService key, key: their values key}. */ -}}
 {{- $db := list -}}
 {{- range $name := list "stations" "incidents" -}}
 {{- $p := get $v.pollers $name | default dict -}}
-{{- if and $p.enabled (eq (toString (dig "ingest" "sink" "http" $p)) "db") -}}
-{{- $db = append $db (dict "svc" $name "key" (printf "pollers.%s.ingest.sink" $name)) -}}
+{{- if $p.enabled -}}
+{{- $db = append $db (dict "svc" $name "key" (printf "pollers.%s" $name)) -}}
 {{- end -}}
 {{- end -}}
-{{- if eq (toString (dig "ingest" "sink" "http" $v.trustBacklogConsumer)) "db" -}}
-{{- $db = append $db (dict "svc" "trust_backlog" "key" "trustBacklogConsumer.ingest.sink") -}}
-{{- end -}}
-{{- if eq (toString (dig "ingest" "sink" "http" $v.trustConsumer)) "db" -}}
-{{- $db = append $db (dict "svc" "trust_consumer" "key" "trustConsumer.ingest.sink") -}}
-{{- end -}}
+{{- $db = append $db (dict "svc" "trust_backlog" "key" "trustBacklogConsumer") -}}
+{{- $db = append $db (dict "svc" "trust_consumer" "key" "trustConsumer") -}}
 {{- if $v.scheduleFeed.enabled -}}
-{{- if eq (toString (dig "ingest" "sink" "http" $v.scheduleFeed)) "db" -}}
-{{- $db = append $db (dict "svc" "schedule_ingest" "key" "scheduleFeed.ingest.sink") -}}
+{{- $db = append $db (dict "svc" "schedule_ingest" "key" "scheduleFeed.ingest") -}}
+{{- $db = append $db (dict "svc" "schedule_reference" "key" "scheduleFeed.reference") -}}
 {{- end -}}
-{{- if eq (toString (dig "reference" "ingest" "sink" "http" $v.scheduleFeed)) "db" -}}
-{{- $db = append $db (dict "svc" "schedule_reference" "key" "scheduleFeed.reference.ingest.sink") -}}
-{{- end -}}
-{{- end -}}
-{{- /* The stream producers: {client: redis.acl.clients key, stream, key, sink}. */ -}}
+{{- /* The stream producers: {client: redis.acl.clients key, stream, key}. */ -}}
 {{- $streamed := list -}}
-{{- $streamOf := dict "ldbws" "station-samples" "tfl" "tfl" "tocs" "reference" -}}
 {{- range $name := list "ldbws" "tfl" "tocs" -}}
 {{- $p := get $v.pollers $name | default dict -}}
-{{- $sink := toString (dig "ingest" "sink" "http" $p) -}}
-{{- if and $p.enabled (has $sink (list "http+shadow" "stream")) -}}
-{{- $streamed = append $streamed (dict "client" (include "distant-signal.pollerRedisClient" $name) "stream" (get $streamOf $name) "key" (printf "pollers.%s.ingest.sink" $name) "sink" $sink) -}}
+{{- if $p.enabled -}}
+{{- $streamed = append $streamed (dict "client" (include "distant-signal.pollerRedisClient" $name) "stream" (include "distant-signal.producerStream" $name) "key" (printf "pollers.%s" $name)) -}}
 {{- end -}}
 {{- end -}}
-{{- $fcSink := toString (dig "ingest" "sink" "http" $v.fullCoverageConsumer) -}}
-{{- if has $fcSink (list "http+shadow" "stream") -}}
-{{- $streamed = append $streamed (dict "client" "fullCoverageConsumer" "stream" "full-coverage" "key" "fullCoverageConsumer.ingest.sink" "sink" $fcSink) -}}
-{{- end -}}
+{{- $streamed = append $streamed (dict "client" "fullCoverageConsumer" "stream" "full-coverage" "key" "fullCoverageConsumer") -}}
 {{- /* Postgres: every direct writer connects as its own narrow role. */ -}}
-{{- $roles := false -}}
 {{- range $d := $db -}}
-{{- $roles = true -}}
-{{- $optOut = append $optOut (printf "%s: http" $d.key) -}}
 {{- if not (get $v.postgresql.roles.perService $d.svc | default dict).connect -}}
-{{- $missing = append $missing (printf "postgresql.roles.perService.%s.connect: true (%s: db; security review H2)" $d.svc $d.key) -}}
+{{- $missing = append $missing (printf "postgresql.roles.perService.%s.connect: true (%s writes Postgres directly; security review H2)" $d.svc $d.key) -}}
 {{- end -}}
 {{- if and (has $d.svc (list "stations" "trust_consumer")) (not (and $v.ingestWriter.enabled $v.ingestWriter.loops.enabled)) -}}
-{{- $missing = append $missing (printf "ingestWriter.enabled: true and ingestWriter.loops.enabled: true (%s: db; plans 2b.2 and 3b.3)" $d.key) -}}
+{{- $missing = append $missing "ingestWriter.enabled: true and ingestWriter.loops.enabled: true (pollers.stations and trustConsumer need its CORPUS crosswalk and train_event_outbox loops; plans 2b.2 and 3b.3)" -}}
 {{- end -}}
 {{- end -}}
-{{- /* The internal readers (phase 4) on internalReads.source db, each as
-     its own role: full_coverage_ro, ldbws_ro and trust_consumer (whose
-     reads share its sink's role and pool, plan 4.4). */ -}}
+{{- /* The internal readers (phase 4), each as its own role:
+     full_coverage_ro, ldbws_ro and trust_consumer (whose reads share its
+     sink's role and pool, plan 4.4). */ -}}
 {{- range $role := list "full_coverage_ro" "ldbws_ro" "trust_consumer" -}}
 {{- $key := include "distant-signal.internalReadsValuesKey" $role -}}
-{{- $values := ternary ($v.pollers.ldbws | default dict) (get $v (ternary "fullCoverageConsumer" "trustConsumer" (eq $role "full_coverage_ro")) | default dict) (eq $role "ldbws_ro") -}}
-{{- $deployed := ternary $values.enabled true (eq $role "ldbws_ro") -}}
-{{- if and $deployed (eq (toString (dig "internalReads" "source" "http" $values)) "db") -}}
-{{- $roles = true -}}
-{{- $optOut = append $optOut (printf "%s.internalReads.source: http" $key) -}}
-{{- if not (get $v.postgresql.roles.perService $role | default dict).connect -}}
-{{- $missing = append $missing (printf "postgresql.roles.perService.%s.connect: true (%s.internalReads.source: db; security review H2)" $role $key) -}}
-{{- end -}}
+{{- $deployed := ternary ($v.pollers.ldbws | default dict).enabled true (eq $role "ldbws_ro") -}}
+{{- if and $deployed (not (get $v.postgresql.roles.perService $role | default dict).connect) -}}
+{{- $missing = append $missing (printf "postgresql.roles.perService.%s.connect: true (%s reads Postgres directly; security review H2)" $role $key) -}}
 {{- end -}}
 {{- end -}}
 {{- /* Redis: the writer applies what the stream producers XADD. */ -}}
-{{- $writerApplies := false -}}
-{{- $writerReads := false -}}
 {{- $narrowFor := list -}}
 {{- range $s := $streamed -}}
-{{- $optOut = append $optOut (printf "%s: http" $s.key) -}}
 {{- $narrowFor = append $narrowFor (printf "redis.acl.clients.%s" $s.client) -}}
-{{- $missing = append $missing (printf "redis.acl.clients.%s: true (%s: %s; docs/redis-acl.md step 2)" $s.client $s.key $s.sink) -}}
-{{- $writerReads = true -}}
-{{- if eq $s.sink "stream" -}}
-{{- $writerApplies = true -}}
+{{- $missing = append $missing (printf "redis.acl.clients.%s: true (%s XADDs to ds:ingest:%s; docs/redis-acl.md step 2)" $s.client $s.key $s.stream) -}}
 {{- if not $v.ingestWriter.enabled -}}
-{{- $missing = append $missing (printf "ingestWriter.enabled: true (%s: stream)" $s.key) -}}
+{{- $missing = append $missing "ingestWriter.enabled: true (it applies the stream producers' ds:ingest:* streams)" -}}
 {{- end -}}
 {{- if ne (toString (get $v.ingestWriter.streams $s.stream)) "apply" -}}
-{{- $missing = append $missing (printf "ingestWriter.streams.%s: apply (%s: stream; spec §13.1)" $s.stream $s.key) -}}
-{{- end -}}
+{{- $missing = append $missing (printf "ingestWriter.streams.%s: apply (%s XADDs to it)" $s.stream $s.key) -}}
 {{- end -}}
 {{- end -}}
 {{- if $v.ingestWriter.enabled -}}
-{{- range $name, $mode := $v.ingestWriter.streams -}}
-{{- if ne (toString $mode) "off" -}}
-{{- $writerReads = true -}}
 {{- $narrowFor = append $narrowFor "redis.acl.clients.ingestWriter" -}}
-{{- $optOut = append $optOut (printf "ingestWriter.streams.%s: \"off\"" $name) -}}
-{{- end -}}
-{{- if eq (toString $mode) "apply" -}}
-{{- $writerApplies = true -}}
-{{- end -}}
-{{- end -}}
-{{- if eq (toString (get $v.ingestWriter.streams "tfl")) "apply" -}}
-{{- $roles = true -}}
-{{- if not $v.postgresql.roles.perService.writer.connect -}}
+{{- if and (eq (toString (get $v.ingestWriter.streams "tfl")) "apply") (not $v.postgresql.roles.perService.writer.connect) -}}
 {{- $missing = append $missing "postgresql.roles.perService.writer.connect: true (ingestWriter.streams.tfl: apply; security review M4)" -}}
 {{- end -}}
 {{- end -}}
-{{- end -}}
-{{- if $roles -}}
 {{- if not $v.postgresql.enabled -}}
 {{- $missing = append $missing "the bundled Postgres (postgresql.enabled: true): an external database gets no per-service roles" -}}
 {{- end -}}
@@ -1803,8 +1563,6 @@ Takes root.
 {{- if not $v.postgresql.roles.perService.enabled -}}
 {{- $missing = append $missing "postgresql.roles.perService.enabled: true" -}}
 {{- end -}}
-{{- end -}}
-{{- if $writerReads -}}
 {{- $acl := $v.redis.acl -}}
 {{- if not (and $acl.enabled $acl.existingSecret) -}}
 {{- $missing = append $missing "redis.acl.enabled: true with redis.acl.existingSecret (one <user>-password key per user; docs/redis-acl.md step 1)" -}}
@@ -1815,15 +1573,12 @@ Takes root.
 {{- if $v.ingestWriter.enabled -}}
 {{- $missing = append $missing "redis.acl.clients.ingestWriter: true (docs/redis-acl.md step 2)" -}}
 {{- end -}}
-{{- if $writerApplies -}}
 {{- if include "distant-signal.redisAclDefaultUserOn" $root -}}
-{{- $missing = append $missing "redis.acl.defaultUser: off or, recommended, \"on-unshared\", quoted in YAML (docs/redis-acl.md step 4; an apply needs it, security review H3)" -}}
+{{- $missing = append $missing "redis.acl.defaultUser: off or, recommended, \"on-unshared\", quoted in YAML (docs/redis-acl.md step 4; the writer's apply needs it, security review H3)" -}}
 {{- end -}}
 {{- range $client, $on := $acl.clients -}}
 {{- if include "distant-signal.redisAclClientDeployed" (dict "root" $root "client" $client) -}}
 {{- $missing = append $missing (printf "redis.acl.clients.%s: true (defaultUser on-unshared or off would lock it out; docs/redis-acl.md step 2)" $client) -}}
-{{- end -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- /* Drop the client lines already met, and all but the first per client. */ -}}
@@ -1839,29 +1594,25 @@ Takes root.
 {{- if not $skip }}{{ $out = append $out $m }}{{ end -}}
 {{- end -}}
 {{- if $out -}}
-{{- fail (printf "Release A (2026-10-09) moved every ingest producer off the api's /private routes by default: each now writes Postgres as its own role or XADDs to a Redis stream the ingest-writer applies (docs/ingest-phase5-runbook.md, \"Release A\"). These values miss its prerequisites:\n  - %s\nMeet them, or keep producers on /private until you can, with: %s." (join "\n  - " $out) (join ", " ($optOut | uniq))) -}}
+{{- fail (printf "Since release B (ingest phase 5) every ingest producer writes Postgres as its own role or XADDs to a Redis stream the ingest-writer applies; the api's /private routes are gone (docs/ingest-phase5-runbook.md). These values miss its prerequisites:\n  - %s" (join "\n  - " $out)) -}}
 {{- end -}}
 {{- end }}
 
 {{/*
-True (non-empty) when the schedulefeed Deployment renders and its ingest
-container writes Postgres directly (scheduleFeed.ingest.sink=db, plan 2d);
-fails the render on an unknown sink. Takes root.
+True (non-empty) when the schedulefeed Deployment renders: its ingest
+container then writes Postgres directly (plan 2d) as its own role. Takes
+root.
 */}}
 {{- define "distant-signal.scheduleIngestSinkDb" -}}
-{{- $sink := toString (.Values.scheduleFeed.ingest.sink | default "http") -}}
-{{- if not (has $sink (list "http" "db")) -}}
-{{- fail (printf "scheduleFeed.ingest.sink must be http or db, got %q" $sink) -}}
-{{- end -}}
-{{- if and .Values.scheduleFeed.enabled (eq $sink "db") -}}
-{{- include "distant-signal.requireNarrowRole" (dict "root" . "service" "schedule_ingest" "what" "scheduleFeed.ingest.sink=db") -}}
+{{- if .Values.scheduleFeed.enabled -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" . "service" "schedule_ingest" "what" "scheduleFeed (schedule-ingest writes Postgres directly)") -}}
 true
 {{- end -}}
 {{- end }}
 
 {{/*
 schedule-ingest's Postgres pool (scheduleFeed.ingest.database.maxConnections)
-under scheduleFeed.ingest.sink=db, else 0. Takes root.
+when the schedulefeed Deployment renders, else 0. Takes root.
 */}}
 {{- define "distant-signal.scheduleIngestPool" -}}
 {{- if include "distant-signal.scheduleIngestSinkDb" . -}}
@@ -1872,37 +1623,19 @@ under scheduleFeed.ingest.sink=db, else 0. Takes root.
 {{- end }}
 
 {{/*
-True (non-empty) when schedule-reference writes Postgres directly
-(scheduleFeed.reference.ingest.sink: db, ingest architecture plan 2a): its
-container gets DATABASE_URL and the schedulefeed pod may reach Postgres.
-Fails on a sink other than http or db. Takes root.
+True (non-empty) when the schedulefeed Deployment renders: schedule-reference
+then writes Postgres directly (plan 2a) as its own role. Takes root.
 */}}
 {{- define "distant-signal.scheduleReferenceDbSink" -}}
-{{- $sink := toString .Values.scheduleFeed.reference.ingest.sink -}}
-{{- if not (has $sink (list "http" "db")) -}}
-{{- fail (printf "scheduleFeed.reference.ingest.sink must be http or db, not %q." $sink) -}}
-{{- end -}}
-{{- if and .Values.scheduleFeed.enabled (eq $sink "db") -}}
-{{- include "distant-signal.requireNarrowRole" (dict "root" . "service" "schedule_reference" "what" "scheduleFeed.reference.ingest.sink=db") -}}
+{{- if .Values.scheduleFeed.enabled -}}
+{{- include "distant-signal.requireNarrowRole" (dict "root" . "service" "schedule_reference" "what" "scheduleFeed (schedule-reference writes Postgres directly)") -}}
 true
 {{- end -}}
 {{- end }}
 
 {{/*
-True (non-empty) when a schedulefeed container connects to Postgres (its
-NetworkPolicy egress, and the postgres policy's ingress): either
-schedule-reference's db sink (plan 2a) or schedule-ingest's (plan 2d).
-Takes root.
-*/}}
-{{- define "distant-signal.scheduleFeedPostgres" -}}
-{{- if or (include "distant-signal.scheduleReferenceDbSink" .) (include "distant-signal.scheduleIngestSinkDb" .) -}}
-true
-{{- end -}}
-{{- end }}
-
-{{/*
-schedule-reference's connections when its db sink is on, else 0. Takes
-root.
+schedule-reference's connections when the schedulefeed Deployment renders,
+else 0. Takes root.
 */}}
 {{- define "distant-signal.scheduleReferencePool" -}}
 {{- if include "distant-signal.scheduleReferenceDbSink" . -}}
@@ -1913,17 +1646,18 @@ root.
 {{- end }}
 
 {{/*
-poller-incidents' DB sink (ingest plan 2c.2): true (non-empty) when
-pollers.incidents is enabled with ingest.sink db (distant-signal.pollerSinkDb,
-which validates the value). Takes root.
+poller-incidents writes Postgres directly (ingest plan 2c.2): true
+(non-empty) when pollers.incidents is enabled (distant-signal.pollerSinkDb).
+Takes root.
 */}}
 {{- define "distant-signal.pollerIncidentsDbSink" -}}
 {{- include "distant-signal.pollerSinkDb" (dict "root" . "name" "incidents" "poller" (.Values.pollers.incidents | default dict)) -}}
 {{- end }}
 
 {{/*
-INCIDENTS_ROW_HEARTBEAT's value for both incident writers
-(pollers.incidents.ingest.rowHeartbeat, plan 2c.6): "false", or empty for
+INCIDENTS_ROW_HEARTBEAT's value for poller-incidents (the api, the other writer, lost
+its POST /private/incidents in release B; pollers.incidents.ingest.rowHeartbeat,
+plan 2c.6): "false", or empty for
 the default (true). Takes root.
 */}}
 {{- define "distant-signal.incidentsRowHeartbeatOff" -}}

@@ -95,8 +95,7 @@ tests:
   # Apply writes nothing. station-samples: applied every minute, rows
   # written until 10m, then none: 0 written over 15m from 25m, firing from
   # 30m. tfl: written every apply. reference: nothing written (the daily
-  # TOC list unchanged) but excluded. A stream in shadow (outcome skipped,
-  # no row_writes) never fires.
+  # TOC list unchanged) but excluded.
   - interval: 1m
     input_series:
       - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples", schema="station-samples", outcome="applied"}'
@@ -111,8 +110,6 @@ tests:
         values: '0+1x40'
       - series: 'distant_signal_ingest_stream_row_writes_total{namespace="distant-signal", pod="w", stream="ds:ingest:reference", schema="tocs", outcome="written"}'
         values: '0x40'
-      - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:full-coverage", schema="full-coverage-stats", outcome="skipped"}'
-        values: '0+1x40'
     alert_rule_test:
       - eval_time: 27m
         alertname: DistantSignalIngestApplyWritesNothing
@@ -129,8 +126,8 @@ tests:
   # Source stale. incidents last landed at 0: over 900s from 16m, firing
   # from 26m. tfl lands every minute. station-samples (stream-only) last
   # landed at 0 and its stream is in apply: over 1800s from 31m, firing
-  # from 41m. full-coverage-stats is as old, but its stream is in shadow
-  # (after a rollback its row ages for good): silent. An unlisted source
+  # from 41m. full-coverage-stats is as old, but its stream is off (its
+  # row then ages for good): silent. An unlisted source
   # is not checked.
   - interval: 1m
     input_series:
@@ -144,7 +141,7 @@ tests:
         values: '1x60'
       - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="full-coverage-stats"}'
         values: '0x60'
-      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:full-coverage", mode="shadow"}'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:full-coverage", mode="off"}'
         values: '1x60'
       - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="something-else"}'
         values: '0x60'
@@ -169,7 +166,7 @@ tests:
   # Island of Ireland, one source per table and network (172800s each,
   # stream-only). GTFS's stations last landed at 0 and ds:ingest:ioi-gtfs
   # is in apply: over 2 days from 48h 1m, firing from 48h 11m. NIR's
-  # stations are as old, but ds:ingest:ioi-nir is in shadow: silent. GTFS's
+  # stations are as old, but ds:ingest:ioi-nir is off: silent. GTFS's
   # lines land every minute.
   - interval: 1m
     input_series:
@@ -181,7 +178,7 @@ tests:
         values: '1x3000'
       - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="island_of_ireland_stations_nir"}'
         values: '0x3000'
-      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-nir", mode="shadow"}'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-nir", mode="off"}'
         values: '1x3000'
     alert_rule_test:
       - eval_time: 48h5m

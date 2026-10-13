@@ -4,15 +4,17 @@
 
   uv run scripts/check-ingest-phase0-chart.py [--helm HELM] [--baseline DIR]
 
-Phase 0 adds two chart features, both OFF by default
-(docs/postgres-app-role.md "Stage 0b", docs/redis-acl.md):
+Phase 0 added the per-service Postgres roles and the per-client Redis ACL
+users (docs/postgres-app-role.md "Stage 0b", docs/redis-acl.md). Since
+release B (ingest phase 5) every ingest producer writes Postgres as its own
+role or XADDs to a Redis stream as its own user, so both are prerequisites
+at their last rollout step rather than switches: every render here starts
+from ci/ingest-prereqs.yaml.
 
 Per-service Postgres roles (`postgresql.roles.perService`):
-  - off: nothing of it renders (no postgres-grants.sql, no per-service
-    role, password or variable);
-  - `enabled` without `roles.setupJob.enabled`, or a service's `connect`
-    without `enabled` or without `roles.enabled`, refuses to render;
-  - `enabled` alone changes no Deployment: the services stay on `app`;
+  - `roles.enabled`, `setupJob.enabled` or `perService.enabled` off refuses
+    to render (the release B preflight names it); so does a non-numeric
+    connectionLimit;
   - the setup Job's ConfigMap carries files/postgres-grants.sql verbatim,
     and the Job runs it after postgres-roles.sql with each role's computed
     CONNECTION LIMIT; on a new cluster (`initScript`) the initdb script and
@@ -20,46 +22,43 @@ Per-service Postgres roles (`postgresql.roles.perService`):
   - `connect` moves exactly that Deployment's DATABASE_URL to its own role
     (with its own password key), the api's pool to perService.api's 16, and
     takes its pool out of the app role's computed limit; the api's
-    migrations stay the owner's;
-  - the generated Secret gains one password per service;
-  - the role-limit budget (spec §6.6): fails at 198 of the 197 slots
-    (max_connections 200), passes at 192.
+    migrations stay the owner's; the producers and readers always connect
+    as theirs;
+  - the generated Secret has one password per service;
+  - the role-limit budget (spec §6.6): one more connection than the 197
+    slots (max_connections 200) fails the render, the 197 pass.
 
 Per-client Redis ACL users (`redis.acl`):
-  - off: nothing of it renders (no REDIS_USERNAME, --aclfile, initContainer
-    or ConfigMap);
-  - bad values refuse to render (no existingSecret, an unknown stage, a
-    client without `enabled`, `defaultUser: off` while a client still uses
-    `default`);
-  - step 1 (`enabled`, stage open) changes only Redis (the ConfigMap, the
-    initContainer, --aclfile instead of --requirepass, probes as ds-admin)
-    and no client;
-  - step 2 (`clients.<x>`) changes only that client: REDIS_USERNAME and its
-    own REDIS_PASSWORD key; REDIS_URL stays credential-free;
-  - the ConfigMap equals scripts/render-redis-acl.py's output for every
-    stage and default-user setting, with and without redis.auth.
+  - `enabled` off, stage open or `defaultUser: on` refuses to render;
+  - bad values refuse to render (no existingSecret, an unknown stage,
+    `defaultUser: off` while a client still uses `default`);
+  - Redis runs with --aclfile, probes as ds-admin, and each client connects
+    with REDIS_USERNAME and its own REDIS_PASSWORD key; REDIS_URL stays
+    credential-free;
+  - the ConfigMap equals scripts/render-redis-acl.py's output for stage
+    narrow and each default-user setting, with and without redis.auth.
 
 Security review render guards (2026-10-08):
-  - M3: ACL users with `default` on refuse to render without redis.auth;
-  - H3: every stream producer (ldbws/tfl `http+shadow`, full-coverage
-    `http+shadow`, an island-of-Ireland poller) and the ingest-writer with a
-    stream on refuse to render on `default`, without their own user, or at
-    stage open, and render as their own narrow user; a writer stream on
-    `apply` refuses while `default` is on;
-  - H2: every narrow-role component's db sink or db source refuses to
-    render on the superuser or the app role, and renders (connecting as its
-    own role) with its `perService.<role>.connect`; a poller with no narrow
-    role refuses `sink: db`;
+  - M3: ACL users with `default` on refuse to render (without redis.auth
+    too: the preflight refuses `default` on altogether);
+  - H3: every stream producer (pollers ldbws, tfl, tocs, poller-incidents'
+    incident-text-changed, full-coverage-consumer, an island-of-Ireland
+    poller) refuses to render without its own user, and renders as it; a
+    writer stream on `apply` refuses while `default` is on;
+  - H2: every narrow-role component refuses to render without its
+    `perService.<role>.connect`, and renders connecting as its own role;
   - M4: `ingestWriter.streams.tfl: apply` refuses without
     `perService.writer.connect`.
 
---baseline DIR renders DIR (a copy of charts/distant-signal from before
-phase 0, e.g. the merge base) and this chart with the same values, for the
-defaults, values-example.yaml, redis.auth on, and postgresql.roles stages A
-and B (what production runs or is rolling out): every document must be
-identical, with Secret values masked (randAlphaNum differs per run; the
-keys are compared). CI doesn't run it (on main it compares main with
-itself).
+Release B: a retired `ingest.sink`, `internalReads.source` or writer
+`shadow` set to anything but its one value refuses to render; set to that
+value it renders.
+
+--baseline DIR renders DIR (a copy of charts/distant-signal, e.g. the merge
+base) and this chart with the same values, for the defaults (plus
+ci/ingest-prereqs.yaml), values-example.yaml and the NetworkPolicies:
+every document must be identical, with Secret values masked (randAlphaNum
+differs per run; the keys are compared). CI doesn't run it.
 
 Exit 1 with one line per failed check. Needs helm on PATH (or --helm) and
 PyYAML (pyproject.toml's lint group).
@@ -69,6 +68,7 @@ import argparse
 import difflib
 import importlib.util
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -81,12 +81,14 @@ import yaml
 REPO = pathlib.Path(__file__).resolve().parent.parent
 CHART = REPO / "charts" / "distant-signal"
 EXAMPLE = "values-example.yaml"
-# Release A (2026-10-09) put every ingest producer on its db/stream sink by
-# default; these checks predate it and test other switches, so they render
-# on ci/http-sinks.yaml (every producer back on http, the writer on app).
+# Every ingest producer writes Postgres or a Redis stream (release B, ingest
+# phase 5, removed the /private HTTP paths), which needs the Postgres
+# per-service roles, the ingest-writer and the Redis ACL, so these checks
+# render on ci/ingest-prereqs.yaml, the least a fresh install adds: every
+# phase 0 switch on, at its last rollout step.
 BASE = (
     "-f",
-    str(CHART / "ci" / "http-sinks.yaml"),
+    str(CHART / "ci" / "ingest-prereqs.yaml"),
     "--set",
     "trustConsumer.kafka.brokers=k:9094",
     "--set",
@@ -115,24 +117,10 @@ def sets(*pairs: str) -> tuple[str, ...]:
     return tuple(a for p in pairs for a in ("--set", p))
 
 
-ROLES_A = sets(
-    "postgresql.roles.setupJob.enabled=true",
-    "postgresql.roles.initScript=false",
-    *(
-        f"postgresql.roles.{r}.existingSecret=distant-signal-postgres-roles"
-        for r in ("owner", "app", "exporter", "dump", "backup")
-    ),
-)
-ROLES_B = (*ROLES_A, *sets("postgresql.roles.enabled=true"))
-PER_SERVICE = (*ROLES_B, *sets("postgresql.roles.perService.enabled=true"))
 SERVICES = ("api", "aggregator", "enricher", "notifier")
-ALL_CONNECT = (
-    *PER_SERVICE,
-    *sets(*(f"postgresql.roles.perService.{s}.connect=true" for s in SERVICES)),
-)
+ALL_CONNECT = sets(*(f"postgresql.roles.perService.{s}.connect=true" for s in SERVICES))
 AUTH = sets("redis.auth.enabled=true", "redis.auth.existingSecret=redis-auth")
-ACL = (*AUTH, *sets("redis.acl.enabled=true", "redis.acl.existingSecret=redis-users"))
-# redis.acl.clients key -> (Deployment suffix, ACL user).
+# ci/ingest-prereqs.yaml's redis.acl clients: key -> (Deployment suffix, ACL user).
 CLIENTS = {
     "api": ("-api", "api"),
     "enricher": ("-enricher", "enricher"),
@@ -140,14 +128,11 @@ CLIENTS = {
     "trustConsumer": ("-trust-consumer", "trust-consumer"),
     "fullCoverageConsumer": ("-full-coverage-consumer", "full-coverage-consumer"),
     "trustBacklogConsumer": ("-trust-backlog-consumer", "trust-backlog-consumer"),
+    "ingestWriter": ("-ingest-writer", "ingest-writer"),
 }
-# redis.acl.clients keys whose workload renders nothing with the defaults
-# (the ingest-writer's streams, plan 3a.3; poller-incidents' db sink, plan
-# 2c; the ldbws, tfl and tocs stream sinks and the island-of-Ireland
-# pollers, plans 3a.7 and 3c.2): no per-client Deployment check, but
-# defaultUser off still needs each of them on.
+# The clients of workloads off by default (the pollers, the island-of-Ireland
+# pollers): defaultUser off still needs each of them on once enabled.
 DORMANT_CLIENTS = (
-    "ingestWriter",
     "pollerIncidents",
     "pollerLdbws",
     "pollerTfl",
@@ -159,13 +144,23 @@ DORMANT_CLIENTS = (
 ALL_CLIENTS = sets(
     *(f"redis.acl.clients.{k}=true" for k in (*CLIENTS, *DORMANT_CLIENTS))
 )
+WRITER_LOOPS = sets("ingestWriter.enabled=true", "ingestWriter.loops.enabled=true")
+SCHEDULE_FEED = sets(
+    "scheduleFeed.enabled=true", "scheduleFeed.sftp.authMethod=password"
+)
+
+
+def poller(name: str, client: str | None = None) -> tuple[str, ...]:
+    """Return the values that enable pollers.<name> (with its Redis user)."""
+    pairs = [f"pollers.{name}.enabled=true", f"pollers.{name}.baseUrl=https://x/{name}"]
+    if client:
+        pairs.append(f"redis.acl.clients.{client}=true")
+    return sets(*pairs)
+
 
 BASELINE_SETS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("defaults", ()),
     ("values-example.yaml", ("-f", EXAMPLE)),
-    ("redis.auth on", AUTH),
-    ("postgresql.roles stage A", ROLES_A),
-    ("postgresql.roles stage B", ROLES_B),
     ("network policy", sets("networkPolicy.enabled=true")),
 )
 
@@ -209,7 +204,10 @@ class Checker:
         code, out = self.render(*args)
         self.check(
             ok=code != 0 and needle in out,
-            message=f"{label}: must refuse to render naming {needle!r}",
+            message=(
+                f"{label}: must refuse to render naming {needle!r}: "
+                f"{out.strip()[-300:]}"
+            ),
         )
 
 
@@ -311,65 +309,28 @@ def check_baseline(c: Checker, base: pathlib.Path) -> None:
             print(f"baseline {label}: identical")
 
 
-def check_roles_off(c: Checker) -> None:
-    """Nothing of perService renders by default or with stages A/B."""
-    for label, args in (("defaults", ()), ("stage B", ROLES_B)):
-        _, out = c.render(*args)
-        for needle in (
-            "postgres-grants",
-            "distant_signal_api",
-            "distant_signal_aggregator",
-            "DS_PG_API",
-            "_connection_limit=34",
-        ):
-            c.check(ok=needle not in out, message=f"perService off ({label}): {needle}")
+def check_roles_required(c: Checker) -> None:
+    """Since release B the per-service roles are a prerequisite, not a switch."""
+    for key in (
+        "postgresql.roles.enabled",
+        "postgresql.roles.setupJob.enabled",
+        "postgresql.roles.perService.enabled",
+    ):
+        c.refuses(f"{key} off", f"{key}: true", *sets(f"{key}=false"))
 
 
 def check_roles_refusals(c: Checker) -> None:
-    """Invalid perService combinations refuse to render."""
-    c.refuses(
-        "perService without the setup Job",
-        "postgresql.roles.setupJob.enabled",
-        *sets("postgresql.roles.perService.enabled=true"),
-    )
-    c.refuses(
-        "connect without perService.enabled",
-        "postgresql.roles.perService.enabled",
-        *ROLES_B,
-        *sets("postgresql.roles.perService.api.connect=true"),
-    )
-    c.refuses(
-        "connect without roles.enabled",
-        "postgresql.roles.enabled",
-        *ROLES_A,
-        *sets(
-            "postgresql.roles.perService.enabled=true",
-            "postgresql.roles.perService.notifier.connect=true",
-        ),
-    )
+    """Invalid perService values refuse to render."""
     c.refuses(
         "a non-numeric connectionLimit",
         "connectionLimit must be a whole number",
-        *PER_SERVICE,
         *sets("postgresql.roles.perService.enricher.connectionLimit=lots"),
     )
 
 
-def check_roles_enabled_only(c: Checker) -> None:
-    """Check that `enabled` creates roles but moves no service."""
-    diffs = differing(c.docs(*ROLES_B), c.docs(*PER_SERVICE))
-    moved = [k for k in diffs if k.startswith("Deployment/")]
-    c.check(ok=not moved, message=f"perService.enabled alone changed {moved}")
-    expected = {
-        "ConfigMap/distant-signal-postgres-roles",
-        "Job/distant-signal-postgres-roles-setup",
-        "Secret/distant-signal",
-    }
-    c.check(
-        ok=set(diffs) <= expected,
-        message=f"perService.enabled changed {sorted(diffs)}",
-    )
-    docs = by_name(c.docs(*PER_SERVICE))
+def check_roles_setup(c: Checker) -> None:
+    """Check that the setup Job runs postgres-grants.sql after postgres-roles.sql."""
+    docs = by_name(c.docs())
     cm = docs.get("ConfigMap/distant-signal-postgres-roles", {})
     data = cast("dict[str, str]", cm.get("data") or {})
     grants = (CHART / "files" / "postgres-grants.sql").read_text(encoding="utf-8")
@@ -389,12 +350,17 @@ def check_roles_enabled_only(c: Checker) -> None:
         "'--variable=enricher_connection_limit=6'",
         "'--variable=notifier_connection_limit=6'",
         "'--variable=app_connection_limit=75'",
+        "'--variable=writer_connection_limit=7'",
+        "'--variable=trust_consumer_connection_limit=3'",
+        "'--variable=trust_backlog_connection_limit=4'",
+        "'--variable=full_coverage_ro_connection_limit=3'",
     ):
         c.check(ok=needle in script, message=f"setup Job script lacks {needle}")
-    c.check(
-        ok=script.index("postgres-roles.sql") < script.index("postgres-grants.sql"),
-        message="postgres-grants.sql must run after postgres-roles.sql",
-    )
+    if "postgres-roles.sql" in script and "postgres-grants.sql" in script:
+        c.check(
+            ok=script.index("postgres-roles.sql") < script.index("postgres-grants.sql"),
+            message="postgres-grants.sql must run after postgres-roles.sql",
+        )
     job_env = env((containers(job) or [{}])[0])
     for service in SERVICES:
         ref = secret_ref(job_env.get(f"DS_PG_{service.upper()}_PASSWORD"))
@@ -412,7 +378,8 @@ def check_roles_enabled_only(c: Checker) -> None:
 
 
 def check_roles_connect(c: Checker) -> None:
-    """`connect` moves exactly that service."""
+    """`connect` moves exactly that service; the producers are always on theirs."""
+    base = c.docs()
     docs = c.docs(*ALL_CONNECT)
     for service in SERVICES:
         url = value(main_env(docs, f"-{service}").get("DATABASE_URL"))
@@ -441,10 +408,8 @@ def check_roles_connect(c: Checker) -> None:
         ok="'--variable=app_connection_limit=5'" in out,
         message="app's computed limit must drop to its slack (5) once all connect",
     )
-    one = c.docs(
-        *PER_SERVICE, *sets("postgresql.roles.perService.notifier.connect=true")
-    )
-    diffs = differing(c.docs(*PER_SERVICE), one)
+    one = c.docs(*sets("postgresql.roles.perService.notifier.connect=true"))
+    diffs = differing(base, one)
     moved = sorted(k for k in diffs if k.startswith("Deployment/"))
     c.check(
         ok=moved == ["Deployment/distant-signal-notifier"],
@@ -454,13 +419,40 @@ def check_roles_connect(c: Checker) -> None:
         ok=value(main_env(one, "-api").get("DATABASE_MAX_CONNECTIONS")) == "50",
         message="the api pool must stay 50 until the api connects as its own role",
     )
+    for suffix, role in (
+        ("-trust-consumer", "trust_consumer"),
+        ("-trust-backlog-consumer", "trust_backlog"),
+        ("-full-coverage-consumer", "full_coverage_ro"),
+        ("-ingest-writer", "writer"),
+    ):
+        url = value(main_env(base, suffix).get("DATABASE_URL"))
+        c.check(
+            ok=url.startswith(f"postgres://distant_signal_{role}:"),
+            message=f"{suffix[1:]} must connect as distant_signal_{role}: {url}",
+        )
+
+
+# An api CONNECTION LIMIT far over any budget, to read the other roles' sum
+# off the render's error.
+HUGE_API_LIMIT = 999
 
 
 def check_roles_budget(c: Checker) -> None:
     """Role limits must fit the 197 non-superuser slots (max_connections 200)."""
-    # All four connecting: owner 3 + app 5 + exporter 3 + dump 2 + backup 4
-    # + aggregator 11 + enricher 6 + notifier 6 = 40, plus the api's.
-    for api_limit, total, ok in ((158, 198, False), (152, 192, True)):
+    _, out = c.render(
+        *ALL_CONNECT,
+        *sets(f"postgresql.roles.perService.api.connectionLimit={HUGE_API_LIMIT}"),
+    )
+    found = re.search(r"sum to (\d+)", out)
+    total = int(found.group(1)) if found else 0
+    c.check(
+        ok=total > HUGE_API_LIMIT,
+        message=f"budget: an api limit of {HUGE_API_LIMIT} must fail: {out[-300:]}",
+    )
+    # The total less the api's: the largest api limit that still fits 197.
+    rest = total - HUGE_API_LIMIT
+    fits = 197 - rest
+    for api_limit, ok in ((fits + 1, False), (fits, True)):
         code, out = c.render(
             *ALL_CONNECT,
             *sets(f"postgresql.roles.perService.api.connectionLimit={api_limit}"),
@@ -469,23 +461,18 @@ def check_roles_budget(c: Checker) -> None:
         )
         if ok:
             c.check(
-                ok=code == 0, message=f"budget {total}/197 must render: {out[-300:]}"
+                ok=code == 0, message=f"budget at 197/197 must render: {out[-300:]}"
             )
         else:
             c.check(
-                ok=code != 0 and f"sum to {total}" in out,
-                message=f"budget {total}/197 must fail the render",
+                ok=code != 0 and "sum to 198" in out,
+                message=f"budget 198/197 must fail the render: {out[-300:]}",
             )
 
 
 def check_roles_init_script(c: Checker) -> None:
     """Check that a new cluster's initdb script runs postgres-grants.sql."""
-    args = sets(
-        "postgresql.roles.enabled=true",
-        "postgresql.roles.setupJob.enabled=true",
-        "postgresql.roles.perService.enabled=true",
-    )
-    docs = by_name(c.docs(*args))
+    docs = by_name(c.docs())
     cm = docs.get("ConfigMap/distant-signal-postgres-roles", {})
     init = str(
         cast("dict[str, str]", cm.get("data") or {}).get("10-distant-signal-roles.sh")
@@ -515,12 +502,20 @@ def load_render_acl() -> ModuleType:
     return module
 
 
-def check_redis_off(c: Checker) -> None:
-    """Nothing of redis.acl renders by default or with redis.auth."""
-    for label, args in (("defaults", ()), ("redis.auth", AUTH)):
-        _, out = c.render(*args)
-        for needle in ("REDIS_USERNAME", "aclfile", "redis-acl", "REDIS_ACL_PASSWORD"):
-            c.check(ok=needle not in out, message=f"redis.acl off ({label}): {needle}")
+def check_redis_required(c: Checker) -> None:
+    """Since release B the Redis ACL at its last step is a prerequisite."""
+    c.refuses(
+        "redis.acl off", "redis.acl.enabled: true", *sets("redis.acl.enabled=false")
+    )
+    c.refuses(
+        "redis.acl stage open", "redis.acl.stage: narrow", *sets("redis.acl.stage=open")
+    )
+    c.refuses(
+        "redis.acl defaultUser on",
+        "redis.acl.defaultUser: off",
+        *AUTH,
+        *sets("redis.acl.defaultUser=on"),
+    )
 
 
 def check_redis_refusals(c: Checker) -> None:
@@ -528,64 +523,41 @@ def check_redis_refusals(c: Checker) -> None:
     c.refuses(
         "acl without existingSecret",
         "redis.acl.existingSecret",
-        *sets("redis.acl.enabled=true"),
+        *sets("redis.acl.existingSecret="),
     )
-    c.refuses(
-        "an unknown stage", "redis.acl.stage", *ACL, *sets("redis.acl.stage=wide")
-    )
-    c.refuses(
-        "a client without acl.enabled",
-        "redis.acl.clients.api needs redis.acl.enabled",
-        *AUTH,
-        *sets("redis.acl.clients.api=true"),
-    )
+    c.refuses("an unknown stage", "redis.acl.stage", *sets("redis.acl.stage=wide"))
     c.refuses(
         "default off with a client on default",
         "redis.acl.clients.enricher",
-        *ACL,
-        *sets("redis.acl.defaultUser=off"),
-        *sets(
-            *(
-                f"redis.acl.clients.{k}=true"
-                for k in (*CLIENTS, *DORMANT_CLIENTS)
-                if k != "enricher"
-            )
-        ),
+        *sets("redis.acl.defaultUser=off", "redis.acl.clients.enricher=false"),
     )
 
 
-def check_redis_steps(c: Checker) -> None:
-    """Step 1 changes only Redis; step 2 only the client it names."""
-    auth = c.docs(*AUTH)
-    step1 = c.docs(*ACL)
-    diffs = differing(auth, step1)
-    c.check(
-        ok=set(diffs)
-        == {"Deployment/distant-signal-redis", "ConfigMap/distant-signal-redis-acl"},
-        message=f"step 1 must change only Redis and its ACL ConfigMap: {sorted(diffs)}",
-    )
-    redis = deployment(step1, "-redis")
+def check_redis_users(c: Checker) -> None:
+    """Redis reads the ACL file; each client connects as its own user."""
+    docs = c.docs()
+    redis = deployment(docs, "-redis")
     main = (containers(redis) or [{}])[0]
     args = [str(a) for a in cast("list[object]", main.get("args") or [])]
     c.check(
         ok="--aclfile" in args and "--requirepass" not in args,
-        message=f"step 1 Redis args: {args}",
+        message=f"Redis args: {args}",
     )
     c.check(
         ok=secret_ref(env(main).get("REDISCLI_AUTH"))
-        == ("redis-users", "ds-admin-password"),
+        == ("example-redis-users", "ds-admin-password"),
         message="Redis probes must authenticate as ds-admin",
     )
     inits = containers(redis, "initContainers")
     init_env = env(inits[0]) if inits else {}
     c.check(
         ok=secret_ref(init_env.get("REDIS_ACL_PASSWORD_DEFAULT"))
-        == ("redis-auth", "redis-password"),
-        message="step 1: default keeps the redis.auth password",
+        == ("example-redis-users", "default-password"),
+        message="defaultUser on-unshared: default gets its own default-password",
     )
     c.check(
         ok=secret_ref(init_env.get("REDIS_ACL_PASSWORD_MOVEMENT_RELAY"))
-        == ("redis-users", "movement-relay-password"),
+        == ("example-redis-users", "movement-relay-password"),
         message="the initContainer must read each user's password key",
     )
     volumes = cast("list[dict[str, object]]", pod(redis).get("volumes") or [])
@@ -596,17 +568,11 @@ def check_redis_steps(c: Checker) -> None:
         message="the rendered users.acl must live in a memory emptyDir",
     )
     for key, (suffix, user) in CLIENTS.items():
-        step2 = c.docs(*ACL, *sets(f"redis.acl.clients.{key}=true"))
-        diffs = differing(step1, step2)
-        c.check(
-            ok=list(diffs) == [f"Deployment/distant-signal{suffix}"],
-            message=f"clients.{key} must change only its Deployment: {sorted(diffs)}",
-        )
-        e = main_env(step2, suffix)
+        e = main_env(docs, suffix)
         c.check(
             ok=value(e.get("REDIS_USERNAME")) == user
             and secret_ref(e.get("REDIS_PASSWORD"))
-            == ("redis-users", f"{user}-password")
+            == ("example-redis-users", f"{user}-password")
             and "@" not in value(e.get("REDIS_URL")),
             message=f"clients.{key}: REDIS_USERNAME {user} and its own password",
         )
@@ -616,97 +582,30 @@ def check_redis_acl_file(c: Checker) -> None:
     """Check the ConfigMap against scripts/render-redis-acl.py."""
     acl = load_render_acl()
     text = (CHART / "files" / "redis-users.acl.tpl").read_text(encoding="utf-8")
-    for stage in ("open", "narrow"):
-        for default_on in (True, False):
-            for with_auth in (True, False):
-                if default_on and not with_auth:
-                    # Refused (security review M3): check_security_guards.
-                    continue
-                base = (
-                    ACL
-                    if with_auth
-                    else sets(
-                        "redis.acl.enabled=true", "redis.acl.existingSecret=redis-users"
-                    )
-                )
-                args = (
-                    *base,
-                    *sets(f"redis.acl.stage={stage}"),
-                    *sets(f"redis.acl.defaultUser={'on' if default_on else 'off'}"),
-                    *(ALL_CLIENTS if not default_on else ()),
-                )
-                cm = by_name(c.docs(*args)).get(
-                    "ConfigMap/distant-signal-redis-acl", {}
-                )
-                got = cast("dict[str, str]", cm.get("data") or {}).get("users.acl.tpl")
-                want = acl.render(
-                    text,
-                    stage=stage,
-                    default_user=default_on,
-                    default_password=with_auth,
-                )
-                c.check(
-                    ok=got == want,
-                    message=(
-                        f"ACL ConfigMap (stage {stage}, default "
-                        f"{'on' if default_on else 'off'}, auth {with_auth}) "
-                        "differs from scripts/render-redis-acl.py"
-                    ),
-                )
-
-
-NARROW_ACL = (*ACL, *sets("redis.acl.stage=narrow"))
-DEFAULT_OFF = (*NARROW_ACL, *sets("redis.acl.defaultUser=off"), *ALL_CLIENTS)
-WRITER_LOOPS = sets("ingestWriter.enabled=true", "ingestWriter.loops.enabled=true")
-# values-example.yaml (every poller on) without the island-of-Ireland
-# pollers, whose own Redis users it sets, and without the release A
-# prerequisites it also sets (2026-10-09: the Redis ACL users with default
-# off, the Postgres roles, the ingest-writer), so each guard below starts
-# from none of them.
-EXAMPLE_NO_IOI = (
-    "-f",
-    EXAMPLE,
-    *sets(
-        "pollerIrishRailGtfs.enabled=false",
-        "pollerIrishRailLive.enabled=false",
-        "pollerNirStations.enabled=false",
-        "redis.acl.enabled=false",
-        "redis.acl.stage=open",
-        "redis.acl.defaultUser=on",
-        *(
-            f"redis.acl.clients.{client}=false"
-            for client in (
-                "api",
-                "enricher",
-                "movementRelay",
-                "trustConsumer",
-                "fullCoverageConsumer",
-                "trustBacklogConsumer",
-                "ingestWriter",
-                "pollerIncidents",
-                "pollerLdbws",
-                "pollerTfl",
-                "pollerTocs",
+    # Stage narrow only: a stream producer refuses stage open. Default
+    # on-unshared (its own password, with or without redis.auth) or off.
+    for default_mode in ("on-unshared", "off"):
+        for with_auth in (True, False):
+            args = (
+                *(AUTH if with_auth else ()),
+                *sets(f"redis.acl.defaultUser={default_mode}"),
+                *(ALL_CLIENTS if default_mode == "off" else ()),
             )
-        ),
-        "postgresql.roles.enabled=false",
-        "postgresql.roles.setupJob.enabled=false",
-        "postgresql.roles.perService.enabled=false",
-        "ingestWriter.enabled=false",
-        "ingestWriter.loops.enabled=false",
-        # Its api pools leave too little of the role budget for a
-        # per-service role on top of app's computed limit.
-        "postgresql.roles.app.connectionLimit=60",
-    ),
-)
-SCHEDULE_FEED = sets(
-    "scheduleFeed.enabled=true", "scheduleFeed.sftp.authMethod=password"
-)
-
-
-def connect(service: str) -> tuple[str, ...]:
-    """Return PER_SERVICE plus `service`'s own role."""
-    return (*PER_SERVICE, *sets(f"postgresql.roles.perService.{service}.connect=true"))
+            cm = by_name(c.docs(*args)).get("ConfigMap/distant-signal-redis-acl", {})
+            got = cast("dict[str, str]", cm.get("data") or {}).get("users.acl.tpl")
+            want = acl.render(
+                text,
+                stage="narrow",
+                default_user=default_mode != "off",
+                default_password=True,
+            )
+            c.check(
+                ok=got == want,
+                message=(
+                    f"ACL ConfigMap (stage narrow, default {default_mode}, "
+                    f"auth {with_auth}) differs from scripts/render-redis-acl.py"
+                ),
+            )
 
 
 def renders(c: Checker, label: str, *args: str) -> None:
@@ -717,43 +616,20 @@ def renders(c: Checker, label: str, *args: str) -> None:
 
 def check_redis_user_guards(c: Checker) -> None:
     """Security review H3 and M3: stream producers need their own users."""
+    # M3 (`default` on without redis.auth) is a prerequisite failure now:
+    # the preflight refuses `default` on whatever redis.auth says.
     c.refuses(
         "M3: ACL users with default on and no redis.auth",
-        "needs redis.auth.enabled",
-        *sets("redis.acl.enabled=true", "redis.acl.existingSecret=redis-users"),
-    )
-    renders(
-        c,
-        "M3: ACL users, default off, no redis.auth",
-        *sets(
-            "redis.acl.enabled=true",
-            "redis.acl.existingSecret=redis-users",
-            "redis.acl.defaultUser=off",
-        ),
-        *ALL_CLIENTS,
+        "redis.acl.defaultUser: off",
+        *sets("redis.acl.defaultUser=on"),
     )
     # (label, the producer's values, its redis.acl.clients key)
     producers: tuple[tuple[str, tuple[str, ...], str], ...] = (
-        (
-            "ldbws http+shadow",
-            (*EXAMPLE_NO_IOI, *sets("pollers.ldbws.ingest.sink=http+shadow")),
-            "pollerLdbws",
-        ),
-        (
-            "tfl http+shadow",
-            (*EXAMPLE_NO_IOI, *sets("pollers.tfl.ingest.sink=http+shadow")),
-            "pollerTfl",
-        ),
-        (
-            "fullCoverageConsumer http+shadow",
-            sets("fullCoverageConsumer.ingest.sink=http+shadow"),
-            "fullCoverageConsumer",
-        ),
-        (
-            "a writer stream on shadow",
-            sets("ingestWriter.enabled=true", "ingestWriter.streams.tfl=shadow"),
-            "ingestWriter",
-        ),
+        ("pollers.ldbws", poller("ldbws"), "pollerLdbws"),
+        ("pollers.tfl", poller("tfl"), "pollerTfl"),
+        ("pollers.tocs", poller("tocs"), "pollerTocs"),
+        ("pollers.incidents", poller("incidents"), "pollerIncidents"),
+        ("fullCoverageConsumer", (), "fullCoverageConsumer"),
         (
             "pollerIrishRailLive",
             sets("pollerIrishRailLive.enabled=true"),
@@ -761,94 +637,45 @@ def check_redis_user_guards(c: Checker) -> None:
         ),
     )
     for label, args, client in producers:
-        own = sets(f"redis.acl.clients.{client}=true")
         needle = f"redis.acl.clients.{client}"
-        c.refuses(f"H3: {label} on default", needle, *args)
-        c.refuses(f"H3: {label} without its user", needle, *args, *ACL)
         c.refuses(
-            f"H3: {label} at stage open",
+            f"H3: {label} without its user",
             needle,
             *args,
-            *ACL,
-            *own,
-            *sets("redis.acl.stage=open"),
+            *sets(f"redis.acl.clients.{client}=false"),
         )
-        renders(c, f"H3: {label} as its own narrow user", *args, *NARROW_ACL, *own)
-    apply = sets(
-        "ingestWriter.enabled=true", "ingestWriter.streams.station-samples=apply"
-    )
+        renders(
+            c,
+            f"H3: {label} as its own narrow user",
+            *args,
+            *sets(f"redis.acl.clients.{client}=true"),
+        )
     c.refuses(
         "H3: a writer stream on apply with default on",
         "redis.acl.defaultUser: off",
-        *apply,
-        *NARROW_ACL,
-        *sets("redis.acl.clients.ingestWriter=true"),
+        *AUTH,
+        *sets("redis.acl.defaultUser=on"),
     )
-    renders(c, "H3: a writer stream on apply with default off", *apply, *DEFAULT_OFF)
 
 
 def check_narrow_role_guards(c: Checker) -> None:
     """Security review H2 and M4: narrow components connect only as their role."""
     # (label, the values, the perService key)
     components: tuple[tuple[str, tuple[str, ...], str], ...] = (
-        (
-            "pollers.stations sink db",
-            (
-                *EXAMPLE_NO_IOI,
-                *WRITER_LOOPS,
-                *sets("pollers.stations.ingest.sink=db"),
-            ),
-            "stations",
-        ),
-        (
-            "pollers.incidents sink db",
-            (*EXAMPLE_NO_IOI, *sets("pollers.incidents.ingest.sink=db")),
-            "incidents",
-        ),
-        (
-            "trustBacklogConsumer sink db",
-            sets("trustBacklogConsumer.ingest.sink=db"),
-            "trust_backlog",
-        ),
-        (
-            "trustConsumer sink db",
-            (*WRITER_LOOPS, *sets("trustConsumer.ingest.sink=db")),
-            "trust_consumer",
-        ),
-        (
-            "trustConsumer reads db",
-            sets("trustConsumer.internalReads.source=db"),
-            "trust_consumer",
-        ),
-        (
-            "fullCoverageConsumer reads db",
-            sets("fullCoverageConsumer.internalReads.source=db"),
-            "full_coverage_ro",
-        ),
-        (
-            "pollers.ldbws reads db",
-            (*EXAMPLE_NO_IOI, *sets("pollers.ldbws.internalReads.source=db")),
-            "ldbws_ro",
-        ),
-        (
-            "scheduleFeed.ingest sink db",
-            (*SCHEDULE_FEED, *sets("scheduleFeed.ingest.sink=db")),
-            "schedule_ingest",
-        ),
-        (
-            "scheduleFeed.reference sink db",
-            (*SCHEDULE_FEED, *sets("scheduleFeed.reference.ingest.sink=db")),
-            "schedule_reference",
-        ),
+        ("pollers.stations", poller("stations"), "stations"),
+        ("pollers.incidents", poller("incidents", "pollerIncidents"), "incidents"),
+        ("trustBacklogConsumer", (), "trust_backlog"),
+        ("trustConsumer", (), "trust_consumer"),
+        ("fullCoverageConsumer reads", (), "full_coverage_ro"),
+        ("pollers.ldbws reads", poller("ldbws", "pollerLdbws"), "ldbws_ro"),
+        ("scheduleFeed.ingest", SCHEDULE_FEED, "schedule_ingest"),
+        ("scheduleFeed.reference", SCHEDULE_FEED, "schedule_reference"),
     )
     for label, args, service in components:
         needle = f"perService.{service}.connect"
-        # Release A made the producers' connect default true: off explicitly.
         off = sets(f"postgresql.roles.perService.{service}.connect=false")
-        c.refuses(f"H2: {label} on the superuser", needle, *args, *off)
-        c.refuses(f"H2: {label} on the app role", needle, *args, *PER_SERVICE, *off)
-        renders(c, f"H2: {label} as its own role", *args, *connect(service))
-        docs = c.docs(*args, *connect(service))
+        c.refuses(f"H2: {label} not as its role", needle, *args, *off)
+        docs = c.docs(*args)
         role = f"distant_signal_{service}"
         urls = [
             value(env(container).get("DATABASE_URL"))
@@ -862,17 +689,33 @@ def check_narrow_role_guards(c: Checker) -> None:
             message=f"H2: {label}: no container connects as {role}",
         )
     c.refuses(
-        "H2: a poller with no narrow role on sink db",
-        "has no narrow Postgres role",
-        *EXAMPLE_NO_IOI,
-        *sets("pollers.tfl.ingest.sink=db"),
+        "M4: tfl apply as the app role",
+        "perService.writer.connect",
+        *sets("postgresql.roles.perService.writer.connect=false"),
     )
-    tfl_apply = (
-        *DEFAULT_OFF,
-        *sets("ingestWriter.enabled=true", "ingestWriter.streams.tfl=apply"),
+
+
+def check_retired_switches(c: Checker) -> None:
+    """Release B: the sink and source switches accept only their one value."""
+    for key, bad in (
+        ("pollers.tfl.ingest.sink", "db"),
+        ("pollers.stations.ingest.sink", "http"),
+        ("trustConsumer.ingest.sink", "http"),
+        ("fullCoverageConsumer.internalReads.source", "http"),
+        ("scheduleFeed.reference.ingest.sink", "http"),
+        ("ingestWriter.streams.tfl", "shadow"),
+    ):
+        c.refuses(f"retired {key}={bad}", f"{key}: {bad}", *sets(f"{key}={bad}"))
+    renders(
+        c,
+        "a retired switch pinned to its one value",
+        *SCHEDULE_FEED,
+        *sets(
+            "scheduleFeed.reference.ingest.sink=db",
+            "trustConsumer.ingest.sink=db",
+            "fullCoverageConsumer.ingest.sink=stream",
+        ),
     )
-    c.refuses("M4: tfl apply as the app role", "perService.writer.connect", *tfl_apply)
-    renders(c, "M4: tfl apply as the writer role", *tfl_apply, *connect("writer"))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -880,24 +723,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--helm", default=shutil.which("helm") or "helm")
     parser.add_argument(
-        "--baseline", type=pathlib.Path, help="a pre-phase-0 copy of the chart"
+        "--baseline", type=pathlib.Path, help="an earlier copy of the chart"
     )
     args = parser.parse_args(argv)
     c = Checker(cast("str", args.helm))
     if args.baseline is not None:
         check_baseline(c, cast("pathlib.Path", args.baseline))
-    check_roles_off(c)
+    check_roles_required(c)
     check_roles_refusals(c)
-    check_roles_enabled_only(c)
+    check_roles_setup(c)
     check_roles_connect(c)
     check_roles_budget(c)
     check_roles_init_script(c)
-    check_redis_off(c)
+    check_redis_required(c)
     check_redis_refusals(c)
-    check_redis_steps(c)
+    check_redis_users(c)
     check_redis_acl_file(c)
     check_redis_user_guards(c)
     check_narrow_role_guards(c)
+    check_retired_switches(c)
     for failure in c.failures:
         print(failure)
     if not c.failures:

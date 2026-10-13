@@ -27,7 +27,10 @@
 --   5. the row policies (db-grants.yaml `row_policies`): every policy named
 --      ds_grants_* is dropped, then each listed one is created again as a
 --      RESTRICTIVE policy for its role (FOR ALL, or one per write command
---      for a `{writes: ...}` entry).
+--      for a `{writes: ...}` entry);
+--   6. what the app role loses (db-grants.yaml `app_revokes`): every
+--      privilege on those tables and EXECUTE on those functions, which
+--      postgres-roles.sql's blanket grants gave it again just before.
 
 \set ON_ERROR_STOP on
 
@@ -805,5 +808,35 @@ BEGIN
     END LOOP;
 END
 $policies$;
+
+-- 6. The app role's revokes (ingest phase 5, release B). postgres-roles.sql
+-- grants app DML on every table and EXECUTE on every routine on each run;
+-- these held only for the api's /private routes, and app's members (the
+-- observed roles) inherit the loss.
+DO $app_revokes$
+DECLARE
+    app text := current_setting('ds_grants.app');
+    r record;
+BEGIN
+    FOR r IN
+        SELECT v.tbl
+        FROM (VALUES
+        ('schedule_calling_points_full_publish_keys'),
+        ('schedule_destination_departures_publish_keys')) AS v(tbl)
+        WHERE to_regclass(format('public.%I', v.tbl)) IS NOT NULL
+    LOOP
+        EXECUTE format('REVOKE ALL ON public.%I FROM %I', r.tbl, app);
+    END LOOP;
+    FOR r IN
+        SELECT v.sig
+        FROM (VALUES
+        ('analyze_publish_keys(text)')) AS v(sig)
+        WHERE to_regprocedure('public.' || v.sig) IS NOT NULL
+    LOOP
+        EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM %I',
+                       to_regprocedure('public.' || r.sig), app);
+    END LOOP;
+END
+$app_revokes$;
 
 COMMIT;

@@ -62,19 +62,19 @@ tests:
           - exp_labels: {severity: critical, namespace: distant-signal}
             exp_annotations:
               summary: api cannot query its database
-              description: "api's SELECT 1 probe has failed for 2m: ingest and most pages fail. See DistantSignalPostgresDown and api's log."
+              description: "api's SELECT 1 probe has failed for 2m: most pages fail. See DistantSignalPostgresDown and api's log."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalapidatabasedown
   # trust-consumer's tracked-trains reload fails once a minute from 5m
-  # (fires after 10m of it); trust-backlog-consumer's POSTs fail for only
-  # 4 minutes (an api rollout); a data rejection (post_rejected) and a
-  # parse drop are not api failures.
+  # (fires after 10m of it); trust-backlog-consumer's STANOX/CRS reload
+  # fails for only 4 minutes (a database restart); a data rejection
+  # (post_rejected) and a parse drop are not counted.
   - interval: 1m
     input_series:
       - series: 'distant_signal_trust_consumer_errors_total{namespace="distant-signal", pod="tc", operation="reload_tracked_trains"}'
         values: '0x5 1+1x40'
       - series: 'distant_signal_trust_consumer_errors_total{namespace="distant-signal", pod="tc", operation="post_rejected"}'
         values: '0+10x45'
-      - series: 'distant_signal_trust_backlog_consumer_errors_total{namespace="distant-signal", pod="tbc", operation="post_batch"}'
+      - series: 'distant_signal_trust_backlog_consumer_errors_total{namespace="distant-signal", pod="tbc", operation="reload_stanox_crs"}'
         values: '0x5 0+30x4 120x36'
       - series: 'distant_signal_full_coverage_consumer_errors_total{namespace="distant-signal", pod="fcc", operation="parse_envelope", msg_type="0003"}'
         values: '0+10x45'
@@ -87,10 +87,10 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warning, namespace: distant-signal, consumer: trust-consumer}
             exp_annotations:
-              summary: trust-consumer keeps failing its calls to api
-              description: "5 failed api calls in 5m, for 10m: its data is not landing. Check api and the consumer's log."
+              summary: trust-consumer keeps failing its reads or writes
+              description: "5 failed reads or writes in 5m, for 10m: its data is not landing. Check Postgres and the consumer's log."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
-  # Ingest plan 3b.2: under ingest.sink db the direct writes count too.
+  # Ingest plan 3b.2: the direct writes count too.
   # trust-backlog-consumer's db_write fails once a minute from 5m (fires
   # after 10m of it); trust-consumer's db_write fails for only 4 minutes.
   - interval: 1m
@@ -108,8 +108,8 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warning, namespace: distant-signal, consumer: trust-backlog-consumer}
             exp_annotations:
-              summary: trust-backlog-consumer keeps failing its calls to api
-              description: "5 failed api calls in 5m, for 10m: its data is not landing. Check api and the consumer's log."
+              summary: trust-backlog-consumer keeps failing its reads or writes
+              description: "5 failed reads or writes in 5m, for 10m: its data is not landing. Check Postgres and the consumer's log."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
   # The aggregator's last success stops at 600s (10m); 15m later it fires.
   # The notifier's line_status loop is healthy; its hourly template_sweep

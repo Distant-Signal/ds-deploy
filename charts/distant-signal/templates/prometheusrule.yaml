@@ -55,18 +55,17 @@ so that clause fired on every rollout.
 {{- $archiveExpiryOn := and ($rule.archiveExpiry).enabled .Values.archive.enabled (.Values.archive.expiry).enabled }}
 {{- $postgresDownOn := ($rule.postgresDown).enabled }}
 {{- $apiDbDownOn := ($rule.apiDatabaseDown).enabled }}
-{{- $privateRetiredOn := and ($rule.apiPrivateRouteRetired).enabled (not (dig "privateRoutes" "enabled" true .Values.api)) }}
 {{- $consumerApiOn := ($rule.consumerApiErrors).enabled }}
 {{- $cyclesOn := ($rule.cycleStalled).enabled }}
 {{- $api5xxOn := ($rule.api5xx).enabled }}
 {{- $schemaGateOn := ($rule.schemaGateWaiting).enabled }}
 {{- $imagePullOn := and ($rule.statefulImagePull).enabled (or .Values.postgresql.enabled .Values.redis.enabled) }}
-{{- $healthOn := or $postgresDownOn $apiDbDownOn $privateRetiredOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
+{{- $healthOn := or $postgresDownOn $apiDbDownOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
 {{- $enricherBatching := or (eq ((.Values.enricher.llm.batch).sweepMode | default "sync") "batch") (ne ((.Values.enricher.llm.batch).mode | default "normal") "normal") }}
 {{- $enricherBatchesOn := and ($rule.enricherBatches).enabled $enricherBatching }}
 {{- $writerDownOn := and ($rule.ingestWriterDown).enabled .Values.ingestWriter.enabled }}
-{{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled ($rule.ingestShadowMismatch).enabled) }}
+{{- $ingestStreamsOn := and .Values.ingestWriter.enabled (or ($rule.ingestStreamBacklog).enabled ($rule.ingestStreamStalled).enabled ($rule.ingestDeadLetters).enabled ($rule.ingestDeadLetterExpiring).enabled ($rule.ingestUnsupportedSchema).enabled ($rule.ingestProducerXaddFailing).enabled ($rule.ingestStreamMemoryHigh).enabled ($rule.ingestClockSkew).enabled) }}
 {{- $outboxOn := and ($rule.trainEventOutbox).enabled .Values.ingestWriter.enabled }}
 {{- $writerLoopsOn := and .Values.ingestWriter.enabled (.Values.ingestWriter.loops).enabled }}
 {{- $loopStaleOn := and ($rule.writerLoopStale).enabled $writerLoopsOn }}
@@ -194,34 +193,8 @@ spec:
             {{- end }}
           annotations:
             summary: "api cannot query its database"
-            description: "api's SELECT 1 probe has failed for {{ .for }}: ingest and most pages fail. See DistantSignalPostgresDown and api's log."
+            description: "api's SELECT 1 probe has failed for {{ .for }}: most pages fail. See DistantSignalPostgresDown and api's log."
             runbook_url: {{ printf "%s#distantsignalapidatabasedown" $runbook | quote }}
-        {{- end }}
-        {{- end }}
-        {{- if $privateRetiredOn }}
-        {{- with $rule.apiPrivateRouteRetired }}
-        {{- /*
-        Ingest phase 5, step 5.1 (docs/ingest-phase5-runbook.md): with
-        api.privateRoutes.enabled false the api answers every /private/*
-        request with a counted 404 (api::private_retired). Any call is a
-        producer still on its HTTP sink (route = the pair it called) or a
-        stray (route="other": a scanner through the Ingress, a typo). Only
-        known pairs alert (decided 2026-10-08); `other` is still counted.
-        Registered at 0, so a first call counts.
-        */}}
-        - alert: DistantSignalApiPrivateRouteRetiredCalled
-          expr: |
-            sum by (namespace, route, method) (increase(distant_signal_api_private_route_retired_total{namespace="{{ $ns }}", route!="other"}[{{ .window }}])) > 0
-          for: {{ .for }}
-          labels:
-            severity: {{ .severity }}
-            {{- with $extraLabels }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          annotations:
-            summary: "Something still calls retired {{ "{{ $labels.method }} {{ $labels.route }}" }}"
-            description: "API_PRIVATE_ROUTES is false and this answered 404. A producer may still be on its HTTP sink: check api's log for the caller."
-            runbook_url: {{ printf "%s#distantsignalapiprivaterouteretiredcalled" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.schemaGateWaiting }}
@@ -257,18 +230,19 @@ spec:
         2026-10-01: trust-consumer failed GET /private/tracked-trains about
         23.6k times and trust-backlog-consumer about 2,200 POSTs, with no
         alert (their *_ready gauges only follow Redis). Each consumer's
-        <consumer>_errors_total operations that are failed calls to api,
-        or failed direct writes under ingest.sink db (db_write,
-        db_write_reasons; ingest plan 3b.2) -- not data rejections --
+        <consumer>_errors_total operations that are failed reads (since
+        release B, ingest phase 5, from Postgres) or failed direct writes
+        (db_write, db_write_reasons; ingest plan 3b.2) -- not data
+        rejections --
         registered at 0 at startup; each crate's
         API_CALL_OPERATIONS lists the same operations, and its tests check
         this list. Summed per consumer (not per operation), so an api outage
         is at most three alerts in one notification.
         */}}
         {{- $consumers := list
-          (list "trust_consumer" "trust-consumer" "reload_tracked_trains|post_train_events|reload_stanox_crs|startup_reference_load|db_write")
-          (list "trust_backlog_consumer" "trust-backlog-consumer" "post_batch|post_train_reasons|reload_stanox_crs|db_write|db_write_reasons")
-          (list "full_coverage_consumer" "full-coverage-consumer" "reload_line_population_fetch|post_line_stats|post_station_samples|reload_stanox_crs") }}
+          (list "trust_consumer" "trust-consumer" "reload_tracked_trains|reload_stanox_crs|startup_reference_load|db_write")
+          (list "trust_backlog_consumer" "trust-backlog-consumer" "reload_stanox_crs|db_write|db_write_reasons")
+          (list "full_coverage_consumer" "full-coverage-consumer" "reload_line_population_fetch|reload_stanox_crs") }}
         - record: distant_signal:consumer_api_errors:increase
           expr: |
             {{- range $i, $c := $consumers }}
@@ -284,8 +258,8 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "{{ "{{ $labels.consumer }}" }} keeps failing its calls to api"
-            description: "{{ "{{ $value | humanize }}" }} failed api calls in {{ .window }}, for {{ .for }}: its data is not landing. Check api and the consumer's log."
+            summary: "{{ "{{ $labels.consumer }}" }} keeps failing its reads or writes"
+            description: "{{ "{{ $value | humanize }}" }} failed reads or writes in {{ .window }}, for {{ .for }}: its data is not landing. Check Postgres and the consumer's log."
             runbook_url: {{ printf "%s#distantsignalconsumerapicallsfailing" $runbook | quote }}
         {{- end }}
         {{- end }}
@@ -295,8 +269,9 @@ spec:
         2026-10-01: the cluster's DistantSignalApi5xx (Ranma-Config) is one
         ratio over every route, so the ingest retry storms (~27 5xx/s on
         /private/*) drowned out what the public saw (~20% of a few requests
-        a minute). Split by route: `public` excludes /private/*, health and
-        unmatched paths; `ingest` is /private/*. The counter is
+        a minute). The `public` scope excludes /metrics, health and
+        unmatched paths; the `ingest` scope (/private/*) went with release B
+        (ingest phase 5), which removed those routes. The counter is
         axum-prometheus' distant_signal_http_requests_total; its route label
         is .routeLabel (`exported_endpoint` behind the PodMonitor). api
         registers the key routes' 200/500/503 series at 0 at startup
@@ -304,8 +279,7 @@ spec:
         */}}
         {{- $label := .routeLabel }}
         {{- $scopes := list
-          (list "public" (printf "%s!~\"/private/.*|/metrics|/public/health|/public/ready|/[{]unmatched[}]\"" $label))
-          (list "ingest" (printf "%s=~\"/private/.*\"" $label)) }}
+          (list "public" (printf "%s!~\"/metrics|/public/health|/public/ready|/[{]unmatched[}]\"" $label)) }}
         {{- range $m := list (list "requests:rate" "rate" "") (list "5xx:rate" "rate" ", status=~\"5..\"") (list "5xx:increase" "increase" ", status=~\"5..\"") }}
         - record: distant_signal:api_{{ index $m 0 }}
           expr: |
@@ -313,7 +287,7 @@ spec:
             {{ if $i }}or {{ end }}label_replace(sum by (namespace) ({{ index $m 1 }}(distant_signal_http_requests_total{namespace="{{ $ns }}", {{ index $s 1 }}{{ index $m 2 }}}[{{ $rule.api5xx.window }}])), "scope", "{{ index $s 0 }}", "", "")
             {{- end }}
         {{- end }}
-        {{- range $scope := list "public" "ingest" }}
+        {{- range $scope := list "public" }}
         {{- $s := index $rule.api5xx $scope }}
         - alert: DistantSignalApi{{ title $scope }}5xx
           expr: |
@@ -327,11 +301,7 @@ spec:
             {{- end }}
           annotations:
             summary: "api answers {{ "{{ $value | humanizePercentage }}" }} of {{ $scope }} requests with 5xx"
-            {{- if eq $scope "public" }}
             description: "Users, the frontend and the MCP get errors (503: a dependency is down). Check DistantSignalApiDatabaseDown and api's log."
-            {{- else }}
-            description: "Producers' ingest POSTs fail and are retried. Check DistantSignalApiDatabaseDown and api's log."
-            {{- end }}
             runbook_url: {{ printf "%s#distantsignalapi%s5xx" $runbook $scope | quote }}
         {{- end }}
         {{- end }}
@@ -915,27 +885,6 @@ spec:
             summary: "full-coverage windows feed_stale for {{ .feedStaleFor }}"
             description: "Too few TRUST Activations or no recent movement event; no window affects severity. Expected during a TRUST outage."
             runbook_url: {{ printf "%s#distantsignalfullcoveragewindowfeedstale" $runbook | quote }}
-        {{- /*
-        2026-10-02: was `> 0` over 30m with no `for`, so the one POST that
-        fails while an api Recreate rollout is down (~20-25 s) fired it for
-        30 minutes (3 of 5 rollouts). Now the same shape as
-        DistantSignalConsumerApiCallsFailing: at least postErrorsThreshold
-        failures per postErrorsWindow, sustained for postErrorsFor. A
-        persistent 404 (one failure a minute) still fires.
-        */}}
-        - alert: DistantSignalFullCoverageWindowPostErrors
-          expr: |
-            sum by (namespace) (increase(distant_signal_full_coverage_consumer_errors_total{namespace="{{ $ns }}", operation="post_window_stats"}[{{ .postErrorsWindow }}])) >= {{ .postErrorsThreshold }}
-          for: {{ .postErrorsFor }}
-          labels:
-            severity: {{ .severity }}
-            {{- with $extraLabels }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          annotations:
-            summary: "full-coverage window stats POSTs failing"
-            description: "{{ "{{ $value | humanize }}" }} window-stats POSTs failed in {{ .postErrorsWindow }}, for {{ .postErrorsFor }}. A 404 means api lacks the route."
-            runbook_url: {{ printf "%s#distantsignalfullcoveragewindowposterrors" $runbook | quote }}
         - alert: DistantSignalFullCoverageWindowStatsStalled
           expr: |
             sum by (namespace) (rate(distant_signal_full_coverage_consumer_window_rows_posted_total{namespace="{{ $ns }}"}[{{ .stalledWindow }}])) == 0
@@ -946,8 +895,8 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "no full-coverage window rows posted"
-            description: "None over {{ .stalledWindow }} for {{ .stalledFor }}: a stuck replay, a population that never loaded, or failing POSTs."
+            summary: "no full-coverage window rows written"
+            description: "None over {{ .stalledWindow }} for {{ .stalledFor }}: a stuck replay, a population that never loaded, or failing stream writes."
             runbook_url: {{ printf "%s#distantsignalfullcoveragewindowstatsstalled" $runbook | quote }}
     {{- end }}
     {{- end }}
@@ -1078,7 +1027,7 @@ spec:
     - name: distant-signal.train-event-outbox
       rules:
         {{- /*
-        Ingest plan 3b.3: under trustConsumer.ingest.sink db, resolutions,
+        Ingest plan 3b.3: trust-consumer writes directly, so resolutions,
         cancellations and reinstatements (and the events queued behind
         them) wait in train_event_outbox for the writer's loop (5 s).
         Both series come from the writer; absent series never fire.
@@ -1343,47 +1292,6 @@ spec:
             summary: "{{ "{{ $labels.stream }}" }} carries times over 2 min in the future"
             description: "The ingest-writer clamped observed times ({{ "{{ $labels.schema }}" }}) to its own clock: a producer's clock is ahead."
             runbook_url: {{ printf "%s#distantsignalingestclockskew" $runbook | quote }}
-        {{- end }}
-        {{- end }}
-        {{- with $rule.ingestShadowMismatch }}
-        {{- if .enabled }}
-        {{- /*
-        The rollout's compare step (plan 3a, spec §13.1): per stream and
-        schema, the rows the writer handled (shadow, or apply) over the
-        rows the api accepted (ingest_stream_rows_total over
-        ingest_stream_sink_rows_total{sink="http"}; plan 3a.6-3a.8). Only
-        while the api is still taking rows (`> 0`), so not after the flip
-        to `stream`. A producer on http+shadow registers its `stream`
-        series at 0, so a shadow copy that never reaches the writer reads
-        0 rather than nothing; a producer on plain `http` has no such
-        series, so the writer's `shadow` alone (rollout step 1) reads
-        nothing.
-        */}}
-        {{- $writer := printf `distant_signal_ingest_stream_rows_total{namespace="%s", mode=~"shadow|apply"}` $ns }}
-        {{- $copied := printf `distant_signal_ingest_stream_sink_rows_total{namespace="%s", sink="stream"}` $ns }}
-        {{- $http := printf `distant_signal_ingest_stream_sink_rows_total{namespace="%s", sink="http"}` $ns }}
-        - record: distant_signal:ingest_stream_rows_vs_http:ratio
-          expr: |
-            (
-              sum by (namespace, stream, schema) (increase({{ $writer }}[{{ .window }}]))
-              or
-              sum by (namespace, stream, schema) (increase({{ $copied }}[{{ .window }}])) * 0
-            )
-            / on (namespace, stream, schema)
-            (sum by (namespace, stream, schema) (increase({{ $http }}[{{ .window }}])) > 0)
-        - alert: DistantSignalIngestShadowMismatch
-          expr: |
-            abs(distant_signal:ingest_stream_rows_vs_http:ratio{namespace="{{ $ns }}"} - 1) > {{ .ratio }}
-          for: {{ .for }}
-          labels:
-            severity: {{ .severity }}
-            {{- with $extraLabels }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          annotations:
-            summary: "{{ "{{ $labels.schema }}" }}: writer and api row counts differ by {{ "{{ $value | humanizePercentage }}" }}"
-            description: "Over {{ .window }}, the ingest-writer handled a different number of {{ "{{ $labels.stream }}" }} rows than the api accepted. Do not flip to stream yet."
-            runbook_url: {{ printf "%s#distantsignalingestshadowmismatch" $runbook | quote }}
         {{- end }}
         {{- end }}
     {{- end }}
@@ -1870,7 +1778,8 @@ spec:
             description: "Over the extraction caps, or a failed CIF content check. The timetable is not refreshed until a new upload."
             runbook_url: {{ printf "%s#distantsignalschedulefeedziprejected" $runbook | quote }}
         {{- /*
-        N-2: api refused schedule-ingest's delivery record (400/413/422).
+        N-2: schedule-ingest's delivery record was refused as bad data (a
+        SQLSTATE class 22/23 error; api's 400/413/422 before release B).
         The delivery is quarantined until a new upload, not retried.
         */}}
         - alert: DistantSignalScheduleFeedIngestRejected
@@ -1883,8 +1792,8 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "api rejected a schedule feed delivery record"
-            description: "api answered 400/413/422 to schedule-ingest; not retried until a new upload. Both logs name the reason."
+            summary: "a schedule feed delivery record was rejected"
+            description: "Refused as bad data; not retried until a new upload. The ingest container's log names the reason."
             runbook_url: {{ printf "%s#distantsignalschedulefeedingestrejected" $runbook | quote }}
         {{- /*
         CORPUS (scheduleFeed.corpus): schedule-ingest refused a CORPUS
@@ -1978,8 +1887,9 @@ spec:
             description: "Its staged key count did not match the publisher's total, so rows it left out stay until the next complete publish."
             runbook_url: {{ printf "%s#distantsignalschedulepublishstagedmismatch" $runbook | quote }}
         {{- /*
-        DQ6/SCHED-1: api answered 400/413/422 to one of schedule-reference's
-        products. That is permanent for the delivery: it is not retried, and
+        DQ6/SCHED-1: one of schedule-reference's products was refused as bad
+        data (a SQLSTATE class 22/23 error; api's 400/413/422 before release
+        B). That is permanent for the delivery: it is not retried, and
         the durable completion marker is not written (so a restart tries the
         delivery again). The product's previous rows stay in place.
         */}}
@@ -1993,8 +1903,8 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "api rejected schedule-reference's {{ "{{ $labels.product }}" }} publish"
-            description: "400/413/422: not retried for this delivery, and the product keeps its previous rows. Usually schema skew or a big chunk."
+            summary: "schedule-reference's {{ "{{ $labels.product }}" }} publish was rejected"
+            description: "Refused as bad data: not retried for this delivery, and the product keeps its previous rows. Usually schema skew."
             runbook_url: {{ printf "%s#distantsignalschedulereferencepublishrejected" $runbook | quote }}
         {{- /*
         DQ11/PL-9: schedule-reference publishes each line's population for
@@ -2389,7 +2299,7 @@ spec:
             {{- end }}
           annotations:
             summary: "no incident snapshot fit to infer ended incidents in {{ .window }}"
-            description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents and api logs."
+            description: "Incomplete, empty or halved snapshots: incidents leaving the feed stay active. Check poller-incidents' log."
             runbook_url: {{ printf "%s#distantsignalincidentremovalstalled" $runbook | quote }}
         {{- end }}
         {{- end }}
@@ -2398,13 +2308,12 @@ spec:
         {{- /*
         Every incidents snapshot that reaches the database counts once in
         api_incident_removal_inference_total{outcome} (each outcome,
-        too_soon and no_baseline included): in the api under
-        pollers.incidents.ingest.sink http, in poller-incidents under db.
-        Both register every outcome at 0 at startup (the api always, with
-        metrics on), so with the poller on the sum is a real 0 when no
-        snapshot lands; with neither process scraped there is no series
-        and nothing fires. Both prefixes count (api_ today, store_ after the
-        phase 5 rename, Q1).
+        too_soon and no_baseline included), in poller-incidents (the api's
+        `POST /private/incidents` path went with release B, ingest phase
+        5). It registers every outcome at 0 at startup, so with the poller
+        on the sum is a real 0 when no snapshot lands; with it not scraped
+        there is no series and nothing fires. Both prefixes count (api_
+        today, store_ after the phase 5 rename, Q1).
         */}}
         - alert: DistantSignalIncidentSnapshotsMissing
           expr: |
@@ -2417,7 +2326,7 @@ spec:
             {{- end }}
           annotations:
             summary: "no incidents snapshot reached the database in {{ .window }}"
-            description: "Neither the api (http sink) nor poller-incidents (db sink) handled one. Check poller-incidents, its upstream and its sink."
+            description: "poller-incidents wrote none. Check poller-incidents, its upstream and its database writes."
             runbook_url: {{ printf "%s#distantsignalincidentsnapshotsmissing" $runbook | quote }}
         {{- end }}
         {{- end }}

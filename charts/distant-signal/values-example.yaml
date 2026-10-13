@@ -39,15 +39,14 @@ api:
     postLoginRedirectUrl: https://status.example.com/
   sessionTtlDays: 14
   # Internal-service OAuth2 (machine-to-machine, distinct from sso above):
-  # every real internal caller authenticates to /private/* with its own
-  # Authentik service-account credential -- see internalOauth below and
-  # each poller's own internalOauthUsername/Password.
+  # only the Distant-Signal-MCP's token is verified, to give it its own
+  # rate-limit budget (api.internalOauth.groups.mcp). Release B (ingest
+  # phase 5) removed the producers' /private routes and credentials.
   internalOauth:
     issuerUrl: https://sso.example.com/application/o/distant-signal-internal/
     clientId: distant-signal-internal
-  # resources: deliberately not overridden. values.yaml's 1Gi/3Gi default
-  # is what production needed to stop OOMKills from schedule publishes and
-  # line-population bursts; a smaller limit here would bring those back.
+  # resources: deliberately not overridden (values.yaml's 1Gi/3Gi default;
+  # see its comment).
 
 aggregator:
   image:
@@ -72,7 +71,8 @@ aggregator:
 # here). Set `redis.enabled: false` together with `redis.externalUrl` to
 # point at a managed instance instead.
 #
-# Since release A (2026-10-09) the stream producers (poller-ldbws,
+# Since release A (2026-10-09), and with no HTTP path left since release B,
+# the stream producers (poller-ldbws,
 # poller-tfl, poller-tocs, full-coverage-consumer, and the island-of-Ireland
 # pollers enabled below) XADD to their own ds:ingest:* streams and the
 # ingest-writer applies them, so every client connects as its own narrow
@@ -107,9 +107,9 @@ redis:
       pollerIrishRailLive: true
       pollerNirStations: true
 
-# The ingest-writer (release A's default sinks need it): it applies the
-# streams above and runs the train-domain loops that poller-stations' and
-# trust-consumer's `db` sinks rely on.
+# The ingest-writer (required since release B): it applies the streams
+# above and runs the train-domain loops that poller-stations' and
+# trust-consumer's direct writes rely on.
 ingestWriter:
   enabled: true
   image:
@@ -188,15 +188,6 @@ postgresql:
   # effective_cache_size and shm.sizeLimit down with it (see values.yaml's
   # `postgresql.config` comment). Any config change restarts Postgres.
 
-# Shared, non-secret OAuth2 client-credentials config every real caller
-# below (the 5 pollers here, plus trust-consumer/schedule-ingest/
-# schedule-reference if enabled) uses to obtain its own access token. Must
-# match api.internalOauth.clientId above.
-internalOauth:
-  tokenUrl: https://sso.example.com/application/o/token/
-  clientId: distant-signal-internal
-  scope: groups
-
 pollers:
   incidents:
     enabled: true
@@ -206,8 +197,6 @@ pollers:
     baseUrl: https://rdm.example.com/incidents
     apiKey: replace-me-rdm-incidents-key
     pollIntervalSecs: 300
-    internalOauthUsername: svc-poller-incidents
-    internalOauthPassword: replace-me-poller-incidents-app-password
   stations:
     enabled: true
     image:
@@ -216,8 +205,6 @@ pollers:
     baseUrl: https://rdm.example.com/json/1.0
     apiKey: replace-me-rdm-stations-key
     pollIntervalSecs: 86400
-    internalOauthUsername: svc-poller-stations
-    internalOauthPassword: replace-me-poller-stations-app-password
   tocs:
     enabled: true
     image:
@@ -226,8 +213,6 @@ pollers:
     baseUrl: https://rdm.example.com/tocs
     apiKey: replace-me-rdm-tocs-key
     pollIntervalSecs: 86400
-    internalOauthUsername: svc-poller-tocs
-    internalOauthPassword: replace-me-poller-tocs-app-password
   ldbws:
     enabled: true
     image:
@@ -237,8 +222,6 @@ pollers:
     apiKey: replace-me-rdm-ldbws-key
     numRows: 10
     pollIntervalSecs: 60
-    internalOauthUsername: svc-poller-ldbws
-    internalOauthPassword: replace-me-poller-ldbws-app-password
   tfl:
     enabled: true
     image:
@@ -249,8 +232,6 @@ pollers:
     # `values.yaml`'s default (`https://api.tfl.gov.uk`) is already correct.
     apiKey: replace-me-tfl-app-key
     pollIntervalSecs: 300
-    internalOauthUsername: svc-poller-tfl
-    internalOauthPassword: replace-me-poller-tfl-app-password
 
 # Exercises the poller-irish-rail-gtfs Deployment/PodMonitor/Secret
 # templates' enabled=true render path in CI (helm-lint job's
@@ -259,8 +240,6 @@ pollers:
 # No apiKey field, unlike the RDM pollers above: this feed needs none.
 pollerIrishRailGtfs:
   enabled: true
-  internalOauthUsername: svc-poller-irish-rail-gtfs
-  internalOauthPassword: replace-me-poller-irish-rail-gtfs-app-password
 
 # Exercises the poller-irish-rail-live Deployment/PodMonitor/Secret
 # templates' enabled=true render path in CI (helm-lint job's
@@ -269,13 +248,9 @@ pollerIrishRailGtfs:
 # No apiKey field, unlike the RDM pollers above: this feed needs none.
 pollerIrishRailLive:
   enabled: true
-  internalOauthUsername: svc-poller-irish-rail-live
-  internalOauthPassword: replace-me-poller-irish-rail-live-app-password
 
 pollerNirStations:
   enabled: true
-  internalOauthUsername: svc-poller-nir-stations
-  internalOauthPassword: replace-me-poller-nir-stations-app-password
 
 # RDM Train Movements (Kafka). movement-relay is on by default and is the
 # only Kafka client; with movementRelay.kafka.* left empty it uses these
@@ -310,8 +285,7 @@ ingress:
     enabled: true
     host: status.example.com
   api:
-    # Left off deliberately: enabling it publishes /private/*, which is
-    # guarded only by internal-service OAuth2 (require_internal_oauth).
+    # Left off deliberately: the frontend reaches the api in-cluster.
     enabled: false
     host: ""
   tls:

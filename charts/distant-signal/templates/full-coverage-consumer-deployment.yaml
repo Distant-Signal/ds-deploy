@@ -106,33 +106,9 @@ This container's own env entries. distant-signal.mergeEnv renders them
 with fullCoverageConsumer.extraEnv, which replaces an entry of the same name.
 */ -}}
 {{- define "distant-signal.fullCoverageConsumerEnv" }}
-            - name: SCHEDULE_LINE_POPULATION_URL
-              value: {{ printf "%s/private/schedule-line-population" (include "distant-signal.apiBaseUrl" .) | quote }}
-            - name: FULL_COVERAGE_STATS_URL
-              value: {{ printf "%s/private/full-coverage-stats" (include "distant-signal.apiBaseUrl" .) | quote }}
-            # The OTHER chain's own endpoint (per-station-full-coverage-stats
-            # plan) -- this crate is only ever an HTTP client of it.
-            - name: STATION_FULL_COVERAGE_STATS_URL
-              value: {{ printf "%s/private/station-full-coverage-samples" (include "distant-signal.apiBaseUrl" .) | quote }}
-            - name: STANOX_CRS_URL
-              value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
-            {{- with include "distant-signal.internalReadsEnv" (dict "root" . "role" "full_coverage_ro" "corpus" true "sources" (list "POPULATION_SOURCE" "STANOX_CRS_SOURCE")) | trim }}{{ . | nindent 12 }}{{- end }}
-            - name: INTERNAL_OAUTH_TOKEN_URL
-              value: {{ .Values.internalOauth.tokenUrl | quote }}
-            - name: INTERNAL_OAUTH_CLIENT_ID
-              value: {{ .Values.internalOauth.clientId | quote }}
-            - name: INTERNAL_OAUTH_SCOPE
-              value: {{ .Values.internalOauth.scope | quote }}
-            - name: INTERNAL_OAUTH_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.fullCoverageConsumerSecretName" . }}
-                  key: {{ include "distant-signal.fullCoverageConsumerOauthUsernameSecretKey" . }}
-            - name: INTERNAL_OAUTH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.fullCoverageConsumerSecretName" . }}
-                  key: {{ include "distant-signal.fullCoverageConsumerOauthPasswordSecretKey" . }}
+            # The line populations and STANOX/CRS come from Postgres (plan
+            # 4.3), as the full_coverage_ro role.
+            {{- with include "distant-signal.internalReadsEnv" (dict "root" . "role" "full_coverage_ro" "corpus" true) | trim }}{{ . | nindent 12 }}{{- end }}
             - name: POPULATION_RELOAD_SECS
               value: {{ .Values.fullCoverageConsumer.populationReloadSecs | quote }}
             - name: STANOX_CRS_RELOAD_SECS
@@ -156,12 +132,9 @@ with fullCoverageConsumer.extraEnv, which replaces an entry of the same name.
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "fullCoverageConsumer" "user" "full-coverage-consumer") }}
-            {{- with include "distant-signal.fullCoverageConsumerIngestSink" . }}
-            # fullCoverageConsumer.ingest.sink (ingest plan 3a.8): XADD each
-            # stats write to ds:ingest:full-coverage. Not rendered for http.
-            - name: INGEST_SINK
-              value: {{ . | quote }}
-            {{- end }}
+            {{- /* Ingest plan 3a.8: each stats write is XADDed to
+                 ds:ingest:full-coverage as this user; the guards. */}}
+            {{- include "distant-signal.fullCoverageConsumerStream" . }}
             - name: REDIS_AUTOCLAIM_MIN_IDLE_SECS
               value: {{ .Values.fullCoverageConsumer.redisAutoclaimMinIdleSecs | quote }}
             - name: REDIS_GAP_CHECK_SECS
@@ -169,8 +142,6 @@ with fullCoverageConsumer.extraEnv, which replaces an entry of the same name.
             # Windowed stats: off unless windowedStats.enabled.
             - name: FULL_COVERAGE_WINDOWED_STATS
               value: {{ .Values.fullCoverageConsumer.windowedStats.enabled | quote }}
-            - name: FULL_COVERAGE_WINDOW_STATS_URL
-              value: {{ printf "%s/private/full-coverage-window-stats" (include "distant-signal.apiBaseUrl" .) | quote }}
             - name: FULL_COVERAGE_RECENT_WINDOW_MINUTES
               value: {{ .Values.fullCoverageConsumer.windowedStats.recentWindowMinutes | quote }}
             - name: FULL_COVERAGE_GRACE_MINUTES

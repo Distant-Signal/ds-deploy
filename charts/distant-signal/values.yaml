@@ -51,37 +51,16 @@ serviceAccount:
 #                               generated, and PRESERVED across `helm upgrade`
 #                               by reading the live Secret back (see README).
 #
-# The shared internal-token header this block used to hold is retired --
-# every internal caller now authenticates to api's /private/* routes via
-# its own Authentik service-account OAuth2 credential instead, see
-# internalOauth below. This top-level `secrets` block is kept (rather than
-# removed outright) as the home for any future chart-wide secret that isn't
-# tied to one specific service.
+# The shared internal-token header this block used to hold is retired. This
+# top-level `secrets` block is kept (rather than removed outright) as the
+# home for any future chart-wide secret that isn't tied to one specific
+# service.
 secrets: {}
 
-# ---------------------------------------------------------------------------
-# internalOauth -- shared, non-secret OAuth2 client-credentials config every
-# real caller of api's /private/* routes uses to obtain its own access
-# token (docs/superpowers/specs/2026-09-02-internal-service-oauth2-design.md
-# Decision 6). One shared Authentik OAuth2 Provider/Application services
-# all 8 real callers (Decision 1). Defining that Provider, its 8 Service
-# Accounts, and their groups is explicitly OUT OF SCOPE for this chart
-# (operator/deployment-time work) -- these values only configure how this
-# chart's own Deployments REACH whatever an operator has already
-# provisioned.
-# ---------------------------------------------------------------------------
-internalOauth:
-  # -- Authentik's client-credentials token endpoint, e.g.
-  # https://sso.example.com/application/o/token/. Required whenever any
-  # real caller is enabled.
-  tokenUrl: ""
-  # -- The shared OAuth2 Provider's client_id -- same value as
-  # api.internalOauth.clientId below (the expected `aud`). Required.
-  clientId: ""
-  # -- Scope requested on every client-credentials POST -- must match
-  # whatever scope mapping the operator attached to the provider to
-  # surface the `groups` claim (Decision 3).
-  scope: groups
+# (The top-level `internalOauth` block -- the producers' client-credentials
+# token URL, client_id and scope -- went with release B (ingest phase 5),
+# which removed the api's /private routes and every producer's HTTP path.
+# api.internalOauth below remains, for the Distant-Signal-MCP only.)
 
 # ---------------------------------------------------------------------------
 # postgres
@@ -345,8 +324,7 @@ postgresql:
         # created with the others whenever `enabled` is on, unused until
         # then.
         # Default true since release A (2026-10-09): it takes effect only
-        # while the component uses the role (deployed and, for a producer,
-        # on its `db` sink), and then needs `perService.enabled`,
+        # while the component is deployed, and then needs `perService.enabled`,
         # `postgresql.roles.enabled` and `setupJob.enabled`; the render
         # fails otherwise rather than fall back to the app role.
         connect: true
@@ -361,14 +339,12 @@ postgresql:
         # loop-lock session (spec §6.6: pool 6, limit 7).
         connectionLimit: ""
       schedule_ingest:
-        # -- Connect schedule-ingest (`scheduleFeed.ingest.sink=db`, which
-        # must be set) as `distant_signal_schedule_ingest` (plan 2d.2): a
+        # -- Connect schedule-ingest (`scheduleFeed`) as `distant_signal_schedule_ingest` (plan 2d.2): a
         # narrow role, not a member of `app`, holding only the CORPUS and
         # feed-marker grants (files/db-grants.yaml). Created with the others
         # whenever `enabled` is on, unused until then.
         # Default true since release A (2026-10-09): it takes effect only
-        # while the component uses the role (deployed and, for a producer,
-        # on its `db` sink), and then needs `perService.enabled`,
+        # while the component is deployed, and then needs `perService.enabled`,
         # `postgresql.roles.enabled` and `setupJob.enabled`; the render
         # fails otherwise rather than fall back to the app role.
         connect: true
@@ -383,15 +359,13 @@ postgresql:
         # §6.6: pool 1, limit 2).
         connectionLimit: ""
       schedule_reference:
-        # -- Connect schedule-reference's `db` sink
-        # (`scheduleFeed.reference.ingest.sink: db`, which this needs) as
+        # -- Connect schedule-reference (`scheduleFeed`) as
         # `distant_signal_schedule_reference` (plan 2a). That role is
         # narrow (files/db-grants.yaml): not a member of the app role,
         # exactly the spec §6.4 grants. Created with the others whenever
         # `enabled` is on, unused until then.
         # Default true since release A (2026-10-09): it takes effect only
-        # while the component uses the role (deployed and, for a producer,
-        # on its `db` sink), and then needs `perService.enabled`,
+        # while the component is deployed, and then needs `perService.enabled`,
         # `postgresql.roles.enabled` and `setupJob.enabled`; the render
         # fails otherwise rather than fall back to the app role.
         connect: true
@@ -406,14 +380,12 @@ postgresql:
         # 1 (spec §6.6: pool 3, limit 4).
         connectionLimit: ""
       stations:
-        # -- Connect poller-stations (`pollers.stations`, which must be
-        # enabled with `ingest.sink: db`) as `distant_signal_stations` (plan
+        # -- Connect poller-stations (`pollers.stations`) as `distant_signal_stations` (plan
         # 2b.3). The role is narrow, not a member of `app`: SELECT, INSERT
         # and UPDATE on `stations` and `ingest_freshness` only. It is created
         # with the others whenever `enabled` is on, unused until then.
         # Default true since release A (2026-10-09): it takes effect only
-        # while the component uses the role (deployed and, for a producer,
-        # on its `db` sink), and then needs `perService.enabled`,
+        # while the component is deployed, and then needs `perService.enabled`,
         # `postgresql.roles.enabled` and `setupJob.enabled`; the render
         # fails otherwise rather than fall back to the app role.
         connect: true
@@ -427,14 +399,12 @@ postgresql:
         # (`pollers.stations.ingest.database.maxConnections`, 1) plus 1.
         connectionLimit: ""
       incidents:
-        # -- Connect poller-incidents' DB sink as `distant_signal_incidents`
-        # (ingest plan 2c.3; a `narrow` role: exactly its grants in
-        # files/db-grants.yaml, no app membership). Needs
-        # `pollers.incidents.ingest.sink: db`. Off with that sink, the
-        # render fails (security review H2).
+        # -- Connect poller-incidents as `distant_signal_incidents` (ingest
+        # plan 2c.3; a `narrow` role: exactly its grants in
+        # files/db-grants.yaml, no app membership). Off with the poller
+        # enabled, the render fails (security review H2).
         # Default true since release A (2026-10-09): it takes effect only
-        # while the component uses the role (deployed and, for a producer,
-        # on its `db` sink), and then needs `perService.enabled`,
+        # while the component is deployed, and then needs `perService.enabled`,
         # `postgresql.roles.enabled` and `setupJob.enabled`; the render
         # fails otherwise rather than fall back to the app role.
         connect: true
@@ -449,14 +419,12 @@ postgresql:
         # (spec §6.6: 3).
         connectionLimit: ""
       trust_backlog:
-        # -- Connect trust-backlog-consumer (`trustBacklogConsumer.ingest.sink:
-        # db` required) as `distant_signal_trust_backlog` (plan 3b.2). A
+        # -- Connect trust-backlog-consumer as `distant_signal_trust_backlog` (plan 3b.2). A
         # narrow role, not a member of `app`: the backlog, shared-movement
         # and reasons writes and the STANOX/CRS read only. Created with the
         # others whenever `enabled` is on, unused until then.
         # Default true since release A (2026-10-09): it takes effect only
-        # while the component uses the role (deployed and, for a producer,
-        # on its `db` sink), and then needs `perService.enabled`,
+        # while the component is deployed, and then needs `perService.enabled`,
         # `postgresql.roles.enabled` and `setupJob.enabled`; the render
         # fails otherwise rather than fall back to the app role.
         connect: true
@@ -474,16 +442,13 @@ postgresql:
         # docs/ingest-phase5-runbook.md "Rollout deadlock").
         connectionLimit: ""
       trust_consumer:
-        # -- Connect trust-consumer (`trustConsumer.ingest.sink: db` or
-        # `trustConsumer.internalReads.source: db` required) as
-        # `distant_signal_trust_consumer` (plans 3b.4, D1, and 4.4). A
+        # -- Connect trust-consumer as `distant_signal_trust_consumer` (plans 3b.4, D1, and 4.4). A
         # narrow role, not a member of `app`: the train-event,
         # forward-signal and outbox writes, SELECT only on
         # train_subscriptions, and the phase 4 reads. Created with the others whenever
         # `enabled` is on, unused until then.
         # Default true since release A (2026-10-09): it takes effect only
-        # while the component uses the role (deployed and, for a producer,
-        # on its `db` sink), and then needs `perService.enabled`,
+        # while the component is deployed, and then needs `perService.enabled`,
         # `postgresql.roles.enabled` and `setupJob.enabled`; the render
         # fails otherwise rather than fall back to the app role.
         connect: true
@@ -500,15 +465,13 @@ postgresql:
         # `trustConsumer.updateStrategy` surge) plus 1.
         connectionLimit: ""
       full_coverage_ro:
-        # -- Connect full-coverage-consumer's direct reads
-        # (`fullCoverageConsumer.internalReads.source: db` required) as
+        # -- Connect full-coverage-consumer's direct reads as
         # `distant_signal_full_coverage_ro` (ingest plan 4.7). A narrow,
         # read-only role, not a member of `app`: SELECT on the line
         # populations and STANOX/CRS only. Created with the others whenever
         # `enabled` is on, unused until then.
         # Default true since release A (2026-10-09): it takes effect only
-        # while the component uses the role (deployed and on
-        # `internalReads.source: db`), and then needs `perService.enabled`,
+        # while the component is deployed, and then needs `perService.enabled`,
         # `postgresql.roles.enabled` and `setupJob.enabled`; the render
         # fails otherwise rather than fall back to the app role.
         connect: true
@@ -525,16 +488,14 @@ postgresql:
         # (spec §6.6: 3).
         connectionLimit: ""
       ldbws_ro:
-        # -- Connect poller-ldbws's direct sample-station read
-        # (`pollers.ldbws.internalReads.source: db` required) as
+        # -- Connect poller-ldbws's direct sample-station read as
         # `distant_signal_ldbws_ro` (ingest plan 4.7). A narrow, read-only
         # role, not a member of `app`: SELECT on the views
         # `ingest_sample_station_pins` and `ingest_custom_line_stations`
         # only, never the personal tables behind them. Created with the
         # others whenever `enabled` is on, unused until then.
         # Default true since release A (2026-10-09): it takes effect only
-        # while the component uses the role (deployed and on
-        # `internalReads.source: db`), and then needs `perService.enabled`,
+        # while the component is deployed, and then needs `perService.enabled`,
         # `postgresql.roles.enabled` and `setupJob.enabled`; the render
         # fails otherwise rather than fall back to the app role.
         connect: true
@@ -1031,8 +992,7 @@ databasePool:
 # Enabling a poller without setting its `baseUrl` aborts rendering with an
 # explicit message rather than deploying a pod that cannot work.
 #
-# `baseUrlEnvVar` and `ingestPath` are part of each poller's contract with
-# its binary (see crates/poller-*/src/config.rs) -- change them only if that
+# `baseUrlEnvVar` is part of each poller's contract with its binary (see crates/poller-*/src/config.rs) -- change them only if that
 # code changes.
 pollers:
   incidents:
@@ -1048,8 +1008,6 @@ pollers:
     baseUrl: ""
     # -- Env var this binary reads the base URL from. Do not change.
     baseUrlEnvVar: RDM_INCIDENTS_BASE_URL
-    # -- Path on the api Service this poller POSTs its results to.
-    ingestPath: /private/incidents
     # -- RSPS5050 P-03-00 Rev A section 10: "Recommend every 5 minutes."
     pollIntervalSecs: 300
     # -- RDM API key, sent as the `x-apikey` header. Rendered into the chart
@@ -1057,37 +1015,24 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-incidents-api-key
-    # -- This poller's own Authentik service-account credential -- see
-    # top-level internalOauth for the shared, non-secret token URL/
-    # client_id/scope. Never auto-generated (Authentik, an external
-    # system, assigns these) -- same posture as apiKey above, not
-    # secrets.internalToken's old auto-generate posture.
-    internalOauthUsername: ""
-    internalOauthPassword: ""
-    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-incidents
-    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-incidents
-    # Ingest architecture phase 2c (docs/superpowers/plans/2026-10-06-ingest-architecture-plan.md).
+    # Ingest architecture phase 2c (docs/superpowers/plans/2026-10-06-ingest-architecture-plan.md):
+    # each snapshot is written to Postgres directly and incident-text-changed
+    # is XADDed from the poller. Renders DATABASE_URL (the incidents role;
+    # `postgresql.roles.perService.incidents.connect` is required, the
+    # render fails without it: security review H2), REDIS_URL (the
+    # `poller-incidents` ACL user with `redis.acl.clients.pollerIncidents`),
+    # and Postgres and Redis egress and admission. Release B (ingest phase
+    # 5) removed the `sink: http` path (`/private/incidents`).
     ingest:
-      # -- `db` (the default since release A, 2026-10-09): write each
-      # snapshot to Postgres directly (INGEST_SINK=db) and XADD
-      # incident-text-changed from the poller: renders DATABASE_URL (the
-      # incidents role; `postgresql.roles.perService.incidents.connect`
-      # is required, the render fails without it: security review H2),
-      # REDIS_URL (the `poller-incidents` ACL user with
-      # `redis.acl.clients.pollerIncidents`), and Postgres and Redis
-      # egress and admission. `http`: POST each snapshot to the api's
-      # `/private/incidents` (the rollback until phase 5 deletes it).
-      sink: db
-      # -- INCIDENTS_ROW_HEARTBEAT, for BOTH writers (the api's
-      # `POST /private/incidents` and the `db` sink), so they cannot
-      # disagree. `true`: every listed incident's `fetched_at` is bumped on
-      # every poll (today; about 600k row updates a day). `false` (plan
-      # 2c.6): only changed rows are written, and readers show the feed's
-      # snapshot time. Rendered only when false. Rollback: `true`.
+      # -- INCIDENTS_ROW_HEARTBEAT. `true`: every listed incident's
+      # `fetched_at` is bumped on every poll (about 600k row updates a
+      # day). `false` (plan 2c.6): only changed rows are written, and
+      # readers show the feed's snapshot time. Rendered only when false.
+      # Rollback: `true`.
       rowHeartbeat: true
       database:
-        # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; the
-        # crate default, spec §6.6: pool 2, role limit 3).
+        # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; the crate
+        # default, spec §6.6: pool 2, role limit 3).
         maxConnections: 2
     logLevel: info
     extraEnv: []
@@ -1120,38 +1065,23 @@ pollers:
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_STATIONS_BASE_URL
-    ingestPath: /private/stations
-    # Ingest architecture plan 2b: where the parsed feed goes.
+    # Ingest architecture plan 2b: the parsed feed is written to Postgres
+    # directly and the startup cursor read from `ingest_freshness`, as the
+    # narrow `distant_signal_stations` only
+    # (`postgresql.roles.perService.stations.connect` is required; the
+    # render fails without it, security review H2). Needs
+    # `ingestWriter.enabled` and `ingestWriter.loops.enabled`: the writer's
+    # 10-minute CORPUS crosswalk loop rebuilds the crosswalk (plan 2b.2).
     ingest:
-      # -- `db` (the default since release A, 2026-10-09;
-      # INGEST_SINK=db): write Postgres directly and read the startup
-      # cursor from `ingest_freshness`, as the narrow
-      # `distant_signal_stations` only (`postgresql.roles.perService.stations.connect`
-      # is required; the render fails without it, security review H2).
-      # Adds Postgres egress and admission to the
-      # NetworkPolicies. `db` needs `ingestWriter.enabled` and
-      # `ingestWriter.loops.enabled`: the writer's 10-minute CORPUS crosswalk
-      # loop replaces the rebuild the api's POST triggers (plan 2b.2).
-      # `http`: POST it to `ingestPath` (the rollback until phase 5).
-      sink: db
       database:
-        # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
-        # §6.6: one daily transaction, pool 1, role limit 2).
+        # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; spec §6.6: one
+        # daily transaction, pool 1, role limit 2).
         maxConnections: 1
     # -- RSPS5050 P-03-00 Rev A section 6: once every 24 hours, overnight.
     pollIntervalSecs: 86400
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-stations-api-key
-    # -- This poller's own Authentik service-account credential -- see
-    # top-level internalOauth for the shared, non-secret token URL/
-    # client_id/scope. Never auto-generated (Authentik, an external
-    # system, assigns these) -- same posture as apiKey above, not
-    # secrets.internalToken's old auto-generate posture.
-    internalOauthUsername: ""
-    internalOauthPassword: ""
-    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-stations
-    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-stations
     logLevel: info
     extraEnv: []
     # Holds the whole ~2,600-row station catalogue in memory to build one
@@ -1198,24 +1128,13 @@ pollers:
     # -- tfl only. TfL sends its subscription key in its own header, so the
     # binary reads TFL_APP_KEY where the RDM pollers read RDM_API_KEY.
     apiKeyEnvVar: TFL_APP_KEY
-    ingestPath: /private/tfl-line-status
-    # Ingest architecture plan 3c.2: where each snapshot goes.
-    ingest:
-      # -- `http` (today's behaviour): POST it to `ingestPath`.
-      # `http+shadow`: that, plus a copy XADDed to `ds:ingest:tfl` for the
-      # ingest-writer's `shadow` mode (`ingestWriter.streams.tfl:
-      # shadow`); the POST stays authoritative and the copy never fails a
-      # cycle. `stream`: XADD only, and the startup cursor is the stream's
-      # newest `tfl-line-status/1` entry; the ingest-writer applies it
-      # (`ingestWriter.streams.tfl: apply`). Both stream sinks add
-      # REDIS_URL (as the `poller-tfl` ACL user with
-      # `redis.acl.clients.pollerTfl`) and Redis egress and admission.
-      # Deploy the notifier's `lineHistoryMaxAgeSeconds` first (plan
-      # 3c.4): applied late, a snapshot's history rows carry their fetch
-      # time. `stream` is the default since release A (2026-10-09), with
-      # `ingestWriter.streams.tfl: apply`; `http` is the rollback until
-      # phase 5.
-      sink: stream
+    # Ingest architecture plan 3c.2: each snapshot is XADDed to
+    # `ds:ingest:tfl` (the startup cursor is the stream's newest
+    # `tfl-line-status/1` entry) and the ingest-writer applies it
+    # (`ingestWriter.streams.tfl: apply` is required). Renders REDIS_URL
+    # (the `poller-tfl` ACL user with `redis.acl.clients.pollerTfl`) and
+    # Redis egress and admission. Release B (ingest phase 5) removed the
+    # `http` and `http+shadow` sinks.
     # -- TfL publishes no recommended cadence for the line-status endpoint,
     # and offers no push or conditional requests. 300s mirrors incidents.
     pollIntervalSecs: 300
@@ -1226,15 +1145,6 @@ pollers:
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-tfl-api-key
-    # -- This poller's own Authentik service-account credential -- see
-    # top-level internalOauth for the shared, non-secret token URL/
-    # client_id/scope. Never auto-generated (Authentik, an external
-    # system, assigns these) -- same posture as apiKey above, not
-    # secrets.internalToken's old auto-generate posture.
-    internalOauthUsername: ""
-    internalOauthPassword: ""
-    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-tfl
-    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-tfl
     logLevel: info
     extraEnv:
       - name: TFL_MODES
@@ -1268,36 +1178,18 @@ pollers:
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_TOCS_BASE_URL
-    ingestPath: /private/tocs
-    # Ingest architecture plan 3c.2: where each snapshot goes.
-    ingest:
-      # -- `http` (today's behaviour): POST it to `ingestPath`.
-      # `http+shadow`: that, plus a copy XADDed to `ds:ingest:reference` for the
-      # ingest-writer's `shadow` mode (`ingestWriter.streams.reference:
-      # shadow`); the POST stays authoritative and the copy never fails a
-      # cycle. `stream`: XADD only, and the startup cursor is the stream's
-      # newest `tocs/1` entry; the ingest-writer applies it
-      # (`ingestWriter.streams.reference: apply`). Both stream sinks add
-      # REDIS_URL (as the `poller-tocs` ACL user with
-      # `redis.acl.clients.pollerTocs`) and Redis egress and admission.
-      # `stream` is the default since release A (2026-10-09), with
-      # `ingestWriter.streams.reference: apply`; `http` is the rollback
-      # until phase 5.
-      sink: stream
+    # Ingest architecture plan 3c.2: each snapshot is XADDed to
+    # `ds:ingest:reference` (the startup cursor is the stream's newest
+    # `tocs/1` entry) and the ingest-writer applies it
+    # (`ingestWriter.streams.reference: apply` is required). Renders
+    # REDIS_URL (the `poller-tocs` ACL user with
+    # `redis.acl.clients.pollerTocs`) and Redis egress and admission.
+    # Release B (ingest phase 5) removed the `http` and `http+shadow` sinks.
     # -- RSPS5050 P-03-00 Rev A section 3: at least once every 24 hours.
     pollIntervalSecs: 86400
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-tocs-api-key
-    # -- This poller's own Authentik service-account credential -- see
-    # top-level internalOauth for the shared, non-secret token URL/
-    # client_id/scope. Never auto-generated (Authentik, an external
-    # system, assigns these) -- same posture as apiKey above, not
-    # secrets.internalToken's old auto-generate posture.
-    internalOauthUsername: ""
-    internalOauthPassword: ""
-    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-tocs
-    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-tocs
     logLevel: info
     extraEnv: []
     # The smallest poller in the chart: a short operator list per tick.
@@ -1331,23 +1223,12 @@ pollers:
     # the binary appends /GetDepBoardWithDetails/{crs} itself.
     baseUrl: ""
     baseUrlEnvVar: LDBWS_BASE_URL
-    ingestPath: /private/station-samples
-    # Ingest architecture plan 3a.7: where the samples go.
-    ingest:
-      # -- `http` (today): POST each cycle to `ingestPath`. `http+shadow`:
-      # the same POST, plus a copy XADDed to `ds:ingest:station-samples`
-      # for `ingestWriter.streams.station-samples: shadow`. `stream`: XADD
-      # only (with `ingestWriter.streams.station-samples: apply`, in the
-      # same values change). Either stream sink renders INGEST_SINK and
-      # REDIS_URL (the `poller-ldbws` ACL user with
-      # `redis.acl.clients.pollerLdbws`) and the Redis egress and
-      # admission. `stream` is the default since release A (2026-10-09);
-      # rollback: `http`.
-      sink: stream
-    # -- ldbws only: the api endpoint listing which stations to sample. This
-    # is a SECOND api URL, separate from ingestPath -- see
-    # crates/poller-ldbws/src/config.rs.
-    sampleStationsPath: /private/sample-stations
+    # Ingest architecture plan 3a.7: each cycle's samples are XADDed to
+    # `ds:ingest:station-samples` and the ingest-writer applies them
+    # (`ingestWriter.streams.station-samples: apply` is required). Renders
+    # REDIS_URL (the `poller-ldbws` ACL user with
+    # `redis.acl.clients.pollerLdbws`) and the Redis egress and admission.
+    # Release B (ingest phase 5) removed the `http` and `http+shadow` sinks.
     # -- ldbws only: LDBWS `numRows` query parameter (upstream default 10).
     numRows: 10
     # -- DESIGN.md section 4 targets 30-60s; 60 is the conservative end.
@@ -1370,36 +1251,21 @@ pollers:
     # line-fairly with the most-pinned lines first. 0 = no cap
     # (SAMPLE_MAX_STATIONS).
     sampleMaxStations: 0
-    # Ingest architecture plan 4.5/4.7: where the station list comes from.
+    # Ingest architecture plan 4.5/4.7: the station list is computed by the
+    # poller from the line catalogue in its image and the views
+    # `ingest_custom_line_stations` and `ingest_sample_station_pins`, as the
+    # read-only `distant_signal_ldbws_ro` only
+    # (`postgresql.roles.perService.ldbws_ro.connect` is required; the
+    # render fails without it, security review H2), the two knobs above
+    # included. Release B (ingest phase 5) removed the `source: http` path.
     internalReads:
-      # -- ldbws only. `http` (today's behaviour): api's
-      # `sampleStationsPath`. `db` (SAMPLE_STATIONS_SOURCE=db): computed by
-      # the poller from the line catalogue in its image and the views
-      # `ingest_custom_line_stations` and `ingest_sample_station_pins`, as
-      # the read-only `distant_signal_ldbws_ro` only
-      # (`postgresql.roles.perService.ldbws_ro.connect` is required; the
-      # render fails without it, security review H2); the same list as the
-      # api's, the two knobs above included. Adds Postgres egress and admission to
-      # the NetworkPolicies and the pool to the connection budgets. `db` is
-      # the default since release A (2026-10-09); `http` is the rollback
-      # until phase 5.
-      source: db
       database:
-        # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
-        # §6.6: pool 1, role limit 2).
+        # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; spec §6.6: pool
+        # 1, role limit 2).
         maxConnections: 1
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-ldbws-api-key
-    # -- This poller's own Authentik service-account credential -- see
-    # top-level internalOauth for the shared, non-secret token URL/
-    # client_id/scope. Never auto-generated (Authentik, an external
-    # system, assigns these) -- same posture as apiKey above, not
-    # secrets.internalToken's old auto-generate posture.
-    internalOauthUsername: ""
-    internalOauthPassword: ""
-    existingSecretInternalOauthUsernameKey: internal-oauth-username-poller-ldbws
-    existingSecretInternalOauthPasswordKey: internal-oauth-password-poller-ldbws
     logLevel: info
     extraEnv: []
     # Parses Darwin LDBWS SOAP responses, which are verbose XML and the
@@ -1487,8 +1353,7 @@ api:
   # fits in terminationGracePeriodSeconds.
   shutdown:
     # -- `API_SHUTDOWN_DRAIN_SECS`: how long in-flight requests get after
-    # SIGTERM. A /private publish chunk still running then is cut off and
-    # retried by its producer, as before.
+    # SIGTERM.
     drainSecs: 20
     # -- The preStop `sleep` (seconds) before SIGTERM. 0 drops the hook.
     preStopSleepSecs: 5
@@ -1603,81 +1468,33 @@ api:
   # cannot be warned first, and enabling it is an operator decision the privacy notice
   # must state. The audit suggests 730 (24 months).
   inactiveAccountRetentionDays: 0
-  # Internal-service OAuth2 verification -- see
+  # Internal-service OAuth2 verification, used ONLY to recognise the
+  # Distant-Signal-MCP since release B (ingest phase 5) removed the api's
+  # /private routes and their per-producer groups. The MCP (a separate
+  # release in its own namespace) calls the api's PUBLIC routes in-cluster
+  # with a client-credentials token; a verified token in groups.mcp moves
+  # its rate-limited requests onto api.rateLimit.mcp. See
   # docs/superpowers/specs/2026-09-02-internal-service-oauth2-design.md.
-  # REQUIRED -- crates/api's clap config declares issuerUrl/clientId/13
-  # group fields with no default for the first two, so a pod without them
-  # exits immediately, same fail-fast posture as sso.* above.
-  #
-  # The group fields DO have defaults, which is precisely why a missing one is
-  # dangerous rather than fail-fast: api silently falls back to the crate's
-  # own suggested name, and if the operator's real Authentik group differs,
-  # that caller's /private/* POSTs 403 forever. The count above must match
-  # `groups:` below one-for-one -- enforced by
-  # crates/api/src/data/config.rs's `chart_env_wiring_tests` module, which
-  # fails the build if this template stops setting any declared
-  # INTERNAL_OAUTH_GROUP_* var.
+  # issuerUrl and clientId are REQUIRED: crates/api's clap config gives
+  # them no default, so a pod without them exits immediately, same
+  # fail-fast posture as sso.* above.
   internalOauth:
     # -- OIDC issuer base URL for the internal-service OAuth2 provider.
     # JWKS is discovered from this URL's .well-known/openid-configuration,
     # same mechanism as sso.issuerUrl. May be the same Authentik instance
     # as sso (a different Application/Provider) or a different one.
     issuerUrl: ""
-    # -- Expected `aud` claim on a verified token -- SAME value as the
-    # top-level internalOauth.clientId above.
+    # -- Expected `aud` claim on a verified token (the provider's
+    # client_id). Must differ from sso.clientId; api refuses to start
+    # otherwise.
     clientId: ""
-    # -- Required Authentik group name per real caller (Decision 3). Not
-    # secret. Suggested defaults only.
     groups:
-      incidents: svc-poller-incidents
-      stations: svc-poller-stations
-      tocs: svc-poller-tocs
-      ldbws: svc-poller-ldbws
-      tfl: svc-poller-tfl
-      trustConsumer: svc-trust-consumer
-      scheduleIngest: svc-schedule-ingest
-      scheduleReference: svc-schedule-reference
-      fullCoverage: svc-full-coverage-consumer
-      # Gates POST /private/trust-event-backlog -- trust-backlog-consumer's
-      # own service-account group. MUST equal
-      # trustBacklogConsumer.internalOauthUsername's own Authentik group
-      # below, or every POST that workload makes is rejected 403 forever and
-      # its Redis backlog grows without bound, with nothing but the
-      # consumer's own error log as evidence. (Declared as
-      # `internal_oauth_group_trust_backlog` in crates/api/src/data/config.rs
-      # since 2026-09-05 but only wired into api-deployment.yaml here on
-      # 2026-09-25 -- which is exactly the drift
-      # crates/api/src/data/config.rs's `chart_env_wiring_tests` module now
-      # makes impossible to reintroduce.)
-      trustBacklog: svc-trust-backlog-consumer
-      # Gates POST /private/corpus-locations (Network Rail CORPUS loads,
-      # scheduleFeed.corpus below). The caller is schedule-ingest's OWN
-      # service account (scheduleFeed.ingest.internalOauthUsername), which
-      # must be added to this group in Authentik in addition to
-      # scheduleIngest's group before scheduleFeed.corpus.enabled is set,
-      # or every CORPUS load is rejected 403.
-      corpus: svc-corpus-ingest
-      # -- The Distant-Signal-MCP's service-account group (a separate
-      # release in its own namespace that calls api's PUBLIC routes
-      # in-cluster with a client-credentials token from the same provider
-      # as the /private callers). Unlike every group above it opens no
-      # /private/* route: a verified token in this group only moves the
-      # MCP's rate-limited public requests onto their own finite budget,
+      # -- The Distant-Signal-MCP's service-account group. A verified token
+      # in this group opens no extra route: it only moves the MCP's
+      # rate-limited public requests onto their own finite budget,
       # api.rateLimit.mcp below, keyed on the caller (one bucket, not per
-      # IP). Empty turns the feature off (any bearer is then ignored). Must
-      # differ from every group above; api refuses to start otherwise.
+      # IP). Empty turns the feature off (any bearer is then ignored).
       mcp: srv-ds-mcp
-  # -- Ingest phase 5, step 5.1 (docs/ingest-phase5-runbook.md;
-  # API_PRIVATE_ROUTES). On by default: the /private/* ingest routes are
-  # served as before. false retires them for the phase 5 soak: every
-  # /private/* request answers 404 and is counted in
-  # distant_signal_api_private_route_retired_total{route,method}, and the
-  # DistantSignalApiPrivateRouteRetiredCalled alert fires when a known
-  # route's count rises (route="other" is counted, not alerted).
-  # Set false only once every producer runs on its db/stream sink (the
-  # runbook's entry criteria); rolling back is setting it true again.
-  privateRoutes:
-    enabled: true
   # -- Network Rail CORPUS as a FALLBACK for the timetable-derived
   # TIPLOC/STANOX->CRS lookups (CORPUS_FALLBACK_ENABLED; see
   # crates/api/src/data/corpus_crosswalk.rs). OFF by default. When on, a
@@ -1722,8 +1539,7 @@ api:
   # Authentik since 2026-09-29.
   oidcStoredGroupsExtra: ""
   # -- API-2: server-side time limits. A request still running after
-  # requestTimeoutSecs (public routes) or privateRequestTimeoutSecs (the
-  # /private ingest routes, which take up to 100 MB bodies) gets a 408; an
+  # requestTimeoutSecs gets a 408; an
   # HTTP/1 client that hasn't sent its full headers within
   # headerReadTimeoutSecs is disconnected. unavailableRetryAfterSecs is the
   # Retry-After on a 503 (1-3600): a route that cannot reach the database
@@ -1731,11 +1547,10 @@ api:
   # a 500 (docs/api-changelog.md, 2026-10-06).
   timeouts:
     requestTimeoutSecs: 30
-    privateRequestTimeoutSecs: 300
     headerReadTimeoutSecs: 10
     unavailableRetryAfterSecs: 30
   # -- Per-client-IP rate limits (API-5, TRIPS-1; crates/api/src/rate_limit.rs).
-  # 429 with Retry-After when exceeded; /private/* is never limited. The key
+  # 429 with Retry-After when exceeded. The key
   # is the X-Real-IP header the frontend proxy sets from CF-Connecting-IP
   # when trustXRealIp is true (safe only while the api Service is not
   # exposed directly: keep ingress.api.enabled off), else the socket peer.
@@ -1986,12 +1801,12 @@ api:
     # at least this size is its own mmap and goes straight back to the OS on
     # free. 131072 is glibc's own starting value.
     mmapThreshold: "131072"
-  # The biggest single driver here is NOT steady-state serving, it is
-  # the /private/* schedule publishes: schedule-reference POSTs a
-  # whole-network day in one body (~30MB of JSON, ~60MB worst case per
-  # docs/superpowers/specs/2026-09-07-train-listing-destination-search-sizing-design.md
-  # Task 1), and api buffers and deserialises that. Plus the line
-  # catalogue, the sqlx pool, and one arena per concurrent request.
+  # The biggest single driver used to be the /private/* schedule publishes
+  # (schedule-reference POSTed a whole-network day in one ~30-60MB body),
+  # which release B (ingest phase 5) removed with the rest of /private:
+  # schedule-reference writes Postgres itself. What is left is the line
+  # catalogue, the trip-planner graph cache, the sqlx pool, and one arena
+  # per concurrent request.
   #
   # 1Gi/3Gi are DELIBERATELY GENEROUS, stopgap-derived sizes: they are the
   # production overrides that kept the pod from being OOMKilled (at the
@@ -2160,24 +1975,22 @@ ingestWriter:
     # `api.scheduleEnrichmentGraceMinutes`), so the two cannot drift.
     enabled: false
   # -- Each Redis ingest stream's mode (INGEST_WRITER_STREAMS; spec §10,
-  # plan 3a.3): `off` (not read), `shadow` (decode, validate, ack, write
-  # nothing) or `apply`. Any stream not `off` gives the writer REDIS_URL,
-  # its Redis credentials (`redis.acl.clients.ingestWriter`) and the
-  # NetworkPolicy paths to Redis. The writer refuses to start a stream it
-  # has no handlers for yet (station-samples and full-coverage arrive in
-  # 3a.6, the rest in 3c). Rollout per producer: writer `shadow`, producer
-  # `http+shadow`, then `apply` with producer `stream` (spec §13.1).
-  # Render guards (security review, 2026-10-08): any stream not `off` needs
+  # plan 3a.3): `off` (not read) or `apply`. Release B (ingest phase 5)
+  # removed `shadow` (decode, validate, ack, write nothing), which only
+  # served the cutover's comparison with the producers' HTTP path; the
+  # render refuses it. Any stream not `off` gives the writer REDIS_URL, its
+  # Redis credentials (`redis.acl.clients.ingestWriter`) and the
+  # NetworkPolicy paths to Redis. An enabled stream producer needs its
+  # stream on `apply` (the render fails otherwise: nothing else would
+  # write its data). Render guards (security review, 2026-10-08): any stream not `off` needs
   # `redis.acl.enabled`, `redis.acl.stage: narrow` and
   # `redis.acl.clients.ingestWriter`; any `apply` also needs
-  # `redis.acl.defaultUser: "off"` (H3); `tfl: apply` needs
+  # `redis.acl.defaultUser: "off"` or `"on-unshared"` (H3); `tfl: apply` needs
   # `postgresql.roles.perService.writer.connect`, as `line_status`'s row
   # policy binds only the writer's own role (M4).
   streams:
-    # Release A (2026-10-09): the four producer streams default to
-    # `apply`, paired with their producers' `stream` sinks. A producer
-    # rolled back to `http` may leave its stream on `apply` (it just
-    # sees no new entries, spec §13.1).
+    # The four producer streams (poller-ldbws, full-coverage-consumer,
+    # poller-tfl, poller-tocs) are applied whenever their producer runs.
     station-samples: apply
     full-coverage: apply
     tfl: apply
@@ -2807,7 +2620,8 @@ redis:
   # Rollback: the previous step's values.
   # Render guards (security review, 2026-10-08): `enabled` with
   # `defaultUser: "on"` needs `redis.auth.enabled` (M3); every ingest stream
-  # producer (a `http+shadow`/`stream` sink, an island-of-Ireland poller)
+  # producer (poller-ldbws, -tfl, -tocs, full-coverage-consumer, an
+  # island-of-Ireland poller)
   # and the ingest-writer with any stream not `off` needs `enabled`,
   # `stage: narrow` and its own `clients.<client>` (H3); and any
   # `ingestWriter.streams` entry on `apply` needs `defaultUser:
@@ -2855,18 +2669,16 @@ redis:
       # -- ingest-writer, as user `ingest-writer` (only once an
       # `ingestWriter.streams` entry is not `off`).
       ingestWriter: false
-      # -- poller-incidents' DB sink (`pollers.incidents.ingest.sink: db`),
-      # as user `poller-incidents` (`%W~incident-text-changed +xadd`).
+      # -- poller-incidents (its incident-text-changed publish), as user `poller-incidents` (`%W~incident-text-changed +xadd`).
       pollerIncidents: false
-      # -- poller-ldbws' stream sinks (`pollers.ldbws.ingest.sink:
-      # http+shadow` or `stream`), as user `poller-ldbws`
+      # -- poller-ldbws (its stream sink), as user `poller-ldbws`
       # (`~ds:ingest:station-samples +xadd +xrevrange`).
       pollerLdbws: false
-      # -- poller-tfl's stream sinks (`pollers.tfl.ingest.sink: http+shadow`
-      # or `stream`, ingest plan 3c.2), as user `poller-tfl`
+      # -- poller-tfl (its stream sink, ingest plan 3c.2), as user
+      # `poller-tfl`
       # (`~ds:ingest:tfl +xadd +xrevrange`).
       pollerTfl: false
-      # -- poller-tocs's stream sinks (`pollers.tocs.ingest.sink`), as user
+      # -- poller-tocs (its stream sink), as user
       # `poller-tocs` (`~ds:ingest:reference`).
       pollerTocs: false
       # -- The island-of-Ireland pollers (when enabled; each writes only to
@@ -3354,61 +3166,39 @@ trustConsumer:
     existingSecret: ""
     existingSecretUsernameKey: kafka-sasl-username
     existingSecretPasswordKey: kafka-sasl-password
-  # -- Read this service's OAuth2 credential from a pre-existing Secret
-  # instead of the chart-rendered one.
-  existingSecret: ""
-  internalOauthUsername: ""
-  internalOauthPassword: ""
-  existingSecretInternalOauthUsernameKey: internal-oauth-username-trust-consumer
-  existingSecretInternalOauthPasswordKey: internal-oauth-password-trust-consumer
-  # Ingest architecture plan 3b.3 (decision D1): where each batch's train
-  # events and forward signals go.
+  # Ingest architecture plan 3b.3 (decision D1): each batch's train events
+  # and forward signals are written to Postgres directly in one
+  # transaction, XACKing movement-events after the commit, as the narrow
+  # `distant_signal_trust_consumer` only
+  # (`postgresql.roles.perService.trust_consumer.connect` is required; the
+  # render fails without it, security review H2). Needs
+  # `ingestWriter.enabled` and `ingestWriter.loops.enabled` (the render
+  # fails otherwise): the events that change a subscription (resolutions,
+  # cancellations, reinstatements) wait in train_event_outbox for the
+  # writer's 5 s train_event_outbox loop. Release B (ingest phase 5)
+  # removed the `sink: http` path (/private/train-events and
+  # /private/train-forward-signals) and this service's OAuth credential.
   ingest:
-    # -- `http` (today's behaviour): POST them to the api's
-    # /private/train-events and /private/train-forward-signals. `db`
-    # (INGEST_SINK=db): write both to Postgres directly in one transaction,
-    # XACKing movement-events after the commit, as the narrow
-    # `distant_signal_trust_consumer` only
-    # (`postgresql.roles.perService.trust_consumer.connect` is required; the
-    # render fails without it, security review H2). Adds Postgres egress and admission to
-    # the NetworkPolicies and the pool to the connection budgets. The
-    # reads (tracked trains, STANOX/CRS) stay on the api until phase 4.
-    # `db` needs `ingestWriter.enabled` and `ingestWriter.loops.enabled`
-    # (the render fails otherwise): the events that change a subscription
-    # (resolutions, cancellations, reinstatements) wait in
-    # train_event_outbox for the writer's 5 s train_event_outbox loop.
-    # `db` is the default since release A (2026-10-09); `http` is the
-    # rollback until phase 5.
-    sink: db
     database:
-      # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
-      # §6.6: pool 2, role limit 3).
+      # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; spec §6.6: pool 2,
+      # role limit 3); shared with the reads below (the larger of the two).
       maxConnections: 2
   referenceReloadSecs: 60
   # -- How often trust-consumer reloads the live STANOX->CRS table from
-  # api's /private/stanox-crs. Deliberately coarser than
+  # Postgres. Deliberately coarser than
   # referenceReloadSecs -- see
   # docs/superpowers/specs/2026-09-01-schedule-ingest-stanox-crs-table-design.md
   # Decision 4. UNRESEARCHED starting figure (see that design's Open
   # Questions #1).
   stanoxCrsReloadSecs: 3600
-  # Ingest architecture plan 4.4/4.7: where the reference data comes from.
+  # Ingest architecture plan 4.4/4.7: the reference data (the view
+  # `ingest_active_tracked_trains`, with no user ids, and `stanox_crs`) is
+  # read directly as the narrow `distant_signal_trust_consumer`, with the
+  # api's CORPUS fallback passed on. Release B (ingest phase 5) removed the
+  # `source: http` path (/private/tracked-trains, /private/stanox-crs).
   internalReads:
-    # -- `http` (today's behaviour): api's /private/tracked-trains and
-    # /private/stanox-crs. `db` (TRACKED_TRAINS_SOURCE and
-    # STANOX_CRS_SOURCE=db): the view `ingest_active_tracked_trains` (no
-    # user ids) and `stanox_crs`, read directly as the narrow
-    # `distant_signal_trust_consumer` only
-    # (`postgresql.roles.perService.trust_consumer.connect` is required; the
-    # render fails without it, security review H2), with the api's CORPUS
-    # fallback passed on. Adds Postgres egress and admission to the
-    # NetworkPolicies and the pool to the connection budgets. `db` is the
-    # default since release A (2026-10-09); `http` is the rollback until
-    # phase 5.
-    source: db
     database:
-      # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
-      # §6.6: pool 2).
+      # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; spec §6.6: pool 2).
       maxConnections: 2
   retentionDays: 90
   healthPort: 8081
@@ -3503,13 +3293,6 @@ fullCoverageConsumer:
     # for the full rationale; same shape here.
     digest: ""
     pullPolicy: IfNotPresent
-  # -- Read this service's OAuth2 credential from a pre-existing Secret
-  # instead of the chart-rendered one.
-  existingSecret: ""
-  internalOauthUsername: ""
-  internalOauthPassword: ""
-  existingSecretInternalOauthUsernameKey: internal-oauth-username-full-coverage-consumer
-  existingSecretInternalOauthPasswordKey: internal-oauth-password-full-coverage-consumer
   # -- Decision 4: comma-separated line ids to shadow-compute, or "*" for
   # every catalogued line with at least one tiploc. Does NOT gate whether
   # a line's stats are ever shown/escalated -- that's each line's own
@@ -3517,23 +3300,18 @@ fullCoverageConsumer:
   shadowLines: "*"
   populationReloadSecs: 300
   stanoxCrsReloadSecs: 3600
-  # Ingest architecture plan 4.3/4.7: where the reference data comes from.
+  # Ingest architecture plan 4.3/4.7: the reference data (one version
+  # query per reload, then only the changed populations, and `stanox_crs`)
+  # is read directly as the read-only `distant_signal_full_coverage_ro`
+  # only (`postgresql.roles.perService.full_coverage_ro.connect` is
+  # required; the render fails without it, security review H2); the api's
+  # CORPUS fallback is passed on. Release B (ingest phase 5) removed the
+  # `source: http` path (/private/schedule-line-population,
+  # /private/stanox-crs).
   internalReads:
-    # -- `http` (today's behaviour): one conditional
-    # /private/schedule-line-population GET per (line, date), and
-    # /private/stanox-crs. `db` (POPULATION_SOURCE and STANOX_CRS_SOURCE=db):
-    # one version query per reload, then only the changed populations, and
-    # `stanox_crs`, read directly as the read-only
-    # `distant_signal_full_coverage_ro` only
-    # (`postgresql.roles.perService.full_coverage_ro.connect` is required; the
-    # render fails without it, security review H2); the api's CORPUS fallback is passed
-    # on. Adds Postgres egress and admission to the NetworkPolicies and the
-    # pool to the connection budgets. `db` is the default since release A
-    # (2026-10-09); `http` is the rollback until phase 5.
-    source: db
     database:
-      # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
-      # §6.6: pool 2, role limit 3).
+      # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; spec §6.6: pool 2,
+      # role limit 3).
       maxConnections: 2
   statsWriteIntervalSecs: 60
   healthPort: 8082
@@ -3561,27 +3339,20 @@ fullCoverageConsumer:
   updateStrategy:
     type: Recreate
   # (movementFeed was removed in Deploy C; see trustConsumer.)
-  # Ingest architecture plan 3a.8: where each stats write goes.
-  ingest:
-    # -- `http` (today): POST the three outputs to the api. `http+shadow`:
-    # the same POSTs, plus a copy of what the api accepted XADDed to
-    # `ds:ingest:full-coverage` for `ingestWriter.streams.full-coverage:
-    # shadow`. `stream`: XADD only (with `ingestWriter.streams.full-coverage:
-    # apply`, in the same values change). Uses this consumer's existing
-    # Redis connection and user (`redis.acl.clients.fullCoverageConsumer`,
-    # whose ACL already allows the stream). `stream` is the default
-    # since release A (2026-10-09), with
-    # `ingestWriter.streams.full-coverage: apply`. Rollback: `http`.
-    sink: stream
+  # Ingest architecture plan 3a.8: each stats write is XADDed to
+  # `ds:ingest:full-coverage` and the ingest-writer applies it
+  # (`ingestWriter.streams.full-coverage: apply` is required). Uses this
+  # consumer's existing Redis connection and user
+  # (`redis.acl.clients.fullCoverageConsumer`, whose ACL allows the
+  # stream). Release B (ingest phase 5) removed the `http` and
+  # `http+shadow` sinks.
   redisAutoclaimMinIdleSecs: 30
   redisGapCheckSecs: 60
   # -- Windowed full-coverage stats
   # (docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md).
   # OFF by default: with enabled=false the consumer writes exactly the
-  # legacy whole-day rows and posts no windows. Turn on only after api
-  # (the /full-coverage-window-stats route and its migrations) and
-  # schedule-reference (operator/train status on the population) are
-  # deployed; aggregator.fullCoverageWindow.mode is a separate switch.
+  # legacy whole-day rows and writes no windows. aggregator.fullCoverageWindow.mode
+  # is a separate switch.
   windowedStats:
     enabled: false
     # -- W: the `recent` window covers trains due in the last W minutes.
@@ -3650,32 +3421,20 @@ trustBacklogConsumer:
     # for the full rationale; same shape here.
     digest: ""
     pullPolicy: IfNotPresent
-  # -- Read this service's OAuth2 credential from a pre-existing Secret
-  # instead of the chart-rendered one.
-  existingSecret: ""
-  internalOauthUsername: ""
-  internalOauthPassword: ""
-  existingSecretInternalOauthUsernameKey: internal-oauth-username-trust-backlog-consumer
-  existingSecretInternalOauthPasswordKey: internal-oauth-password-trust-backlog-consumer
-  # Ingest architecture plan 3b.1 (spec R1): where each batch goes.
+  # Ingest architecture plan 3b.1 (spec R1): each batch's backlog events
+  # and reason codes are written to Postgres directly, XACKing
+  # movement-events after the commit, and STANOX/CRS is reloaded from it,
+  # as the narrow `distant_signal_trust_backlog` only
+  # (`postgresql.roles.perService.trust_backlog.connect` is required; the
+  # render fails without it, security review H2). `api.corpusFallback.enabled`
+  # is passed on so the STANOX/CRS reload matches the api's. Release B
+  # (ingest phase 5) removed the `sink: http` path
+  # (/private/trust-event-backlog, /private/train-reasons,
+  # /private/stanox-crs) and this service's OAuth credential.
   ingest:
-    # -- `http` (today's behaviour): POST the backlog events and reason
-    # codes to the api's /private/trust-event-backlog and
-    # /private/train-reasons, and reload STANOX/CRS from
-    # /private/stanox-crs. `db` (INGEST_SINK=db): write and read Postgres
-    # directly, XACKing movement-events after the commit, as the narrow
-    # `distant_signal_trust_backlog` only
-    # (`postgresql.roles.perService.trust_backlog.connect` is required; the
-    # render fails without it, security review H2). Replaces the api egress with
-    # Postgres egress and admission in the NetworkPolicies, adds the pool
-    # to the connection budgets, and passes `api.corpusFallback.enabled`
-    # on so the STANOX/CRS reload matches the api's. `db` is the
-    # default since release A (2026-10-09); `http` is the rollback
-    # until phase 5.
-    sink: db
     database:
-      # -- Its Postgres pool under `db` (DATABASE_MAX_CONNECTIONS; spec
-      # §6.6: pool 3, role limit 4).
+      # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; spec §6.6: pool 3,
+      # role limit 4).
       maxConnections: 3
   stanoxCrsReloadSecs: 3600
   redisAutoclaimMinIdleSecs: 30
@@ -4345,33 +4104,23 @@ scheduleFeed:
     # stability window (now 5 * 120s = 10 minutes) stays a meaningful
     # signal rather than shrinking to 4 minutes.
     stabilityCycles: 5
-    # -- Where the ingest container records each feed delivery and loads
-    # each CORPUS extract (`INGEST_SINK`, ingest architecture plan 2d):
-    # `http` (api's /private/schedule-feed-ingests and
-    # /private/corpus-locations, as before) or `db` (Postgres directly,
-    # with the same validation, as the narrow
-    # `distant_signal_schedule_ingest` only:
-    # `postgresql.roles.perService.schedule_ingest.connect` is required, the
-    # render fails without it, security review H2; adds DATABASE_URL, the NetworkPolicy
-    # Postgres egress and ingress, and this pool to the connection
-    # budgets). Under `db` the CORPUS freshness gauge and the post-load
-    # comparison come from the ingest-writer's CORPUS loop, so turn
-    # `ingestWriter` and its loops on first. `db` is the default since
-    # release A (2026-10-09); `http` is the rollback until phase 5.
-    sink: db
+    # The ingest container records each feed delivery and loads each CORPUS
+    # extract into Postgres directly (ingest architecture plan 2d), as the
+    # narrow `distant_signal_schedule_ingest` only
+    # (`postgresql.roles.perService.schedule_ingest.connect` is required,
+    # the render fails without it, security review H2). The CORPUS
+    # freshness gauge and the post-load comparison come from the
+    # ingest-writer's CORPUS loop, so run `ingestWriter` with its loops.
+    # Release B (ingest phase 5) removed the `sink: http` path
+    # (/private/schedule-feed-ingests, /private/corpus-locations).
     database:
-      # -- The pool under `sink: db` (DATABASE_MAX_CONNECTIONS; spec §6.6:
-      # 1). Scans are sequential, so one connection is enough.
+      # -- Its pool (DATABASE_MAX_CONNECTIONS; spec §6.6: 1). Scans are
+      # sequential, so one connection is enough.
       maxConnections: 1
     # -- Extra env vars for the ingest container. Same shape as a
     # container `env` list. An entry named like one the chart sets
     # replaces it (one entry per name); other entries follow the chart's.
     extraEnv: []
-    existingSecret: ""
-    internalOauthUsername: ""
-    internalOauthPassword: ""
-    existingSecretInternalOauthUsernameKey: internal-oauth-username-schedule-ingest
-    existingSecretInternalOauthPasswordKey: internal-oauth-password-schedule-ingest
     # A read_dir/stat scan loop plus an unzip of the delivered archive to the
     # same PVC. It streams rather than buffering the whole extract, so it sits
     # much closer to the sftp container than to `reference` below.
@@ -4417,10 +4166,8 @@ scheduleFeed:
   # SFTP account and landing folder as the CIF feed and loaded by the
   # `ingest` container into api's corpus_locations table (whole-table
   # replace per delivery). OFF by default: while off, a CORPUS file is left
-  # in the landing folder with a one-time "stray file" warning. Before
-  # enabling, add the schedule-ingest service account
-  # (ingest.internalOauthUsername) to api.internalOauth.groups.corpus in
-  # Authentik. See docs/superpowers/specs/2026-09-28-corpus-sftp-ingest-design.md.
+  # in the landing folder with a one-time "stray file" warning. See
+  # docs/superpowers/specs/2026-09-28-corpus-sftp-ingest-design.md.
   corpus:
     enabled: false
     # -- Globs naming the CORPUS extract. Only this gzipped-JSON shape is
@@ -4518,7 +4265,8 @@ scheduleFeed:
   # -- Third sibling container in this same Pod (crates/schedule-reference):
   # once `ingest` has moved a verified-complete delivery into
   # storage_dir/<n>/, parses that sequence's TI/A records into the
-  # STANOX->CRS table and POSTs it to api's /private/stanox-crs. See
+  # STANOX->CRS table and the other timetable products, and writes them to
+  # Postgres directly. See
   # docs/superpowers/specs/2026-09-01-schedule-ingest-stanox-crs-table-design.md.
   reference:
     # -- Health port. Must differ from workerHealth.port: this container
@@ -4544,36 +4292,28 @@ scheduleFeed:
     # and ~30 s of publish cycle at production sizes; dates further out
     # carry fewer of the CIF's late (STP) changes.
     forwardPublishDays: 28
+    # The products go to Postgres directly through `ds_store` (ingest
+    # architecture plan 2a): the container gets `DATABASE_URL` (as
+    # `distant_signal_schedule_reference` only:
+    # `postgresql.roles.perService.schedule_reference.connect` is required,
+    # the render fails without it, security review H2), the schedulefeed
+    # pod may reach Postgres (NetworkPolicy), and it waits for the schema
+    # gate before its first poll. Release B (ingest phase 5) removed the
+    # `sink: http` path (the api's /private schedule routes).
     ingest:
-      # -- Where the products go (`INGEST_SINK`; ingest architecture plan
-      # 2a): `http`, the api's `/private` ingest routes (today's path), or
-      # `db`, Postgres directly through `ds_store`. With `db` the container
-      # gets `DATABASE_URL` (as `distant_signal_schedule_reference` only:
-      # `postgresql.roles.perService.schedule_reference.connect` is
-      # required, the render fails without it, security review H2), the
-      # schedulefeed pod may reach Postgres
-      # (NetworkPolicy), and it waits for the schema gate before its first
-      # poll. `db` is the default since release A (2026-10-09).
-      # Rollback is `http`: the api routes still exist.
-      sink: db
       database:
-        # -- The `db` sink's pool size (`DATABASE_MAX_CONNECTIONS`; spec
-        # §6.6: publishes are sequential, the final chunk holds one).
+        # -- Its pool size (`DATABASE_MAX_CONNECTIONS`; spec §6.6:
+        # publishes are sequential, the final chunk holds one).
         maxConnections: 3
     # -- MUST differ from metrics.port: this container shares the
     # schedulefeed Pod's network namespace with `ingest`, which already
     # binds metrics.port for its own listener -- see
     # schedulefeed-deployment.yaml's own comment on this.
     metricsPort: 9092
-    existingSecret: ""
-    internalOauthUsername: ""
-    internalOauthPassword: ""
-    existingSecretInternalOauthUsernameKey: internal-oauth-username-schedule-reference
-    existingSecretInternalOauthPasswordKey: internal-oauth-password-schedule-reference
     # BY FAR the largest allocation in this chart, and the other of the two
     # leak/spike risks the 2026-09-25 review called out. This container parses
     # the WHOLE-NETWORK CIF extract in memory and builds several derived
-    # whole-network products from it before POSTing them -- the
+    # whole-network products from it before writing them -- the
     # schedule_calling_points_full publish alone is ~1.7-2 million rows at
     # ~30MB per day
     # (docs/superpowers/plans/2026-09-22-dynamic-trip-planning-phase2-connections-array-plan.md:113),
@@ -4844,7 +4584,7 @@ frontend:
 # ---------------------------------------------------------------------------
 # SEPARATE HOSTNAMES, NOT PATH-SPLITTING ONE HOST. The api serves its
 # TfL-compatible routes at UNPREFIXED top-level paths -- GET /Line/... and
-# GET /StopPoint/{crs}/Disruption -- alongside /public/... and /private/...
+# GET /StopPoint/{crs}/Disruption -- alongside /public/...
 # (crates/api/src/routes/mod.rs explains why: clients built against TfL's own
 # API must work unchanged). Splitting a single host by path prefix would
 # either collide with Next.js's own routes or break that compatibility.
@@ -4862,12 +4602,8 @@ ingress:
     # ingress.enabled and ingress.frontend.enabled are both true.
     host: ""
   api:
-    # SECURITY: enabling this exposes /private/* to the internet as well.
-    # Those endpoints are protected by internal-service OAuth2
-    # (require_internal_oauth, crates/api/src/auth.rs) -- there is no other
-    # authentication in front of them. If you do not need external API
-    # access, leave this off; the frontend reaches the api over the
-    # in-cluster Service either way.
+    # If you do not need external API access, leave this off; the frontend
+    # reaches the api over the in-cluster Service either way.
     enabled: false
     # -- Hostname for the api, e.g. api.example.com.
     host: ""
@@ -5148,17 +4884,6 @@ metrics:
         maxAgeSeconds: 120
         for: 1m
         severity: critical
-    # DistantSignalIngestShadowMismatch: the rollout's compare step (plan
-    # 3a; spec §13.1). While a producer is on `http+shadow`, the rows the
-    # ingest-writer handled for a schema over `window` differ from the
-    # rows the api accepted by more than `ratio`, for `for`. Also records
-    # distant_signal:ingest_stream_rows_vs_http:ratio (1 when they agree).
-    ingestShadowMismatch:
-      enabled: true
-      window: 1h
-      ratio: 0.02
-      for: 30m
-      severity: warning
     # The ingest-writer's health (`distant-signal.ingest-writer-health`),
     # all rendered only with ingestWriter.enabled and silent on an absent
     # series. Runbooks: docs/alerts.md.
@@ -5205,9 +4930,9 @@ metrics:
     # the writer every 60s) is older than its maxAgeSeconds, for `for`. One
     # alert per listed source; an unlisted source is not checked. A source
     # in whileStreamApplies is checked only while the writer applies that
-    # stream (ingestWriter.streams.*: apply): only the stream path writes
-    # its row, so after a rollback to http it would age for good. The http
-    # paths today: incidents and tfl every 5 min, stations and tocs daily.
+    # stream (ingestWriter.streams.*: apply): only the writer writes its
+    # row, so with the stream off it would age for good. Cadences:
+    # incidents and tfl every 5 min, stations and tocs daily.
     # The island-of-Ireland catalogues are stream-only, one source per table
     # and network (poller-irish-rail-gtfs and poller-nir-stations, daily
     # each), so 2 days as for the GB reference data.
@@ -5259,25 +4984,12 @@ metrics:
     # through its request pool (distant_signal_api_db_up, every 15s) has
     # failed on some replica for `for`. Covers what pg_up cannot see: a
     # rotated password, an exhausted pool or max_connections, a
-    # NetworkPolicy, an external database. Critical because api is the only
-    # writer for every ingest path: while it cannot query, TRUST, poller
-    # and schedule data stop landing and the queues in front of it only
-    # hold so much.
+    # NetworkPolicy, an external database. Critical because the api serves
+    # every public page and route from the database.
     apiDatabaseDown:
       enabled: true
       for: 2m
       severity: critical
-    # DistantSignalApiPrivateRouteRetiredCalled (ingest phase 5, step 5.1):
-    # with api.privateRoutes.enabled false, something called a retired
-    # /private/* route (distant_signal_api_private_route_retired_total rose
-    # within `window` for a known route; route="other" is counted, never
-    # alerted). Renders only while the routes are retired.
-    # Runbook: docs/alerts.md.
-    apiPrivateRouteRetired:
-      enabled: true
-      window: 15m
-      for: 0m
-      severity: warning
     # DistantSignalSchemaGateWaiting (critical; ingest spec §14.2): a
     # service's schema gate (distant_signal_db_schema_ready) has been 0 for
     # `for`: the database lacks the newest migration in its image, or its
@@ -5289,20 +5001,20 @@ metrics:
       severity: critical
     # DistantSignalConsumerApiCallsFailing: trust-consumer,
     # trust-backlog-consumer or full-coverage-consumer failed at least
-    # minErrors calls to api (POSTs, the tracked-trains / population /
-    # stanox reloads; *_errors_total by operation) within `window`,
-    # continuously for `for`, so a short api blip (a rollout) does not fire.
+    # minErrors reads or writes (the direct writes, the tracked-trains /
+    # population / stanox reloads; *_errors_total by operation; the api
+    # POSTs went with release B) within `window`, continuously for `for`, so
+    # a short blip (a database restart) does not fire.
     consumerApiErrors:
       enabled: true
       window: 5m
       minErrors: 3
       for: 10m
       severity: warning
-    # DistantSignalApiPublic5xx / DistantSignalApiIngest5xx: the share of
-    # api's requests answered 5xx (a dependency-unavailable 503 included)
-    # over `window`, split by route: `public` is every route except
-    # /private/*, /public/health, /public/ready and unmatched paths (scanner
-    # noise); `ingest` is /private/*. Fires when the ratio is above `ratio` AND at
+    # DistantSignalApiPublic5xx: the share of api's requests answered 5xx
+    # (a dependency-unavailable 503 included) over `window`: `public` is
+    # every route except /metrics, /public/health, /public/ready and
+    # unmatched paths (scanner noise). Fires when the ratio is above `ratio` AND at
     # least `minErrors` 5xx happened in the window (public traffic is a few
     # requests a minute, so one 500 would otherwise be 100%), for `for`.
     # `for` is longer than `window`, so a burst shorter than for - window
@@ -5317,11 +5029,6 @@ metrics:
       public:
         ratio: 0.05
         minErrors: 3
-        for: 10m
-        severity: warning
-      ingest:
-        ratio: 0.05
-        minErrors: 30
         for: 10m
         severity: warning
     # DistantSignalAggregatorCycleFailing / DistantSignalNotifierCycleFailing:
@@ -5491,20 +5198,11 @@ metrics:
     # windows feed_stale (too few Activations in the last hour, or no event
     # for feedStaleSecs) for `feedStaleFor` -- no window influences severity
     # meanwhile. Expected during a known TRUST outage.
-    # DistantSignalFullCoverageWindowPostErrors: at least
-    # `postErrorsThreshold` POSTs to /private/full-coverage-window-stats
-    # failed within `postErrorsWindow`, continuously for `postErrorsFor`
-    # (the shape of DistantSignalConsumerApiCallsFailing), so the one POST
-    # lost to an api rollout does not fire; a persistent failure (an api
-    # without the route answers 404 every minute) still does.
     # DistantSignalFullCoverageWindowStatsStalled: no window rows posted
     # over `stalledWindow` for `stalledFor` while the consumer is running.
     fullCoverageWindow:
       enabled: true
       feedStaleFor: 15m
-      postErrorsWindow: 5m
-      postErrorsThreshold: 3
-      postErrorsFor: 10m
       stalledWindow: 10m
       stalledFor: 15m
       severity: warning

@@ -107,5 +107,5 @@ tests:
           - exp_labels: {severity: warning, namespace: distant-signal}
             exp_annotations:
               summary: "no incidents snapshot reached the database in 2h"
-              description: "Neither the api (http sink) nor poller-incidents (db sink) handled one. Check poller-incidents, its upstream and its sink."
+              description: "poller-incidents wrote none. Check poller-incidents, its upstream and its database writes."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalincidentsnapshotsmissing

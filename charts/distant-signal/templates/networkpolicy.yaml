@@ -31,12 +31,9 @@ spec:
     # poll those tables), so turning networkPolicy.enabled on would have
     # silently stopped every push notification this app sends.
     #
-    # The pollers/consumers that POST to api's /private/* ingest endpoints do
-    # NOT belong here: they reach the database only through the api (see the
-    # api policy below, which is where they are allow-listed). A poller moved
-    # to a direct write (pollers.<name>.ingest.sink: db, ingest architecture
-    # phase 2) does, and is added below while it is on `db`; so does a
-    # reader on `<component>.internalReads.source: db` (phase 4).
+    # Since release B (ingest phase 5) no producer goes through the api: the
+    # direct writers (phases 2 and 3b) and the internal readers (phase 4)
+    # are listed below whenever they are deployed.
     - from:
         - podSelector:
             matchExpressions:
@@ -63,38 +60,24 @@ spec:
                   # The ingest-writer (ingest-writer-deployment.yaml).
                   - ingest-writer
                   {{- end }}
-                  {{- if include "distant-signal.scheduleFeedPostgres" . }}
-                  # schedule-reference's db sink
-                  # (scheduleFeed.reference.ingest.sink: db, plan 2a) and/or
-                  # schedule-ingest's direct writes
-                  # (scheduleFeed.ingest.sink=db, plan 2d).
+                  {{- if .Values.scheduleFeed.enabled }}
+                  # schedule-reference (plan 2a) and schedule-ingest (plan 2d)
+                  # write Postgres directly.
                   - schedulefeed
                   {{- end }}
-                  {{- range $name, $poller := .Values.pollers }}
-                  {{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" $name "poller" $poller) }}
-                  # pollers.{{ $name }}.ingest.sink: db (ingest architecture
-                  # phase 2): this poller writes Postgres directly.
+                  {{- range $name := list "stations" "incidents" "ldbws" }}
+                  {{- if (get $root.Values.pollers $name | default dict).enabled }}
+                  # stations and incidents write Postgres directly (plans 2b,
+                  # 2c); ldbws reads its sample stations from it (plan 4.5).
                   - {{ printf "poller-%s" $name }}
                   {{- end }}
                   {{- end }}
-                  {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_backlog") }}
-                  # trustBacklogConsumer.ingest.sink: db (plan 3b.1): the
-                  # TRUST backlog written directly.
+                  # The TRUST backlog (plan 3b.1), the train events and forward
+                  # signals (plan 3b.3, D1) written directly, and the internal
+                  # reads (plans 4.3, 4.4).
                   - trust-backlog-consumer
-                  {{- end }}
-                  {{- if include "distant-signal.trustConsumerPool" . | int }}
-                  # trustConsumer.ingest.sink: db (plan 3b.3, D1: train events
-                  # and forward signals written directly) and/or
-                  # trustConsumer.internalReads.source: db (plan 4.4).
                   - trust-consumer
-                  {{- end }}
-                  {{- range $role, $component := dict "full_coverage_ro" "full-coverage-consumer" "ldbws_ro" "poller-ldbws" }}
-                  {{- if include "distant-signal.internalReadsDb" (dict "root" $root "role" $role) }}
-                  # internalReads.source: db (ingest architecture plan 4.7):
-                  # this reader reads its reference data from Postgres.
-                  - {{ $component }}
-                  {{- end }}
-                  {{- end }}
+                  - full-coverage-consumer
         {{- with .Values.networkPolicy.postgresClients }}
         # networkPolicy.postgresClients: workloads outside this chart, e.g.
         # a postgres-exporter or a pg_dump backup CronJob.
@@ -160,18 +143,15 @@ spec:
                   - trust-backlog-consumer
                   - full-coverage-consumer
                   - movement-relay
-                  {{- if include "distant-signal.ingestWriterStreamsOn" . }}
-                  # The ingest-writer, once it reads a stream (plan 3a.3).
+                  {{- if .Values.ingestWriter.enabled }}
+                  # The ingest-writer reads the ds:ingest:* streams (plan 3a.3).
                   - ingest-writer
                   {{- end }}
-                  {{- if include "distant-signal.pollerIncidentsDbSink" . }}
-                  # poller-incidents' DB sink XADDs incident-text-changed.
-                  - poller-incidents
-                  {{- end }}
-                  {{- range $name, $poller := .Values.pollers }}
-                  {{- if include "distant-signal.pollerSinkStream" (dict "root" $ "name" $name "poller" $poller) }}
-                  # pollers.{{ $name }}.ingest.sink http+shadow or stream
-                  # (plan 3a.7): XADDs its ds:ingest:* stream.
+                  {{- range $name := list "incidents" "ldbws" "tfl" "tocs" }}
+                  {{- if (get $.Values.pollers $name | default dict).enabled }}
+                  # incidents XADDs incident-text-changed (plan 2c.2); ldbws,
+                  # tfl and tocs XADD their ds:ingest:* stream (plans 3a.7,
+                  # 3c.2).
                   - {{ printf "poller-%s" $name }}
                   {{- end }}
                   {{- end }}
@@ -223,23 +203,10 @@ spec:
     # memory:
     #   grep -rl 'distant-signal.apiBaseUrl' templates/
     #
-    # Until 2026-09-25 this allowed only `frontend` plus the five
-    # `.Values.pollers` entries, which covered the read path and the original
-    # RDM pollers and nothing else. Everything below the poller range was
-    # missing, and every one of them POSTs to a /private/* ingest route as its
-    # entire reason to exist -- so with networkPolicy.enabled=true each would
-    # have failed every publish, which (see
-    # crates/schedule-reference/src/config.rs's chart_env_wiring_tests) is the
-    # deliberately best-effort log-and-continue path in most of these crates:
-    # the product simply stays empty, forever, with only a recurring error!
-    # line to show for it. Exactly the failure mode that cost this app a whole
-    # product earlier the same day.
-    #
-    # Components are listed UNCONDITIONALLY rather than gated on each
-    # workload's own `enabled` value: a matchExpressions value naming a
-    # component that isn't deployed selects nothing and is a harmless no-op,
-    # whereas an `if`-gate is one more place this list can silently drift out
-    # of step with the Deployment templates -- which is the bug being fixed.
+    # Release B (ingest phase 5) removed the api's /private routes and every
+    # producer's HTTP path: the pollers, the TRUST and full-coverage
+    # consumers and the schedulefeed pod write Postgres or a Redis stream
+    # themselves, so none of them is listed any more (runbook §4.2).
     - from:
         - podSelector:
             matchExpressions:
@@ -252,32 +219,6 @@ spec:
                 values:
                   # Reads the public API for every page render.
                   - frontend
-                  {{- range $name, $poller := .Values.pollers }}
-                  {{- if $poller.enabled }}
-                  - poller-{{ $name }}
-                  {{- end }}
-                  {{- end }}
-                  # /private/train-events, /private/train-forward-signals,
-                  # /private/tracked-trains, /private/stanox-crs.
-                  - trust-consumer
-                  # /private/trust-event-backlog, /private/train-reasons,
-                  # /private/stanox-crs.
-                  - trust-backlog-consumer
-                  # /private/schedule-line-population,
-                  # /private/full-coverage-stats,
-                  # /private/station-full-coverage-samples,
-                  # /private/stanox-crs.
-                  - full-coverage-consumer
-                  # BOTH containers in this one Pod: `ingest`
-                  # (POST /private/schedule-feed-ingests) and `reference`
-                  # (the eight *_URL publishes enumerated in
-                  # crates/schedule-reference/src/config.rs). They share the
-                  # Pod's network namespace, so one component label covers
-                  # both.
-                  - schedulefeed
-                  # Not the three island-of-Ireland pollers: since ingest
-                  # plan 3c.2 (decision D8) each writes only to its
-                  # own ds:ingest:ioi-* stream, never the api.
                   {{- if .Values.tests.enabled }}
                   # `helm test`'s probe Pod curls api.probes.path
                   # (templates/tests/test-api-health.yaml). Without this,
@@ -315,9 +256,7 @@ spec:
       {{- end }}
       {{- if and .Values.ingress.enabled .Values.ingress.api.enabled }}
         # The api is published externally, so the ingress controller must
-        # reach it too. SECURITY: this also exposes /private/*, guarded by
-        # internal-service OAuth2 (require_internal_oauth). It does NOT
-        # expose /metrics -- see the separate metrics-only rule below, and
+        # reach it too. It does NOT expose /metrics -- see the separate metrics-only rule below, and
         # metrics_port's own doc comment in crates/api/src/data/config.rs
         # for why /metrics moved off this port entirely (2026-09-25 Signal
         # Box Audit Low finding).
@@ -429,10 +368,6 @@ networkPolicy.components.<component>.extraEgress.
 {{- $enabledPollerNames = append $enabledPollerNames $name }}
 {{- end }}
 {{- end }}
-{{- $callsApi := dict "api" true }}
-{{- $queueWorker := dict "api" true "redis" true }}
-{{- /* Upstreams whose ports the internet rule must allow (internetPorts). */}}
-{{- $token := list .Values.internalOauth.tokenUrl }}
 {{- /* enricher: the LLM endpoint (enricher.llm.anthropic.baseUrl, i.e.
 api.anthropic.com, with provider anthropic; batches go to the same host),
 plus OpenAI's token exchange and (primary mode) Authentik's token endpoint
@@ -445,33 +380,19 @@ opens their ports, not their hosts. */}}
 {{- $enricherUrls = append $enricherUrls .Values.enricher.llm.workloadIdentity.authentik.tokenUrl }}
 {{- end }}
 {{- end }}
-{{- /* Phase 3b: a TRUST consumer on ingest.sink db calls Postgres.
-trust-backlog-consumer then calls nothing on the api (its STANOX/CRS reload
-reads Postgres too). trust-consumer calls Postgres with ingest.sink db or
-internalReads.source db (phase 4) and keeps the api unless both are db
-(the reads, or the POSTs). */}}
-{{- $trustConsumerEgress := $queueWorker }}
-{{- if include "distant-signal.trustConsumerPool" . | int }}
-{{- $trustConsumerApi := not (and (include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer")) (include "distant-signal.internalReadsDb" (dict "root" . "role" "trust_consumer"))) }}
-{{- $trustConsumerEgress = ternary (dict "api" true "redis" true "postgres" true) (dict "redis" true "postgres" true) $trustConsumerApi }}
-{{- end }}
-{{- $trustBacklogEgress := $queueWorker }}
-{{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_backlog") }}
-{{- $trustBacklogEgress = dict "redis" true "postgres" true }}
-{{- end }}
-{{- /* Phase 4: full-coverage-consumer on internalReads.source db also
-calls Postgres (plan 4.7); it keeps the api for its POSTs. */}}
-{{- $fullCoverageEgress := $queueWorker }}
-{{- if include "distant-signal.internalReadsDb" (dict "root" . "role" "full_coverage_ro") }}
-{{- $fullCoverageEgress = dict "api" true "redis" true "postgres" true }}
-{{- end }}
+{{- /* Release B (ingest phase 5): no worker calls the api any more. The
+TRUST consumers write Postgres directly (plan 3b) and read their reference
+data from it (plan 4.4), the full-coverage-consumer XADDs its stats (plan
+3a.8) and reads its populations from Postgres (plan 4.3); all three read
+the movement stream from Redis. */}}
+{{- $queueDbWorker := dict "redis" true "postgres" true }}
 {{- $workers := list
   (dict "component" "aggregator" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true) "internet" .Values.archive.enabled "urls" (list (.Values.archive.s3.endpoint | default "https://s3.amazonaws.com")))
   (dict "component" "enricher" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true "redis" true) "urls" $enricherUrls)
   (dict "component" "notifier" "metricsPort" .Values.metrics.port "healthPorts" (list .Values.workerHealth.port) "egress" (dict "postgres" true))
-  (dict "component" "trust-consumer" "metricsPort" .Values.trustConsumer.metricsPort "healthPorts" (list .Values.trustConsumer.healthPort) "egress" $trustConsumerEgress "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
-  (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $trustBacklogEgress "urls" $token)
-  (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $fullCoverageEgress "urls" $token "brokers" .Values.trustConsumer.kafka.brokers)
+  (dict "component" "trust-consumer" "metricsPort" .Values.trustConsumer.metricsPort "healthPorts" (list .Values.trustConsumer.healthPort) "egress" $queueDbWorker "brokers" .Values.trustConsumer.kafka.brokers)
+  (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $queueDbWorker)
+  (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $queueDbWorker "brokers" .Values.trustConsumer.kafka.brokers)
 }}
 {{- if .Values.ingestWriter.enabled }}
 {{- /* Postgres; Redis too once an ingestWriter.streams entry is not off (plan 3a.3). */}}
@@ -486,27 +407,17 @@ calls Postgres (plan 4.7); it keeps the api for its POSTs. */}}
 {{- end }}
 {{- range $enabledPollerNames }}
 {{- $poller := get $root.Values.pollers . }}
-{{- /* Phase 2: a poller on ingest.sink db calls Postgres, not the api;
-poller-incidents' (plan 2c.2) also XADDs incident-text-changed to Redis. */}}
-{{- $pollerEgress := $callsApi }}
-{{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" . "poller" $poller) }}
-{{- $pollerEgress = dict "postgres" true }}
-{{- if eq . "incidents" }}{{ $_ := set $pollerEgress "redis" true }}{{ end }}
-{{- end }}
-{{- /* Phase 3 (plans 3a.7, 3c.2): a stream sink XADDs to Redis. Under
-`stream` tfl and tocs no longer call the api at all; ldbws still reads its
-station list from it unless its internalReads.source is db (and
-http+shadow still POSTs). */}}
-{{- if include "distant-signal.pollerSinkStream" (dict "root" $root "name" . "poller" $poller) }}
-{{- $listFromDb := and (eq . "ldbws") (not (empty (include "distant-signal.internalReadsDb" (dict "root" $root "role" "ldbws_ro")))) }}
-{{- $apiFree := and (eq (toString $poller.ingest.sink) "stream") (or (ne . "ldbws") $listFromDb) }}
-{{- $pollerEgress = ternary (dict "redis" true) (dict "api" true "redis" true) $apiFree }}
-{{- end }}
-{{- /* Phase 4: poller-ldbws on internalReads.source db reads Postgres too. */}}
-{{- if and (eq . "ldbws") (include "distant-signal.internalReadsDb" (dict "root" $root "role" "ldbws_ro")) }}
-{{- $pollerEgress = merge (dict "postgres" true) $pollerEgress }}
-{{- end }}
-{{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $pollerEgress "urls" (list $poller.baseUrl $root.Values.internalOauth.tokenUrl)) }}
+{{- /* Each poller's own upstream, plus (runbook §4.2): stations Postgres;
+incidents Postgres and Redis (incident-text-changed, plan 2c.2); ldbws
+Redis (its stream) and Postgres (its sample stations, plan 4.5); tfl and
+tocs Redis (their streams, plan 3c.2). */}}
+{{- $pollerEgress := get (dict
+  "stations" (dict "postgres" true)
+  "incidents" (dict "postgres" true "redis" true)
+  "ldbws" (dict "postgres" true "redis" true)
+  "tfl" (dict "redis" true)
+  "tocs" (dict "redis" true)) . | default dict }}
+{{- $workers = append $workers (dict "component" (printf "poller-%s" .) "metricsPort" $root.Values.metrics.port "healthPorts" (list $root.Values.workerHealth.port) "egress" $pollerEgress "urls" (list $poller.baseUrl)) }}
 {{- end }}
 {{- /* The island-of-Ireland pollers: their upstream and Redis (each its
 own ds:ingest:ioi-* stream, plan 3c.2, D8); no api, no token URL. */}}
@@ -593,7 +504,7 @@ spec:
 {{- with include "distant-signal.extraIngress" (dict "root" . "component" "schedulefeed") }}
     {{- . | nindent 4 }}
 {{- end }}
-{{- $sfUrls := list .Values.internalOauth.tokenUrl }}
+{{- $sfUrls := list }}
 {{- if .Values.scheduleFeed.bucket.enabled }}
 {{- /* Ports only: the internet rule is by CIDR, so these add 443 (or a
 custom baseUrl's port) when networkPolicy.egress.internetPorts is set. */}}
@@ -606,12 +517,10 @@ the key's OAuth endpoint. */}}
 {{- end }}
 {{- with .Values.scheduleFeed.bucket.baseUrl }}{{ $sfUrls = append $sfUrls . }}{{ end }}
 {{- end }}
-{{- /* Postgres with either schedulefeed db sink: schedule-reference's
-(scheduleFeed.reference.ingest.sink: db, plan 2a) or schedule-ingest's
-(scheduleFeed.ingest.sink=db, plan 2d). The pod's containers share one
-network namespace, so the egress is the pod's. */}}
-{{- $sfDeps := dict "api" true }}
-{{- if include "distant-signal.scheduleFeedPostgres" . }}{{ $_ := set $sfDeps "postgres" true }}{{ end }}
+{{- /* Postgres for both containers' direct writes: schedule-reference's
+(plan 2a) and schedule-ingest's (plan 2d); no api since release B. The
+pod's containers share one network namespace, so the egress is the pod's. */}}
+{{- $sfDeps := dict "postgres" true }}
 {{- with include "distant-signal.egressSection" (dict "root" . "component" "schedulefeed" "deps" $sfDeps "internet" true "urls" $sfUrls) }}
   {{- . | nindent 2 }}
 {{- end }}

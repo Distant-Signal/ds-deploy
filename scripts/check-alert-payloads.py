@@ -100,9 +100,6 @@ RENDER_FLAGS = [
     "api.sso.redirectUrl=https://app.example.com/callback",
     "api.sso.postLoginRedirectUrl=https://app.example.com/",
     "metrics.prometheusRule.enabled=true",
-    # Retired /private routes, for DistantSignalApiPrivateRouteRetiredCalled
-    # (ingest phase 5, step 5.1). Off by default.
-    "api.privateRoutes.enabled=false",
     "pollers.ldbws.enabled=true",
     "pollers.ldbws.baseUrl=https://ldbws.example.com",
     "pollers.incidents.enabled=true",
@@ -110,7 +107,7 @@ RENDER_FLAGS = [
     # A daily poller, for DistantSignalPollerStale's per-interval threshold.
     "pollers.stations.enabled=true",
     "pollers.stations.baseUrl=https://stations.example.com",
-    # Their own Redis users: release A's default sinks with default off.
+    # Their own Redis users: their db/stream sinks with default off.
     "redis.acl.clients.pollerLdbws=true",
     "redis.acl.clients.pollerIncidents=true",
     "archive.enabled=true",
@@ -169,8 +166,8 @@ class Alert:
 
 def render(helm: str) -> list[dict[str, object]]:
     """Render the chart with every alert on; return the PrometheusRule documents."""
-    # Release A's defaults (2026-10-09: every producer on its db or stream
-    # sink) with the prerequisites they need, so the stream alerts render.
+    # Every producer is on its db or stream sink (since release A; the only
+    # sink since release B) with the prerequisites it needs.
     prereqs = str(CHART / "ci" / "ingest-prereqs.yaml")
     cmd = [
         helm,

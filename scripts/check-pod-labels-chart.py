@@ -59,12 +59,13 @@ def sets(*pairs: str) -> tuple[str, ...]:
     return tuple(a for p in pairs for a in ("--set", p))
 
 
-# Release A (2026-10-09) put every ingest producer on its db/stream sink by
-# default; these checks predate it and test other switches, so they render
-# on ci/http-sinks.yaml (every producer back on http, the writer on app).
+# Every ingest producer writes Postgres or a Redis stream (release B, ingest
+# phase 5, removed the /private HTTP paths), which needs the Postgres
+# per-service roles, the ingest-writer and the Redis ACL, so these checks
+# render on ci/ingest-prereqs.yaml, the least a fresh install adds.
 BASE = (
     "-f",
-    str(CHART / "ci" / "http-sinks.yaml"),
+    str(CHART / "ci" / "ingest-prereqs.yaml"),
     *sets(
         "trustConsumer.kafka.brokers=k:9094",
         "trustConsumer.kafka.topic=t",

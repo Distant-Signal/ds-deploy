@@ -34,17 +34,8 @@ Reach the api:
 
   http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.api.host }}{{ .Values.api.probes.path }}
 
-  ############################################################################
-  # SECURITY WARNING
-  #
-  # ingress.api.host is enabled, so /private/* is reachable from outside the
-  # cluster as well. Those ingestion endpoints are protected by internal-
-  # service OAuth2 (crates/api/src/auth.rs's require_internal_oauth,
-  # delegated to Authentik) -- there is no other authentication in front of
-  # them. If you do not need external API access, set ingress.api.enabled=
-  # false; the frontend reaches the api over the in-cluster Service either
-  # way.
-  ############################################################################
+  If you do not need external API access, set ingress.api.enabled=false;
+  the frontend reaches the api over the in-cluster Service either way.
 {{- else }}
 
   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "distant-signal.apiFullname" . }} {{ .Values.api.service.port }}:{{ .Values.api.service.port }}

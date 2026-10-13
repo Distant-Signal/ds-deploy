@@ -101,50 +101,20 @@ This container's own env entries. distant-signal.mergeEnv renders them
 with trustConsumer.extraEnv, which replaces an entry of the same name.
 */ -}}
 {{- define "distant-signal.trustConsumerEnv" }}
-            - name: API_INGEST_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/train-events" | quote }}
-            - name: FORWARD_SIGNALS_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/train-forward-signals" | quote }}
-            - name: API_TRACKED_TRAINS_URL
-              value: {{ printf "%s%s" (include "distant-signal.apiBaseUrl" .) "/private/tracked-trains" | quote }}
+            # Train events and forward signals go to Postgres directly (plan
+            # 3b.3, D1), and the tracked trains and STANOX/CRS come from it
+            # (plan 4.4): one DATABASE_URL and one pool, as the
+            # trust_consumer role.
             {{- if include "distant-signal.trustSinkDb" (dict "root" . "service" "trust_consumer") }}
-            # trustConsumer.ingest.sink: db (ingest architecture plan 3b.3,
-            # D1): train events and forward signals go to Postgres directly
-            # instead of API_INGEST_URL and FORWARD_SIGNALS_URL.
-            - name: INGEST_SINK
-              value: "db"
-            {{- end }}
-            {{- if include "distant-signal.trustConsumerPool" . | int }}
-            # One DATABASE_URL and one pool for the db sink and the db reads
-            # (internalReads.source, plan 4.4), as the app role or, with
-            # postgresql.roles.perService.trust_consumer.connect, its own.
             {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "trust_consumer") | nindent 12 }}
             - name: DATABASE_MAX_CONNECTIONS
               value: {{ include "distant-signal.trustConsumerPool" . | quote }}
             {{- end }}
-            - name: INTERNAL_OAUTH_TOKEN_URL
-              value: {{ .Values.internalOauth.tokenUrl | quote }}
-            - name: INTERNAL_OAUTH_CLIENT_ID
-              value: {{ .Values.internalOauth.clientId | quote }}
-            - name: INTERNAL_OAUTH_SCOPE
-              value: {{ .Values.internalOauth.scope | quote }}
-            - name: INTERNAL_OAUTH_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.trustConsumerSecretName" . }}
-                  key: {{ include "distant-signal.trustConsumerOauthUsernameSecretKey" . }}
-            - name: INTERNAL_OAUTH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "distant-signal.trustConsumerSecretName" . }}
-                  key: {{ include "distant-signal.trustConsumerOauthPasswordSecretKey" . }}
             - name: REFERENCE_RELOAD_SECS
               value: {{ .Values.trustConsumer.referenceReloadSecs | quote }}
             - name: STANOX_CRS_RELOAD_SECS
               value: {{ .Values.trustConsumer.stanoxCrsReloadSecs | quote }}
-            - name: STANOX_CRS_URL
-              value: {{ printf "%s/private/stanox-crs" (include "distant-signal.apiBaseUrl" .) | quote }}
-            {{- with include "distant-signal.internalReadsEnv" (dict "root" . "role" "trust_consumer" "corpus" true "database" false "sources" (list "TRACKED_TRAINS_SOURCE" "STANOX_CRS_SOURCE")) | trim }}{{ . | nindent 12 }}{{- end }}
+            {{- with include "distant-signal.internalReadsEnv" (dict "root" . "role" "trust_consumer" "corpus" true "database" false) | trim }}{{ . | nindent 12 }}{{- end }}
             - name: RETENTION_DAYS
               value: {{ .Values.trustConsumer.retentionDays | quote }}
             - name: HEALTH_BIND_URL

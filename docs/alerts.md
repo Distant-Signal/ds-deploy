@@ -37,9 +37,9 @@ Metric names below omit the `distant_signal_` prefix.
 The Distant Signal database is down: postgres_exporter's `pg_up` is 0, or the
 bundled Postgres StatefulSet (`<release>-postgres`) has no ready replica. On
 2026-10-01 it was down for six hours (10:16-16:10 UTC) with only a warning
-about the exporter. Every writer stops: api answers 5xx on its `/private`
-ingest routes, the consumers keep their batches pending, the aggregator and
-notifier cycles fail, and movement-events lag grows.
+about the exporter. Every writer stops: the producers' direct writes and the
+ingest-writer fail, the consumers keep their batches pending, the aggregator
+and notifier cycles fail, and movement-events lag grows.
 
 1. `kubectl -n distant-signal get pod distant-signal-postgres-0` and
    `kubectl logs distant-signal-postgres-0 -c postgres --previous`: crash
@@ -93,9 +93,9 @@ api's own probe has failed for `apiDatabaseDown.for`:
 counts in `distant_signal_api_db_probe_failures_total`, and api logs the
 first failure ("api cannot query its database") and the recovery.
 
-While it fires, api answers 5xx on most routes, including the `/private`
-ingest routes the consumers and pollers POST to. Those keep their batches
-pending and retry, so watch movement-events lag.
+While it fires, api answers 5xx on most routes. Ingest does not go
+through the api (release B, ingest phase 5), so check
+[DistantSignalPostgresDown](#distantsignalpostgresdown) for the producers.
 
 1. If [DistantSignalPostgresDown](#distantsignalpostgresdown) fires too, the
    database itself is down: start there.
@@ -145,7 +145,7 @@ lacks, as `PRIVILEGE on table[.column]`).
 
 ### DistantSignalConsumerApiCallsFailing
 
-A TRUST consumer keeps failing its calls to api: at least
+A TRUST consumer keeps failing its reads or writes: at least
 `consumerApiErrors.minErrors` failures within `window`, continuously for
 `for` (`distant_signal:consumer_api_errors:increase`, one series per
 consumer). The consumers' `*_ready` gauges only follow their Redis
@@ -157,26 +157,29 @@ The operations counted (`distant_signal_<consumer>_errors_total{operation}`):
 
 | Consumer | Operations |
 | --- | --- |
-| trust-consumer | `reload_tracked_trains`, `post_train_events`, `reload_stanox_crs`, `startup_reference_load`; `db_write` with `trustConsumer.ingest.sink: db` |
-| trust-backlog-consumer | `post_batch`, `post_train_reasons`, `reload_stanox_crs`; `db_write`, `db_write_reasons` with `trustBacklogConsumer.ingest.sink: db` |
-| full-coverage-consumer | `reload_line_population_fetch`, `post_line_stats`, `post_station_samples`, `reload_stanox_crs` |
+| trust-consumer | `reload_tracked_trains`, `reload_stanox_crs`, `startup_reference_load`, `db_write` |
+| trust-backlog-consumer | `reload_stanox_crs`, `db_write`, `db_write_reasons` |
+| full-coverage-consumer | `reload_line_population_fetch`, `reload_stanox_crs` |
 
-Data rejections (`post_rejected`) are not counted: those are poison entries,
-isolated by the dead-letter path. full-coverage-consumer's
-`post_window_stats` has its own alert,
-[DistantSignalFullCoverageWindowPostErrors](#distantsignalfullcoveragewindowposterrors).
+Since release B (ingest phase 5) the reads come from Postgres and the
+writes go to Postgres or (full-coverage-consumer's stats) a Redis stream;
+the HTTP operations (`post_train_events`, `post_batch`,
+`post_train_reasons`, `post_line_stats`, `post_station_samples`,
+`post_window_stats`) went with `/private`. Data rejections
+(`post_rejected`) are not counted: those are poison entries, isolated by
+the dead-letter path. full-coverage-consumer's stream writes are watched by
+[DistantSignalIngestProducerXaddFailing](#distantsignalingestproducerxaddfailing).
 
 1. Check [DistantSignalApiDatabaseDown](#distantsignalapidatabasedown) and
    [DistantSignalPostgresDown](#distantsignalpostgresdown): a database
    outage is the usual cause.
 2. Otherwise `sum by (operation) (increase(distant_signal_<consumer>_errors_total[10m]))`
-   shows which call fails, and the consumer's error log has api's status and
-   body. A 401/403 points at the internal OAuth client (Authentik); a 5xx at
-   api's own log. `db_write*` (ingest plan 3b, `ingest.sink: db`) are the
-   consumer's own Postgres writes: its log has the SQLSTATE; a
+   shows which read or write fails, and the consumer's error log has the
+   error. `db_write*` (ingest plan 3b) are the consumer's own Postgres
+   writes: its log has the SQLSTATE; a
    `permission denied` means its role lacks a grant (the schema gate
    should have caught it; check the roles setup Job ran).
-3. Failed POSTs leave their batches pending in movement-events and are
+3. Failed writes leave their batches pending in movement-events and are
    retried, so nothing is lost until the stream's MAXLEN trims them: watch
    [DistantSignalMovementLagHigh](#distantsignalmovementlaghigh).
 
@@ -184,12 +187,14 @@ isolated by the dead-letter path. full-coverage-consumer's
 
 More than `api5xx.public.ratio` (5%) of api's public requests answered 5xx
 over `api5xx.window` (5m), with at least `minErrors` (3) of them, for `for`
-(10m). Public means every route except `/private/*`, `/public/health`, `/public/ready` and
-unmatched paths (`/{unmatched}`, scanner noise): what the frontend, the MCP
-and anyone else calling the API sees. The recording rules
+(10m). Public means every route except `/metrics`, `/public/health`,
+`/public/ready` and unmatched paths (`/{unmatched}`, scanner noise, a call
+to a `/private/*` route included since release B removed them): what the
+frontend, the MCP and anyone else calling the API sees. The recording rules
 `distant_signal:api_requests:rate`, `distant_signal:api_5xx:rate` and
-`distant_signal:api_5xx:increase` carry a `scope` label (`public`,
-`ingest`).
+`distant_signal:api_5xx:increase` carry a `scope` label (`public`; the
+`ingest` scope and DistantSignalApiIngest5xx went with the `/private`
+routes in release B, ingest phase 5).
 
 The cluster's own `DistantSignalApi5xx` (Ranma-Config) is one ratio over
 every route, so on 2026-10-01 the ingest retry storm (about 27 5xx a second
@@ -210,35 +215,6 @@ the database (or Redis, or the IdP), see the 2026-10-06 entry in
 3. A single route's 503s with "too many trip plans are being computed" in
    the body is `/Trips/plan` shedding load, not an outage.
 
-### DistantSignalApiIngest5xx
-
-The same for the `/private/*` ingest routes, with at least `minErrors` (30)
-5xx in the window. The pollers and consumers retry with backoff (honouring
-`Retry-After` on a 503), so their data is late, not lost, until the
-movement-events stream's MAXLEN or a poller's retry budget runs out. See
-[DistantSignalConsumerApiCallsFailing](#distantsignalconsumerapicallsfailing)
-for the consumers' view and the same first steps as above.
-
-### DistantSignalApiPrivateRouteRetiredCalled
-
-Renders only while `api.privateRoutes.enabled` is false
-(`API_PRIVATE_ROUTES=false`), the soak of ingest phase 5 step 5.1
-([runbook](ingest-phase5-runbook.md#51-api_private_routes-and-the-7-day-soak)).
-The api then answers every `/private/*` request with a 404 and counts it in
-`distant_signal_api_private_route_retired_total{route, method}`; this fires
-on any increase of a known route within `window` (15m).
-
-1. `route` and `method` name the pair that was called. Calls to a path or
-   method the old route table never had (a scanner through the Ingress, a
-   typo) are counted as `route="other"` but never alert; query the counter
-   to see them.
-2. For a real pair, find the caller: api logs `call to a retired /private
-   route` with `caller`, the verified `sub` of its internal OAuth bearer
-   (`none` without one). Check that producer's deployed `INGEST_SINK` /
-   `*_SOURCE` (runbook §1.3 C).
-3. To restore service at once, set `api.privateRoutes.enabled: true`; the
-   soak then restarts its 7 days once the producer is moved.
-
 ### Querying api request metrics
 
 - The route is the `exported_endpoint` label, not `endpoint`:
@@ -249,8 +225,7 @@ on any increase of a known route within `window` (15m).
 - api registers some series at 0 when it starts (`api::route_metrics`):
   `http_requests_total` for the key public routes (`/Trips/plan`,
   `/Train/by-uid/...`, line status, stations, trains search and resolve,
-  freshness, incidents, session) and every `/private` route, each with
-  status 200, 500 and 503; `http_requests_duration_seconds` for the key
+  freshness, incidents, session), each with status 200, 500 and 503; `http_requests_duration_seconds` for the key
   public routes' 200s; and `api_trip_plan_graph_cache_total` for `hit` and
   `miss`. Without that, a series appeared at 1 on its first request and
   `increase()`/`rate()` never counted that request, so a rare route like
@@ -305,13 +280,14 @@ delivered-but-unACKed ones (`movement_relay_stream_pending`) are above
 (`movement_relay_stream_maxlen`, or `movementRelay.streamMaxLen` before a
 relay exports it). Recorded as `distant_signal:movement_events_behind:ratio`.
 
-A consumer whose downstream (api) is failing keeps reading and leaves each
+A consumer whose downstream (Postgres, or the ingest stream) is failing keeps reading and leaves each
 failed batch pending, so its lag stays near 0 while pending grows; MAXLEN trims
 pending entries all the same. Once lag plus pending reaches the cap, entries
 are trimmed before the group reads them (a stream gap).
 
-1. Read the consumer's logs: is it failing to POST to api, or is it slow?
-2. Check api's health.
+1. Read the consumer's logs: is it failing its writes, or is it slow?
+2. Check [DistantSignalDirectWritesFailing](#distantsignaldirectwritesfailing)
+   and [DistantSignalPostgresDown](#distantsignalpostgresdown).
 
 Design: [movement-relay design](superpowers/specs/2026-09-04-movement-relay-design.md).
 
@@ -613,25 +589,14 @@ last hour, or no movement event recently. No window influences severity and
 no train is presumed cancelled meanwhile. Expected during a known TRUST
 outage; otherwise check movement-relay and the consumer's lag.
 
-### DistantSignalFullCoverageWindowPostErrors
-
-At least 3 POSTs to `/private/full-coverage-window-stats` failed
-(`full_coverage_consumer_errors_total{operation="post_window_stats"}`) within
-5 minutes, continuously for 10 minutes (`postErrorsThreshold`,
-`postErrorsWindow`, `postErrorsFor`), the same shape as
-[DistantSignalConsumerApiCallsFailing](#distantsignalconsumerapicallsfailing).
-The consumer posts about once a minute, so the one POST that fails while an
-api rollout is down does not fire it; a failure on every POST does. An api
-without that route (not yet deployed, or its migrations not run) answers 404.
-Check api's logs and the consumer's warn log.
-
 ### DistantSignalFullCoverageWindowStatsStalled
 
-No window rows posted (`full_coverage_consumer_window_rows_posted_total`)
-while windowed stats are on. The consumer posts on every stats write (about a
-minute) once its startup replay is done, so look for a stuck replay, a
-population that never loaded, or failing POSTs
-([DistantSignalFullCoverageWindowPostErrors](#distantsignalfullcoveragewindowposterrors)).
+No window rows written (`full_coverage_consumer_window_rows_posted_total`;
+since release B they are XADDed to `ds:ingest:full-coverage`, not POSTed)
+while windowed stats are on. The consumer writes on every stats write
+(about a minute) once its startup replay is done, so look for a stuck
+replay, a population that never loaded, or failing stream writes
+([DistantSignalIngestProducerXaddFailing](#distantsignalingestproducerxaddfailing)).
 
 ## resources
 
@@ -739,7 +704,7 @@ Design: [ingest architecture](superpowers/specs/2026-10-06-ingest-architecture-d
 
 ### DistantSignalTrainEventOutboxRejected
 
-With `trustConsumer.ingest.sink: db`, trust-consumer cannot write
+trust-consumer writes directly and cannot write
 `train_subscriptions`: a resolution, cancellation or reinstatement (and the
 later events of the same subscription) waits in `train_event_outbox` for the
 ingest-writer's `train_event_outbox` loop (ingest plan 3b.3). The loop
@@ -785,9 +750,8 @@ reopening, and the queued trains' movements do not land. Critical.
    `permission denied` (42501) means the writer role lacks SELECT, UPDATE
    or DELETE on `train_event_outbox` (`files/db-grants.yaml`, the role setup
    Job).
-3. If the writer cannot be fixed quickly, set `trustConsumer.ingest.sink:
-   http`: the api then applies everything inline again; the rows already
-   queued are applied once the loop runs.
+3. There is no `http` sink to fall back to since release B (ingest phase
+   5): the rows wait in the outbox and are applied once the loop runs again.
 
 ### DistantSignalWriterLoopStale
 
@@ -873,10 +837,10 @@ them.
 
 1. The source's poller: [DistantSignalPollerFailing](#distantsignalpollerfailing)
    / [DistantSignalPollerStale](#distantsignalpollerstale), its log.
-2. Its sink: under `http`, api's ingest route (5xx, 401); under `db`, the
-   poller's `db_writes_total`; under `stream`, the stream's alerts
+2. Its sink: a direct writer's `db_writes_total`; a stream producer's
+   stream alerts
    ([DistantSignalIngestStreamStalled](#distantsignalingeststreamstalled)).
-3. A stream source whose stream was rolled back to `http`: its row stops
+3. A stream source whose stream is `off`: its row stops
    moving for good; drop its `whileStreamApplies` entry only if the stream
    stays in `apply`.
 
@@ -920,8 +884,9 @@ the work) is not a failure. Recorded as
   `permission denied` (42501) counts as transient and means a missing grant
   (`files/db-grants.yaml`).
 
-If it cannot be fixed quickly, set the component's `ingest.sink` back to
-`http`: the api writes again.
+There is no HTTP path to fall back to since release B (ingest phase 5):
+fix the write, or roll back to the previous chart release and images
+([runbook](ingest-phase5-runbook.md)).
 
 ## ingest streams
 
@@ -979,7 +944,7 @@ the writer last applied an entry of it longer ago than that
 `distant_signal:ingest_stream_unapplied:seconds` while over), for `for`.
 Data is reaching Redis and not Postgres: pages go stale.
 
-Shadow mode counts as applying (`skipped`), and so does a duplicate. A
+A duplicate counts as applying. A
 writer that has applied nothing since it started has no last-applied
 series and does not fire this; the backlog alert covers it. Work through
 [DistantSignalIngestStreamBacklog](#distantsignalingeststreambacklog)'s
@@ -1065,30 +1030,6 @@ future is overwritten by the next snapshot), so data is not blocked, but
 that producer's freshness and history times are off. Compare the clocks
 (`date -u` in the producer and writer pods; NTP on the nodes). The cluster
 is a single node today, so this should not fire.
-
-### DistantSignalIngestShadowMismatch
-
-The rollout's compare step (plan 3a, spec §13.1) disagrees: while a
-producer is on `http+shadow`, the rows the ingest-writer handled for one
-schema (`ingest_stream_rows_total`, `shadow` or `apply`) differ from the
-rows the api accepted (`ingest_stream_sink_rows_total{sink="http"}`) by
-more than `ingestShadowMismatch.ratio` over its `window`
-(`distant_signal:ingest_stream_rows_vs_http:ratio`, 1 when they agree).
-Do not flip that producer to `stream` until it is quiet again.
-
-- **0** (the copy never arrives): the producer's XADDs fail (see
-  `DistantSignalIngestProducerXaddFailing`, the producer's log, its Redis
-  ACL user and NetworkPolicy), or the writer's stream is `off`.
-- **Below 1**: copies are lost between the POST and the writer: XADD
-  failures, entries superseded while Redis was down
-  (`ingest_stream_produce_dropped_total{reason="superseded"}`), dead
-  letters (`DistantSignalIngestDeadLetters`), or an encoding failure (the
-  producer logs it; `reason="oversize"`).
-- **Above 1**: the writer saw rows the api did not count: more than one
-  producer pod, or a dead-letter re-injection during the window.
-
-A short blip around a deploy is expected (counters restart); the `for`
-covers it.
 
 ## users
 
@@ -1209,10 +1150,11 @@ switch `archive.expiry.dryRun` off.
 
 ### DistantSignalScheduleReferenceNotSeeded
 
-schedule-reference has been waiting to read its last completed publish from
-api (`GET /private/schedule-reference-publishes`), so it publishes nothing
-(`schedule_reference_seeded` is 0). Check api and the internal OAuth token
-endpoint; the container's warn log names the error.
+schedule-reference has been waiting to read its last completed publish
+(`schedule_reference_publishes`, from Postgres), so it publishes nothing
+(`schedule_reference_seeded` is 0). Check Postgres and its role
+(`distant_signal_schedule_reference`); the container's warn log names the
+error.
 
 ### DistantSignalScheduleFeedZipRejected
 
@@ -1223,10 +1165,10 @@ replaces it. The ingest container's error log names the reason.
 
 ### DistantSignalScheduleFeedIngestRejected
 
-schedule-ingest extracted a CIF delivery but api answered 400/413/422 to its
-ingest record, so schedule-reference never sees it. It is not retried until a
-new upload replaces it. The ingest container's error log and api's log name
-the reason.
+schedule-ingest extracted a CIF delivery but its ingest record was refused
+as bad data (a SQLSTATE class 22/23 data error), so schedule-reference
+never sees it. It is not retried until a new upload replaces it. The ingest
+container's error log names the reason.
 
 ### DistantSignalCorpusRejected
 
@@ -1257,19 +1199,19 @@ and the reference container's error log).
 
 A publish finished with a staged key count that did not match the
 publisher's total, so the rows that publish left out were not deleted. They
-stay until the next complete publish. Counted by api
-(`api_schedule_publish_staged_mismatch_total{product}`) or, with
-schedule-reference's db sink (`scheduleFeed.reference.ingest.sink: db`), by
-schedule-reference (`store_schedule_publish_staged_mismatch_total{product}`);
-the warn log of whichever counted it has the `publish_id` and both counts.
+stay until the next complete publish. Counted by schedule-reference
+(`store_schedule_publish_staged_mismatch_total{product}`; the api's
+`api_` series went with its `/private` publish routes in release B); its
+warn log has the `publish_id` and both counts.
 
 ### DistantSignalScheduleReferencePublishRejected
 
-api refused one of schedule-reference's products with 400, 413 or 422. It is
-not retried for this delivery and the delivery is not recorded as published,
-so that product keeps its previous rows (a restart tries the delivery again).
-Usually a schema skew between the two services or an oversized chunk; the
-reference container's error log has api's response body.
+The database refused one of schedule-reference's products as bad data (a
+SQLSTATE class 22/23 data error). It is not retried for this delivery and
+the delivery is not recorded as published, so that product keeps its
+previous rows (a restart tries the delivery again). Usually a schema skew
+between the image and the migrations; the reference container's error log
+has the constraint.
 
 ### DistantSignalLinePopulationMissing
 
@@ -1414,7 +1356,7 @@ every cycle fires after about 18 minutes; the former 1h window with no `for`
 took 40-55 minutes on 2026-10-01. Daily pollers
 (stations, tocs) run one cycle a day, so one failed daily cycle is enough.
 Check the poller's logs: its upstream feed (National Rail, TfL, Irish Rail),
-its credentials or an expired key, and api's `/private` ingest route.
+its credentials or an expired key, and its own database or stream writes.
 
 ### DistantSignalPollerStale
 
@@ -1428,9 +1370,9 @@ DistantSignalPollerFailing it needs no failed cycle, so it also fires for a
 poller that has stopped completing cycles at all (a wedged loop, a schedule
 that never comes due). If DistantSignalPollerFailing is firing too, start
 there. Otherwise check the poller's log for its last "poll cycle" line and
-whether the pod is running. poller-ldbws holds undelivered samples while api
-is down (`ldbws_pending_samples`) and sends them on the first successful
-POST.
+whether the pod is running. poller-ldbws's samples go to the
+`ds:ingest:station-samples` stream (release B removed its api POST and the
+pending-sample buffer); check that stream's alerts too.
 
 ### DistantSignalLdbwsStationStale
 
@@ -1483,17 +1425,16 @@ as ended.
 No incidents snapshot reached the database within
 `incidentSnapshotsMissing.window` (2h): the sum of
 `api_incident_removal_inference_total` over every outcome did not move, for
-`for`. Each snapshot counts once there, whatever the inference decided:
-in the api under `pollers.incidents.ingest.sink: http`, in poller-incidents
-under `db`. Both register the series at 0 at startup, so this is a real
-0, not a missing series. Incidents shown as active may be stale, and none
+`for`. Each snapshot counts once there, whatever the inference decided, in
+poller-incidents (the api's `/private/incidents` path went with release
+B). It registers the series at 0 at startup, so this is a real 0, not a
+missing series. Incidents shown as active may be stale, and none
 leaving the feed are marked ended.
 
 1. [DistantSignalPollerFailing](#distantsignalpollerfailing) /
    [DistantSignalPollerStale](#distantsignalpollerstale) for `incidents`:
    the poller's fetch or its delivery is failing (its log).
-2. `http`: api's `/private/incidents` answers (5xx, 401, 413). `db`: the
-   poller's `db_writes_total` and `permission denied` in its log.
+2. The poller's `db_writes_total` and `permission denied` in its log.
 3. `SELECT fetched_at FROM ingest_freshness WHERE source = 'incidents';`
    should be within 5 minutes.
 

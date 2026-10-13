@@ -44,15 +44,13 @@ that can exhaust max_connections. Counted: api maxConnections x
 replicaCount (plus a RollingUpdate surge pod), plus aggregator 10,
 notifier 5, enricher 5, the api's migration connection 1, the archive pool
 2 when archive.enabled, the api-maintenance CronJob's pool when
-apiMaintenance.enabled, the ingest-writer's when ingestWriter.enabled and
-schedule-ingest's when scheduleFeed.ingest.sink=db,
-schedule-reference's when scheduleFeed.reference.ingest.sink=db, each
-poller's with pollers.<name>.ingest.sink db (stations 1, incidents 2), the
-TRUST consumers' with their ingest.sink db (trust-backlog-consumer 3,
-trust-consumer 2; plan 3b; trust-consumer's one pool also when its
-internalReads.source is db), and the other phase 4 readers' with
-<component>.internalReads.source db (full-coverage-consumer 2,
-poller-ldbws 1), all summed (the enricher's, the TRUST consumers' and
+apiMaintenance.enabled, the ingest-writer's when ingestWriter.enabled,
+schedule-ingest's and schedule-reference's when scheduleFeed.enabled, each
+enabled direct-writing poller's (stations 1, incidents 2), the TRUST
+consumers' (trust-backlog-consumer 3, trust-consumer 2; plan 3b;
+trust-consumer's one pool also serves its reads), and the other phase 4
+readers' (full-coverage-consumer 2, poller-ldbws 1 when enabled), all
+summed (the enricher's, the TRUST consumers' and
 full-coverage-consumer's times their replicas plus any updateStrategy
 surge); plus
 postgresql.connectionBudget (clients outside this chart, such as the
@@ -335,31 +333,10 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.internalOauth.issuerUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID
               value: {{ .Values.api.internalOauth.clientId | quote }}
-            - name: INTERNAL_OAUTH_GROUP_INCIDENTS
-              value: {{ .Values.api.internalOauth.groups.incidents | quote }}
-            - name: INTERNAL_OAUTH_GROUP_STATIONS
-              value: {{ .Values.api.internalOauth.groups.stations | quote }}
-            - name: INTERNAL_OAUTH_GROUP_TOCS
-              value: {{ .Values.api.internalOauth.groups.tocs | quote }}
-            - name: INTERNAL_OAUTH_GROUP_LDBWS
-              value: {{ .Values.api.internalOauth.groups.ldbws | quote }}
-            - name: INTERNAL_OAUTH_GROUP_TFL
-              value: {{ .Values.api.internalOauth.groups.tfl | quote }}
-            - name: INTERNAL_OAUTH_GROUP_TRUST_CONSUMER
-              value: {{ .Values.api.internalOauth.groups.trustConsumer | quote }}
-            - name: INTERNAL_OAUTH_GROUP_SCHEDULE_INGEST
-              value: {{ .Values.api.internalOauth.groups.scheduleIngest | quote }}
-            - name: INTERNAL_OAUTH_GROUP_SCHEDULE_REFERENCE
-              value: {{ .Values.api.internalOauth.groups.scheduleReference | quote }}
-            - name: INTERNAL_OAUTH_GROUP_FULL_COVERAGE
-              value: {{ .Values.api.internalOauth.groups.fullCoverage | quote }}
-            - name: INTERNAL_OAUTH_GROUP_TRUST_BACKLOG
-              value: {{ .Values.api.internalOauth.groups.trustBacklog | quote }}
-            - name: INTERNAL_OAUTH_GROUP_CORPUS
-              value: {{ .Values.api.internalOauth.groups.corpus | quote }}
-            # Not a /private/* gate: the Distant-Signal-MCP's group, which
-            # only moves its public requests onto api.rateLimit.mcp. Empty
-            # turns that off. See crates/api/src/rate_limit.rs.
+            # The Distant-Signal-MCP's group, which only moves its public
+            # requests onto api.rateLimit.mcp. Empty turns that off. See
+            # crates/api/src/rate_limit.rs. The api's only internal-token
+            # use since release B removed /private (ingest phase 5).
             - name: INTERNAL_OAUTH_GROUP_MCP
               value: {{ .Values.api.internalOauth.groups.mcp | default "" | quote }}
             # Off by default -- see api.corpusFallback in values.yaml.
@@ -388,12 +365,6 @@ with api.extraEnv, which replaces an entry of the same name.
             # api.tripPlanGraphCache in values.yaml.
             - name: API_REQUEST_TIMEOUT_SECS
               value: {{ .Values.api.timeouts.requestTimeoutSecs | quote }}
-            # Ingest phase 5, step 5.1: false retires /private/* behind a
-            # counted 404; see api.privateRoutes.
-            - name: API_PRIVATE_ROUTES
-              value: {{ dig "privateRoutes" "enabled" true .Values.api | toString | quote }}
-            - name: API_PRIVATE_REQUEST_TIMEOUT_SECS
-              value: {{ .Values.api.timeouts.privateRequestTimeoutSecs | quote }}
             - name: API_HEADER_READ_TIMEOUT_SECS
               value: {{ .Values.api.timeouts.headerReadTimeoutSecs | quote }}
             - name: API_UNAVAILABLE_RETRY_AFTER_SECS
@@ -497,10 +468,9 @@ with api.extraEnv, which replaces an entry of the same name.
             # is a credential, so it alone goes through a secretKeyRef; the
             # other four are plain URLs/identifiers that are public by
             # construction (the browser sees the issuer and redirect URLs
-            # on every sign-in anyway) -- same posture as every
-            # INTERNAL_OAUTH_* value above, none of which is a
-            # secretKeyRef either (Decision 6: api never holds any of the
-            # 8 real callers' own credentials).
+            # on every sign-in anyway) -- same posture as the
+            # INTERNAL_OAUTH_* values above, none of which is a
+            # secretKeyRef either.
             - name: SSO_ISSUER_URL
               value: {{ $issuerUrl | quote }}
             - name: SSO_CLIENT_ID
@@ -519,10 +489,8 @@ with api.extraEnv, which replaces an entry of the same name.
             # Four sweep-cadence tunables, all declared in
             # crates/api/src/data/config.rs with a working default but
             # never wired into this template until the 2026-09-25 Signal
-            # Box Audit Low pass -- the same "declared but unwired" gap
-            # already closed above for the INTERNAL_OAUTH_GROUP_* fields
-            # (see chart_env_wiring_tests's own doc comment). Unlike those,
-            # an unwired sweep interval doesn't 403 anything -- it just
+            # Box Audit Low pass (see chart_env_wiring_tests's own doc
+            # comment). An unwired sweep interval doesn't fail anything -- it just
             # means an operator can't tune the cadence without a redeploy,
             # since the code-level default (matching the value below) still
             # applies. schedule_match_interval_secs is the one sibling
@@ -542,14 +510,6 @@ with api.extraEnv, which replaces an entry of the same name.
             # sweeps; the api runs none. Rendered only when false, so the
             # default render is unchanged.
             - name: API_BACKGROUND_LOOPS
-              value: "false"
-            {{- end }}
-            {{- if include "distant-signal.incidentsRowHeartbeatOff" . }}
-            # pollers.incidents.ingest.rowHeartbeat false (ingest plan
-            # 2c.6): POST /private/incidents writes only changed rows. The
-            # same value as poller-incidents' DB sink. Rendered only when
-            # false, so the default render is unchanged.
-            - name: INCIDENTS_ROW_HEARTBEAT
               value: "false"
             {{- end }}
             - name: PAST_TRAVEL_RETENTION_DAYS
