@@ -3002,10 +3002,11 @@ enricher:
       # default (adaptive thinking).
       thinking: ""
     # -- LLM_PROFILE: a built-in generation profile by name
-    # (openai-gpt-6-luna, openai-default, claude-default). Empty (the
-    # default) picks it by provider and model: OpenAI-compatible endpoints
-    # send temperature 0 (gpt-6-luna also effort none), Claude sends no
-    # sampling parameters (docs/enricher-anthropic.md, "Tuning per model").
+    # (openai-gpt-6-luna, openai-default, claude-haiku-5, claude-default).
+    # Empty (the default) picks it by provider and model: OpenAI-compatible
+    # endpoints send temperature 0 (gpt-6-luna also effort none), Claude
+    # sends no sampling parameters (docs/enricher-anthropic.md, "Tuning per
+    # model").
     profile: ""
     # -- LLM_TEMPERATURE: overrides the profile's temperature; a number, or
     # "omit" to send none. A temperature a model is known to reject (the
@@ -3027,7 +3028,8 @@ enricher:
       # `<profile>.<call>.txt` or `<call>.txt`, call one of primary,
       # adversarial, severity_adversarial; a call with neither keeps the
       # built-in prompt. Changing a prompt changes model_version, so the
-      # sweep re-extracts. Empty (the default): the built-in prompts.
+      # sweep re-extracts. Empty (the default): the built-in prompts. The
+      # tuned Haiku set is crates/enricher/prompts/ (claude-haiku-5.*.txt).
       configMap: ""
     # -- CARRY_FORWARD_SEMANTIC_NOOPS: when true (the default), a text
     # change that only touches HTML, whitespace, entities, case or in-word

@@ -13,8 +13,8 @@ to show for it.
 number or `omit` for each sampling override. */}}
 {{- $llmValues := .Values.enricher.llm }}
 {{- with $llmValues.profile }}
-{{- if not (has . (list "openai-gpt-6-luna" "openai-default" "claude-default")) }}
-{{- fail (printf "enricher.llm.profile=%q is not one of openai-gpt-6-luna, openai-default, claude-default." .) }}
+{{- if not (has . (list "openai-gpt-6-luna" "openai-default" "claude-haiku-5" "claude-default")) }}
+{{- fail (printf "enricher.llm.profile=%q is not one of openai-gpt-6-luna, openai-default, claude-haiku-5, claude-default." .) }}
 {{- end }}
 {{- if and $anthropic (hasPrefix "openai-" .) }}
 {{- fail (printf "enricher.llm.profile=%q is an OpenAI profile but enricher.llm.provider is anthropic." .) }}
