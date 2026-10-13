@@ -804,6 +804,36 @@ jobs:
         working-directory: frontend
         run: npx playwright test
 
+      # Visual regression screenshots (frontend/e2e/visual.spec.ts, the
+      # `visual` Playwright project, which the step above skips): the main
+      # pages at 390 and 1366px, light and dark, compared against the
+      # committed baselines in frontend/e2e/visual-baselines/. Only when
+      # this PR or push touches frontend/**: the pages render nothing else
+      # the repo changes, apart from the api, whose own tests cover it.
+      # The comparison runs inside the pinned Playwright container
+      # (scripts/visual-tests.py), the same one used to make the baselines
+      # locally, so fonts and rendering match. docs/style-guide.md,
+      # "Visual regression", says how to update the baselines.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # renovate: datasource=pypi depName=uv
+          version: "0.12.21"
+          # Nothing to cache: no dependencies are installed.
+          enable-cache: false
+
+      # Answers "changed" whenever it can't tell (a new branch's first
+      # push, an unfetchable base), so the check is never skipped wrongly.
+      - name: Did this change touch frontend/?
+        id: frontend-paths
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: uv run --locked --no-default-groups scripts/paths-changed.py --base "${BASE_SHA}" frontend/
+
+      - name: Visual regression screenshots
+        if: steps.frontend-paths.outputs.changed == 'true'
+        run: uv run --locked --no-default-groups scripts/visual-tests.py
+
       - name: Upload Playwright report + traces
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
