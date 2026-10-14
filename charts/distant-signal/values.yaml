@@ -2003,6 +2003,12 @@ ingestWriter:
     ioi-gtfs: "off"
     ioi-nir: "off"
     ioi-live: "off"
+    # One stream per transit network (transit networks spec §9; off by
+    # default): ds:ingest:transit-metrolink (pollerTransitSchedule's
+    # metrolink network: transit-timetable, transit-timetable-commit).
+    # `apply` needs postgresql.roles.perService.writer.connect, as tfl
+    # does (the writer's ingest_freshness row policy binds its own role).
+    transit-metrolink: "off"
   # -- Changed rows only (INGEST_WRITER_CHANGED_ROWS_ONLY; plan 3a.9, spec
   # §7.8): the `station-full-coverage-samples/1` handler stops advancing
   # `resolved_at` on rows whose stats are unchanged (about 2,400 of 2,700
@@ -2688,6 +2694,13 @@ redis:
       pollerIrishRailGtfs: false
       pollerIrishRailLive: false
       pollerNirStations: false
+      # -- poller-transit-schedule for network metrolink (off by default;
+      # transit spec §13), as user `poller-transit-metrolink`
+      # (`~ds:ingest:transit-metrolink +xadd +xrevrange`). An `optional`
+      # user: it is rendered into the ACL file, and so needs the
+      # `poller-transit-metrolink-password` key of `existingSecret`, only
+      # while this is on. Turning it on restarts Redis once.
+      pollerTransitMetrolink: false
   image:
     repository: redis
     # -- Pinned to an exact 7.4 patch release and content digest (INF-11);
@@ -4828,12 +4841,14 @@ metrics:
         "ds:ingest:ioi-gtfs": 500
         "ds:ingest:ioi-nir": 500
         "ds:ingest:ioi-live": 1000
+        "ds:ingest:transit-metrolink": 320
     # DistantSignalIngestStreamStalled (critical): producers' XADDs to a
     # stream succeeded within its stallAfterSecs, but the writer has
     # applied nothing from it for longer, for `for`. stallAfterSecs is
     # about 3x each stream's cadence (at least 3 minutes, for the 30s
     # gauges): station-samples 1/min, full-coverage 3/min, tfl 1/5 min,
-    # reference daily, ioi-live 1/5 min, ioi-gtfs and ioi-nir daily.
+    # reference daily, ioi-live 1/5 min, ioi-gtfs and ioi-nir daily,
+    # transit-metrolink 1/5 min (its situations; off by default).
     ingestStreamStalled:
       enabled: true
       for: 5m
@@ -4846,6 +4861,7 @@ metrics:
         "ds:ingest:ioi-gtfs": 259200
         "ds:ingest:ioi-nir": 259200
         "ds:ingest:ioi-live": 900
+        "ds:ingest:transit-metrolink": 900
     # DistantSignalIngestDeadLetters: any entry dead-lettered within
     # `window`.
     ingestDeadLetters:

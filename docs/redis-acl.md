@@ -23,6 +23,10 @@ explains the format). The kinds:
 - **final**: a client that does not exist yet (the phase 3 stream
   producers and `ingest-writer`): its final rights in every stage, so
   phase 3 needs no Redis restart.
+- **optional**: a producer that ships off (the transit networks'
+  `poller-transit-<network>`): `final` rights, but rendered only while its
+  client, `redis.acl.clients.<user in camelCase>`, is on. See
+  [Optional users](#optional-users-new-producers-that-ship-off).
 - **admin**: `ds-admin`, for humans and the Redis probes: `~* &* +@all`.
 
 | User | Kind | Narrow rights (summary) |
@@ -35,6 +39,7 @@ explains the format). The kinds:
 | `exporter` | client | read-only metrics commands (`INFO`, `CONFIG GET`, `CLIENT LIST`, `SLOWLOG`, `LATENCY`, `XINFO`, `SCAN`, `MEMORY USAGE`, `COMMAND INFO`, ...) |
 | `poller-incidents` | final | XADD on `incident-text-changed` (phase 2c) |
 | `poller-ldbws`, `poller-tfl`, `poller-tocs`, the three island-of-Ireland pollers | final | XADD and XREVRANGE on their own `ds:ingest:*` stream (one each: the island-of-Ireland pollers have `ds:ingest:ioi-gtfs`, `-live` and `-nir`) |
+| `poller-transit-metrolink` | optional | XADD and XREVRANGE on `ds:ingest:transit-metrolink` (transit networks; rendered only with `redis.acl.clients.pollerTransitMetrolink`) |
 | `ingest-writer` | final | consumer-group and gauge commands on `ds:ingest:*` (never XADD, XTRIM or XDEL there); XADD, XTRIM, XLEN, XRANGE and MEMORY USAGE on `ds:dlq:*` |
 | `ds-admin` | admin | everything |
 | `default` | (values) | `defaultUser: "on"`: today's password and rights; `"on-unshared"`: on, with its own password that no client is given (step 4); `"off"`: disabled |
@@ -68,7 +73,8 @@ refused. Edit the template and that test together.
   `poller-tfl-password`, `poller-tocs-password`,
   `poller-irish-rail-gtfs-password`, `poller-irish-rail-live-password`,
   `poller-nir-stations-password`, `ingest-writer-password`,
-  `ds-admin-password`.
+  `ds-admin-password`. An `optional` user's key
+  (`poller-transit-metrolink-password`) only once its client is on.
 - **Redis.** A `<release>-redis-acl` ConfigMap holds `users.acl` with
   `${REDIS_ACL_PASSWORD_<USER>}` placeholders. The Redis pod's `redis-acl`
   initContainer (the Redis image's `sh` and `awk`) fills them from the
@@ -85,6 +91,34 @@ refused. Edit the template and that test together.
   changes.
 - `scripts/render-redis-acl.py` renders the same file outside Helm, for a
   staging Redis (`--passwords-from-env`).
+
+## Optional users: new producers that ship off
+
+Every user in the template needs its `<user>-password` key, and any
+change to the users file restarts Redis (the ConfigMap checksum on the
+pod). So a `final` line for a producer that ships off would restart Redis
+on the deploy that merges it, and Redis would not start again until the
+Secret had the key. An `optional` line avoids both: the chart renders it
+(the ACL line, and the password env in the Redis pod) only while its
+client is on, so merging it changes nothing that renders
+(`scripts/check-ingest-phase0-chart.py` checks this).
+
+To turn one on (the transit networks' rollout, transit spec §15.1):
+
+1. Add `<user>-password` to the users Secret (the SealedSecret in
+   Ranma-Config), letters and digits only.
+2. Set `redis.acl.clients.<client>: true` in the same Ranma-Config change.
+3. Redis restarts once for the new users file: about 4 s of AOF load, with
+   the consumers retrying, as any Redis restart. If Reloader also restarts
+   Redis for the Secret change, that is a second restart in quick
+   succession. Verify `ACL USERS` lists the user.
+
+That is the operational cost of each new producer: one Redis restart when
+it is turned on. Turning the client off again removes the user (another
+restart); remove the Secret key after that.
+
+`scripts/render-redis-acl.py --client <key>` renders an optional user
+outside Helm.
 
 ## Rollout runbook (Ranma)
 

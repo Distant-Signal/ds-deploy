@@ -298,6 +298,27 @@ tables:
   island_of_ireland_lines: {class: ingest, grants: {api: S, writer: SIU}}
   island_of_ireland_stations: {class: ingest, grants: {api: S, writer: SIU}}
   island_of_ireland_station_samples: {class: ingest, grants: {api: S, writer: SIU}}
+  # Transit networks (docs/superpowers/specs/2026-10-09-transit-networks-design.md
+  # §8; migration 20261014100000): the writer applies the
+  # ds:ingest:transit-<network> streams (ds_store::transit). The versioned
+  # timetable tables are inserted per feed version and never updated; the
+  # prune deletes old transit_feed_versions rows, and every versioned
+  # table cascades from them (a cascade needs no grant), so the writer gets
+  # no DELETE there. The api reads (batch 3); read_shared gives the
+  # aggregator and notifier SELECT too, which no code uses.
+  transit_networks: {class: ingest, grants: {api: S, writer: SIU}}
+  transit_feed_versions: {class: ingest, grants: {api: S, writer: SIUD}}
+  transit_feed_parts: {class: ingest, grants: {api: S, writer: SI}}
+  transit_lines: {class: ingest, grants: {api: S, writer: SI}}
+  transit_stops: {class: ingest, grants: {api: S, writer: SI}}
+  transit_patterns: {class: ingest, grants: {api: S, writer: SI}}
+  transit_pattern_stops: {class: ingest, grants: {api: S, writer: SI}}
+  transit_trips: {class: ingest, grants: {api: S, writer: SI}}
+  transit_service_days: {class: ingest, grants: {api: S, writer: SI}}
+  # Upserted from each situations snapshot; absent situations deleted.
+  transit_situations: {class: ingest, grants: {api: S, writer: SIUD}}
+  # Replaced whole at each timetable activation.
+  transit_rail_links: {class: ingest, grants: {api: S, writer: SIUD}}
   # writer: D too (spec §6.4 says SIU): the TfL upsert deletes the TfL lines
   # that left the feed. Its rows are pinned to source = 'tfl' by
   # row_policies below (plan 3c.3, D10).
@@ -456,7 +477,9 @@ row_policies:
   #   writer: ds_store::freshness::record_ingest from its handlers: tfl,
   #     tocs, the four snapshot sources (ds_store::samples::sources) and the
   #     island-of-Ireland catalogue's per-network sources
-  #     (ds_store::samples::island_of_ireland). The two unsuffixed
+  #     (ds_store::samples::island_of_ireland), and each transit network's
+  #     timetable and situations (common::transit, transit spec §8.5;
+  #     metrolink only, off by default). The two unsuffixed
   #     island_of_ireland_* names writers recorded before the per-network
   #     split were dropped a release after it (batch 54; migration
   #     20261010100100 deletes their rows).
@@ -466,6 +489,7 @@ row_policies:
         source IN ('tfl', 'tocs', 'station-samples', 'full-coverage-stats',
         'full-coverage-window-stats', 'station-full-coverage-samples',
         'island_of_ireland_stations_gtfs', 'island_of_ireland_lines_gtfs',
-        'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir')
+        'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir',
+        'transit-metrolink-timetable', 'transit-metrolink-situations')
     stations: {writes: "source = 'stations'"}
     incidents: {writes: "source = 'incidents'"}

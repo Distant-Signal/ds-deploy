@@ -17,6 +17,13 @@
 #   final   a client that does not exist yet (the phase 3 stream producers
 #           and the ingest-writer). <rules> in every stage, so phase 3 needs
 #           no Redis restart.
+#   optional  as `final`, but rendered (its ACL line and its password in
+#           the Redis pod) only while redis.acl.clients.<user in camelCase>
+#           is on (poller-transit-metrolink: pollerTransitMetrolink). A new
+#           producer that ships off: merging it renders nothing new, so it
+#           needs no Secret key and restarts nothing. Turning its client
+#           on needs the `<user>-password` key first and restarts Redis
+#           once (transit spec §0, §13.2).
 #   admin   humans, through `kubectl exec ... redis-cli --user ds-admin`,
 #           and the Redis pod's own probes: `~* &* +@all` in every stage.
 #
@@ -77,6 +84,10 @@ poller-tocs final ~ds:ingest:reference +xadd +xrevrange +ping +hello +auth +clie
 poller-irish-rail-gtfs final ~ds:ingest:ioi-gtfs +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 poller-irish-rail-live final ~ds:ingest:ioi-live +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 poller-nir-stations final ~ds:ingest:ioi-nir +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
+# poller-transit-schedule, one user per network (transit spec §13.2), off
+# by default: XADD to its own stream, XREVRANGE for its cursor and its feed
+# guard's baseline (the last timetable commit).
+poller-transit-metrolink optional ~ds:ingest:transit-metrolink +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 # ingest-writer (crates/ingest-stream/src/consumer.rs,
 # crates/ingest-writer/src/stream.rs): its consumer group and gauges on
 # ds:ingest:*, but never XADD, XTRIM or XDEL there, so it cannot forge or

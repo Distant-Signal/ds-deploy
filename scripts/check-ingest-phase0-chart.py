@@ -608,6 +608,54 @@ def check_redis_acl_file(c: Checker) -> None:
             )
 
 
+def check_optional_acl_users(c: Checker) -> None:
+    """Check an `optional` user renders only while its client is on (transit §0).
+
+    poller-transit-metrolink ships off: by default neither its ACL line nor
+    its password env (a Secret key Redis would need) renders, so merging it
+    restarts nothing. With its client on, both render, and the ConfigMap
+    still equals scripts/render-redis-acl.py's with `--client`.
+    """
+    acl = load_render_acl()
+    text = (CHART / "files" / "redis-users.acl.tpl").read_text(encoding="utf-8")
+    var = "REDIS_ACL_PASSWORD_POLLER_TRANSIT_METROLINK"
+    for on in (False, True):
+        args = sets(f"redis.acl.clients.pollerTransitMetrolink={str(on).lower()}")
+        docs = c.docs(*args)
+        cm = by_name(docs).get("ConfigMap/distant-signal-redis-acl", {})
+        got = cast("dict[str, str]", cm.get("data") or {}).get("users.acl.tpl") or ""
+        want = acl.render(
+            text,
+            stage="narrow",
+            default_user=True,
+            default_password=True,
+            clients=["pollerTransitMetrolink"] if on else [],
+        )
+        c.check(
+            ok=got == want and ("user poller-transit-metrolink " in got) == on,
+            message=f"optional ACL user with its client {on}: ConfigMap {got!r:.80}",
+        )
+        inits = containers(deployment(docs, "-redis"), "initContainers")
+        init_env = env(inits[0]) if inits else {}
+        c.check(
+            ok=(var in init_env) == on
+            and (
+                not on
+                or secret_ref(init_env.get(var))
+                == ("example-redis-users", "poller-transit-metrolink-password")
+            ),
+            message=f"optional ACL user with its client {on}: Redis env {var}",
+        )
+    # Not deployed while its network is off, so defaultUser off does not
+    # need its client on.
+    renders(
+        c,
+        "defaultUser off with the transit client off (no producer)",
+        *ALL_CLIENTS,
+        *sets("redis.acl.defaultUser=off"),
+    )
+
+
 def renders(c: Checker, label: str, *args: str) -> None:
     """Check that the render succeeds."""
     code, out = c.render(*args)
@@ -693,6 +741,22 @@ def check_narrow_role_guards(c: Checker) -> None:
         "perService.writer.connect",
         *sets("postgresql.roles.perService.writer.connect=false"),
     )
+    # The same for a transit network's stream (transit spec §0): the
+    # writer's ingest_freshness row policy binds its own role only.
+    c.refuses(
+        "M4: transit-metrolink apply as the app role",
+        "ingestWriter.streams.transit-metrolink: apply needs",
+        *sets(
+            "ingestWriter.streams.tfl=off",
+            "ingestWriter.streams.transit-metrolink=apply",
+            "postgresql.roles.perService.writer.connect=false",
+        ),
+    )
+    renders(
+        c,
+        "transit-metrolink apply as the writer's role",
+        *sets("ingestWriter.streams.transit-metrolink=apply"),
+    )
 
 
 def check_retired_switches(c: Checker) -> None:
@@ -739,6 +803,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_redis_refusals(c)
     check_redis_users(c)
     check_redis_acl_file(c)
+    check_optional_acl_users(c)
     check_redis_user_guards(c)
     check_narrow_role_guards(c)
     check_retired_switches(c)

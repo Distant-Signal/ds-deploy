@@ -416,7 +416,13 @@ counts as deployed. Takes (dict "root" $ "client" <redis.acl.clients key>).
 {{- $v := .root.Values -}}
 {{- $pollers := dict "pollerIncidents" "incidents" "pollerLdbws" "ldbws" "pollerTfl" "tfl" "pollerTocs" "tocs" "pollerStations" "stations" -}}
 {{- $own := dict "pollerIrishRailGtfs" "pollerIrishRailGtfs" "pollerIrishRailLive" "pollerIrishRailLive" "pollerNirStations" "pollerNirStations" "movementRelay" "movementRelay" "ingestWriter" "ingestWriter" -}}
-{{- if hasKey $pollers .client -}}
+{{- /* poller-transit-schedule, one Deployment per enabled network
+     (pollerTransitSchedule.networks.<network>.enabled, transit spec §13.1). */ -}}
+{{- $transit := dict "pollerTransitMetrolink" "metrolink" -}}
+{{- if hasKey $transit .client -}}
+{{- $networks := ($v.pollerTransitSchedule | default dict).networks | default dict -}}
+{{- if (get $networks (get $transit .client) | default dict).enabled }}true{{ end -}}
+{{- else if hasKey $pollers .client -}}
 {{- if (get $v.pollers (get $pollers .client) | default dict).enabled }}true{{ end -}}
 {{- else if hasKey $own .client -}}
 {{- if (get $v (get $own .client) | default dict).enabled }}true{{ end -}}
@@ -463,15 +469,36 @@ on-unshared").
 
 {{/*
 The ACL users from files/redis-users.acl.tpl, one "<user> <kind> <rules>"
-per line (comments and blank lines dropped).
+per line (comments and blank lines dropped). An `optional` user is listed
+only while its client, redis.acl.clients.<user in camelCase>, is on
+(distant-signal.redisAclOptionalClient), so it needs no Secret key and
+restarts nothing until then.
 */}}
 {{- define "distant-signal.redisAclUserLines" -}}
+{{- $root := . -}}
 {{- range $line := .Files.Get "files/redis-users.acl.tpl" | splitList "\n" }}
 {{- $line = trim $line }}
 {{- if and $line (not (hasPrefix "#" $line)) }}
+{{- $parts := regexSplit "\\s+" $line 3 }}
+{{- if or (lt (len $parts) 2) (ne (index $parts 1) "optional") (get $root.Values.redis.acl.clients (include "distant-signal.redisAclOptionalClient" (index $parts 0))) }}
 {{ $line }}
 {{- end }}
 {{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+The redis.acl.clients key of an `optional` ACL user: its name in
+camelCase (poller-transit-metrolink -> pollerTransitMetrolink). Takes the
+user name.
+*/}}
+{{- define "distant-signal.redisAclOptionalClient" -}}
+{{- $words := splitList "-" . -}}
+{{- $out := first $words -}}
+{{- range $word := rest $words -}}
+{{- $out = printf "%s%s" $out (title $word) -}}
+{{- end -}}
+{{- $out -}}
 {{- end }}
 
 {{/*
@@ -508,7 +535,7 @@ user default reset off
 {{- $rights := $rules }}
 {{- if or (eq $kind "admin") (and (eq $kind "client") (eq $stage "open")) }}
 {{- $rights = "~* &* +@all" }}
-{{- else if not (has $kind (list "client" "final")) }}
+{{- else if not (has $kind (list "client" "final" "optional")) }}
 {{- fail (printf "files/redis-users.acl.tpl: user %s has unknown kind %q" $user $kind) }}
 {{- end }}
 user {{ $user }} reset on >${{ printf "{%s}" $var }} >${{ printf "{%s_PREVIOUS}" $var }} {{ $rights }}
@@ -1418,6 +1445,11 @@ other than off or apply (release B removed shadow). Takes root.
 {{- end -}}
 {{- if and (eq (toString (get .Values.ingestWriter.streams "tfl")) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" . "service" "writer"))) -}}
 {{- fail "ingestWriter.streams.tfl: apply needs postgresql.roles.perService.writer.connect (security review M4): line_status's row policy (source = 'tfl') applies to the writer's own role only. As the app role the writer could write the aggregator's lines too." -}}
+{{- end -}}
+{{- range $name, $mode := .Values.ingestWriter.streams -}}
+{{- if and (hasPrefix "transit-" $name) (eq (toString $mode) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" $ "service" "writer"))) -}}
+{{- fail (printf "ingestWriter.streams.%s: apply needs postgresql.roles.perService.writer.connect (as tfl, security review M4): the writer's row policies (ingest_freshness's transit sources, line_status from batch 4) bind its own role only. As the app role it could write any feed's freshness." $name) -}}
+{{- end -}}
 {{- end -}}
 {{- join "," $items -}}
 {{- end }}

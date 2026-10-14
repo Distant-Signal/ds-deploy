@@ -4,7 +4,7 @@ r"""Render charts/distant-signal/files/redis-users.acl.tpl as a users.acl.
 
   uv run scripts/render-redis-acl.py [--stage open|narrow]
       [--default-user on|off|on-unshared] [--no-default-password]
-      [--passwords-from-env]
+      [--passwords-from-env] [--client KEY ...]
 
 Prints exactly the `users.acl.tpl` data the chart's redis-acl ConfigMap
 holds for the same `redis.acl.stage` and `redis.acl.defaultUser`
@@ -15,6 +15,10 @@ REDIS_ACL_PASSWORD_DEFAULT from (redis.auth's password, or the users
 Secret's own `default-password`). --no-default-password renders the
 `default` user as `nopass` (`on` only), as the chart does when redis.auth
 is off.
+
+An `optional` user (a producer that ships off) is rendered only with
+`--client <its redis.acl.clients key>`, as the chart renders it only while
+that client is on.
 
 --passwords-from-env fills the placeholders from the environment, as the
 Redis pod's initContainer does (an empty *_PREVIOUS is dropped), so a
@@ -33,7 +37,7 @@ import os
 import pathlib
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 TEMPLATE = (
     pathlib.Path(__file__).resolve().parent.parent
@@ -42,7 +46,7 @@ TEMPLATE = (
     / "files"
     / "redis-users.acl.tpl"
 )
-KINDS = ("client", "final", "admin")
+KINDS = ("client", "final", "optional", "admin")
 OPEN_RIGHTS = "~* &* +@all"
 PLACEHOLDER = re.compile(r"^>\$\{([A-Z0-9_]+)\}$")
 
@@ -54,6 +58,12 @@ class AclError(Exception):
 def password_var(user: str) -> str:
     """Return the env var holding `user`'s password."""
     return "REDIS_ACL_PASSWORD_" + user.upper().replace("-", "_")
+
+
+def optional_client(user: str) -> str:
+    """Return the redis.acl.clients key of an `optional` user (camelCase)."""
+    first, *rest = user.split("-")
+    return first + "".join(word.title() for word in rest)
 
 
 def users(text: str) -> list[tuple[str, str, str]]:
@@ -71,14 +81,28 @@ def users(text: str) -> list[tuple[str, str, str]]:
     return result
 
 
-def render(text: str, *, stage: str, default_user: bool, default_password: bool) -> str:
-    """Return users.acl with placeholders, as the chart renders it."""
+def render(
+    text: str,
+    *,
+    stage: str,
+    default_user: bool,
+    default_password: bool,
+    clients: Collection[str] = (),
+) -> str:
+    """Return users.acl with placeholders, as the chart renders it.
+
+    An `optional` user is rendered only when its client key
+    (`optional_client`) is in `clients`, as `redis.acl.clients.<key>: true`
+    renders it in the chart.
+    """
     if default_user:
         auth = ">${REDIS_ACL_PASSWORD_DEFAULT}" if default_password else "nopass"
         lines = [f"user default reset on {auth} {OPEN_RIGHTS}"]
     else:
         lines = ["user default reset off"]
     for user, kind, rules in users(text):
+        if kind == "optional" and optional_client(user) not in clients:
+            continue
         open_rights = kind == "admin" or (kind == "client" and stage == "open")
         rights = OPEN_RIGHTS if open_rights else rules
         var = password_var(user)
@@ -121,6 +145,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--no-default-password", action="store_true")
     parser.add_argument("--passwords-from-env", action="store_true")
+    parser.add_argument(
+        "--client",
+        action="append",
+        default=[],
+        metavar="KEY",
+        help="a redis.acl.clients key that is on: renders its `optional` user",
+    )
     args = parser.parse_args(argv)
     if args.default_user == "on-unshared" and args.no_default_password:
         print(
@@ -134,6 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             stage=args.stage,
             default_user=args.default_user != "off",
             default_password=not args.no_default_password,
+            clients=args.client,
         )
         if args.passwords_from_env:
             acl = fill(acl, os.environ)
