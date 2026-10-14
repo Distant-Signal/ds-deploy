@@ -715,6 +715,9 @@ jobs:
       # so accessibility.spec.ts can sweep them. Read at request time by
       # `next start`; see frontend/lib/legal.ts. Production leaves it unset.
       LEGAL_PAGES_PREVIEW: "true"
+      # The seed's tram network (frontend/e2e/fixtures/seed.sql), for the
+      # /transit pages' specs and screenshots. Off in every other setting.
+      API_TRANSIT_NETWORKS: metrolink
       # frontend/e2e/fixtures/seed.sql's own fixture ids -- see that file's
       # header comment for what each backs and why the dates are fixed.
       E2E_REAL_LINE_ID: lner-ecml
