@@ -821,7 +821,7 @@ BEGIN
         SELECT v.tbl, v.kind, v.cmd, current_setting('ds_grants.' || v.kind) AS grantee,
                v.cond
         FROM (VALUES
-        ('line_status', 'writer', 'ALL', 'source = ''tfl'''),
+        ('line_status', 'writer', 'ALL', 'source IN (''tfl'', ''transit'')'),
         ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'')'),
         ('ingest_freshness', 'writer', 'UPDATE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'')'),
         ('ingest_freshness', 'writer', 'DELETE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'')'),

@@ -463,9 +463,12 @@ app_revokes:
 # _update (USING and WITH CHECK) and _delete (USING); its reads are
 # unchanged.
 row_policies:
-  # The ingest-writer applies the `tfl` stream (plan 3c.3); the aggregator
-  # owns every other line.
-  line_status: {writer: "source = 'tfl'"}
+  # The ingest-writer applies the `tfl` stream (plan 3c.3) and each transit
+  # network's (`source = 'transit'`, ids `<network>:<line>`; transit spec
+  # §10.4: one source for every network, pinned per stream in the handler,
+  # since RLS cannot tell networks apart); the aggregator owns every other
+  # line.
+  line_status: {writer: "source IN ('tfl', 'transit')"}
   # Each producer writes only its own freshness rows (security review L4,
   # 2026-10-08), so a compromised one cannot push another feed's
   # fetched_at into the future (the upsert keeps GREATEST) and hide that
