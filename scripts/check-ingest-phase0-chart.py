@@ -698,6 +698,31 @@ def check_transit_producer(c: Checker) -> None:
         and value(e.get("TRANSIT_WORK_DIR")) == "/work",
         message=f"{name}: its network, Redis user and work dir",
     )
+    # The one-shot timetable refresh: off (empty) by default, passed
+    # through as set, a token outside its grammar refused at render.
+    c.check(
+        ok=value(e.get("TRANSIT_TIMETABLE_REFRESH")) == "",
+        message=f"{name}: no timetable refresh request by default",
+    )
+    refreshed = by_name(
+        c.docs(
+            *TRANSIT_ON,
+            *sets(
+                "pollerTransitSchedule.networks.metrolink.timetableRefresh=2026-10-15"
+            ),
+        )
+    )
+    refreshed_env = env((containers(refreshed.get(name, {})) or [{}])[0])
+    c.check(
+        ok=value(refreshed_env.get("TRANSIT_TIMETABLE_REFRESH")) == "2026-10-15",
+        message=f"{name}: timetableRefresh reaches TRANSIT_TIMETABLE_REFRESH",
+    )
+    c.refuses(
+        "a timetable refresh token outside its grammar",
+        "timetableRefresh must be 1-64",
+        *TRANSIT_ON,
+        *sets("pollerTransitSchedule.networks.metrolink.timetableRefresh=has space"),
+    )
     volumes = cast("list[dict[str, object]]", pod(deployment).get("volumes") or [])
     c.check(
         ok=any(v.get("name") == "work" and "emptyDir" in v for v in volumes),

@@ -3894,6 +3894,14 @@ pollerTransitSchedule:
       # more than this fraction since the last commit is refused
       # (transit_feed_refused_total{reason="sharp_drop"}). 1.0 turns it off.
       feedMaxDropFraction: 0.3
+      # -- One-shot timetable refresh (TRANSIT_TIMETABLE_REFRESH). Empty:
+      # none. Set it to a new token (a date such as "2026-10-15", or a
+      # counter) and the producer, which restarts for the change, fetches
+      # and publishes the timetable at once instead of waiting out the
+      # day. The commit records the token, so later restarts with the same
+      # token change nothing; change it to ask again, never unset it.
+      # 1-64 of A-Z a-z 0-9 . _ : - (docs/transit-networks.md).
+      timetableRefresh: ""
       # -- The /work emptyDir the GTFS zip is downloaded to.
       workDirSizeLimit: 512Mi
       # The parse streams: 48 MiB peak RSS on the whole North West file.

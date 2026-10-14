@@ -2644,6 +2644,7 @@ spec's §15.1.
 | `pollerTransitSchedule.networks.metrolink.situationsEnabled` | `false` | Run the SIRI-SX loop. The ingest-writer applies `transit-situations/1` (plan 4.3); a writer image older than that dead-letters every snapshot, so turn it on only once the writer has it. |
 | `pollerTransitSchedule.networks.metrolink.horizonDays` | `60` | Days of service dates stored after today. |
 | `pollerTransitSchedule.networks.metrolink.feedMaxDropFraction` | `0.3` | A feed whose line, stop or trip count fell by more than this since the last commit is refused. |
+| `pollerTransitSchedule.networks.metrolink.timetableRefresh` | `""` | `TRANSIT_TIMETABLE_REFRESH`: a one-shot timetable refresh. Set a new token (a date or a counter; 1-64 of `A-Z a-z 0-9 . _ : -`) and the producer fetches and publishes the timetable at start instead of waiting out the day. The commit records the token, so it is answered once; change it to ask again, never unset it. Empty: none. |
 | `pollerTransitSchedule.networks.metrolink.workDirSizeLimit` | `512Mi` | The `/work` emptyDir's size limit (the GTFS zip). |
 | `pollerTransitSchedule.networks.metrolink.resources` | requests `100m`/`192Mi`, limit `768Mi` | Container resource requests/limits. |
 | `pollerTransitSchedule.networks.metrolink.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it. |

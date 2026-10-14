@@ -13,6 +13,10 @@ Recreate from creation: two pods must never XADD at once.
 {{- $client := printf "pollerTransit%s" ($network | title) }}
 {{- $component := "poller-transit-schedule" }}
 {{- include "distant-signal.requireStreamApplied" (dict "root" $root "client" $client "stream" (printf "transit-%s" $network) "what" (printf "pollerTransitSchedule.networks.%s.enabled" $network)) }}
+{{- $refresh := toString (default "" $n.timetableRefresh) }}
+{{- if and $refresh (not (regexMatch "^[A-Za-z0-9._:-]{1,64}$" $refresh)) }}
+{{- fail (printf "pollerTransitSchedule.networks.%s.timetableRefresh must be 1-64 of A-Z a-z 0-9 . _ : - (got %q)" $network $refresh) }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -133,6 +137,8 @@ network's extraEnv, which replaces an entry of the same name. Takes (dict
               value: {{ $n.horizonDays | int64 | quote }}
             - name: FEED_MAX_DROP_FRACTION
               value: {{ $n.feedMaxDropFraction | quote }}
+            - name: TRANSIT_TIMETABLE_REFRESH
+              value: {{ toString (default "" $n.timetableRefresh) | quote }}
             - name: TRANSIT_WORK_DIR
               value: "/work"
             - name: REDIS_URL
