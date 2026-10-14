@@ -348,6 +348,10 @@ with api.extraEnv, which replaces an entry of the same name.
             # credentials above.
             - name: CHATBOT_ACCESS_GROUP
               value: {{ .Values.api.chatbotAccessGroup | quote }}
+            # The transit networks /public/transit serves (empty: every
+            # route 404s and the frontend hides the pages).
+            - name: API_TRANSIT_NETWORKS
+              value: {{ join "," .Values.api.transitNetworks | quote }}
             # `group` or `authenticated` -- see api.chatbotAccess in
             # values.yaml.
             - name: CHATBOT_ACCESS

@@ -1516,6 +1516,12 @@ api:
   # Only read when chatbotAccess is `group`; there, "" means nobody gets the
   # chatbot (it does NOT mean everyone -- use chatbotAccess: authenticated).
   chatbotAccessGroup: distant-signal-chatbot-users
+  # -- The transit networks `/public/transit` serves (API_TRANSIT_NETWORKS;
+  # transit networks spec §11). Empty by default: every `/public/transit`
+  # route answers 404 and the frontend hides its pages. List a network only
+  # after its timetable has been applied for a day (spec §15.1), e.g.
+  # `[metrolink]`.
+  transitNetworks: []
   # -- Who gets the embedded chatbot (/chat): `group` (default) -- logged-in
   # members of chatbotAccessGroup only; `authenticated` -- every logged-in
   # user, whatever their groups (logged-out visitors still get the sign-in
