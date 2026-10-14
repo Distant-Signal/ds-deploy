@@ -1180,7 +1180,7 @@ jobs:
           grep -q 'name: INTERNAL_OAUTH_GROUP_MCP$' <<<"${api}" || fail "the api must keep INTERNAL_OAUTH_GROUP_MCP"
           dep=$(doc Deployment distant-signal-ingest-writer <<<"${out}")
           env_is "${dep}" INGEST_WRITER_STREAMS \
-            "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply" ingest-writer
+            "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,transit-metrolink:off" ingest-writer
 
           # The retired switches: anything but their one value fails, naming it.
           for kv in pollers.stations.ingest.sink=http pollers.tfl.ingest.sink=http+shadow \
@@ -2725,7 +2725,7 @@ jobs:
           env_is "${dep}" INGEST_WRITER_LOOPS true
           env_is "${dep}" RECONCILIATION_SWEEP_INTERVAL_SECS 300
           env_is "${dep}" DATABASE_MAX_CONNECTIONS 6
-          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply"
+          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,transit-metrolink:off"
 
           # Plan 3a.3: a stream not off brings Redis (env, user, egress, admission),
           # as its own narrow Redis user (security review H3; the guards
