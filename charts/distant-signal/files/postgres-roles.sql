@@ -144,6 +144,7 @@ SET log_statement = none;
 \set backup_password ''
 \endif
 
+\echo '== postgres-roles.sql: begin'
 BEGIN;
 
 -- The settings below live only until COMMIT (set_config(..., true)), so
@@ -168,6 +169,7 @@ SELECT
 \gset ignored_
 
 -- 1. Roles, 2. memberships.
+\echo '== postgres-roles.sql: 1-2. roles and memberships'
 DO $roles$
 DECLARE
     old_owner text := current_setting('ds_roles.old_owner');
@@ -244,6 +246,7 @@ END
 $roles$;
 
 -- 3. Ownership.
+\echo '== postgres-roles.sql: 3. ownership'
 DO $ownership$
 DECLARE
     old_oid oid := (SELECT oid FROM pg_roles WHERE rolname = current_setting('ds_roles.old_owner'));
@@ -261,7 +264,12 @@ BEGIN
             current_setting('ds_roles.old_owner');
     END IF;
 
-    EXECUTE format('ALTER SCHEMA public OWNER TO %I', owner_role);
+    -- Only when it changes: a steady-state run writes no catalog row it
+    -- need not (scripts/test-postgres-roles.py --check-setup-job).
+    IF (SELECT nspowner FROM pg_namespace WHERE nspname = 'public')
+        <> (SELECT oid FROM pg_roles WHERE rolname = owner_role) THEN
+        EXECUTE format('ALTER SCHEMA public OWNER TO %I', owner_role);
+    END IF;
 
     -- Relations. Indexes and TOAST tables follow their table; a sequence
     -- owned by a column (serial/identity) follows its table too, and may
@@ -355,6 +363,7 @@ END
 $ownership$;
 
 -- 4. App role privileges, 5. backup functions (this database).
+\echo '== postgres-roles.sql: 4, 5, 7. privileges'
 DO $privileges$
 DECLARE
     owner_role text := current_setting('ds_roles.owner');
@@ -413,6 +422,7 @@ $privileges$;
 
 -- 6. pg_stat_statements (migration 20260927070000 does the same, but as
 -- the owner role it may not).
+\echo '== postgres-roles.sql: 6. pg_stat_statements'
 DO $extension$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements') THEN
@@ -424,9 +434,11 @@ EXCEPTION
 END
 $extension$;
 
+\echo '== postgres-roles.sql: commit'
 COMMIT;
 
 -- 5. Backup functions, in the database pgBackRest connects to.
+\echo '== postgres-roles.sql: 5. backup functions in database' :"backup_database"
 \connect :"backup_database"
 BEGIN;
 SELECT set_config('ds_roles.backup', :'backup', true) \gset ignored_
@@ -439,3 +451,4 @@ BEGIN
 END
 $backup$;
 COMMIT;
+\echo '== postgres-roles.sql: done'

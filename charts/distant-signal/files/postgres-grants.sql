@@ -24,10 +24,11 @@
 --   4. the groups' grants and each narrow role's grants, after revoking
 --      everything else they hold in schema public. Objects that do not
 --      exist yet are skipped (a new cluster's initdb run);
---   5. the row policies (db-grants.yaml `row_policies`): every policy named
---      ds_grants_* is dropped, then each listed one is created again as a
---      RESTRICTIVE policy for its role (FOR ALL, or one per write command
---      for a `{writes: ...}` entry);
+--   5. the row policies (db-grants.yaml `row_policies`): each listed one
+--      is a RESTRICTIVE policy for its role (FOR ALL, or one per write
+--      command for a `{writes: ...}` entry), created or replaced only when
+--      missing or different, and a ds_grants_* policy no longer listed is
+--      dropped (an unchanged policy takes no ACCESS EXCLUSIVE lock);
 --   6. what the app role loses (db-grants.yaml `app_revokes`): every
 --      privilege on those tables and EXECUTE on those functions, which
 --      postgres-roles.sql's blanket grants gave it again just before.
@@ -225,6 +226,7 @@ SET log_statement = none;
 \set ldbws_ro_password ''
 \endif
 
+\echo '== postgres-grants.sql: begin'
 BEGIN;
 
 -- Settings live only until COMMIT, so the passwords never outlast it.
@@ -274,6 +276,7 @@ SELECT
 \gset ignored_
 
 -- 1. Roles.
+\echo '== postgres-grants.sql: 1. roles'
 DO $roles$
 DECLARE
     app text := current_setting('ds_grants.app');
@@ -359,6 +362,7 @@ END
 $roles$;
 
 -- 2. Memberships, 3. CONNECT and USAGE.
+\echo '== postgres-grants.sql: 2-3. memberships, CONNECT and USAGE'
 DO $members$
 DECLARE
     app text := current_setting('ds_grants.app');
@@ -434,6 +438,7 @@ $members$;
 -- public is revoked first, so a grant removed from db-grants.yaml goes
 -- away on the next run. Observed roles end with nothing of their own: they
 -- use the app role's privileges.
+\echo '== postgres-grants.sql: 4. grants'
 DO $grants$
 DECLARE
     r record;
@@ -806,20 +811,32 @@ $grants$;
 -- role whatever permissive policy (the table's migration adds one for
 -- PUBLIC) or membership (the app role) would otherwise let it see. It
 -- takes effect once the table's migration has enabled row-level security.
+--
+-- CREATE POLICY and DROP POLICY take ACCESS EXCLUSIVE on the table, which
+-- waits behind every open transaction that has touched it and blocks every
+-- query queued after it (a suspect when the 2026-10-14 setup Job ran into
+-- its deadline on a release that changed no policy; the Job's lock_timeout
+-- now bounds such a wait). So a policy whose definition is
+-- already right is left alone: the steady state takes no lock stronger
+-- than a GRANT's. The wanted definition is deparsed on a throwaway TEMP
+-- copy of the table's columns (CREATE TABLE ... LIKE takes only ACCESS
+-- SHARE), so it compares exactly with the live policy's, however the
+-- condition is spelled. Only a ds_grants_* policy that is not listed, or
+-- differs (command, role, RESTRICTIVE, USING or WITH CHECK), is dropped,
+-- and only a missing or differing one is created.
+\echo '== postgres-grants.sql: 5. row policies'
 DO $policies$
 DECLARE
     r record;
+    probe oid;
+    want_qual text;
+    want_check text;
+    wanted text[] := ARRAY[]::text[];
 BEGIN
     FOR r IN
-        SELECT p.tablename, p.policyname
-        FROM pg_policies p
-        WHERE p.schemaname = 'public' AND p.policyname LIKE 'ds\_grants\_%'
-    LOOP
-        EXECUTE format('DROP POLICY %I ON public.%I', r.policyname, r.tablename);
-    END LOOP;
-    FOR r IN
-        SELECT v.tbl, v.kind, v.cmd, current_setting('ds_grants.' || v.kind) AS grantee,
-               v.cond
+        SELECT v.tbl,
+               'ds_grants_' || v.kind
+                   || CASE WHEN v.cmd = 'ALL' THEN '' ELSE '_' || lower(v.cmd) END AS pol
         FROM (VALUES
         ('line_status', 'writer', 'ALL', 'source IN (''tfl'', ''transit'')'),
         ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'')'),
@@ -833,18 +850,72 @@ BEGIN
         ('ingest_freshness', 'incidents', 'DELETE', 'source = ''incidents''')) AS v(tbl, kind, cmd, cond)
         WHERE to_regclass(format('public.%I', v.tbl)) IS NOT NULL
     LOOP
-        -- FOR ALL: ds_grants_<role>, USING and WITH CHECK. A writes-only
-        -- entry: ds_grants_<role>_<command> for INSERT (WITH CHECK), UPDATE
-        -- (both) and DELETE (USING); the role's reads stay unrestricted.
+        wanted := wanted || format('%I.%I', r.tbl, r.pol);
+    END LOOP;
+    -- Policies no longer listed.
+    FOR r IN
+        SELECT p.tablename, p.policyname
+        FROM pg_policies p
+        WHERE p.schemaname = 'public' AND p.policyname LIKE 'ds\_grants\_%'
+          AND format('%I.%I', p.tablename, p.policyname) <> ALL (wanted)
+    LOOP
+        RAISE NOTICE 'dropping row policy % on % (no longer listed)',
+            r.policyname, r.tablename;
+        EXECUTE format('DROP POLICY %I ON public.%I', r.policyname, r.tablename);
+    END LOOP;
+    FOR r IN
+        SELECT v.tbl, v.kind, v.cmd, current_setting('ds_grants.' || v.kind) AS grantee,
+               v.cond,
+               'ds_grants_' || v.kind
+                   || CASE WHEN v.cmd = 'ALL' THEN '' ELSE '_' || lower(v.cmd) END AS pol,
+               -- FOR ALL: ds_grants_<role>, USING and WITH CHECK. A
+               -- writes-only entry: ds_grants_<role>_<command> for INSERT
+               -- (WITH CHECK), UPDATE (both) and DELETE (USING); the role's
+               -- reads stay unrestricted.
+               CASE v.cmd
+                   WHEN 'INSERT' THEN format('WITH CHECK (%s)', v.cond)
+                   WHEN 'DELETE' THEN format('USING (%s)', v.cond)
+                   ELSE format('USING (%s) WITH CHECK (%s)', v.cond, v.cond)
+               END AS clauses,
+               CASE v.cmd WHEN 'ALL' THEN '*' WHEN 'INSERT' THEN 'a'
+                          WHEN 'UPDATE' THEN 'w' WHEN 'DELETE' THEN 'd' END AS polcmd
+        FROM (VALUES
+        ('line_status', 'writer', 'ALL', 'source IN (''tfl'', ''transit'')'),
+        ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'')'),
+        ('ingest_freshness', 'writer', 'UPDATE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'')'),
+        ('ingest_freshness', 'writer', 'DELETE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'')'),
+        ('ingest_freshness', 'stations', 'INSERT', 'source = ''stations'''),
+        ('ingest_freshness', 'stations', 'UPDATE', 'source = ''stations'''),
+        ('ingest_freshness', 'stations', 'DELETE', 'source = ''stations'''),
+        ('ingest_freshness', 'incidents', 'INSERT', 'source = ''incidents'''),
+        ('ingest_freshness', 'incidents', 'UPDATE', 'source = ''incidents'''),
+        ('ingest_freshness', 'incidents', 'DELETE', 'source = ''incidents''')) AS v(tbl, kind, cmd, cond)
+        WHERE to_regclass(format('public.%I', v.tbl)) IS NOT NULL
+    LOOP
+        EXECUTE format('CREATE TEMP TABLE ds_grants_policy_probe (LIKE public.%I)', r.tbl);
+        probe := 'pg_temp.ds_grants_policy_probe'::regclass;
+        EXECUTE format('CREATE POLICY probe ON pg_temp.ds_grants_policy_probe '
+                       'AS RESTRICTIVE FOR %s TO %I %s', r.cmd, r.grantee, r.clauses);
+        SELECT pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid)
+        INTO want_qual, want_check
+        FROM pg_policy p WHERE p.polrelid = probe;
+        DROP TABLE pg_temp.ds_grants_policy_probe;
+        IF EXISTS (
+            SELECT 1 FROM pg_policy p
+            WHERE p.polrelid = format('public.%I', r.tbl)::regclass
+              AND p.polname = r.pol
+              AND NOT p.polpermissive
+              AND p.polcmd = r.polcmd
+              AND p.polroles = ARRAY[(SELECT oid FROM pg_roles WHERE rolname = r.grantee)]
+              AND pg_get_expr(p.polqual, p.polrelid) IS NOT DISTINCT FROM want_qual
+              AND pg_get_expr(p.polwithcheck, p.polrelid) IS NOT DISTINCT FROM want_check)
+        THEN
+            CONTINUE;
+        END IF;
+        RAISE NOTICE 'creating row policy % on %', r.pol, r.tbl;
+        EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', r.pol, r.tbl);
         EXECUTE format('CREATE POLICY %I ON public.%I AS RESTRICTIVE FOR %s TO %I %s',
-                       'ds_grants_' || r.kind
-                           || CASE WHEN r.cmd = 'ALL' THEN '' ELSE '_' || lower(r.cmd) END,
-                       r.tbl, r.cmd, r.grantee,
-                       CASE r.cmd
-                           WHEN 'INSERT' THEN format('WITH CHECK (%s)', r.cond)
-                           WHEN 'DELETE' THEN format('USING (%s)', r.cond)
-                           ELSE format('USING (%s) WITH CHECK (%s)', r.cond, r.cond)
-                       END);
+                       r.pol, r.tbl, r.cmd, r.grantee, r.clauses);
     END LOOP;
 END
 $policies$;
@@ -853,6 +924,7 @@ $policies$;
 -- grants app DML on every table and EXECUTE on every routine on each run;
 -- these held only for the api's /private routes, and app's members (the
 -- observed roles) inherit the loss.
+\echo '== postgres-grants.sql: 6. app revokes'
 DO $app_revokes$
 DECLARE
     app text := current_setting('ds_grants.app');
@@ -879,4 +951,6 @@ BEGIN
 END
 $app_revokes$;
 
+\echo '== postgres-grants.sql: commit'
 COMMIT;
+\echo '== postgres-grants.sql: done'

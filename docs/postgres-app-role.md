@@ -173,7 +173,8 @@ SELECT nspowner::regrole FROM pg_namespace WHERE nspname = 'public';
 ```
 
 `kubectl -n distant-signal logs job/distant-signal-postgres-roles-setup`
-shows any error; a failed Job fails the upgrade, and re-running it is safe.
+shows any error; a failed Job fails the upgrade, and re-running it is safe
+(see "When the setup Job fails").
 
 ### 3. Stage B: switch the services
 
@@ -372,13 +373,107 @@ while the Job runs:
   `app_revokes` entry, a role leaving `app`) take effect before the old
   pods stop, as a contract migration would. Remove a privilege only in a
   release after the one whose code stopped using it.
-- The SQL takes its usual brief locks (`CREATE POLICY` / `DROP POLICY` on
-  the tables with row policies) while the old pods serve, as it did
-  before after the rollout.
+- A release that changes no row policy and no ownership takes no ACCESS
+  EXCLUSIVE lock: only a missing or changed `ds_grants_*` policy is
+  dropped and created, and only objects the bootstrap superuser still owns
+  change owner. A release that does change a policy takes ACCESS
+  EXCLUSIVE on that table for a moment, waiting at most `lockTimeout`
+  (10 s) behind the old pods' transactions before the try fails and is
+  retried (see below).
 
 `helm rollback` runs neither pre- nor post-upgrade hooks: after one, run a
 copy of the setup Job by hand if the rolled-back release needs other
 grants (as was done on 2026-10-14).
+
+### When the setup Job fails
+
+**What happened** (2026-10-14, Helm v252). The pre-upgrade setup Job ran
+into its 600 s `activeDeadlineSeconds` and failed the upgrade; Flux's
+retry (v253, 28 minutes later) ran it in about a minute. Its pod, and its
+log, were gone: the Job controller deletes a pod still running at the
+deadline. What the cluster still showed:
+
+- Postgres has `log_lock_waits = on` and `deadlock_timeout = 1s`, so any
+  lock wait over a second is logged, the setup's included. The server
+  log for the Job's ten minutes (about 21:07 to 21:17 UTC) has none, and
+  no lock-wait line at all after 20:57.
+- At 21:17:30, when the deadline ended the pod, the server logged `could
+  not receive data from client: Connection reset by peer`: the Job's
+  session was connected and idle, waiting for psql, not running a
+  statement or queued on a lock.
+- The node was starved: checkpoints writing for 810 s, WAL archive pushes
+  timing out (20:40), COMMITs taking 1 to 5 s and a monitoring
+  `pg_ls_archive_statusdir()` query 2 to 6 s, kubelet `KillPodSandbox`
+  timing out, the migrate Job taking 7 minutes on the retry and the setup
+  Job itself 69 s instead of a few.
+
+So the likeliest cause was not a lock queue but a client side that
+stopped making progress (psql waiting on a reply or on its own output on
+a starved node), with nothing to bound it: an endless `pg_isready` loop,
+no `statement_timeout` or `lock_timeout`, no limit on psql. Recreating
+the row policies on every run (ACCESS EXCLUSIVE on `line_status` and
+`ingest_freshness`) could have caused the same symptom behind a long
+reader, so that is fixed too.
+
+**What the Job does now** (`files/postgres-roles-setup.sh`, from the hook
+ConfigMap):
+
+| Step | Bound |
+|---|---|
+| wait for Postgres (`pg_isready --timeout=5`, every 2 s) | 180 s, then exit 69 |
+| connect | `PGCONNECT_TIMEOUT=10` |
+| each lock wait | `lockTimeout` (10 s): SQLSTATE 55P03 |
+| each statement (a section of the script is one) | `statementTimeout` (120 s): 57014 |
+| one try of a script | 180 s, then psql is killed |
+| retries per script (55P03, 57014, 40P01, `tuple concurrently updated`, psql exit 2, a killed try) | `attempts` (5), backoff 5, 10, 20, 40 s |
+| the whole pod | the Job's deadline less 60 s (540 s of 600): no wait, try or backoff starts that could not end by then, exit 75 |
+
+Both scripts are idempotent and run in one transaction each (plus the
+backup database's grants in a second one), so a retried try starts from a
+clean state. Any other error (a missing password, a superuser check, a
+syntax error) is final, with psql's status (3). With `backoffLimit: 0` the
+Job fails when its one pod does, and that pod and its log stay until the
+next release replaces the Job (`before-hook-creation`). Each section
+prints a `== postgres-*.sql: N. ...` line and its time, and before each
+retry the script lists the sessions that may be in the way: in a
+transaction for over 5 s, waiting on a lock or blocking one, with what
+they hold in `public` and their query (cut to 300 characters; redacted
+when it mentions a password).
+
+**Reading a failed run.** Do it before Flux retries the release, which
+replaces the Job; suspend the HelmRelease first if need be:
+
+```sh
+flux -n distant-signal suspend helmrelease distant-signal   # optional: hold the retry
+kubectl -n distant-signal logs job/distant-signal-postgres-roles-setup --timestamps
+kubectl -n distant-signal describe pod -l job-name=distant-signal-postgres-roles-setup
+#   State: Terminated, with the exit code and the log's tail as its Message
+kubectl -n distant-signal logs distant-signal-postgres-0 -c postgres --since=1h \
+  | grep -E -A3 'still waiting|acquired|canceling statement|could not receive'
+flux -n distant-signal resume helmrelease distant-signal
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | done |
+| 3 | an SQL error that a retry would not fix: read the `ERROR:` line and its `CONTEXT` |
+| 64 | bad usage or setting (a chart bug) |
+| 69 | Postgres did not answer `pg_isready` within 180 s |
+| 75 | every try failed for a retriable reason, or the deadline left no room: the log names the reason and the sessions in the way |
+| 137 / no pod | killed at the Job deadline anyway (the pod was slow to start) |
+
+For a 75 on lock timeouts, the listed sessions are the ones to look at (a
+long report, a stuck migration, an `idle in transaction` client); once
+they are gone, re-run the release or a copy of the Job. While the Job is
+running, the same view by hand:
+
+```sql
+SELECT pid, application_name, state, pg_blocking_pids(pid) AS blocked_by,
+       now() - xact_start AS xact_age, left(query, 120) AS query
+FROM pg_stat_activity
+WHERE wait_event_type = 'Lock' OR xact_start < now() - interval '30 seconds'
+ORDER BY xact_start;
+```
 
 ### The first narrow role: `distant_signal_schedule_reference` (phase 2a)
 
@@ -569,6 +664,14 @@ is narrowed in phases 2–5.
 - `scripts/test-postgres-roles.py --mode per-service` (CI's rust-db-test job):
   the api, aggregator, notifier and enricher DB suites, each as its own
   role, on a database set up exactly as the chart does it.
+- `scripts/test-postgres-roles.py --check-setup-job` (CI, with `--mode
+  existing` and `--mode per-service`): the setup scripts run once more
+  through the Job's entrypoint, one try each with `lock_timeout=2s`,
+  while another session holds ACCESS SHARE on every relation in `public`;
+  any ACCESS EXCLUSIVE lock would fail it. With one row policy dropped
+  first, the same run must fail with 55P03 and name the reader.
+- `scripts/tests/test_postgres_roles_setup.py`: the entrypoint's retries,
+  deadline, exit codes and password redaction, with stub psql.
 - A narrowed role on a migrated database (by hand, 2026-10-06): exactly its
   YAML grants, column grants, its sequences and functions, no app
   membership; running the SQL twice is a no-op.

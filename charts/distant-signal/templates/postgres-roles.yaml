@@ -89,6 +89,8 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation
 data:
   {{- $sqlData | nindent 2 }}
+  postgres-roles-setup.sh: |
+    {{- .Files.Get "files/postgres-roles-setup.sh" | nindent 4 }}
 {{- if .Values.networkPolicy.enabled }}
 ---
 # Admits the setup Job's pods to Postgres, in addition to the postgres
@@ -129,6 +131,19 @@ spec:
 {{ . }}
 {{- end }}
 {{- end }}
+{{- $setup := .Values.postgresql.roles.setupJob }}
+{{- $deadline := int64 $setup.activeDeadlineSeconds }}
+{{- if lt $deadline 120 }}
+{{- fail "postgresql.roles.setupJob.activeDeadlineSeconds must be at least 120: the pod keeps 60 s of it in hand" }}
+{{- end }}
+{{- range $key := list "lockTimeout" "statementTimeout" }}
+{{- if not (regexMatch "^[1-9][0-9]*(ms|s|min)$" (toString (index $setup $key))) }}
+{{- fail (printf "postgresql.roles.setupJob.%s must be a duration like 10s, 500ms or 2min, not %v" $key (index $setup $key)) }}
+{{- end }}
+{{- end }}
+{{- if lt (int64 $setup.attempts) 1 }}
+{{- fail "postgresql.roles.setupJob.attempts must be at least 1" }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -140,13 +155,21 @@ metadata:
     # A hook, so it runs again on every install and upgrade and a failure
     # fails the release: pre-upgrade after the migrate Job (weight -5), or
     # post-install / post-upgrade (see above).
-    # before-hook-creation keeps the last run's pod and logs until the next.
+    # before-hook-creation keeps the last run (its pods and their logs)
+    # until the next release creates the hook again, and Flux's retry is
+    # such a release: read a failed run's log before it
+    # (docs/postgres-app-role.md "When the setup Job fails"). hook-failed
+    # would delete it at once, and hook-succeeded the successes' timing.
     helm.sh/hook: {{ include "distant-signal.postgresRolesSetupJobHook" . }}
     helm.sh/hook-weight: "0"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
-  backoffLimit: {{ int64 .Values.postgresql.roles.setupJob.backoffLimit }}
-  activeDeadlineSeconds: {{ int64 .Values.postgresql.roles.setupJob.activeDeadlineSeconds }}
+  # The pod retries a lock timeout and the like itself, within the
+  # deadline; a new pod would only repeat a final error with less time.
+  backoffLimit: {{ int64 $setup.backoffLimit }}
+  # The Job controller deletes a pod still running at the deadline, and
+  # its log with it (2026-10-14, Helm v252): the pod stops 60 s before.
+  activeDeadlineSeconds: {{ $deadline }}
   template:
     metadata:
       labels:
@@ -161,7 +184,7 @@ spec:
       {{- end }}
       securityContext:
         {{- $defaults := dict "runAsNonRoot" true "runAsUser" 999 "runAsGroup" 999 "seccompProfile" (dict "type" "RuntimeDefault") }}
-        {{- toYaml (mergeOverwrite $defaults (default (dict) .Values.postgresql.roles.setupJob.podSecurityContext | deepCopy)) | nindent 8 }}
+        {{- toYaml (mergeOverwrite $defaults (default (dict) $setup.podSecurityContext | deepCopy)) | nindent 8 }}
       containers:
         - name: postgres-roles
           # The Postgres image itself: its psql matches the server, and the
@@ -169,18 +192,24 @@ spec:
           image: {{ include "distant-signal.postgresImage" . | quote }}
           imagePullPolicy: {{ include "distant-signal.postgresImagePullPolicy" . }}
           # The image's entrypoint only starts a server for `postgres`
-          # commands; anything else it execs as given.
+          # commands; anything else it execs as given. files/postgres-roles-setup.sh
+          # waits for Postgres (bounded), then runs each script with
+          # ON_ERROR_STOP and retries a lock timeout and the like, all
+          # before DS_SETUP_DEADLINE.
           command:
             - sh
             - -c
             - |
               set -eu
+              setup=/etc/distant-signal/postgres-roles/postgres-roles-setup.sh
+              DS_SETUP_DEADLINE=$(($(date +%s) + {{ sub $deadline 60 }}))
+              export DS_SETUP_DEADLINE
               # On a fresh install this runs while Postgres is still starting.
-              until pg_isready --quiet; do sleep 2; done
+              sh "${setup}" wait
               {{- if $perService }}
-              psql -X --quiet --no-password \
+              sh "${setup}" run \
               {{- else }}
-              exec psql -X --quiet --no-password \
+              exec sh "${setup}" run \
               {{- end }}
               {{- range splitList "\n" (include "distant-signal.postgresRolesPsqlVariables" .) }}
                 {{ . | squote }} \
@@ -188,12 +217,14 @@ spec:
                 --file=/etc/distant-signal/postgres-roles/postgres-roles.sql
               {{- if $perService }}
               # postgresql.roles.perService: the per-service roles (Stage 0b).
-              exec psql -X --quiet --no-password \
+              exec sh "${setup}" run \
               {{- range splitList "\n" (include "distant-signal.postgresGrantsPsqlVariables" .) }}
                 {{ . | squote }} \
               {{- end }}
                 --file=/etc/distant-signal/postgres-roles/postgres-grants.sql
               {{- end }}
+          # The log's tail in the pod's status (kubectl describe) too.
+          terminationMessagePolicy: FallbackToLogsOnError
           env:
             # libpq's own variables: the superuser, over the Service.
             - name: PGHOST
@@ -213,13 +244,21 @@ spec:
               value: distant-signal-postgres-roles
             - name: PGCONNECT_TIMEOUT
               value: "10"
+            # Fail fast rather than queue: a lock wait ends in 55P03 and a
+            # stuck statement in 57014 (both retried), a session psql left
+            # idle in its transaction ends, and the server notices a client
+            # gone mid-statement or idle.
+            - name: PGOPTIONS
+              value: {{ printf "-c lock_timeout=%s -c statement_timeout=%s -c idle_in_transaction_session_timeout=60s -c client_connection_check_interval=10s -c tcp_keepalives_idle=30 -c tcp_keepalives_interval=10 -c tcp_keepalives_count=3" $setup.lockTimeout $setup.statementTimeout | quote }}
+            - name: DS_SETUP_ATTEMPTS
+              value: {{ $setup.attempts | quote }}
             {{- include "distant-signal.postgresRolesPasswordEnv" . | trim | nindent 12 }}
             # psql's history and the like; the root filesystem is read-only.
             - name: HOME
               value: /tmp
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          {{- with .Values.postgresql.roles.setupJob.resources }}
+          {{- with $setup.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -234,6 +273,8 @@ spec:
           configMap:
             name: {{ $setupName }}
             items:
+              - key: postgres-roles-setup.sh
+                path: postgres-roles-setup.sh
               - key: postgres-roles.sql
                 path: postgres-roles.sql
               {{- if $perService }}
