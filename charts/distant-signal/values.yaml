@@ -2011,7 +2011,8 @@ ingestWriter:
     ioi-live: "off"
     # One stream per transit network (transit networks spec §9; off by
     # default): ds:ingest:transit-metrolink (pollerTransitSchedule's
-    # metrolink network: transit-timetable, transit-timetable-commit).
+    # metrolink network: transit-timetable, transit-timetable-commit,
+    # transit-situations, which also writes the network's line_status rows).
     # `apply` needs postgresql.roles.perService.writer.connect, as tfl
     # does (the writer's ingest_freshness row policy binds its own role).
     transit-metrolink: "off"
@@ -3880,9 +3881,11 @@ pollerTransitSchedule:
       timetableIntervalSecs: 86400
       # -- Seconds between SIRI-SX fetches.
       situationsIntervalSecs: 300
-      # -- Run the SIRI-SX loop (TRANSIT_SITUATIONS_ENABLED). Off until the
-      # ingest-writer handles transit-situations/1 (transit plan batch 4):
-      # before that, the applied stream would dead-letter every snapshot.
+      # -- Run the SIRI-SX loop (TRANSIT_SITUATIONS_ENABLED). The
+      # ingest-writer applies transit-situations/1 (transit plan 4.3), but a
+      # writer image older than that dead-letters every snapshot, so turn
+      # it on only once the writer has it. Line status shows on the pages
+      # only while api.transitNetworks lists the network.
       situationsEnabled: false
       # -- Days of service dates stored after today (Q8).
       horizonDays: 60

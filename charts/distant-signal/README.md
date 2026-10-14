@@ -1901,7 +1901,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.streams.ioi-gtfs` | `off` | Mode of `ds:ingest:ioi-gtfs` (`pollerIrishRailGtfs`: `ioi-stations`, `ioi-lines`), as `station-samples` (handlers: plan 3c). One stream per island-of-Ireland poller (security review H1): the writer applies only the schemas each stream carries. The old shared `island-of-ireland` key fails the render unless `off`. |
 | `ingestWriter.streams.ioi-nir` | `off` | Mode of `ds:ingest:ioi-nir` (`pollerNirStations`: `ioi-stations`, `ioi-lines`), as `ioi-gtfs`. |
 | `ingestWriter.streams.ioi-live` | `off` | Mode of `ds:ingest:ioi-live` (`pollerIrishRailLive`: `ioi-station-samples`), as `ioi-gtfs`. |
-| `ingestWriter.streams.transit-metrolink` | `off` | Mode of `ds:ingest:transit-metrolink` (the transit networks' metrolink producer: `transit-timetable`, `transit-timetable-commit`). `apply` needs `postgresql.roles.perService.writer.connect`, as `tfl` does. |
+| `ingestWriter.streams.transit-metrolink` | `off` | Mode of `ds:ingest:transit-metrolink` (the transit networks' metrolink producer: `transit-timetable`, `transit-timetable-commit`, `transit-situations`, which also writes the network's `line_status` rows). `apply` needs `postgresql.roles.perService.writer.connect`, as `tfl` does. |
 | `ingestWriter.changedRowsOnly` | `false` | Changed rows only (`INGEST_WRITER_CHANGED_ROWS_ONLY`, plan 3a.9): `station_full_coverage_samples` rows whose stats are unchanged are not rewritten, and readers derive their age from the feed's observed time. The other snapshot tables keep their per-row time. Turn on only after the api with the derived readers is deployed and `streams.full-coverage` has soaked on `apply`. |
 | `ingestWriter.unsupportedDeadlineSecs` | `3600` | `INGEST_WRITER_UNSUPPORTED_DEADLINE_SECS`: an entry pending as unsupported (a newer schema or envelope version) this long is dead-lettered, reason `unsupported_expired`, instead of blocking its stream for good. Roll the writer forward within this time. `0` never dead-letters it. |
 | `ingestWriter.database.maxConnections` | `6` | Its Postgres pool; counted, plus its one loop-lock session, in the connection budgets. |
@@ -2638,7 +2638,7 @@ spec's §15.1.
 | `pollerTransitSchedule.networks.metrolink.naptanUrl` | NaPTAN access nodes | `{area}` is the network file's NaPTAN area. |
 | `pollerTransitSchedule.networks.metrolink.timetableIntervalSecs` | `86400` | Seconds between timetable fetches. |
 | `pollerTransitSchedule.networks.metrolink.situationsIntervalSecs` | `300` | Seconds between SIRI-SX fetches. |
-| `pollerTransitSchedule.networks.metrolink.situationsEnabled` | `false` | Run the SIRI-SX loop. Off until the ingest-writer handles `transit-situations/1` (batch 4); before that the applied stream would dead-letter every snapshot. |
+| `pollerTransitSchedule.networks.metrolink.situationsEnabled` | `false` | Run the SIRI-SX loop. The ingest-writer applies `transit-situations/1` (plan 4.3); a writer image older than that dead-letters every snapshot, so turn it on only once the writer has it. |
 | `pollerTransitSchedule.networks.metrolink.horizonDays` | `60` | Days of service dates stored after today. |
 | `pollerTransitSchedule.networks.metrolink.feedMaxDropFraction` | `0.3` | A feed whose line, stop or trip count fell by more than this since the last commit is refused. |
 | `pollerTransitSchedule.networks.metrolink.workDirSizeLimit` | `512Mi` | The `/work` emptyDir's size limit (the GTFS zip). |
