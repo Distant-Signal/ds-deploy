@@ -933,6 +933,56 @@ true
 {{- end }}
 
 {{/*
+The role setup Job's helm.sh/hook (templates/postgres-roles.yaml). Takes
+root.
+
+On an upgrade it runs pre-upgrade, after the migrate hook Job (weight -5
+< 0) and before any Deployment rolls: a migration's new tables get their
+per-service grants before the pods that need them start. As a post-upgrade
+hook it ran only after the upgrade's wait, which waited on those pods
+(the 2026-10-14 ingest-writer deadlock, docs/postgres-app-role.md "Hook
+order"). On an install it stays post-install: Postgres does not exist
+before.
+
+It falls back to post-upgrade (the old order) when pre-upgrade cannot work:
+  - migrate.job off: the api runs the migrations at startup, so new tables
+    exist only once the release's pods run;
+  - the chart's Secret exists (an upgrade, seen through `lookup`; empty
+    under `helm template`) but lacks a password key the Job reads: this
+    release adds it (secret.yaml), and the release's resources, the Secret
+    included, are applied only after the pre-upgrade hooks. A pre-upgrade
+    Job could not start, and its failure would stop the Secret from ever
+    gaining the key.
+*/}}
+{{- define "distant-signal.postgresRolesSetupJobHook" -}}
+{{- $late := not .Values.migrate.job.enabled -}}
+{{- $chartSecret := include "distant-signal.secretName" . -}}
+{{- $live := lookup "v1" "Secret" .Release.Namespace $chartSecret -}}
+{{- if and (not $late) $live -}}
+{{- $data := default (dict) (get $live "data") -}}
+{{- $refs := list (list (include "distant-signal.postgresSecretName" .) (include "distant-signal.postgresSecretPasswordKey" .)) -}}
+{{- range $role := list "owner" "app" "exporter" "dump" "backup" -}}
+{{- $refs = append $refs (list (include "distant-signal.postgresRoleSecretName" (dict "root" $ "role" $role)) (include "distant-signal.postgresRoleSecretKey" (dict "root" $ "role" $role))) -}}
+{{- end -}}
+{{- if include "distant-signal.perServiceEnabled" . -}}
+{{- range $service := include "distant-signal.perServiceKeys" . | splitList " " -}}
+{{- $refs = append $refs (list (include "distant-signal.perServiceSecretName" (dict "root" $ "service" $service)) (include "distant-signal.perServiceSecretKey" (dict "root" $ "service" $service))) -}}
+{{- end -}}
+{{- end -}}
+{{- range $ref := $refs -}}
+{{- if and (eq (index $ref 0) $chartSecret) (not (hasKey $data (index $ref 1))) -}}
+{{- $late = true -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $late -}}
+post-install,post-upgrade
+{{- else -}}
+pre-upgrade,post-install
+{{- end -}}
+{{- end }}
+
+{{/*
 True (non-empty) when the Postgres pod carries the initdb script.
 */}}
 {{- define "distant-signal.postgresRolesInitScript" -}}
@@ -1827,6 +1877,20 @@ fails the render instead. Takes root.
 {{- end -}}
 {{- end }}
 
+{{/*
+The SQL files of the roles ConfigMaps (templates/postgres-roles.yaml): the
+release one (the initdb script's) and the setup Job's hook copy. Takes
+root.
+*/}}
+{{- define "distant-signal.postgresRolesSqlData" -}}
+postgres-roles.sql: |
+  {{- .Files.Get "files/postgres-roles.sql" | nindent 2 }}
+{{- if include "distant-signal.perServiceEnabled" . }}
+postgres-grants.sql: |
+  {{- .Files.Get "files/postgres-grants.sql" | nindent 2 }}
+{{- end }}
+{{- end }}
+
 {{- define "distant-signal.postgresRolesConfigMapName" -}}
 {{- printf "%s-roles" (include "distant-signal.postgresFullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
@@ -2024,8 +2088,9 @@ in-cluster services in `deps` (distant-signal.egressRules). Renders nothing
 unless distant-signal.egressOn for the component: without egress policies a
 Job's egress is not restricted by this chart, and its ingress stays as
 before (a Job serves nothing). `hook` (optional) makes it a Helm hook
-created before that hook Job (weight -10). Takes (dict "root" $
-"component" "migrate" "deps" (dict "postgres" true) "hook" "pre-install,pre-upgrade").
+created before that hook Job (weight -10). `name` (optional) replaces the
+default name, <fullname>-<component>. Takes (dict "root" $ "component"
+"migrate" "deps" (dict "postgres" true) "hook" "pre-install,pre-upgrade").
 */}}
 {{- define "distant-signal.jobEgressNetworkPolicy" -}}
 {{- $root := .root -}}
@@ -2033,7 +2098,7 @@ created before that hook Job (weight -10). Takes (dict "root" $
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ printf "%s-%s" (include "distant-signal.fullname" $root) .component | trunc 63 | trimSuffix "-" }}
+  name: {{ .name | default (printf "%s-%s" (include "distant-signal.fullname" $root) .component) | trunc 63 | trimSuffix "-" }}
   labels:
     {{- include "distant-signal.labels" (dict "root" $root "component" .component) | nindent 4 }}
   {{- with .hook }}

@@ -48,10 +48,6 @@ spec:
                   - aggregator
                   - enricher
                   - notifier
-                  {{- if include "distant-signal.postgresRolesSetupJob" . }}
-                  # postgresql.roles.setupJob (templates/postgres-roles.yaml).
-                  - postgres-roles
-                  {{- end }}
                   {{- if .Values.apiMaintenance.enabled }}
                   # The api-maintenance CronJob (api-maintenance-cronjob.yaml).
                   - api-maintenance
@@ -455,18 +451,12 @@ component, whichever networks are on. */}}
 {{ include "distant-signal.workerNetworkPolicy" (merge (dict "root" $root) .) }}
 {{- end }}
 {{- /*
-The role setup Job (postgres-roles.yaml, a post-install/post-upgrade hook,
-so this policy is applied before it runs) and the api-maintenance CronJob:
-with egress policies on, they may reach Postgres and DNS. Its admission into Postgres is in the postgres
-policy above. The migrate hook Job's policies are hooks themselves
-(migrate-job.yaml).
+The api-maintenance CronJob: with egress policies on, it may reach
+Postgres and DNS. Its admission into Postgres is in the postgres policy
+above. The migrate and role setup hook Jobs' policies are hooks themselves
+(migrate-job.yaml, postgres-roles.yaml): a pre-upgrade hook runs before
+this file's changes are applied.
 */}}
-{{- if include "distant-signal.postgresRolesSetupJob" . }}
-{{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" $root "component" "postgres-roles" "deps" (dict "postgres" true)) }}
----
-{{ . }}
-{{- end }}
-{{- end }}
 {{- if .Values.apiMaintenance.enabled }}
 {{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" $root "component" "api-maintenance" "deps" (dict "postgres" true)) }}
 ---

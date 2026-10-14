@@ -15,10 +15,11 @@ Per-service Postgres roles (`postgresql.roles.perService`):
   - `roles.enabled`, `setupJob.enabled` or `perService.enabled` off refuses
     to render (the release B preflight names it); so does a non-numeric
     connectionLimit;
-  - the setup Job's ConfigMap carries files/postgres-grants.sql verbatim,
-    and the Job runs it after postgres-roles.sql with each role's computed
-    CONNECTION LIMIT; on a new cluster (`initScript`) the initdb script and
-    the Postgres pod do too;
+  - the setup Job's own (hook) ConfigMap carries files/postgres-roles.sql
+    and files/postgres-grants.sql verbatim and is what the Job mounts, and
+    the Job runs postgres-grants.sql after postgres-roles.sql with each
+    role's computed CONNECTION LIMIT; on a new cluster (`initScript`) the
+    initdb script and the Postgres pod do too;
   - `connect` moves exactly that Deployment's DATABASE_URL to its own role
     (with its own password key), the api's pool to perService.api's 16, and
     takes its pool out of the app role's computed limit; the api's
@@ -331,14 +332,21 @@ def check_roles_refusals(c: Checker) -> None:
 def check_roles_setup(c: Checker) -> None:
     """Check that the setup Job runs postgres-grants.sql after postgres-roles.sql."""
     docs = by_name(c.docs())
-    cm = docs.get("ConfigMap/distant-signal-postgres-roles", {})
+    # The Job's own hook copy: as a pre-upgrade hook it runs before the
+    # release ConfigMap is updated (docs/postgres-app-role.md "Hook order").
+    cm = docs.get("ConfigMap/distant-signal-postgres-roles-setup", {})
     data = cast("dict[str, str]", cm.get("data") or {})
-    grants = (CHART / "files" / "postgres-grants.sql").read_text(encoding="utf-8")
-    c.check(
-        ok=data.get("postgres-grants.sql") == grants,
-        message="the roles ConfigMap must carry files/postgres-grants.sql verbatim",
-    )
+    for name in ("postgres-roles.sql", "postgres-grants.sql"):
+        text = (CHART / "files" / name).read_text(encoding="utf-8")
+        c.check(
+            ok=data.get(name) == text,
+            message=f"the setup Job's ConfigMap must carry files/{name} verbatim",
+        )
     job = docs.get("Job/distant-signal-postgres-roles-setup", {})
+    c.check(
+        ok="name: distant-signal-postgres-roles-setup\n" in yaml.safe_dump(job),
+        message="the setup Job must mount its own ConfigMap",
+    )
     command = cast("list[object]", (containers(job) or [{}])[0].get("command") or [])
     script = "".join(str(x) for x in command)
     for needle in (

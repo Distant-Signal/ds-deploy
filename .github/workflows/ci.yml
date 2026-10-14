@@ -2089,15 +2089,20 @@ jobs:
             || fail "PG_MIGRATION_PASSWORD must come from roles.owner.existingSecret"
           n_cron=$(grep -c -- '- "PGBACKREST_PG1_USER=distant_signal_backup"' <<<"${on}" || true)
           [[ "${n_cron}" -eq 4 ]] || fail "all four pgBackRest CronJobs must run as the backup role"
-          grep -q 'helm.sh/hook: post-install,post-upgrade' <<<"${on}" || fail "the setup Job must be a hook"
+          # Without migrate.job the api migrates at startup, so the setup Job
+          # must follow the rollout (the pre-upgrade order is checked in
+          # "helm template (migrate hook Job)").
+          grep -q 'helm.sh/hook: post-install,post-upgrade' <<<"${on}" \
+            || fail "without migrate.job the setup Job must be a post-install,post-upgrade hook"
           grep -q "'--variable=app_connection_limit=75'" <<<"${on}" \
             || fail "app CONNECTION LIMIT must default to the chart's pools (50 + 10 + 5 + 5) + 5"
           grep -q "'--variable=owner_connection_limit=3'" <<<"${on}" \
             || fail "owner CONNECTION LIMIT must default to api.replicaCount + 2"
           grep -q 'mountPath: /docker-entrypoint-initdb.d' <<<"${on}" || fail "initScript must mount the initdb script"
           np=$(render --set networkPolicy.enabled=true --set postgresql.roles.setupJob.enabled=true \
-            --show-only templates/networkpolicy.yaml)
-          grep -q -- '- postgres-roles$' <<<"${np}" || fail "the setup Job must be allowed into Postgres"
+            --show-only templates/postgres-roles.yaml)
+          grep -q 'name: distant-signal-postgres-from-postgres-roles$' <<<"${np}" \
+            || fail "the setup Job must be allowed into Postgres"
           secret=$(render --set postgresql.roles.setupJob.enabled=true --show-only templates/secret.yaml)
           for key in owner app exporter dump backup; do
             grep -q "  postgres-${key}-password: " <<<"${secret}" || fail "chart-generated postgres-${key}-password missing"
@@ -2134,8 +2139,11 @@ jobs:
       # Ingest plan 1B.4: migrate.job (off by default) renders a
       # pre-upgrade,post-install hook Job that holds the schema owner's
       # credentials; with api.migrateOnStartup false the api has none. Its
-      # hook NetworkPolicies, and the role setup Job's egress policy, let
-      # both Jobs reach Postgres.
+      # hook NetworkPolicies, and the role setup Job's, let both Jobs reach
+      # Postgres. The setup Job runs pre-upgrade after it, so a migration's
+      # new tables have their grants before any Deployment rolls (the
+      # 2026-10-14 ingest-writer deadlock), with its SQL and policies as
+      # earlier hooks.
       - name: helm template (migrate hook Job)
         run: |
           set -euo pipefail
@@ -2204,12 +2212,52 @@ jobs:
           grep -q 'helm.sh/hook: pre-install,pre-upgrade' <<<"${np}" || fail "the Postgres admission must be a hook"
           grep -q 'helm.sh/hook-weight: "-10"' <<<"${np}" || fail "the Postgres admission must precede the Job"
           grep -q 'app.kubernetes.io/component: migrate' <<<"${np}" || fail "the Postgres admission must name the Job's pods"
-          for c in migrate postgres-roles; do
-            eg=$(doc NetworkPolicy "distant-signal-${c}" <<<"${moved}")
-            grep -q 'port: 5432' <<<"${eg}" || fail "${c} must be allowed out to Postgres"
+          for np_name in migrate postgres-roles-setup; do
+            eg=$(doc NetworkPolicy "distant-signal-${np_name}" <<<"${moved}")
+            grep -q 'port: 5432' <<<"${eg}" || fail "${np_name} must be allowed out to Postgres"
           done
+
+          # The role setup Job (2026-10-14): on an upgrade it runs pre-upgrade
+          # after the migrate Job, never post-upgrade (which waits on the
+          # pods its grants gate); on an install post-install after it. Its
+          # ConfigMap and NetworkPolicies are hooks created before it, and
+          # nothing it needs is a plain release resource (applied only after
+          # the pre-upgrade hooks).
+          weight() { sed -n 's/^    helm.sh\/hook-weight: "\(-\{0,1\}[0-9]*\)"$/\1/p'; }
+          roles_job=$(doc Job distant-signal-postgres-roles-setup <<<"${moved}")
+          grep -q 'helm.sh/hook: pre-upgrade,post-install$' <<<"${roles_job}" \
+            || fail "with migrate.job the setup Job must be a pre-upgrade,post-install hook"
+          migrate_w=$(doc Job distant-signal-migrate <<<"${moved}" | weight)
+          roles_w=$(weight <<<"${roles_job}")
+          [[ -n "${migrate_w}" && -n "${roles_w}" ]] || fail "both Jobs must set helm.sh/hook-weight"
+          (( roles_w > migrate_w )) || fail "the setup Job (${roles_w}) must run after the migrate Job (${migrate_w})"
+          grep -A2 'configMap:$' <<<"${roles_job}" | grep -q 'name: distant-signal-postgres-roles-setup$' \
+            || fail "the setup Job must mount its hook ConfigMap"
+          for dep in "ConfigMap distant-signal-postgres-roles-setup" \
+              "NetworkPolicy distant-signal-postgres-from-postgres-roles" \
+              "NetworkPolicy distant-signal-postgres-roles-setup"; do
+            # shellcheck disable=SC2086 # kind and name, split on purpose
+            d=$(doc ${dep} <<<"${moved}")
+            [[ -n "${d}" ]] || fail "${dep} not rendered"
+            grep -q 'helm.sh/hook: pre-install,pre-upgrade$' <<<"${d}" || fail "${dep} must be a pre-install,pre-upgrade hook"
+            w=$(weight <<<"${d}")
+            if [[ -z "${w}" ]] || (( w >= migrate_w )); then fail "${dep} must be created before both Jobs"; fi
+          done
+          admit=$(doc NetworkPolicy distant-signal-postgres-from-postgres-roles <<<"${moved}")
+          grep -q 'app.kubernetes.io/component: postgres-roles' <<<"${admit}" \
+            || fail "the Postgres admission must name the setup Job's pods"
           pg=$(doc NetworkPolicy distant-signal-postgres <<<"${moved}")
-          grep -q -- '- postgres-roles$' <<<"${pg}" || fail "the setup Job must be admitted to Postgres"
+          if grep -q -- '- postgres-roles$' <<<"${pg}"; then
+            fail "the setup Job's Postgres admission must be its hook, not the release's postgres policy"
+          fi
+          old_egress=$(doc NetworkPolicy distant-signal-postgres-roles <<<"${moved}")
+          if [[ -n "${old_egress}" ]]; then
+            fail "the setup Job's egress must be its hook policy (distant-signal-postgres-roles-setup)"
+          fi
+          cm=$(doc ConfigMap distant-signal-postgres-roles <<<"${moved}")
+          if grep -q 'helm.sh/hook' <<<"${cm}"; then
+            fail "the release roles ConfigMap (the initdb script's) must not be a hook"
+          fi
 
           # The role split (and so the owner) is a prerequisite since release
           # B (ingest phase 5): with an external database, which gets no

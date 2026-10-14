@@ -9,8 +9,9 @@ INVALID-index heal, then every pending migration.
 
 Hook order: on an upgrade this runs before any of the release's resources
 change (pre-upgrade), so a failure fails the release and the old pods keep
-serving; on an install it runs once Postgres exists (post-install, weight
--5: before the role setup Job's weight 0). The two NetworkPolicies below
+serving; on an install it runs once Postgres exists (post-install). Both
+times weight -5: before the role setup Job's weight 0, which grants on the
+tables this Job creates (postgres-roles.yaml). The two NetworkPolicies below
 are hooks too (weight -10): a pre-upgrade hook runs before the release's
 own networkpolicy.yaml changes are applied, so the Postgres admission for
 this Job cannot live there. They stay in the cluster between releases

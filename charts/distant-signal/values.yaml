@@ -157,13 +157,14 @@ postgresql:
     # would never run anyway.
     initScript: true
     setupJob:
-      # -- Run files/postgres-roles.sql as a Helm post-install/post-upgrade
-      # hook Job, as the superuser over the Service. Independent of
-      # `enabled`: on an existing cluster, turn this on FIRST to create the
-      # roles and move ownership to `owner`, then flip `enabled`. Running it
-      # on every upgrade keeps the CONNECTION LIMITs and grants current and
-      # moves to `owner` anything a superuser created meanwhile. A failure
-      # fails the helm upgrade.
+      # -- Run files/postgres-roles.sql as a Helm hook Job, as the superuser
+      # over the Service: post-install, and pre-upgrade after the migrate
+      # hook Job (post-upgrade without migrate.job; docs/postgres-app-role.md
+      # "Hook order"). Independent of `enabled`: on an existing cluster,
+      # turn this on FIRST to create the roles and move ownership to
+      # `owner`, then flip `enabled`. Running it on every upgrade keeps the
+      # CONNECTION LIMITs and grants current and moves to `owner` anything
+      # a superuser created meanwhile. A failure fails the helm upgrade.
       enabled: false
       # -- Seconds before the Job gives up (it first waits for Postgres).
       activeDeadlineSeconds: 600

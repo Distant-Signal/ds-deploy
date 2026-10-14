@@ -150,8 +150,8 @@ postgresql:
       existingSecret: distant-signal-postgres-roles
 ```
 
-Reconcile. The post-upgrade hook Job `distant-signal-postgres-roles-setup`
-runs `postgres-roles.sql` as `distant_signal` over the Service. Nothing
+Reconcile. The hook Job `distant-signal-postgres-roles-setup` ("Hook
+order" below) runs `postgres-roles.sql` as `distant_signal` over the Service. Nothing
 restarts. The services still connect as the superuser, which ignores
 ownership, so nothing they do changes.
 
@@ -296,7 +296,8 @@ narrows the roles from.
 - **The setup Job runs `postgres-grants.sql` after `postgres-roles.sql`**
   (and so does the initdb script on a new cluster). It is idempotent:
   roles, limits, passwords, memberships and grants are re-applied on every
-  upgrade, and a grant removed from the YAML is revoked.
+  upgrade, and a grant removed from the YAML is revoked. On an upgrade it
+  runs before any Deployment rolls ("Hook order" below).
 - **The app role's computed limit shrinks** by the pool of each service
   that connects as its own role (all four on: 5, its slack). The render
   fails when the limits of every role in use (owner, app, exporter, dump,
@@ -304,6 +305,80 @@ narrows the roles from.
 - **The api's pool drops from 50 to 16** while it connects as its own role
   (`perService.api.maxConnections`). Production's peak is 6 (2026-10-06).
   Its migrations still connect as the owner.
+
+### Hook order
+
+**What happened** (2026-10-14, Helm v250). A release added migration
+`20261014100000_transit_tables.sql` (the `transit_*` tables) and their
+per-service grants. The ingest-writer (Recreate, one replica) restarted and
+stayed NotReady in its schema gate (`missing: INSERT/SELECT/... on
+transit_*`). The grants come from the setup Job, then a
+`post-install,post-upgrade` hook. Helm runs post-upgrade hooks only after
+the upgrade's wait succeeds, and the wait needed the ingest-writer Ready:
+a deadlock until the 20m Helm timeout, which Flux's RetryOnFailure would
+repeat (a failed upgrade runs no post-upgrade hook). It was broken by
+running a copy of the Job by hand. Any migration that adds tables and
+grants would have done the same.
+
+**The order now**, `helm upgrade` with `migrate.job.enabled`:
+
+| Step | Object | Hook | Weight |
+|---|---|---|---|
+| 1 | NetworkPolicies `distant-signal-postgres-from-migrate`, `distant-signal-migrate` (egress) | `pre-install,pre-upgrade` | -10 |
+| 1 | ConfigMap `distant-signal-postgres-roles-setup` (this release's SQL), NetworkPolicies `distant-signal-postgres-from-postgres-roles`, `distant-signal-postgres-roles-setup` (egress) | `pre-install,pre-upgrade` | -10 |
+| 2 | Job `distant-signal-migrate` | `pre-upgrade,post-install` | -5 |
+| 3 | Job `distant-signal-postgres-roles-setup` | `pre-upgrade,post-install` | 0 |
+| 4 | the release's resources (Deployments roll), then the wait | | |
+
+`helm install`: the -10 hooks pre-install; the release's resources and the
+wait; then post-install the migrate Job (-5) and the setup Job (0), which
+need the Postgres the release just created (on a new cluster the initdb
+script has already created the roles and run both SQL files).
+
+A pre-upgrade hook runs before any of the release's resources change, so
+the setup Job uses none of them: it mounts its own hook ConfigMap, not
+`distant-signal-postgres-roles` (which is only the initdb script's now,
+rendered only with `initScript`), and its Postgres admission and egress
+are its own hook NetworkPolicies, not the postgres policy in
+networkpolicy.yaml. The hook objects stay between releases (each upgrade
+replaces them); turning `setupJob` off leaves them until `kubectl delete
+configmap,networkpolicy -l app.kubernetes.io/component=postgres-roles`.
+The Secrets it reads are the release's existing ones.
+
+**When it stays post-upgrade** (`distant-signal.postgresRolesSetupJobHook`):
+
+- **Without `migrate.job`** the api migrates at startup, so a migration's
+  tables exist only after the rollout: the Job keeps `post-upgrade`, and a
+  migration whose grants gate a workload can deadlock as above. Enable
+  `migrate.job`.
+- **When this release adds a password key to the chart's Secret** (the
+  live Secret, read with `lookup`, lacks a key the Job reads: setupJob or
+  perService turned on, or a new per-service role, with chart-generated
+  passwords). The Secret is a release resource, updated only after the
+  pre-upgrade hooks, so a pre-upgrade Job could not start, and a failed
+  pre-upgrade hook would stop the Secret from ever gaining the key. That
+  one upgrade runs the Job post-upgrade; the next runs it pre-upgrade. A
+  key missing from an `existingSecret` is not detected: add it before
+  the release (the services need it too).
+
+**What running before the rollout changes.** The old pods are still up
+while the Job runs:
+
+- `ALTER ROLE ... CONNECTION LIMIT` never ends a session, so a lower limit
+  does not touch the old pods; a raised limit now applies before the new
+  pods start, so raising a limit by values helps the rollout that carries
+  it.
+- **Grants removed from `db-grants.yaml`** (a narrow role's grant, an
+  `app_revokes` entry, a role leaving `app`) take effect before the old
+  pods stop, as a contract migration would. Remove a privilege only in a
+  release after the one whose code stopped using it.
+- The SQL takes its usual brief locks (`CREATE POLICY` / `DROP POLICY` on
+  the tables with row policies) while the old pods serve, as it did
+  before after the rollout.
+
+`helm rollback` runs neither pre- nor post-upgrade hooks: after one, run a
+copy of the setup Job by hand if the rolled-back release needs other
+grants (as was done on 2026-10-14).
 
 ### The first narrow role: `distant_signal_schedule_reference` (phase 2a)
 
@@ -472,11 +547,12 @@ is narrowed in phases 2–5.
 ### Rollback
 
 - **One service:** `perService.<service>.connect: false`. It goes back to
-  the app role. The app role's limit grows back by that pool, but only when
-  the post-upgrade setup Job runs, after the pod restarted, so for that
-  window the service has the app role's old (smaller) limit. With every
-  other service on its own role that is still the slack plus any pools
-  still on app, enough to start. To avoid even that, set
+  the app role. The app role's limit grows back by that pool when the
+  setup Job runs, before the pod restarts (pre-upgrade, "Hook order"); with
+  the Job post-upgrade (no `migrate.job`) only after, so for that window
+  the service has the app role's old (smaller) limit. With every other
+  service on its own role that is still the slack plus any pools still on
+  app, enough to start. To avoid even that, set
   `postgresql.roles.app.connectionLimit` to the full value one release
   earlier.
 - **All of it:** `perService.enabled: false` after every `connect` is off.

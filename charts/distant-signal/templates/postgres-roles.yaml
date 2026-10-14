@@ -7,14 +7,33 @@ files/postgres-roles.sql is idempotent: it creates or updates the owner,
 app, exporter, dump and backup roles, moves schema public and everything
 in it from auth.username (the bootstrap superuser) to the owner, and
 grants the app role DML only.
+
+Hook order (docs/postgres-app-role.md "Hook order"). On an upgrade the
+setup Job is a pre-upgrade hook, weight 0: after the migrate hook Job
+(weight -5), so the new tables exist, and before any Deployment rolls, so
+a new pod's schema gate finds its grants (the 2026-10-14 ingest-writer
+deadlock: as a post-upgrade hook it waited on the upgrade's wait, which
+waited on that pod). distant-signal.postgresRolesSetupJobHook says when it
+stays post-upgrade. On an install it is post-install, weight 0, after the
+migrate Job's -5.
+
+A pre-upgrade hook runs before the release's own resources change, so the
+Job reads nothing from them: its SQL is in its own hook ConfigMap and its
+NetworkPolicies are hooks, all pre-install,pre-upgrade, weight -10,
+replaced on the next release (before-hook-creation) and left in the
+cluster in between, like the migrate Job's. Turning setupJob off leaves
+them until deleted by hand (`kubectl delete configmap,networkpolicy -l
+app.kubernetes.io/component=postgres-roles`). The release ConfigMap below
+is only the initdb script's (the Postgres pod mounts it).
 */}}
 {{- $initScript := include "distant-signal.postgresRolesInitScript" . }}
 {{- $setupJob := include "distant-signal.postgresRolesSetupJob" . }}
 {{- /* Stage 0b (postgresql.roles.perService): files/postgres-grants.sql,
      generated from files/db-grants.yaml, runs after postgres-roles.sql. */}}
 {{- $perService := include "distant-signal.perServiceEnabled" . }}
-{{- if or $initScript $setupJob }}
-{{- $root := . }}
+{{- $setupName := printf "%s-setup" (include "distant-signal.postgresRolesConfigMapName" .) | trunc 63 | trimSuffix "-" }}
+{{- $sqlData := include "distant-signal.postgresRolesSqlData" . }}
+{{- if $initScript }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -22,12 +41,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "postgres-roles") | nindent 4 }}
 data:
-  postgres-roles.sql: |
-    {{- .Files.Get "files/postgres-roles.sql" | nindent 4 }}
-  {{- if $perService }}
-  postgres-grants.sql: |
-    {{- .Files.Get "files/postgres-grants.sql" | nindent 4 }}
-  {{- end }}
+  {{- $sqlData | nindent 2 }}
   {{- /*
   Run by the official image's entrypoint from /docker-entrypoint-initdb.d,
   on an EMPTY data directory only, against the temporary socket-only server
@@ -62,17 +76,73 @@ data:
 {{- end }}
 {{- if $setupJob }}
 ---
-apiVersion: batch/v1
-kind: Job
+# The Job's SQL, this release's: a hook created before the Job (see above).
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: {{ printf "%s-setup" (include "distant-signal.postgresRolesConfigMapName" .) | trunc 63 | trimSuffix "-" }}
+  name: {{ $setupName }}
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "postgres-roles") | nindent 4 }}
   annotations:
-    # A hook, so it runs again on every install and upgrade (after the
-    # release's resources are applied) and a failure fails the release.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  {{- $sqlData | nindent 2 }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# Admits the setup Job's pods to Postgres, in addition to the postgres
+# policy in networkpolicy.yaml (NetworkPolicies are additive): a hook, so
+# it is in place before a pre-upgrade Job even in the release that turns
+# the Job on.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-from-postgres-roles" (include "distant-signal.postgresFullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "postgres-roles") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "distant-signal.selectorLabels" (dict "root" . "component" "postgres-roles") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.service.port }}
+{{- /* Its egress (with egress policies on), named after the Job, not
+     <fullname>-postgres-roles: that name was a release resource until
+     2026-10-14, and Helm deletes a resource the new release no longer has
+     after the pre-upgrade hooks, which would take a same-named hook with
+     it on the first upgrade with this change. */}}
+{{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" . "component" "postgres-roles" "name" $setupName "deps" (dict "postgres" true) "hook" "pre-install,pre-upgrade") }}
+---
+{{ . }}
+{{- end }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $setupName }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "postgres-roles") | nindent 4 }}
+  annotations:
+    # A hook, so it runs again on every install and upgrade and a failure
+    # fails the release: pre-upgrade after the migrate Job (weight -5), or
+    # post-install / post-upgrade (see above).
     # before-hook-creation keeps the last run's pod and logs until the next.
-    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook: {{ include "distant-signal.postgresRolesSetupJobHook" . }}
+    helm.sh/hook-weight: "0"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: {{ int64 .Values.postgresql.roles.setupJob.backoffLimit }}
@@ -162,7 +232,7 @@ spec:
       volumes:
         - name: roles
           configMap:
-            name: {{ include "distant-signal.postgresRolesConfigMapName" . }}
+            name: {{ $setupName }}
             items:
               - key: postgres-roles.sql
                 path: postgres-roles.sql

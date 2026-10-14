@@ -767,10 +767,13 @@ workload's rollout is now:
 | api | `api.strategy.type`, Recreate or RollingUpdate (maxSurge 1, maxUnavailable 0) | (replicas + 1) × pool + 2 + the api-maintenance pool |
 | movement-relay | RollingUpdate, maxSurge 1 (no Postgres) | none |
 
-The limits are applied by the setup Job, a **post-upgrade hook**: an
-upgrade stuck waiting on its pods never reaches it, so raising a limit by
-values cannot unstick it. `ALTER ROLE ... CONNECTION LIMIT` by hand, or
-delete the old pod, or patch the live Deployment to Recreate; see
+The limits (and every grant) are applied by the setup Job, a
+**pre-upgrade hook** after the migrate Job, so they are in place before the
+pods roll (docs/postgres-app-role.md "Hook order"). Without `migrate.job`,
+and for the one upgrade that adds a password key to the chart's Secret, it
+is a post-upgrade hook, which an upgrade stuck waiting on its pods never
+reaches: then `ALTER ROLE ... CONNECTION LIMIT` by hand, or delete the old
+pod, or patch the live Deployment to Recreate; see
 docs/ingest-phase5-runbook.md §0.5 "Rollout deadlock".
 
 ## Release B: the producers' only paths
@@ -1449,7 +1452,7 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.connectionBudget.adminSessions` | `3` | Interactive `kubectl exec ... psql` sessions the budget check keeps room for. |
 | `postgresql.roles.enabled` | `false` | Connect the api pools and every worker as `app`, api's migrations as `owner`, and the pgBackRest CronJobs as `backup` (docs/postgres-app-role.md). The roles must exist first (`setupJob`, or `initScript` on a new cluster). Does not restart Postgres on its own. |
 | `postgresql.roles.initScript` | `true` | With `enabled`: run files/postgres-roles.sql from /docker-entrypoint-initdb.d, which the image runs only on an EMPTY data directory (a new cluster), before any client connects. Turning it on restarts Postgres: set it false on an existing cluster. |
-| `postgresql.roles.setupJob.enabled` | `false` | Run files/postgres-roles.sql as a Helm post-install/post-upgrade hook Job, as the superuser over the Service, on every install and upgrade (idempotent: creates/updates the roles, moves ownership to `owner`, grants). Independent of `enabled`: on an existing cluster turn this on first. A failure fails the release. |
+| `postgresql.roles.setupJob.enabled` | `false` | Run files/postgres-roles.sql as a Helm hook Job (post-install; pre-upgrade after the migrate hook Job, or post-upgrade without migrate.job: docs/postgres-app-role.md "Hook order"), as the superuser over the Service, on every install and upgrade (idempotent: creates/updates the roles, moves ownership to `owner`, grants). Independent of `enabled`: on an existing cluster turn this on first. A failure fails the release. |
 | `postgresql.roles.setupJob.activeDeadlineSeconds` | `600` | Seconds before the Job gives up (it first waits for Postgres). |
 | `postgresql.roles.setupJob.backoffLimit` | `2` | Retries after a failed run. |
 | `postgresql.roles.setupJob.resources` | requests `10m`/`32Mi`, limit `128Mi` | Container resources. |
