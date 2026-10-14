@@ -1503,6 +1503,9 @@ disruptions are kept but show on no line (only at network level). Add
 `ref` to the right line's `siri_line_refs` in
 `crates/poller-transit-schedule/networks/<network>.toml` and release.
 
+Both transit alerts: the rollout, rollback and recovery steps are in
+[transit-networks.md](transit-networks.md).
+
 ## pgBackRest
 
 ## pgBackRest

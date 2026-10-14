@@ -103,7 +103,8 @@ Secret had the key. An `optional` line avoids both: the chart renders it
 client is on, so merging it changes nothing that renders
 (`scripts/check-ingest-phase0-chart.py` checks this).
 
-To turn one on (the transit networks' rollout, transit spec §15.1):
+To turn one on (the transit networks' rollout, transit spec §15.1, and
+[transit-networks.md](transit-networks.md), its runbook):
 
 1. Add `<user>-password` to the users Secret (the SealedSecret in
    Ranma-Config), letters and digits only.
