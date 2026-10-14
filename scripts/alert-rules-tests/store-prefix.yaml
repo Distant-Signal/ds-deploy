@@ -44,8 +44,9 @@ tests:
         exp_alerts: []
 
   # DistantSignalCorpusStale from the store_ gauge: the last delivery was
-  # loaded 50 days before the test starts (default corpusStaleAfterDays 45).
-  # The api's old api_ gauge is absent. Fires after `for` (1h).
+  # loaded 50 days before the test starts (past the default
+  # corpusStaleCriticalDays 45, so the critical one). The api's old api_
+  # gauge is absent. Fires after `for` (1h).
   - interval: 1m
     input_series:
       - series: 'distant_signal_store_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="schedulefeed"}'
@@ -57,8 +58,8 @@ tests:
       - eval_time: 75m
         alertname: DistantSignalCorpusStale
         exp_alerts:
-          - exp_labels: {severity: warning, namespace: distant-signal}
+          - exp_labels: {severity: critical, namespace: distant-signal}
             exp_annotations:
               summary: no CORPUS delivery loaded for 45 days
-              description: "CORPUS is monthly: RDM stopped pushing it, or schedule-ingest cannot load it. The previous extract stays in use."
+              description: "At least one monthly CORPUS missed: RDM stopped pushing it, or schedule-ingest cannot load it. The old extract stays in use."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusstale

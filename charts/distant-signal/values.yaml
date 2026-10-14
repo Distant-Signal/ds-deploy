@@ -5580,12 +5580,24 @@ metrics:
     # uploaded delivery zip within `zipRejectedWindow` (PL-5 caps).
     # DistantSignalCorpusRejected: schedule-ingest refused a CORPUS extract
     # within `zipRejectedWindow` (only while scheduleFeed.corpus.enabled).
+    # DistantSignalCorpusLoadFailing: schedule-ingest failed to scan
+    # watch_dir, or to read or load a stable CORPUS file, at least
+    # `corpusFailingMin` times within `corpusFailingWindow`
+    # (schedule_feed_corpus_failures_total{stage}). It retries every poll
+    # (120s), so 3 in 30m is about 6 minutes of a persistent failure. Kept
+    # apart from "no new file yet", which is normal for days or weeks.
     # DistantSignalCorpusStale: the newest loaded CORPUS delivery is older
-    # than `corpusStaleAfterDays` (only while scheduleFeed.corpus.enabled;
-    # never before the first load). CORPUS is published monthly, so 45 days
-    # is one full cycle (at most 31 days) plus two weeks' grace for a late
-    # publication or upload: a single missed month alerts, a slightly late
-    # one does not.
+    # than `corpusStaleWarningDays` (severity `severity`) or
+    # `corpusStaleCriticalDays` (`corpusStaleCriticalSeverity`); only one
+    # fires at a time. Only while scheduleFeed.corpus.enabled; never before
+    # the first load. CORPUS is not a daily feed: RDM lists it as monthly,
+    # and deliveries have come every few days to couple of weeks, so a gap
+    # of up to a month (at most 31 days) is normal. 35 days is one full
+    # monthly cycle plus four days' grace for a late publication or
+    # upload; 45 days is a cycle plus two weeks, so at least one delivery
+    # was missed. A fortnightly cadence is covered with more slack. The
+    # warning must be below the critical; corpusStaleAfterDays (45, one
+    # warning) was replaced by the two and refuses to render.
     # DistantSignalScheduleReferencePublishStale: the last fully published
     # delivery is older than `staleAfterHours` (deliveries land nightly).
     # DistantSignalSchedulePublishStagedMismatch: api (or schedule-reference's
@@ -5603,7 +5615,11 @@ metrics:
       notSeededFor: 30m
       zipRejectedWindow: 6h
       staleAfterHours: 30
-      corpusStaleAfterDays: 45
+      corpusStaleWarningDays: 35
+      corpusStaleCriticalDays: 45
+      corpusStaleCriticalSeverity: critical
+      corpusFailingWindow: 30m
+      corpusFailingMin: 3
       mismatchWindow: 6h
       rejectedWindow: 6h
       populationMissingFor: 15m

@@ -1210,12 +1210,40 @@ too few rows, a row without an NLC, or over the decompression cap) and moved
 it to `/data/schedule-feed/corpus/rejected/`. `corpus_locations` keeps the
 previous delivery. The ingest container's error log names the reason.
 
+### DistantSignalCorpusLoadFailing
+
+schedule-ingest keeps failing at one CORPUS `stage`
+(`schedule_feed_corpus_failures_total{stage}`, at least
+`corpusFailingMin` times within `corpusFailingWindow`, 3 in 30m by
+default). It retries every poll (120s), and `corpus_locations` keeps the
+previous delivery meanwhile. This is a real failure, not a quiet feed: a
+CORPUS file is waiting and cannot be loaded.
+
+- `scan`: `watch_dir` cannot be listed (the volume, or its permissions).
+- `read`: a stable file cannot be read. The 2026-10-02 `EACCES` was this:
+  SFTPGo wrote the upload `0600` (see the `umask` note in
+  `charts/distant-signal/files/schedule-sftp-entrypoint.sh`).
+- `load`: the Postgres write failed (connection, grants, or a refused
+  load). Check the `schedule_ingest` role and the database.
+
+The ingest container's error log names the file and the cause.
+
 ### DistantSignalCorpusStale
 
 The newest loaded Network Rail CORPUS extract was delivered over
-`corpusStaleAfterDays` ago (`api_corpus_last_delivered_at_seconds`, or `store_…` after the phase 5 rename). CORPUS is
-published monthly. Either RDM stopped pushing it (check the SFTP corpus
-folder) or schedule-ingest cannot load it (check
+`corpusStaleWarningDays` (35, warning) or `corpusStaleCriticalDays` (45,
+`corpusStaleCriticalSeverity`) ago (`api_corpus_last_delivered_at_seconds`,
+or `store_…` after the phase 5 rename). Only one of the two fires at a
+time.
+
+CORPUS is not a daily feed. RDM lists it as monthly, and deliveries have
+come every few days to couple of weeks, so days or weeks without a new
+file are normal and do not alert. 35 days is a full monthly cycle plus
+four days' grace; 45 days means at least one delivery was missed.
+
+Either RDM stopped pushing it (check the SFTP corpus folder, the bucket and
+the RDM subscription) or schedule-ingest cannot load it (check
+[DistantSignalCorpusLoadFailing](#distantsignalcorpusloadfailing),
 [DistantSignalCorpusRejected](#distantsignalcorpusrejected) and the ingest
 container's error log). The previous extract stays in use.
 

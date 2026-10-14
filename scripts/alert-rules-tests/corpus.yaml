@@ -1,0 +1,97 @@
+# promtool unit tests for the CORPUS alerts (see recorded-alerts.yaml's
+# header for how rules.yaml is rendered, with scheduleFeed.corpus.enabled).
+# CORPUS is not daily: a gap of days or weeks must stay quiet, a real
+# failure must alert within minutes. The gauge holds the delivery's Unix
+# time and promtool's clock starts at 0, so -N*86400 is N days old.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # 1 day, a fortnight and a whole month (31 days) since the last delivery:
+  # all normal for CORPUS, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+        values: '-86400x180'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: DistantSignalCorpusStale
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+        values: '-1209600x180'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: DistantSignalCorpusStale
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+        values: '-2678400x180'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: DistantSignalCorpusStale
+        exp_alerts: []
+
+  # 40 days: the warning only (corpusStaleWarningDays 35), after `for` (1h).
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+        values: '-3456000x90'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DistantSignalCorpusStale
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: DistantSignalCorpusStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: no CORPUS delivery loaded for 35 days
+              description: "Over a month is unusual for CORPUS: RDM stopped pushing it, or schedule-ingest cannot load it. The old extract stays in use."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusstale
+
+  # 50 days: the critical only (corpusStaleCriticalDays 45); the warning
+  # stops where the critical starts.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+        values: '-4320000x90'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: DistantSignalCorpusStale
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: no CORPUS delivery loaded for 45 days
+              description: "At least one monthly CORPUS missed: RDM stopped pushing it, or schedule-ingest cannot load it. The old extract stays in use."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusstale
+
+  # A load failing every 2-minute poll from minute 10 fires within minutes,
+  # whatever the delivery's age; a single read failure and the idle scan
+  # stage do not.
+  - interval: 2m
+    input_series:
+      - series: 'distant_signal_schedule_feed_corpus_failures_total{namespace="distant-signal", pod="schedulefeed", stage="load"}'
+        values: '0x4 1+1x20'
+      - series: 'distant_signal_schedule_feed_corpus_failures_total{namespace="distant-signal", pod="schedulefeed", stage="read"}'
+        values: '0x4 1x20'
+      - series: 'distant_signal_schedule_feed_corpus_failures_total{namespace="distant-signal", pod="schedulefeed", stage="scan"}'
+        values: '0x24'
+      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+        values: '-86400x24'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DistantSignalCorpusLoadFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalCorpusLoadFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stage: load}
+            exp_annotations:
+              summary: CORPUS load keeps failing in schedule-ingest
+              description: "Retried every poll; the previous extract stays in use. The ingest container's error log names the cause."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusloadfailing
+      - eval_time: 20m
+        alertname: DistantSignalCorpusStale
+        exp_alerts: []

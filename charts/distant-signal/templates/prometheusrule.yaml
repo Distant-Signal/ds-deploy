@@ -1829,22 +1829,57 @@ spec:
             description: "Moved to corpus/rejected/; the previous extract stays in use. The ingest container's error log names the reason."
             runbook_url: {{ printf "%s#distantsignalcorpusrejected" $runbook | quote }}
         {{- /*
+        CORPUS (scheduleFeed.corpus): schedule-ingest failed to scan
+        watch_dir, or to read or load a stable CORPUS file, at least
+        corpusFailingMin times in corpusFailingWindow (it retries every
+        poll, 120s). A real failure, so prompt; "no new file yet" is not one
+        and is left to DistantSignalCorpusStale. The series only exists
+        while CORPUS ingest is enabled, registered at 0 per stage.
+        */}}
+        - alert: DistantSignalCorpusLoadFailing
+          expr: |
+            sum by (namespace, stage) (increase(distant_signal_schedule_feed_corpus_failures_total{namespace="{{ $ns }}"}[{{ .corpusFailingWindow }}])) >= {{ .corpusFailingMin }}
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "CORPUS {{ "{{ $labels.stage }}" }} keeps failing in schedule-ingest"
+            description: "Retried every poll; the previous extract stays in use. The ingest container's error log names the cause."
+            runbook_url: {{ printf "%s#distantsignalcorpusloadfailing" $runbook | quote }}
+        {{- /*
         CORPUS (scheduleFeed.corpus): the newest loaded CORPUS delivery is
-        older than corpusStaleAfterDays. api sets the gauge from
-        corpus_deliveries at startup and after each load, so it survives
-        restarts between monthly deliveries; it does not exist before the
-        first load, so a freshly enabled install waiting for its first
-        delivery does not fire. Renders only while CORPUS ingest is on, so
-        a disabled feature (whose old deliveries still set the gauge) never
-        alerts. Reads the gauge under both prefixes (Q1 of
+        older than corpusStaleWarningDays (warning) or
+        corpusStaleCriticalDays (corpusStaleCriticalSeverity). CORPUS is
+        not daily: RDM lists it as monthly and it has arrived every few
+        days to weeks, so a gap of up to a month is normal and the
+        warning starts after it. The warning stops where the critical
+        starts, so only one fires. api (or the writer's CORPUS loop) sets
+        the gauge from corpus_deliveries at startup and after each load,
+        so it survives restarts between deliveries; it does not exist
+        before the first load, so a freshly enabled install waiting for its
+        first delivery does not fire. Renders only while CORPUS ingest is
+        on, so a disabled feature (whose old deliveries still set the
+        gauge) never alerts. Reads the gauge under both prefixes (Q1 of
         docs/ingest-phase5-runbook.md): ds-store emits api_ today and will
         emit store_ after the phase 5 rename; `max` over the regex takes
         whichever process set it.
         */}}
         {{- if ($.Values.scheduleFeed.corpus).enabled }}
+        {{- if hasKey . "corpusStaleAfterDays" }}
+        {{- fail "metrics.prometheusRule.schedulePipeline.corpusStaleAfterDays was replaced by corpusStaleWarningDays and corpusStaleCriticalDays: remove it and set those." }}
+        {{- end }}
+        {{- $warnDays := int .corpusStaleWarningDays }}
+        {{- $critDays := int .corpusStaleCriticalDays }}
+        {{- if or (lt $warnDays 1) (le $critDays $warnDays) }}
+        {{- fail "metrics.prometheusRule.schedulePipeline: corpusStaleWarningDays must be at least 1 and below corpusStaleCriticalDays" }}
+        {{- end }}
+        {{- $corpusAge := printf "time() - max by (namespace) ({__name__=~\"distant_signal_(api|store)_corpus_last_delivered_at_seconds\", namespace=\"%s\"})" $ns }}
         - alert: DistantSignalCorpusStale
           expr: |
-            time() - max by (namespace) ({__name__=~"distant_signal_(api|store)_corpus_last_delivered_at_seconds", namespace="{{ $ns }}"}) > {{ mul (int .corpusStaleAfterDays) 86400 }}
+            {{ $corpusAge }} > {{ mul $warnDays 86400 }} <= {{ mul $critDays 86400 }}
           for: 1h
           labels:
             severity: {{ .severity }}
@@ -1852,8 +1887,21 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
-            summary: "no CORPUS delivery loaded for {{ .corpusStaleAfterDays }} days"
-            description: "CORPUS is monthly: RDM stopped pushing it, or schedule-ingest cannot load it. The previous extract stays in use."
+            summary: "no CORPUS delivery loaded for {{ $warnDays }} days"
+            description: "Over a month is unusual for CORPUS: RDM stopped pushing it, or schedule-ingest cannot load it. The old extract stays in use."
+            runbook_url: {{ printf "%s#distantsignalcorpusstale" $runbook | quote }}
+        - alert: DistantSignalCorpusStale
+          expr: |
+            {{ $corpusAge }} > {{ mul $critDays 86400 }}
+          for: 1h
+          labels:
+            severity: {{ .corpusStaleCriticalSeverity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "no CORPUS delivery loaded for {{ $critDays }} days"
+            description: "At least one monthly CORPUS missed: RDM stopped pushing it, or schedule-ingest cannot load it. The old extract stays in use."
             runbook_url: {{ printf "%s#distantsignalcorpusstale" $runbook | quote }}
         {{- end }}
         {{- /*
