@@ -1471,6 +1471,38 @@ leaving the feed are marked ended.
 3. `SELECT fetched_at FROM ingest_freshness WHERE source = 'incidents';`
    should be within 5 minutes.
 
+### DistantSignalTransitFeedRefused
+
+poller-transit-schedule (a transit network's producer, docs/superpowers/specs/2026-10-09-transit-networks-design.md)
+refused its network's timetable within `transitFeedRefused.window` (26h):
+`transit_feed_refused_total{network, reason}`. The previous timetable
+stays active and the next daily cycle tries again, so pages keep working;
+they show an older timetable. By `reason`:
+
+- `sharp_drop`: the line, stop or trip count fell by more than
+  `feedMaxDropFraction` (0.3) since the last commit. Compare the log's
+  "parsed the timetable" counts with the last commit
+  (`XREVRANGE ds:ingest:transit-<network> + - COUNT 50` as `ds-admin`,
+  the newest `transit-timetable-commit/1`). A real cut (a closed line) is
+  accepted by raising the fraction for one cycle.
+- `no_service_today`, `empty`: BODS published a broken or empty file;
+  wait for the next nightly file.
+- `unmapped_route`: a route name the network file
+  (`crates/poller-transit-schedule/networks/<network>.toml`) does not
+  know, such as a new line. Add it to a line's `gtfs_route_names` (or
+  `replacement_bus_route_names`) and release.
+- `oversize`, `malformed`, `fetch`: the download or the zip; check the
+  log and that BODS still serves the URL without a key.
+
+### DistantSignalTransitUnmappedLineRef
+
+A network's SIRI-SX disruptions named a `LineRef` with no alias in its
+network file, within `transitUnmappedLineRef.window` (1h):
+`transit_situation_unmapped_line_refs_total{network, ref}`. Those
+disruptions are kept but show on no line (only at network level). Add
+`ref` to the right line's `siri_line_refs` in
+`crates/poller-transit-schedule/networks/<network>.toml` and release.
+
 ## pgBackRest
 
 ## pgBackRest

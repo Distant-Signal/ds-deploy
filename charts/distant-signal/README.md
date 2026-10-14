@@ -1729,7 +1729,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `metrics.prometheusRule.ingestStreamBacklog` / `ingestStreamStalled` / `ingestDeadLetters` / `ingestDeadLetterExpiring` / `ingestUnsupportedSchema` / `ingestProducerXaddFailing` / `ingestStreamMemoryHigh` / `ingestClockSkew` | see `values.yaml` | The ingest stream alerts (ingest spec §14.2): `DistantSignalIngestStreamBacklog` (pending over 600s or 0.5 of MAXLEN: warning; 0.8: critical, which replaces the warning once it fires; `maxlen` per stream, kept in step with `crates/ingest-stream/src/budget.rs`), `…StreamStalled` (XADDs succeed but nothing applied for `stallAfterSecs` per stream; critical), `…DeadLetters` (any in 15m), `…DeadLetterExpiring` (within 4h of the 7-day trim), `…UnsupportedSchema` (critical), `…ProducerXaddFailing` (every XADD failed for 10m; critical), `…StreamMemoryHigh` (over 0.75 of 512 MiB), `…ClockSkew` (an observed time clamped, D13). (`…ShadowMismatch` went with the producers' `http+shadow` sink in release B.) Each has `enabled`, `for`, `severity`. Render only with `ingestWriter.enabled`, and silent until a stream is on. Runbooks: `docs/alerts.md`, `docs/ingest-streams-deadletter.md`. |
 | `metrics.prometheusRule.writerLoopStale` / `.writerLoopUnowned` | see `values.yaml` | `DistantSignalWriterLoopStale`: a loop's newest success (`loop_last_success_timestamp_seconds`) older than `maxAgeSeconds` (1800; `maxAgeSecondsByCycle` per loop, `excludeCycles` [canary]), for 10m. `DistantSignalWriterLoopUnowned`: no process holds a loop's lock (`sum by (loop) (loop_lock_held) < 1`) for 15m (`forByLoop` per loop). Each has `enabled`, `for`, `severity`; render only with `ingestWriter.enabled` and `ingestWriter.loops.enabled`. |
 | `metrics.prometheusRule.ingestApplyWritesNothing` | see `values.yaml` | `DistantSignalIngestApplyWritesNothing`: over `window` (15m) the writer applied entries of a stream but wrote no row (`ingest_stream_row_writes_total{outcome="written"}` flat), for 5m; `excludeStreams` (the daily `ds:ingest:reference`). Renders only with `ingestWriter.enabled`. |
-| `metrics.prometheusRule.ingestSourceStale` | see `values.yaml` | `DistantSignalIngestSourceStale`: an `ingest_freshness` row (`ingest_freshness_timestamp_seconds{source}`, read by the writer every 60s) older than its `maxAgeSeconds` entry (incidents and tfl 900, stations and tocs 172800, the stream-only snapshot sources 1800, the island-of-Ireland catalogues' per-network sources 172800), for 10m; a source in `whileStreamApplies` only while the writer applies that stream. Renders only with `ingestWriter.enabled`. |
+| `metrics.prometheusRule.ingestSourceStale` | see `values.yaml` | `DistantSignalIngestSourceStale`: an `ingest_freshness` row (`ingest_freshness_timestamp_seconds{source}`, read by the writer every 60s) older than its `maxAgeSeconds` entry (incidents and tfl 900, stations and tocs 172800, the stream-only snapshot sources 1800, the island-of-Ireland catalogues' per-network sources 172800, a transit network's timetable 129600 and situations 1800), for 10m; a source in `whileStreamApplies` only while the writer applies that stream. Renders only with `ingestWriter.enabled`. |
 | `metrics.prometheusRule.dbPoolAcquireTimeouts` / `.directWritesFailing` | see `values.yaml` | `DistantSignalDbPoolAcquireTimeouts`: a component's pool timed out an acquire (`db_pool_acquire_timeouts_total`) within `window` (10m). `DistantSignalDirectWritesFailing`: a direct writer's writes of one operation (`db_writes_total`) all failed (timeout, transient, rejected; no ok) over `window` (15m), for 30m. Each has `enabled`, `for`, `severity`. |
 | `metrics.prometheusRule.incidentSnapshotsMissing` | see `values.yaml` | `DistantSignalIncidentSnapshotsMissing`: no incidents snapshot reached the database (`api_incident_removal_inference_total`, any outcome, from api or poller-incidents) within `window` (2h), for 15m. Only with `pollers.incidents.enabled`. |
 | `metrics.prometheusRule.scheduleFeedMarkerStale` | see `values.yaml` | `DistantSignalScheduleFeedMarkerStale`: the newest recorded CIF delivery (`schedule_feed_last_ingest_delivered_at_seconds`) older than `maxAgeSeconds` (108000, 30h), for 15m. Only with `scheduleFeed.enabled`. |
@@ -2610,6 +2610,45 @@ Off by default; no API key needed.
 | `pollerNirStations.podAnnotations` | `{}` | Pod annotations. |
 | `pollerNirStations.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 
+### pollerTransitSchedule
+
+Transit networks that are neither National Rail nor TfL, Manchester
+Metrolink first (docs/superpowers/specs/2026-10-09-transit-networks-design.md).
+One Deployment per enabled network, `<release>-poller-transit-schedule-<network>`
+(`strategy: Recreate`), from one image. Each XADDs its network's BODS
+timetable (GTFS) and disruptions (SIRI-SX) to `ds:ingest:transit-<network>`
+as its own Redis user; no database, api or key. The rollout order is the
+spec's §15.1.
+
+| Key | Default | Description |
+|---|---|---|
+| `pollerTransitSchedule.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-transit-schedule` | Image repository. |
+| `pollerTransitSchedule.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `pollerTransitSchedule.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `pollerTransitSchedule.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `pollerTransitSchedule.progressStallSecs` | `3600` | `/livez` stall window (see `workerHealth`): one GTFS download, its parse and the produce. |
+| `pollerTransitSchedule.logLevel` | `info` | `RUST_LOG` value. |
+| `pollerTransitSchedule.metricsPort` | `9091` | Prometheus `/metrics` port. |
+| `pollerTransitSchedule.networks.metrolink.enabled` | `false` | Deploy Metrolink's producer. Needs `redis.acl.clients.pollerTransitMetrolink: true` and `ingestWriter.streams.transit-metrolink: apply`. |
+| `pollerTransitSchedule.networks.metrolink.adapter` | `gtfs` | `TRANSIT_ADAPTER`; only `gtfs` exists. |
+| `pollerTransitSchedule.networks.metrolink.gtfsUrl` | BODS North West GTFS | The timetable zip (see values.yaml for the URL). |
+| `pollerTransitSchedule.networks.metrolink.gtfsMaxBytes` | `419430400` | The GTFS download's byte cap. |
+| `pollerTransitSchedule.networks.metrolink.situationsUrl` | BODS SIRI-SX bulk archive | The disruptions archive (a 302 to a signed URL on `download.bus-data.dft.gov.uk`). |
+| `pollerTransitSchedule.networks.metrolink.naptanUrl` | NaPTAN access nodes | `{area}` is the network file's NaPTAN area. |
+| `pollerTransitSchedule.networks.metrolink.timetableIntervalSecs` | `86400` | Seconds between timetable fetches. |
+| `pollerTransitSchedule.networks.metrolink.situationsIntervalSecs` | `300` | Seconds between SIRI-SX fetches. |
+| `pollerTransitSchedule.networks.metrolink.situationsEnabled` | `false` | Run the SIRI-SX loop. Off until the ingest-writer handles `transit-situations/1` (batch 4); before that the applied stream would dead-letter every snapshot. |
+| `pollerTransitSchedule.networks.metrolink.horizonDays` | `60` | Days of service dates stored after today. |
+| `pollerTransitSchedule.networks.metrolink.feedMaxDropFraction` | `0.3` | A feed whose line, stop or trip count fell by more than this since the last commit is refused. |
+| `pollerTransitSchedule.networks.metrolink.workDirSizeLimit` | `512Mi` | The `/work` emptyDir's size limit (the GTFS zip). |
+| `pollerTransitSchedule.networks.metrolink.resources` | requests `100m`/`192Mi`, limit `768Mi` | Container resource requests/limits. |
+| `pollerTransitSchedule.networks.metrolink.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it. |
+| `pollerTransitSchedule.networks.metrolink.nodeSelector` | `{}` | Pod node selector. |
+| `pollerTransitSchedule.networks.metrolink.tolerations` | `[]` | Pod tolerations. |
+| `pollerTransitSchedule.networks.metrolink.affinity` | `{}` | Pod affinity rules. |
+| `pollerTransitSchedule.networks.metrolink.podAnnotations` | `{}` | Pod annotations. |
+| `pollerTransitSchedule.networks.metrolink.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
 ### scheduleFeed
 
 An SFTP server (SFTPGo) that receives the pushed CIF timetable, and the
@@ -2797,7 +2836,7 @@ now matches every other workload.
 | `metrics.prometheusRule.annotations` | `{}` | Extra annotations on the `PrometheusRule` object. |
 | `metrics.prometheusRule.ruleLabels` | `{}` | Extra labels added to every alert, next to `severity`. |
 | `metrics.prometheusRule.runbookBaseUrl` | GitHub `main` | Prefix for each alert's `runbook_url`; `/docs/alerts.md#<alert name, lowercased>` is appended. |
-| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `enricherTokenExchange`, `enricherBatches`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `notifierForwardQueue`, `userSignupSpike`, `archiveUploadFailures`, `archiveStale`, `archiveBatchChurn`, `retentionStepFailing`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `scheduleBucket`, `pollerFailures`, `pollerStale`, `ldbwsStalestStation`, `ldbwsInvalidCrs` and `incidentRemovalStalled`. |
+| `metrics.prometheusRule.<alert>` | see `values.yaml` | Per-alert `enabled`, `for`, `severity` and threshold settings, `for` durations, severities and thresholds for `movementLag`, `movementLagGrowing`, `streamGap`, `deadLetter`, `deadLetterFull`, `relayPublishFailing`, `redisPersistence`, `groupRecreated`, `deadLetterExpiring`, `longPending`, `parseEnvelope`, `enricherErrors`, `enricherTokenExchange`, `enricherBatches`, `componentMemory`, `fullCoverageWindow`, `notifierPushDropped`, `notifierForwardQueue`, `userSignupSpike`, `archiveUploadFailures`, `archiveStale`, `archiveBatchChurn`, `retentionStepFailing`, `archiveExpiry`, `schedulePipeline`, `scheduleSftp`, `scheduleBucket`, `pollerFailures`, `pollerStale`, `transitFeedRefused`, `transitUnmappedLineRef`, `ldbwsStalestStation`, `ldbwsInvalidCrs` and `incidentRemovalStalled`. |
 
 #### Alerts
 
@@ -2888,6 +2927,8 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalScheduleFeedSourcesDisagree` | warning | SFTP and the bucket delivered different content of one kind within `scheduleFeed.disagreementWindowMinutes` (`schedule_feed_source_disagreement_total{kind}`) in the last 1d; the bucket copy won. Only with both sources on. |
 | `DistantSignalPollerFailing` | warning | A poller completed no successful cycle and at least one failed one (`poller_cycle_total{result}`) over the last 2h, or more than half its cycles over the last 15m failed (`pollerFailures.failureRatio`, `ratioWindow`), for 10m (SVC-08). Rendered only when a poller (including an island-of-Ireland one) is enabled, in a separate `<fullname>-pollers` PrometheusRule. |
 | `DistantSignalPollerStale` | warning | A poller's last successful cycle (`poller_last_success_timestamp_seconds{cycle}`, the process start until one succeeds) is older than 2x its `pollIntervalSecs` and at least 1800s (`pollerStale.intervalMultiple`, `minAgeSeconds`) for 10m. Needs no failed cycle, so it also catches a poller that stopped cycling. One rule per enabled poller, in the `<fullname>-pollers` PrometheusRule. |
+| `DistantSignalTransitFeedRefused` | warning | `poller-transit-schedule` refused a network's timetable (`transit_feed_refused_total{network, reason}`) within 26h (`transitFeedRefused.window`); the previous one stays active. Only while a `pollerTransitSchedule` network is enabled. |
+| `DistantSignalTransitUnmappedLineRef` | warning | A network's SIRI-SX disruptions named a `LineRef` its network file has no alias for (`transit_situation_unmapped_line_refs_total{network, ref}`) within 1h. Only while a network is enabled. |
 | `DistantSignalLdbwsStationStale` | warning | The least recently sampled LDBWS station (`ldbws_stalest_station_age_seconds`) is over 900s old (the aggregator's sample-age limit, past which it drops the station) for 15m: the rotation stopped reaching part of the list (SVC-04). Stations LDBWS rejects as an invalid CRS are excluded. Only when `pollers.ldbws.enabled`. |
 | `DistantSignalLdbwsInvalidCrs` | warning | LDBWS has answered "Invalid crs code supplied" for a sample station (`ldbws_invalid_crs_station{crs}` is 1) for 15m: a `lines/*.toml` typo. The poller re-probes it hourly instead of every cycle. Only when `pollers.ldbws.enabled`. |
 | `DistantSignalIncidentSnapshotsMissing` | warning | No incidents snapshot reached the database (`api_incident_removal_inference_total`, every outcome, counted by api under the http sink and poller-incidents under db) over 2h, for 15m. |

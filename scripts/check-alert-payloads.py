@@ -127,6 +127,11 @@ RENDER_FLAGS = [
     # and DistantSignalWriterLoopUnowned.
     "ingestWriter.enabled=true",
     "ingestWriter.loops.enabled=true",
+    # A transit network (its producer's alerts and the DistantSignalPollerStale
+    # rules of its two loops), with its Redis user and its stream applied.
+    "pollerTransitSchedule.networks.metrolink.enabled=true",
+    "redis.acl.clients.pollerTransitMetrolink=true",
+    "ingestWriter.streams.transit-metrolink=apply",
     "postgresql.pgbackrest.enabled=true",
     "postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest",
     "postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0",

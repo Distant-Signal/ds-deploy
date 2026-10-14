@@ -3824,6 +3824,83 @@ pollerNirStations:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
+# pollerTransitSchedule (crates/poller-transit-schedule/src/config.rs:
+# Config) -- transit networks that are neither National Rail nor TfL,
+# Manchester Metrolink first (docs/superpowers/specs/2026-10-09-transit-
+# networks-design.md). One Deployment per enabled network
+# (`<release>-poller-transit-schedule-<network>`), from one image. Each
+# reads its network's public BODS timetable (GTFS) and disruptions
+# (SIRI-SX) and NaPTAN, and XADDs them to its own stream,
+# `ds:ingest:transit-<network>`, as its own Redis user
+# (`redis.acl.clients.pollerTransit<Network>`). No database, no api, no
+# secret beyond the Redis password: the BODS downloads need no key.
+# ---------------------------------------------------------------------------
+pollerTransitSchedule:
+  image:
+    repository: ghcr.io/fasterspeeding/distant-signal/poller-transit-schedule
+    # -- Empty means "use the chart's appVersion".
+    tag: ""
+    # -- Content digest override. See api.image.digest's own comment above.
+    digest: ""
+    pullPolicy: IfNotPresent
+  # -- /livez stall window (see workerHealth): one GTFS download (159 MB on
+  # 2026-10-14), its parse and the produce.
+  progressStallSecs: 3600
+  logLevel: info
+  metricsPort: 9091
+  # -- One entry per network compiled into the image
+  # (crates/poller-transit-schedule/networks/<network>.toml).
+  networks:
+    metrolink:
+      # -- Off by default. Turning it on needs
+      # `redis.acl.clients.pollerTransitMetrolink: true` (its own Redis
+      # user, with the `poller-transit-metrolink-password` Secret key) and
+      # `ingestWriter.streams.transit-metrolink: apply`; the pages stay
+      # hidden until `api.transitNetworks` lists it (batch 3). Rollout:
+      # the transit spec §15.1.
+      enabled: false
+      # -- The timetable source adapter (TRANSIT_ADAPTER); only gtfs exists.
+      adapter: gtfs
+      # -- The BODS North West GTFS (OGL), filtered to the network's NOCs.
+      gtfsUrl: "https://data.bus-data.dft.gov.uk/timetable/download/gtfs-file/north_west/"
+      # -- The GTFS download's byte cap (TRANSIT_GTFS_MAX_BYTES; 400 MiB).
+      gtfsMaxBytes: 419430400
+      # -- The BODS SIRI-SX bulk archive (a 302 to a signed URL on
+      # download.bus-data.dft.gov.uk).
+      situationsUrl: "https://data.bus-data.dft.gov.uk/disruptions/download/bulk_archive"
+      # -- NaPTAN access nodes; `{area}` is the network file's naptan_area.
+      naptanUrl: "https://naptan.api.dft.gov.uk/v1/access-nodes?atcoAreaCodes={area}&dataFormat=csv"
+      # -- Seconds between timetable fetches (BODS rebuilds the file nightly).
+      timetableIntervalSecs: 86400
+      # -- Seconds between SIRI-SX fetches.
+      situationsIntervalSecs: 300
+      # -- Run the SIRI-SX loop (TRANSIT_SITUATIONS_ENABLED). Off until the
+      # ingest-writer handles transit-situations/1 (transit plan batch 4):
+      # before that, the applied stream would dead-letter every snapshot.
+      situationsEnabled: false
+      # -- Days of service dates stored after today (Q8).
+      horizonDays: 60
+      # -- Sharp-drop guard: a feed whose line, stop or trip count fell by
+      # more than this fraction since the last commit is refused
+      # (transit_feed_refused_total{reason="sharp_drop"}). 1.0 turns it off.
+      feedMaxDropFraction: 0.3
+      # -- The /work emptyDir the GTFS zip is downloaded to.
+      workDirSizeLimit: 512Mi
+      # The parse streams: 48 MiB peak RSS on the whole North West file.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 192Mi
+        limits:
+          memory: 768Mi
+      extraEnv: []
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+      podAnnotations: {}
+      podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
 # scheduleFeed -- OPT-IN CIF SCHEDULE feed SFTP-push receiver
 # (docs/superpowers/specs/2026-09-01-schedule-feed-push-design.md)
 # ---------------------------------------------------------------------------
@@ -4994,6 +5071,10 @@ metrics:
         island_of_ireland_lines_gtfs: 172800
         island_of_ireland_stations_nir: 172800
         island_of_ireland_lines_nir: 172800
+        # Transit networks (spec §13.4): a daily timetable, so 36 h; the
+        # situations every 5 minutes (written from batch 4).
+        transit-metrolink-timetable: 129600
+        transit-metrolink-situations: 1800
       whileStreamApplies:
         station-samples: "ds:ingest:station-samples"
         full-coverage-stats: "ds:ingest:full-coverage"
@@ -5003,6 +5084,8 @@ metrics:
         island_of_ireland_lines_gtfs: "ds:ingest:ioi-gtfs"
         island_of_ireland_stations_nir: "ds:ingest:ioi-nir"
         island_of_ireland_lines_nir: "ds:ingest:ioi-nir"
+        transit-metrolink-timetable: "ds:ingest:transit-metrolink"
+        transit-metrolink-situations: "ds:ingest:transit-metrolink"
       for: 10m
       severity: warning
     # DistantSignalDbPoolAcquireTimeouts: a component's Postgres pool timed
@@ -5285,6 +5368,23 @@ metrics:
       intervalMultiple: 2
       minAgeSeconds: 1800
       for: 10m
+      severity: warning
+    # DistantSignalTransitFeedRefused: poller-transit-schedule refused a
+    # network's timetable within `window`
+    # (distant_signal_transit_feed_refused_total{network, reason}); the
+    # previous version stays active. 26h spans one daily cycle. Only while
+    # a pollerTransitSchedule network is enabled. Runbook: docs/alerts.md.
+    transitFeedRefused:
+      enabled: true
+      window: 26h
+      severity: warning
+    # DistantSignalTransitUnmappedLineRef: a network's SIRI-SX disruptions
+    # named a LineRef its network file has no alias for, within `window`
+    # (distant_signal_transit_situation_unmapped_line_refs_total{network,
+    # ref}). Its disruptions show on no line until the alias is added.
+    transitUnmappedLineRef:
+      enabled: true
+      window: 1h
       severity: warning
     # DistantSignalLdbwsStationStale (SVC-04): the least recently sampled
     # LDBWS station was last sampled more than `maxAgeSeconds` ago

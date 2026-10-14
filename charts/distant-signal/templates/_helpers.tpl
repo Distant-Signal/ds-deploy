@@ -432,6 +432,16 @@ true
 {{- end }}
 
 {{/*
+True (non-empty) when any pollerTransitSchedule network is enabled (transit
+networks spec §13). Takes root.
+*/}}
+{{- define "distant-signal.transitNetworksOn" -}}
+{{- range $_, $n := (.Values.pollerTransitSchedule | default dict).networks | default dict -}}
+{{- if $n.enabled }}true{{ end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 redis.acl.defaultUser as one of "on", "off" or "on-unshared". Accepts YAML
 booleans for on/off.
 */}}
@@ -2579,7 +2589,7 @@ this chart can render, so a typo cannot silently drop a rule. Takes
 {{- define "distant-signal.npComponent" -}}
 {{- $root := .root -}}
 {{- $all := $root.Values.networkPolicy.components | default dict -}}
-{{- $known := list "api" "frontend" "aggregator" "enricher" "notifier" "postgres" "redis" "schedulefeed" "schedulefeed-sftp" "trust-consumer" "trust-backlog-consumer" "full-coverage-consumer" "movement-relay" "poller-irish-rail-gtfs" "poller-irish-rail-live" "poller-nir-stations" "postgres-roles" "migrate" "api-maintenance" "ingest-writer" -}}
+{{- $known := list "api" "frontend" "aggregator" "enricher" "notifier" "postgres" "redis" "schedulefeed" "schedulefeed-sftp" "trust-consumer" "trust-backlog-consumer" "full-coverage-consumer" "movement-relay" "poller-irish-rail-gtfs" "poller-irish-rail-live" "poller-nir-stations" "poller-transit-schedule" "postgres-roles" "migrate" "api-maintenance" "ingest-writer" -}}
 {{- range $name, $_ := $root.Values.pollers -}}
 {{- $known = append $known (printf "poller-%s" $name) -}}
 {{- end -}}

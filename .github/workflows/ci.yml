@@ -2457,18 +2457,22 @@ jobs:
             --set redis.acl.enabled=true --set redis.acl.existingSecret=redis-users --set redis.acl.stage=narrow
             --set redis.acl.clients.pollerIrishRailGtfs=true --set redis.acl.clients.pollerIrishRailLive=true
             --set redis.acl.clients.pollerNirStations=true
+            --set redis.acl.clients.pollerTransitMetrolink=true
+            --set ingestWriter.streams.transit-metrolink=apply
           )
           pollers=$(render -f charts/distant-signal/values-example.yaml "${ioi[@]}" \
             --set pollerIrishRailGtfs.enabled=true \
             --set pollerIrishRailLive.enabled=true \
             --set pollerNirStations.enabled=true \
+            --set pollerTransitSchedule.networks.metrolink.enabled=true \
             --show-only templates/poller-deployments.yaml \
             --show-only templates/poller-irish-rail-gtfs-deployment.yaml \
             --show-only templates/poller-irish-rail-live-deployment.yaml \
-            --show-only templates/poller-nir-stations-deployment.yaml)
+            --show-only templates/poller-nir-stations-deployment.yaml \
+            --show-only templates/poller-transit-schedule-deployment.yaml)
           deployments=$(grep -c '^kind: Deployment' <<<"${pollers}")
           probes=$(grep -c 'path: /livez' <<<"${pollers}")
-          [[ "${deployments}" -ge 4 ]] || fail "expected the pollers to render, got ${deployments}"
+          [[ "${deployments}" -ge 5 ]] || fail "expected the pollers to render, got ${deployments}"
           [[ "${probes}" -eq "${deployments}" ]] \
             || fail "every poller needs a /livez liveness probe (${probes} of ${deployments})"
 
@@ -2900,14 +2904,18 @@ jobs:
             --set redis.acl.enabled=true --set redis.acl.existingSecret=redis-users --set redis.acl.stage=narrow
             --set redis.acl.clients.pollerIrishRailGtfs=true --set redis.acl.clients.pollerIrishRailLive=true
             --set redis.acl.clients.pollerNirStations=true
+            --set redis.acl.clients.pollerTransitMetrolink=true
+            --set ingestWriter.streams.transit-metrolink=apply
           )
           all=$(render "${ioi[@]}" --set pollerIrishRailGtfs.enabled=true \
             --set pollerIrishRailLive.enabled=true \
             --set pollerNirStations.enabled=true \
+            --set pollerTransitSchedule.networks.metrolink.enabled=true \
             --show-only templates/networkpolicy.yaml)
           for c in aggregator:8090 enricher:8090 notifier:8090 trust-consumer:8081 \
               trust-backlog-consumer:8083 full-coverage-consumer:8082 movement-relay:8083 \
-              poller-irish-rail-gtfs:8090 poller-irish-rail-live:8090 poller-nir-stations:8090; do
+              poller-irish-rail-gtfs:8090 poller-irish-rail-live:8090 poller-nir-stations:8090 \
+              poller-transit-schedule:8090; do
             p=$(policy "distant-signal-${c%%:*}" <<<"${all}")
             [[ -n "${p}" ]] || fail "no NetworkPolicy for ${c%%:*}"
             grep -q "port: ${c##*:}\$" <<<"${p}" || fail "${c%%:*} policy must admit health port ${c##*:}"

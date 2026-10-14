@@ -2119,7 +2119,8 @@ scoping as above.
 {{- $fullname := include "distant-signal.fullname" . }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
 {{- $runbook := printf "%s/docs/alerts.md" (trimSuffix "/" $rule.runbookBaseUrl) }}
-{{- $anyPoller := or .Values.pollerIrishRailGtfs.enabled .Values.pollerIrishRailLive.enabled .Values.pollerNirStations.enabled }}
+{{- $transitOn := include "distant-signal.transitNetworksOn" . }}
+{{- $anyPoller := or .Values.pollerIrishRailGtfs.enabled .Values.pollerIrishRailLive.enabled .Values.pollerNirStations.enabled $transitOn }}
 {{- range $name, $poller := .Values.pollers }}
 {{- if $poller.enabled }}
 {{- $anyPoller = true }}
@@ -2138,12 +2139,22 @@ scoping as above.
 {{- $_ := set $pollerIntervals $label $values.pollIntervalSecs }}
 {{- end }}
 {{- end }}
+{{- /* poller-transit-schedule's two loops (one label each, whichever
+network: an enabled network's intervals). */}}
+{{- range $_, $n := .Values.pollerTransitSchedule.networks }}
+{{- if $n.enabled }}
+{{- $_ := set $pollerIntervals "transit-timetable" $n.timetableIntervalSecs }}
+{{- $_ := set $pollerIntervals "transit-situations" $n.situationsIntervalSecs }}
+{{- end }}
+{{- end }}
+{{- $transitRefusedOn := and ($rule.transitFeedRefused).enabled $transitOn }}
+{{- $transitUnmappedOn := and ($rule.transitUnmappedLineRef).enabled $transitOn }}
 {{- $pollerStaleOn := and ($rule.pollerStale).enabled $anyPoller }}
 {{- $ldbwsOn := and ($rule.ldbwsStalestStation).enabled (.Values.pollers.ldbws).enabled }}
 {{- $ldbwsInvalidCrsOn := and ($rule.ldbwsInvalidCrs).enabled (.Values.pollers.ldbws).enabled }}
 {{- $incidentRemovalOn := and ($rule.incidentRemovalStalled).enabled (.Values.pollers.incidents).enabled }}
 {{- $incidentSnapshotsOn := and ($rule.incidentSnapshotsMissing).enabled (.Values.pollers.incidents).enabled }}
-{{- if or $pollerFailuresOn $pollerStaleOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn $incidentSnapshotsOn }}
+{{- if or $pollerFailuresOn $pollerStaleOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn $incidentSnapshotsOn $transitRefusedOn $transitUnmappedOn }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -2246,6 +2257,44 @@ spec:
             description: "None in {{ $maxAge }}s: its cycles fail, or it is not polling at all. Check its log, its upstream and api."
             runbook_url: {{ printf "%s#distantsignalpollerstale" $runbook | quote }}
         {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.transitFeedRefused }}
+        {{- if $transitRefusedOn }}
+        {{- /*
+        poller-transit-schedule refused a timetable (transit spec §6.2:
+        empty, a sharp drop, no service today, an unmapped route, over a
+        cap, malformed, or the download failed); the previous version stays
+        active, so this is a warning, not an outage.
+        */}}
+        - alert: DistantSignalTransitFeedRefused
+          expr: |
+            sum by (namespace, network, reason) (increase(distant_signal_transit_feed_refused_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.network }}" }} timetable refused ({{ "{{ $labels.reason }}" }})"
+            description: "In the last {{ .window }}. The previous timetable stays active. Check the producer's log."
+            runbook_url: {{ printf "%s#distantsignaltransitfeedrefused" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.transitUnmappedLineRef }}
+        {{- if $transitUnmappedOn }}
+        - alert: DistantSignalTransitUnmappedLineRef
+          expr: |
+            sum by (namespace, network, ref) (increase(distant_signal_transit_situation_unmapped_line_refs_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.network }}" }} unknown disruption line {{ "{{ $labels.ref }}" }}"
+            description: "In the last {{ .window }}. Its disruptions show on no line until the network file has the alias."
+            runbook_url: {{ printf "%s#distantsignaltransitunmappedlineref" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.ldbwsStalestStation }}

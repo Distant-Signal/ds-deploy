@@ -1,0 +1,153 @@
+{{- /*
+poller-transit-schedule: one Deployment per enabled network
+(pollerTransitSchedule.networks.<network>.enabled; transit networks spec
+§13.1). Its only sink is its network's stream, ds:ingest:transit-<network>,
+as its own Redis user (redis.acl.clients.pollerTransit<Network>), which the
+ingest-writer must apply (ingestWriter.streams.transit-<network>: apply).
+Recreate from creation: two pods must never XADD at once.
+*/}}
+{{- $root := . }}
+{{- $p := .Values.pollerTransitSchedule }}
+{{- range $network, $n := $p.networks }}
+{{- if $n.enabled }}
+{{- $client := printf "pollerTransit%s" ($network | title) }}
+{{- $component := "poller-transit-schedule" }}
+{{- include "distant-signal.requireStreamApplied" (dict "root" $root "client" $client "stream" (printf "transit-%s" $network) "what" (printf "pollerTransitSchedule.networks.%s.enabled" $network)) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-poller-transit-schedule-%s" (include "distant-signal.fullname" $root) $network | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" $root "component" $component) | nindent 4 }}
+    distant-signal/transit-network: {{ $network | quote }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
+      distant-signal/transit-network: {{ $network | quote }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.podLabels" (dict "root" $root "component" $component) | nindent 8 }}
+        distant-signal/transit-network: {{ $network | quote }}
+      {{- if or $root.Values.metrics.enabled $n.podAnnotations }}
+      annotations:
+        {{- if $root.Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $p.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with $n.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" $root }}
+      automountServiceAccountToken: false
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" $n.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: poller-transit-schedule
+          image: {{ include "distant-signal.image" (dict "root" $root "image" $p.image) | quote }}
+          imagePullPolicy: {{ $p.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          # /livez restarts a wedged loop; /healthz is 503
+          # "stream_unavailable" while its last XADD failed.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" $root "port" $root.Values.workerHealth.port "readiness" true) | nindent 10 }}
+          ports:
+            - name: health
+              containerPort: {{ $root.Values.workerHealth.port }}
+              protocol: TCP
+          {{- if $root.Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ $p.metricsPort }}
+              protocol: TCP
+          {{- end }}
+          env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerTransitScheduleEnv" (dict "root" $root "network" $network "n" $n "client" $client)) "extra" $n.extraEnv) | trim | nindent 12 }}
+          volumeMounts:
+            - name: work
+              mountPath: /work
+          {{- with $n.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        # The GTFS zip (a zip needs a seekable file), deleted after each
+        # parse.
+        - name: work
+          emptyDir:
+            sizeLimit: {{ $n.workDirSizeLimit }}
+      {{- with $n.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $n.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $n.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+
+{{- /*
+One network's env entries. distant-signal.mergeEnv renders them with the
+network's extraEnv, which replaces an entry of the same name. Takes (dict
+"root" $ "network" <name> "n" <its values> "client" <redis.acl.clients key>).
+*/ -}}
+{{- define "distant-signal.pollerTransitScheduleEnv" }}
+{{- $root := .root }}
+{{- $p := $root.Values.pollerTransitSchedule }}
+{{- $n := .n }}
+            - name: TRANSIT_NETWORK
+              value: {{ .network | quote }}
+            - name: TRANSIT_ADAPTER
+              value: {{ $n.adapter | quote }}
+            - name: TRANSIT_GTFS_URL
+              value: {{ $n.gtfsUrl | quote }}
+            - name: TRANSIT_GTFS_MAX_BYTES
+              value: {{ $n.gtfsMaxBytes | int64 | quote }}
+            - name: TRANSIT_SITUATIONS_URL
+              value: {{ $n.situationsUrl | quote }}
+            - name: TRANSIT_NAPTAN_URL
+              value: {{ $n.naptanUrl | quote }}
+            - name: TRANSIT_TIMETABLE_INTERVAL_SECS
+              value: {{ $n.timetableIntervalSecs | int64 | quote }}
+            - name: TRANSIT_SITUATIONS_INTERVAL_SECS
+              value: {{ $n.situationsIntervalSecs | int64 | quote }}
+            - name: TRANSIT_SITUATIONS_ENABLED
+              value: {{ $n.situationsEnabled | quote }}
+            - name: TRANSIT_HORIZON_DAYS
+              value: {{ $n.horizonDays | int64 | quote }}
+            - name: FEED_MAX_DROP_FRACTION
+              value: {{ $n.feedMaxDropFraction | quote }}
+            - name: TRANSIT_WORK_DIR
+              value: "/work"
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" $root | quote }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" $root "client" .client "user" (printf "poller-transit-%s" .network)) }}
+            - name: METRICS_ENABLED
+              value: {{ $root.Values.metrics.enabled | quote }}
+            {{- if $root.Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ $p.metricsPort | quote }}
+            {{- end }}
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int $root.Values.workerHealth.port) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ $p.progressStallSecs | quote }}
+            - name: RUST_LOG
+              value: {{ $p.logLevel | quote }}
+{{- end }}

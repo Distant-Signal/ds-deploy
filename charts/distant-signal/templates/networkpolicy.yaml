@@ -165,6 +165,11 @@ spec:
                   {{- if .Values.pollerNirStations.enabled }}
                   - poller-nir-stations
                   {{- end }}
+                  {{- if include "distant-signal.transitNetworksOn" . }}
+                  # Each transit network's producer XADDs its own
+                  # ds:ingest:transit-<network> stream (transit spec §13.3).
+                  - poller-transit-schedule
+                  {{- end }}
         {{- with .Values.networkPolicy.redisClients }}
         # networkPolicy.redisClients: workloads outside this chart, e.g. a
         # redis-exporter.
@@ -430,6 +435,20 @@ own ds:ingest:ioi-* stream, plan 3c.2, D8); no api, no token URL. */}}
 {{- end }}
 {{- if .Values.pollerNirStations.enabled }}
 {{- $workers = append $workers (dict "component" "poller-nir-stations" "metricsPort" .Values.pollerNirStations.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $ioiEgress "urls" (list .Values.pollerNirStations.stationsCsvUrl .Values.pollerNirStations.haltsCsvUrl)) }}
+{{- end }}
+{{- /* poller-transit-schedule (transit spec §13.3): Redis (its network's
+stream) and the public downloads: the BODS GTFS and SIRI-SX URLs, the
+SIRI-SX archive's signed-URL host (download.bus-data.dft.gov.uk) and
+NaPTAN, for every enabled network; no Postgres, no api. One policy for the
+component, whichever networks are on. */}}
+{{- if include "distant-signal.transitNetworksOn" . }}
+{{- $transitUrls := list "https://download.bus-data.dft.gov.uk/" }}
+{{- range $network, $n := .Values.pollerTransitSchedule.networks }}
+{{- if $n.enabled }}
+{{- $transitUrls = concat $transitUrls (list $n.gtfsUrl $n.situationsUrl ($n.naptanUrl | replace "{area}" "area")) }}
+{{- end }}
+{{- end }}
+{{- $workers = append $workers (dict "component" "poller-transit-schedule" "metricsPort" .Values.pollerTransitSchedule.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" (dict "redis" true) "urls" $transitUrls) }}
 {{- end }}
 {{- range $workers }}
 ---

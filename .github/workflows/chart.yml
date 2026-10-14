@@ -223,6 +223,9 @@ jobs:
           - service: poller-nir-stations
             dockerfile: docker/poller-nir-stations.Dockerfile
             target: ""
+          - service: poller-transit-schedule
+            dockerfile: docker/poller-transit-schedule.Dockerfile
+            target: ""
           - service: trust-consumer
             dockerfile: docker/trust-consumer.Dockerfile
             target: ""
@@ -709,6 +712,7 @@ jobs:
             [poller-irish-rail-gtfs]=".pollerIrishRailGtfs"
             [poller-irish-rail-live]=".pollerIrishRailLive"
             [poller-nir-stations]=".pollerNirStations"
+            [poller-transit-schedule]=".pollerTransitSchedule"
             [trust-consumer]=".trustConsumer"
             [full-coverage-consumer]=".fullCoverageConsumer"
             [trust-backlog-consumer]=".trustBacklogConsumer"
