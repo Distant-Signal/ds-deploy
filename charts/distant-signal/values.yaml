@@ -3131,6 +3131,18 @@ enricher:
   # mine-bringer cluster showed steady-state usage of ~6Mi -- 512Mi was
   # ~85x that. Halved rather than sized to the snapshot, since this is an
   # event-driven workload that can spike under a burst of incidents.
+  #
+  # Batch mode (`llm.batch.sweepMode: batch`, or `llm.batch.mode` batch
+  # or batch-only) spikes above that while it submits or finishes a batch,
+  # then returns to ~20Mi. At `llm.batch.maxItems` (2,000), after the
+  # 2026-10-14 fix (docs/enricher-anthropic.md, "Batch mode"): ~50Mi on
+  # top of the baseline for a primary submission, ~40Mi for an adversarial
+  # stage, so under ~120Mi even if a sweep's submission and a stage's
+  # finish overlap. (Before the fix a 929-incident batch held ~230Mi and
+  # fired DistantSignalComponentMemoryHigh; at 2,000 a submission alone
+  # allocated ~220Mi on top of the baseline.)
+  # 256Mi keeps that under the alert's 80%. Raise it with maxItems: ~25Mi
+  # more per 1,000 items.
   resources:
     requests:
       cpu: 50m
