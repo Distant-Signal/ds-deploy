@@ -699,8 +699,7 @@ rows (`notifier_forward_queue_rows`; 50000 by default) for `largeFor`.
 Production held 315 rows for a full 30-day window on 2026-10-09, all for
 tracked trains. Rows stay for the trains retention window whether or not the
 notifier has read them, so this is either a producer writing far more
-signals than usual (trust-consumer, through its DB sink or api's
-`/private/train-forward-signals`: check `GROUP BY trains_id` for one train
+signals than usual (trust-consumer, through its DB sink: check `GROUP BY trains_id` for one train
 with thousands of rows, or many rows with no `dedup_key`), or tracked trains
 have grown enough that the table should be pruned or archived on its own
 schedule. Raise `maxRows` only after ruling out the first.
@@ -1254,8 +1253,8 @@ counter's `drift` stage is not this alert's: see
 
 The newest loaded Network Rail CORPUS extract was delivered over
 `corpusStaleWarningDays` (35, warning) or `corpusStaleCriticalDays` (45,
-`corpusStaleCriticalSeverity`) ago (`api_corpus_last_delivered_at_seconds`,
-or `store_…` after the phase 5 rename). Only one of the two fires at a
+`corpusStaleCriticalSeverity`) ago (`store_corpus_last_delivered_at_seconds`;
+`api_…` before the phase 5 rename). Only one of the two fires at a
 time.
 
 CORPUS is not a daily feed. RDM lists it as monthly, and deliveries have
@@ -1481,7 +1480,7 @@ the alert clears once api stops listing it or LDBWS accepts it.
 Over the last window (2h, 24 polls), api applied its "Ended (no longer
 listed)" inference to no incidents snapshot, and skipped at least one as
 `incomplete`, `empty` or a `shrink`
-(`api_incident_removal_inference_total{outcome}`, or `store_…` after the phase 5 rename; `too_soon` and
+(`store_incident_removal_inference_total{outcome}`; `api_…` before the phase 5 rename; `too_soon` and
 `no_baseline` skips are benign and not counted). While this lasts,
 an incident that leaves the Knowledgebase feed without RDM clearing it stays
 "active" on the archive and in line status, the bug the inference exists to
@@ -1507,7 +1506,7 @@ as ended.
 
 No incidents snapshot reached the database within
 `incidentSnapshotsMissing.window` (2h): the sum of
-`api_incident_removal_inference_total` over every outcome did not move, for
+`store_incident_removal_inference_total` over every outcome did not move, for
 `for`. Each snapshot counts once there, whatever the inference decided, in
 poller-incidents (the api's `/private/incidents` path went with release
 B). It registers the series at 0 at startup, so this is a real 0, not a

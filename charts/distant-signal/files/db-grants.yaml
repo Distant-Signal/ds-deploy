@@ -373,9 +373,8 @@ tables:
   # the same transaction as schedule_line_population by schedule-reference,
   # read by the api's line pages; the aggregator
   # prunes old dates. The one-off backfill is `ds-migrate
-  # backfill-line-train-summaries`, as the schema owner (phase 5 prep, Q2);
-  # the api image's deprecated backfill_line_train_summaries binary, which
-  # writes with the api's credentials, goes in step 5.4b.
+  # backfill-line-train-summaries`, as the schema owner (phase 5 prep, Q2;
+  # the api image's own binary went in step 5.4b).
   line_train_summaries: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
   # Each schedule's vehicle (train, bus, ferry) per service date, published
   # by schedule-reference; the aggregator prunes old dates; the notifier skips live alerts for

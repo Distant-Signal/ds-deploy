@@ -1,3 +1,4 @@
+{{- include "distant-signal.removedChatbotAccessGuard" . }}
 {{/*
 Fail-fast on an unusable SSO config -- same pattern as before, EXCEPT an
 empty api.sso.* value is no longer automatically fatal when
@@ -343,20 +344,10 @@ with api.extraEnv, which replaces an entry of the same name.
             # Off by default -- see api.corpusFallback in values.yaml.
             - name: CORPUS_FALLBACK_ENABLED
               value: {{ .Values.api.corpusFallback.enabled | toString | quote }}
-            # Authentik/SSO end-user group that grants embedded-chatbot
-            # access -- see api.chatbotAccessGroup's own comment in
-            # values.yaml. NOT one of the INTERNAL_OAUTH_GROUP_* machine
-            # credentials above.
-            - name: CHATBOT_ACCESS_GROUP
-              value: {{ .Values.api.chatbotAccessGroup | quote }}
             # The transit networks /public/transit serves (empty: every
             # route 404s and the frontend hides the pages).
             - name: API_TRANSIT_NETWORKS
               value: {{ join "," .Values.api.transitNetworks | quote }}
-            # `group` or `authenticated` -- see api.chatbotAccess in
-            # values.yaml.
-            - name: CHATBOT_ACCESS
-              value: {{ include "distant-signal.chatbotAccess" . | quote }}
             # Authentik/SSO end-user group allowed to revoke other users'
             # sessions -- see api.adminGroup in values.yaml. Empty = off.
             - name: ADMIN_GROUP
@@ -449,9 +440,6 @@ with api.extraEnv, which replaces an entry of the same name.
             # independently gate on this.
             - name: FULL_COVERAGE_ENABLED_DEFAULT
               value: {{ .Values.api.fullCoverageEnabledDefault | quote }}
-            - name: REDIS_URL
-              value: {{ include "distant-signal.redisUrl" . | quote }}
-            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "api" "user" "api") }}
             # Always rendered, so it reflects the real value either way.
             # Decides whether requests are counted at all AND whether the
             # internal-only /metrics listener below is started

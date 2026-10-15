@@ -540,7 +540,9 @@ jobs:
       # MIGRATION_DATABASE_URL; ds_store::test_support::schedule_fixture_pool):
       # since release B the app role (and so the api role) no longer holds
       # the *_publish_keys tables or analyze_publish_keys (db-grants.yaml
-      # app_revokes).
+      # app_revokes). writer-maintenance's backfill-incident-lines preflight
+      # runs as the incidents role, the role that subcommand is run as
+      # (ingest phase 5, 5.4b; the writer run above checks the refusal).
       - name: DB-backed tests as each service's own role (Stage 0b)
         run: |
           # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
@@ -560,6 +562,7 @@ jobs:
             DATABASE_URL="$DATABASE_URL_FULL_COVERAGE_RO" cargo test -p full-coverage-consumer --test role_reads -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_LDBWS_RO" cargo test -p poller-ldbws --test role_reads -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_INCIDENTS" cargo test -p poller-incidents -- --ignored --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_INCIDENTS" cargo test -p ingest-writer --bin writer-maintenance -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_STATIONS" cargo test -p poller-stations -- --ignored --test-threads=1'
 
   # Custom: no reusable Piped workflow covers Node/npm at all (its
@@ -1099,6 +1102,36 @@ jobs:
             --set api.sso.redirectUrl=https://app.example.com/callback \
             --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
             > /dev/null
+
+      # api.chatbotAccess / api.chatbotAccessGroup were removed on 2026-10-14
+      # (/chat is open to every logged-in user). Without them the api renders
+      # no CHATBOT_ACCESS* env var; a values file that still sets either one
+      # fails the render, naming the key.
+      - name: helm template (removed chatbot access values)
+        run: |
+          set -euo pipefail
+          base=(
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          out=$(render)
+          if grep -q 'name: CHATBOT_ACCESS' <<<"${out}"; then fail "no CHATBOT_ACCESS* env var may render"; fi
+          for key in chatbotAccess chatbotAccessGroup; do
+            # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+            if err=$(render --set "api.${key}=x" 2>&1 >/dev/null); then fail "api.${key} rendered"; fi
+            grep -qF "api.${key}: removed on 2026-10-14" <<<"${err}" || fail "the failure must name api.${key}: ${err}"
+          done
 
       # Release B (ingest phase 5, docs/ingest-phase5-runbook.md): every
       # producer has only its db or stream sink and every internal reader
@@ -2016,7 +2049,7 @@ jobs:
           fi
           n_pw=$(grep -c 'name: REDIS_PASSWORD' <<<"${off}" || true)
           n_acl=$(grep -A3 'name: REDIS_PASSWORD' <<<"${off}" | grep -c 'name: example-redis-users' || true)
-          [[ "${n_pw}" -ge 7 && "${n_pw}" -eq "${n_acl}" ]] \
+          [[ "${n_pw}" -ge 6 && "${n_pw}" -eq "${n_acl}" ]] \
             || fail "every REDIS_PASSWORD must come from redis.acl.existingSecret (${n_acl} of ${n_pw})"
           grep -A1 'name: REDIS_URL' <<<"${off}" | grep 'value:' | grep -q -v '@' \
             || fail "REDIS_URL must stay credential-free"
@@ -3072,7 +3105,7 @@ jobs:
             out=$(egress_of "${c}" "${eg}")
             grep -q 'port: 53$' <<<"${out}" || fail "${c} must get an egress policy allowing DNS"
           done
-          for d in api:postgres api:redis frontend:api aggregator:postgres enricher:postgres \
+          for d in api:postgres frontend:api aggregator:postgres enricher:postgres \
               enricher:redis schedulefeed:postgres trust-consumer:postgres trust-consumer:redis \
               trust-backlog-consumer:postgres full-coverage-consumer:postgres full-coverage-consumer:redis; do
             out=$(egress_of "${d%%:*}" "${eg}")
@@ -3084,6 +3117,12 @@ jobs:
             out=$(egress_of "${c}" "${eg}")
             if grep -q 'component: api$' <<<"${out}"; then fail "${c} must not reach the api"; fi
           done
+          # Ingest phase 5, step 5.4: the api has no Redis client, so it may
+          # not reach Redis, and Redis admits it no longer.
+          out=$(egress_of api "${eg}")
+          if grep -q 'component: redis$' <<<"${out}"; then fail "the api must not reach redis"; fi
+          redis_in=$(policy distant-signal-redis <<<"${eg}" | awk '/^  ingress:/{f=1} /^  egress:/{f=0} f')
+          if grep -q -- '- api$' <<<"${redis_in}"; then fail "redis must not admit the api"; fi
           api_in=$(policy distant-signal-api <<<"${eg}" | awk '/^  ingress:/{f=1} /^  egress:/{f=0} f')
           if grep -E -q -- '- (poller-[a-z-]+|trust-consumer|trust-backlog-consumer|full-coverage-consumer|schedulefeed)$' <<<"${api_in}"; then
             fail "the api must admit no ingest producer"

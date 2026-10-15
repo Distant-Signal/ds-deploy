@@ -65,11 +65,6 @@ full-coverage-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xc
 # incident-text-changed). XGROUP SETID as for the movement-events consumers.
 enricher client ~incident-text-changed +xreadgroup +xack +xautoclaim +xgroup|create +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id
 
-# api: XADD incident-text-changed MAXLEN ~ N (crates/api/src/data/queries.rs).
-# Write-only. Until phase 2c moves the publish to poller-incidents; the api
-# loses Redis altogether in phase 5.
-api client %W~incident-text-changed +xadd +ping +hello +auth +client|setname +client|setinfo +client|id
-
 # Ranma's redis_exporter (not in this chart): read-only metrics commands.
 # Checked against the exporter's own command list in a staging run before
 # production (docs/redis-acl.md). COMMAND INFO: redis_exporter v1.93 sends it

@@ -29,7 +29,6 @@ redis:
     # Every client whose workload renders by default. The disabled pollers
     # (and so the island-of-Ireland ones) need no user.
     clients:
-      api: true
       enricher: true
       movementRelay: true
       trustConsumer: true

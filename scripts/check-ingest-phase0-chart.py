@@ -123,7 +123,6 @@ ALL_CONNECT = sets(*(f"postgresql.roles.perService.{s}.connect=true" for s in SE
 AUTH = sets("redis.auth.enabled=true", "redis.auth.existingSecret=redis-auth")
 # ci/ingest-prereqs.yaml's redis.acl clients: key -> (Deployment suffix, ACL user).
 CLIENTS = {
-    "api": ("-api", "api"),
     "enricher": ("-enricher", "enricher"),
     "movementRelay": ("-movement-relay", "movement-relay"),
     "trustConsumer": ("-trust-consumer", "trust-consumer"),
@@ -583,6 +582,20 @@ def check_redis_users(c: Checker) -> None:
             == ("example-redis-users", f"{user}-password")
             and "@" not in value(e.get("REDIS_URL")),
             message=f"clients.{key}: REDIS_USERNAME {user} and its own password",
+        )
+    # Ingest phase 5, step 5.4: the api has no Redis client. A leftover
+    # `redis.acl.clients.api` (on or off) is ignored, even with default off.
+    api_env = main_env(docs, "-api")
+    c.check(
+        ok=not any(k.startswith("REDIS_") for k in api_env),
+        message=f"the api must render no REDIS_* env: {sorted(api_env)}",
+    )
+    for on in ("true", "false"):
+        renders(
+            c,
+            f"a leftover redis.acl.clients.api={on}",
+            *ALL_CLIENTS,
+            *sets("redis.acl.defaultUser=off", f"redis.acl.clients.api={on}"),
         )
 
 

@@ -1567,39 +1567,24 @@ api:
   # image) before turning it on.
   corpusFallback:
     enabled: false
-  # -- Authentik/SSO group (via the `groups` OIDC claim, NOT one of the
-  # machine/service-account groups above) that grants a real, logged-in
-  # user access to the embedded chatbot -- crate::auth::ChatbotAuthorizedUser
-  # checks this against that user's own resolved `groups`. Suggested default
-  # only; an operator's actual Authentik group name is not mandated.
-  # Supersedes the former per-user `chatbot_allowed_users` DB allowlist.
-  # Only read when chatbotAccess is `group`; there, "" means nobody gets the
-  # chatbot (it does NOT mean everyone -- use chatbotAccess: authenticated).
-  chatbotAccessGroup: distant-signal-chatbot-users
   # -- The transit networks `/public/transit` serves (API_TRANSIT_NETWORKS;
   # transit networks spec §11). Empty by default: every `/public/transit`
   # route answers 404 and the frontend hides its pages. List a network only
   # after its timetable has been applied for a day (spec §15.1), e.g.
   # `[metrolink]`.
   transitNetworks: []
-  # -- Who gets the embedded chatbot (/chat): `group` (default) -- logged-in
-  # members of chatbotAccessGroup only; `authenticated` -- every logged-in
-  # user, whatever their groups (logged-out visitors still get the sign-in
-  # prompt). In `authenticated` mode chatbotAccessGroup is ignored and no
-  # longer kept on users.groups, and the frontend drops its "only accounts
-  # that have been given access" notes. Flip it together with
-  # distant-signal-mcp's own ungating: the chat's tools come from that
-  # server, which enforces its own access groups.
-  chatbotAccess: group
-  # -- Authentik/SSO end-user group (same `groups` OIDC claim as
-  # chatbotAccessGroup) whose members may end any user's sessions through
+  # The embedded chatbot (/chat) is open to every logged-in user. The former
+  # chatbotAccess and chatbotAccessGroup keys were removed on 2026-10-14;
+  # setting either now fails the render.
+  # -- Authentik/SSO end-user group (from the `groups` OIDC claim, NOT one
+  # of the machine/service-account groups above) whose members may end any user's sessions through
   # POST /api/admin/users/revoke-sessions. OFF by default: empty means
   # nobody is an admin and that endpoint returns 403 to everyone. Group
   # membership is read at login, so adding or removing someone takes effect
   # at their next login. See docs/session-revocation.md.
   adminGroup: ""
   # -- LEG-6: extra IdP groups kept on users.groups at login, besides
-  # chatbotAccessGroup and adminGroup (every other group in the claim is
+  # adminGroup (every other group in the claim is
   # dropped). Comma-separated; "" (the default) keeps none. Nothing reads
   # extra groups today: distant-signal-mcp takes its groups straight from
   # Authentik since 2026-09-29.
@@ -2604,21 +2589,21 @@ notifier:
   podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
-# redis (crates/enricher's trigger queue; crates/api publishes to it)
+# redis (movement-events, incident-text-changed and the ds:ingest:* streams)
 # ---------------------------------------------------------------------------
 redis:
   enabled: true
   # -- Connection URL of an externally-managed Redis. Used ONLY when
   # `redis.enabled` is false, in which case it is required: setting
   # `redis.enabled: false` with this left empty aborts the render rather
-  # than pointing api and enricher at an in-chart Service that was never
+  # than pointing its clients at an in-chart Service that was never
   # created. Same contract as `postgresql.enabled: false` +
   # `externalDatabase.*`.
   externalUrl: ""
   # -- Redis AUTH (INF-3). OFF by default: with `enabled: false` nothing
   # below renders and the chart output is unchanged.
   #
-  # When enabled, every workload that talks to Redis (api, enricher,
+  # When enabled, every workload that talks to Redis (enricher,
   # trust-consumer, full-coverage-consumer, trust-backlog-consumer,
   # movement-relay) gets a `REDIS_PASSWORD` env from the Secret below via
   # `secretKeyRef`, next to its unchanged, credential-free `REDIS_URL`. The
@@ -2733,9 +2718,9 @@ redis:
     # -- Which clients connect as their own user (`REDIS_USERNAME` and
     # their own `REDIS_PASSWORD` from `existingSecret`) instead of
     # `default` (step 2). Needs `enabled`.
+    # The api has had no Redis client since ingest phase 5 (step 5.4): a
+    # leftover `api` key here is ignored.
     clients:
-      # -- api, as user `api`.
-      api: false
       # -- enricher, as user `enricher`.
       enricher: false
       # -- movement-relay, as user `movement-relay`.
@@ -2839,8 +2824,8 @@ redis:
   # run_cycle, event_sink.rs), so Kafka holds the backlog and nothing is
   # dropped. On each refusal it also XTRIMs the stream to its cap (XTRIM
   # is allowed at maxmemory), so lowering movementRelay.streamMaxLen is
-  # enough to recover. api's XADD to incident-text-changed fails the same
-  # way; enricher's hourly sweep covers anything that missed.
+  # enough to recover. poller-incidents' XADD to incident-text-changed
+  # fails the same way; enricher's hourly sweep covers anything that missed.
   #
   # 1536mb (Redis units: mebibytes) is movementRelay.streamMaxLen's 1 GiB
   # budget plus 50% for larger-than-planned entries, the small
@@ -5578,10 +5563,10 @@ metrics:
       enabled: true
       for: 15m
       severity: warning
-    # DistantSignalIncidentRemovalStalled: over `window`, api skipped the
+    # DistantSignalIncidentRemovalStalled: over `window`, poller-incidents skipped the
     # "Ended (no longer listed)" inference for an incomplete, empty or
     # more-than-50%-shrunken incidents snapshot and applied it to none
-    # (distant_signal_api_incident_removal_inference_total{outcome}), so
+    # (distant_signal_store_incident_removal_inference_total{outcome}), so
     # incidents that leave the Knowledgebase feed stay "active". 2h is 24
     # polls at the 300s interval. Only when pollers.incidents.enabled.
     incidentRemovalStalled:
@@ -5590,9 +5575,8 @@ metrics:
       for: 15m
       severity: warning
     # DistantSignalIncidentSnapshotsMissing: no incidents snapshot reached
-    # the database within `window` (distant_signal_api_incident_removal_inference_total,
-    # every outcome: counted by api under the http sink, by poller-incidents
-    # under db), for `for`. Only when pollers.incidents.enabled.
+    # the database within `window` (distant_signal_store_incident_removal_inference_total,
+    # every outcome: counted by poller-incidents), for `for`. Only when pollers.incidents.enabled.
     incidentSnapshotsMissing:
       enabled: true
       window: 2h

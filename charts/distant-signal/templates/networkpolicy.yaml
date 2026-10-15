@@ -122,7 +122,10 @@ spec:
     #   - movement-relay         -- publishes the redis-stream MovementFeed
     # Every one of those is a queue producer or consumer whose ONLY job is
     # Redis, so `networkPolicy.enabled=true` did not degrade them, it stopped
-    # them dead.
+    # them dead. The api is no longer one of them: its only Redis use (the
+    # XADD behind POST /private/incidents) went in release B, and its client
+    # in ingest phase 5 step 5.4; poller-incidents publishes
+    # incident-text-changed now.
     - from:
         - podSelector:
             matchExpressions:
@@ -133,7 +136,6 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
                 values:
-                  - api
                   - enricher
                   - trust-consumer
                   - trust-backlog-consumer
@@ -297,7 +299,7 @@ spec:
 {{- with include "distant-signal.extraIngress" (dict "root" . "component" "api") }}
     {{- . | nindent 4 }}
 {{- end }}
-{{- with include "distant-signal.egressSection" (dict "root" . "component" "api" "deps" (dict "postgres" true "redis" true "idp" true) "internet" true "urls" (list .Values.api.sso.issuerUrl .Values.api.internalOauth.issuerUrl)) }}
+{{- with include "distant-signal.egressSection" (dict "root" . "component" "api" "deps" (dict "postgres" true "idp" true) "internet" true "urls" (list .Values.api.sso.issuerUrl .Values.api.internalOauth.issuerUrl)) }}
   {{- . | nindent 2 }}
 {{- end }}
 ---
