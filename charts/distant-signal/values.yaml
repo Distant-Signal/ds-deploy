@@ -4629,6 +4629,17 @@ scheduleFeed:
     # them (~1.2Gi peak by the estimate above). Once live usage confirms
     # it, bring both down -- resize from live `kubectl top`, not from this
     # estimate.
+    #
+    # Between publishes (2026-10-14). Prod ran at ~1.3GiB RSS from each
+    # nightly publish until the next restart: glibc kept the freed index
+    # and row pages. The binary now pins malloc's mmap threshold at startup
+    # and runs malloc_trim(0) after every publish cycle (`common::heap`), so
+    # RSS falls back to tens of MiB once the cycle ends: 1149 MiB -> 42 MiB
+    # after a production-shaped synthetic publish (peak ~1.2GiB, unchanged).
+    # `distant_signal_schedule_reference_post_publish_resident_memory_bytes`
+    # and the "publish cycle finished" log line report it. So the request
+    # can size the idle state (512Mi is ample) while the limit covers the
+    # ~1.2-1.4GiB nightly burst.
     resources:
       requests:
         cpu: 250m
