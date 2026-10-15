@@ -4320,14 +4320,47 @@ scheduleFeed:
   # replace per delivery). OFF by default: while off, a CORPUS file is left
   # in the landing folder with a one-time "stray file" warning. See
   # docs/superpowers/specs/2026-09-28-corpus-sftp-ingest-design.md.
+  #
+  # CORPUS comes in two formats, two versions of NWR's CORPUS API that can
+  # both be subscribed to at once, loaded into the same table: the JSON
+  # extract (CORPUSExtract.json.gz, every location, ~56,000 rows) and the
+  # NLC XML snapshot (NLC<YYYYMMDD>.xml.gz, only TIPLOC-bearing locations,
+  # ~12,100 rows). Both are on by default; `formatPrecedence` decides which
+  # is loaded when both arrive. See
+  # docs/superpowers/specs/2026-10-14-corpus-nlc-xml-format-design.md.
   corpus:
     enabled: false
-    # -- Globs naming the CORPUS extract. Only this gzipped-JSON shape is
+    # -- Load the JSON extract (the older API version).
+    jsonEnabled: true
+    # -- Globs naming the JSON extract. Only this gzipped-JSON shape is
     # loaded; CORPUSExtract.csv.gz (SMART) is deliberately ignored.
     filePattern: "CORPUSExtract.json.gz"
-    # -- An extract with fewer rows is rejected (real: ~56,000), so a
+    # -- A JSON extract with fewer rows is rejected (real: ~56,000), so a
     # truncated or placeholder file cannot wipe the table.
     minRows: 10000
+    xml:
+      # -- Load the NLC XML snapshot (the newer API version), picked by
+      # the NLC prefix and the .xml.gz extension. Any other NLC* file is
+      # never loaded: it raises DistantSignalCorpusFormatDrift.
+      enabled: true
+      # -- A snapshot with fewer rows is rejected (real: 12,102 on
+      # 2026-10-09).
+      minRows: 10000
+    # -- Which file is loaded when both formats arrive: `json` (the
+    # default: the superset, and what was loaded before the XML format),
+    # `xml`, or `newest` (by mtime; with both feeds subscribed the table
+    # then alternates between them). The non-preferred format is still
+    # parsed (a broken file alerts), compared and archived, and is loaded
+    # only when the preferred one has not been loaded for
+    # `preferredGraceDays`.
+    formatPrecedence: json
+    # -- Days without a load of the preferred format before the other
+    # format takes over.
+    preferredGraceDays: 35
+    # -- Compare each file with the newest one of the other format and log
+    # and export the differences (schedule_feed_corpus_format_diff), the
+    # migration signal. Read-only.
+    compareFormats: true
     # -- gzip-bomb guard: the most bytes an extract may decompress to (the
     # real one is ~7 MB).
     maxDecompressedBytes: 268435456
@@ -5586,6 +5619,11 @@ metrics:
     # (schedule_feed_corpus_failures_total{stage}). It retries every poll
     # (120s), so 3 in 30m is about 6 minutes of a persistent failure. Kept
     # apart from "no new file yet", which is normal for days or weeks.
+    # DistantSignalCorpusFormatDrift: an NLC* file that is not .xml.gz sits
+    # in the landing folder (the NLC XML CORPUS format may have drifted; the
+    # file is ignored): a `drift` count in
+    # schedule_feed_corpus_failures_total within `corpusFailingWindow`.
+    # Fires on the first poll that sees it.
     # DistantSignalCorpusStale: the newest loaded CORPUS delivery is older
     # than `corpusStaleWarningDays` (severity `severity`) or
     # `corpusStaleCriticalDays` (`corpusStaleCriticalSeverity`); only one

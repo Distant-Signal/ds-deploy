@@ -337,9 +337,12 @@ timetable change), set that threshold to `0` in
 `scheduleFeed.ingest.cifChecks`; the pod restarts and re-reads the zip.
 Restore it afterwards.
 
-CORPUS keeps its own checks (`corpus.rs`): gzip, a size cap on
-decompression, the `TIPLOCDATA` JSON shape, every row with an NLC, and at
-least `scheduleFeed.corpus.minRows` (10,000) rows.
+CORPUS keeps its own checks (`corpus.rs`, `corpus_xml.rs`): gzip, a size cap
+on decompression, the format's shape (the `TIPLOCDATA` JSON of
+`CORPUSExtract.json.gz`, or the `TSDBData` XML of an `NLC*.xml.gz` snapshot),
+every row with an NLC, and at least `scheduleFeed.corpus.minRows` (JSON) or
+`scheduleFeed.corpus.xml.minRows` (XML; both 10,000) rows. An `NLC*` file that
+is not `.xml.gz` is never loaded and raises `DistantSignalCorpusFormatDrift`.
 
 ### Provenance and the audit line
 
@@ -362,7 +365,7 @@ logged as one line with `target` `schedule_ingest::audit`:
 | `accepted` | extracted (CIF) or loaded (CORPUS) and recorded by api | absent |
 | `quarantined` | a CIF zip that failed a check; not retried until a new upload replaces it. Counts in `schedule_feed_zip_rejected_total` (`DistantSignalScheduleFeedZipRejected`) | the failed check |
 | `rejected_by_api` | api refused the record with 400/413/422 (`DistantSignalScheduleFeedIngestRejected`) | api's error |
-| `corpus_rejected` | a CORPUS file that failed its checks, or an older one superseded unloaded (`DistantSignalCorpusRejected`) | the failed check |
+| `corpus_rejected` | a CORPUS file that failed its checks (`DistantSignalCorpusRejected`), or one archived unloaded because another won: an older file, or the non-preferred format (`scheduleFeed.corpus.formatPrecedence`) | the failed check, or why it was not loaded |
 
 A file whose api POST fails transiently gets its line when the retry
 succeeds. Once api accepts a CIF delivery, schedule-ingest writes the zip's

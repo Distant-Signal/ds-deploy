@@ -476,6 +476,24 @@ scheduleFeed.ingest.extraEnv by distant-signal.mergeEnv (an extraEnv entry repla
               value: {{ .Values.scheduleFeed.corpus.minRows | quote }}
             - name: CORPUS_RETENTION_KEEP
               value: {{ .Values.scheduleFeed.corpus.retentionKeep | quote }}
+            # The two CORPUS formats (API versions) and which one wins when
+            # both arrive (crates/schedule-ingest/src/{corpus,corpus_xml}.rs).
+            {{- $corpus := .Values.scheduleFeed.corpus }}
+            {{- if not (has $corpus.formatPrecedence (list "json" "xml" "newest")) }}
+            {{- fail (printf "scheduleFeed.corpus.formatPrecedence must be json, xml or newest, not %q" (toString $corpus.formatPrecedence)) }}
+            {{- end }}
+            - name: CORPUS_JSON_ENABLED
+              value: {{ $corpus.jsonEnabled | quote }}
+            - name: CORPUS_XML_ENABLED
+              value: {{ $corpus.xml.enabled | quote }}
+            - name: CORPUS_XML_MIN_ROWS
+              value: {{ $corpus.xml.minRows | int | quote }}
+            - name: CORPUS_FORMAT_PRECEDENCE
+              value: {{ $corpus.formatPrecedence | quote }}
+            - name: CORPUS_PREFERRED_GRACE_DAYS
+              value: {{ $corpus.preferredGraceDays | int | quote }}
+            - name: CORPUS_COMPARE_FORMATS
+              value: {{ $corpus.compareFormats | quote }}
             {{- if include "distant-signal.scheduleIngestSinkDb" . }}
             # Ingest architecture plan 2d: the feed markers and CORPUS loads
             # go to Postgres directly, as the schedule_ingest role

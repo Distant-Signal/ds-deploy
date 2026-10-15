@@ -1834,11 +1834,12 @@ spec:
         corpusFailingMin times in corpusFailingWindow (it retries every
         poll, 120s). A real failure, so prompt; "no new file yet" is not one
         and is left to DistantSignalCorpusStale. The series only exists
-        while CORPUS ingest is enabled, registered at 0 per stage.
+        while CORPUS ingest is enabled, registered at 0 per stage. The
+        `drift` stage is DistantSignalCorpusFormatDrift's, not this one's.
         */}}
         - alert: DistantSignalCorpusLoadFailing
           expr: |
-            sum by (namespace, stage) (increase(distant_signal_schedule_feed_corpus_failures_total{namespace="{{ $ns }}"}[{{ .corpusFailingWindow }}])) >= {{ .corpusFailingMin }}
+            sum by (namespace, stage) (increase(distant_signal_schedule_feed_corpus_failures_total{namespace="{{ $ns }}", stage!="drift"}[{{ .corpusFailingWindow }}])) >= {{ .corpusFailingMin }}
           for: 0m
           labels:
             severity: {{ .severity }}
@@ -1849,6 +1850,29 @@ spec:
             summary: "CORPUS {{ "{{ $labels.stage }}" }} keeps failing in schedule-ingest"
             description: "Retried every poll; the previous extract stays in use. The ingest container's error log names the cause."
             runbook_url: {{ printf "%s#distantsignalcorpusloadfailing" $runbook | quote }}
+        {{- /*
+        CORPUS (scheduleFeed.corpus): a file named like the NLC XML CORPUS
+        feed (NLC*) that is not .xml.gz sits in the landing folder. NWR's
+        delivery format may have drifted; schedule-ingest ignores the file
+        (never loads, moves or deletes it) and counts a `drift` failure on
+        every poll while it is there, so this fires on the first count and
+        clears corpusFailingWindow after the file is removed. Same counter
+        and style as DistantSignalCorpusLoadFailing. The series only exists
+        while CORPUS ingest is enabled, registered at 0.
+        */}}
+        - alert: DistantSignalCorpusFormatDrift
+          expr: |
+            sum by (namespace) (increase(distant_signal_schedule_feed_corpus_failures_total{namespace="{{ $ns }}", stage="drift"}[{{ .corpusFailingWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "a CORPUS file has an unexpected format"
+            description: "An NLC* file in the landing folder is not .xml.gz, so it is ignored. The ingest container's warning names it."
+            runbook_url: {{ printf "%s#distantsignalcorpusformatdrift" $runbook | quote }}
         {{- /*
         CORPUS (scheduleFeed.corpus): the newest loaded CORPUS delivery is
         older than corpusStaleWarningDays (warning) or
