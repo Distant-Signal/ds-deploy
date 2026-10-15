@@ -235,6 +235,12 @@ tables:
   push_subscriptions: {class: personal, grants: {api: SIUD, notifier: SD}}
   tracked_train_tickets: {class: personal, grants: {api: SIUD}}
   unlisted_links: {class: personal, grants: {api: SIUD}}
+  # Delegated access (docs/connected-apps.md). The notifier sends the
+  # grant_created web push and records it in push_notified_at.
+  delegated_grants: {class: personal, grants: {api: SIUD, notifier: [{privileges: S, columns: [id, user_id, client_display_name, scopes, created_at, revoked_at, push_notified_at]}, {privileges: U, columns: [push_notified_at]}]}}
+  delegated_grant_confirmations: {class: personal, grants: {api: SIUD}}
+  delegated_deletions: {class: personal, grants: {api: SIUD}}
+  journey_idempotency_keys: {class: personal, grants: {api: SIUD}}
 
   # --- shared-train: trains and their movements, shared by users.
   # aggregator: SELECT ... FOR UPDATE OF t needs U or D (it has D).
@@ -406,6 +412,8 @@ views:
 # Every sequence, with the table that owns it.
 sequences:
   corpus_locations_id_seq: {table: corpus_locations}
+  delegated_deletions_id_seq: {table: delegated_deletions}
+  delegated_grants_id_seq: {table: delegated_grants}
   fixed_links_id_seq: {table: fixed_links}
   incident_history_id_seq: {table: incident_history}
   journey_legs_id_seq: {table: journey_legs}

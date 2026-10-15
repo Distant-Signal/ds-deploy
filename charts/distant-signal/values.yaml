@@ -1555,6 +1555,45 @@ api:
       # api.rateLimit.mcp below, keyed on the caller (one bucket, not per
       # IP). Empty turns the feature off (any bearer is then ignored).
       mcp: srv-ds-mcp
+  # -- Delegated access (docs/connected-apps.md; spec
+  # docs/superpowers/specs/2026-10-14-ds-mcp-delegated-access-design.md):
+  # a registered client, today only the Distant-Signal-MCP, acting for a
+  # user who connected it on the Connected apps page. OFF by default: with
+  # no client listed (or every client disabled) the api binds no delegated
+  # listener, creates no delegated Service, and refuses every delegated
+  # bearer.
+  delegated:
+    # -- The registered clients (DELEGATED_CLIENTS, sent as JSON). Each:
+    # `name` (the grant's client and journeys.created_via; [a-z0-9-], not
+    # `web`), `displayName` (shown to users), `issuerUrl` and `audience`
+    # (the Authentik provider's issuer and client_id; both must differ from
+    # every other client id and issuer the api trusts, or it refuses to
+    # start), `maxScopes` (any of journeys:read, journeys:write,
+    # journeys:delete), `enabled` (default true; false is the kill switch:
+    # every token for the client gets 401 at once) and `serviceGroup` (the
+    # internal-OAuth group whose token may call POST /delegated-grants/revoke
+    # for this client). For example:
+    #   - name: ds-mcp
+    #     displayName: Distant Signal assistant
+    #     issuerUrl: https://sso.cursed.solutions/application/o/distant-signal-api/
+    #     audience: distant-signal-api
+    #     maxScopes: [journeys:read, journeys:write, journeys:delete]
+    #     enabled: true
+    #     serviceGroup: srv-ds-mcp
+    clients: []
+    # -- The delegated listener's container port (DELEGATED_LISTEN_ADDR is
+    # 0.0.0.0:<this>), and the port of its own ClusterIP Service,
+    # <release>-api-delegated. Delegated bearers are accepted only on it:
+    # the Ingress and the tunnel route to the main Service, so they never
+    # reach it, and the NetworkPolicy admits it only from
+    # networkPolicy.apiExtraIngressNamespaces (narrowed by
+    # apiExtraIngressPodLabels). Must differ from api.service.port and
+    # metrics.port.
+    port: 8082
+    # -- Journeys one user's client may save, and delete, per rolling 24
+    # hours (decisions D-2 and D-11). Over the limit: 429 daily_limit.
+    dailySaveLimit: 50
+    dailyDeleteLimit: 20
   # -- Network Rail CORPUS as a FALLBACK for the timetable-derived
   # TIPLOC/STANOX->CRS lookups (CORPUS_FALLBACK_ENABLED; see
   # crates/api/src/data/corpus_crosswalk.rs). OFF by default. When on, a
@@ -1642,6 +1681,21 @@ api:
       publicWrite:
         perMinute: 600
         burst: 200
+    # -- Delegated requests (api.delegated): charged to the user's bucket
+    # and to the client's, and both must pass. The client's ceiling is
+    # these values times clientMultiplier. Never the per-IP or MCP buckets.
+    # 429 rate_limited (JSON) with Retry-After.
+    delegated:
+      read:            # GET /Journeys/mine, GET /Journeys/{id}
+        perMinute: 60
+        burst: 20
+      write:           # POST /Journeys/itinerary
+        perMinute: 10
+        burst: 5
+      delete:          # DELETE /Journeys/{id}
+        perMinute: 5
+        burst: 3
+      clientMultiplier: 20
   # -- Days after today a service date's timetable counts as firm
   # (SCHEDULE_PROVISIONAL_AFTER_DAYS, 0-60; invalid values fall back to 7).
   # A later date is reported `provisional: true` by train search,

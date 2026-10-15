@@ -13,3 +13,26 @@ spec:
       protocol: TCP
   selector:
     {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api") | nindent 4 }}
+{{- if include "distant-signal.delegatedEnabled" . }}
+---
+# The delegated listener's own Service (api.delegated; decision D-14 of the
+# delegated-access spec). Always ClusterIP, whatever api.service.type is:
+# the Ingress and the tunnel route to the Service above, so a public request
+# can never reach the only port that accepts delegated bearers. ds-mcp calls
+# http://<this name>.<namespace>.svc:<port> for the delegated routes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "distant-signal.apiDelegatedFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: delegated
+      port: {{ include "distant-signal.delegatedPort" . }}
+      targetPort: delegated
+      protocol: TCP
+  selector:
+    {{- include "distant-signal.selectorLabels" (dict "root" . "component" "api") | nindent 4 }}
+{{- end }}

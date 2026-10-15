@@ -226,6 +226,14 @@ spec:
             - name: http
               containerPort: {{ .Values.api.service.port }}
               protocol: TCP
+            {{- if include "distant-signal.delegatedEnabled" . }}
+            # The delegated listener (api.delegated): delegated bearers are
+            # accepted only here. Published only by the <api>-delegated
+            # ClusterIP Service.
+            - name: delegated
+              containerPort: {{ include "distant-signal.delegatedPort" . }}
+              protocol: TCP
+            {{- end }}
             {{- if .Values.metrics.enabled }}
             # api's own internal-only /metrics listener
             # (crates/api/src/main.rs's spawn_metrics_listener) -- a
@@ -403,6 +411,31 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.rateLimit.mcp.publicWrite.perMinute | quote }}
             - name: API_RATE_LIMIT_MCP_PUBLIC_WRITE_BURST
               value: {{ .Values.api.rateLimit.mcp.publicWrite.burst | quote }}
+            # Delegated access: see api.delegated and
+            # api.rateLimit.delegated. An empty client list turns it off.
+            {{- $delegatedLimits := dig "rateLimit" "delegated" dict .Values.api }}
+            - name: API_RATE_LIMIT_DELEGATED_READ_PER_MINUTE
+              value: {{ dig "read" "perMinute" 60 $delegatedLimits | quote }}
+            - name: API_RATE_LIMIT_DELEGATED_READ_BURST
+              value: {{ dig "read" "burst" 20 $delegatedLimits | quote }}
+            - name: API_RATE_LIMIT_DELEGATED_WRITE_PER_MINUTE
+              value: {{ dig "write" "perMinute" 10 $delegatedLimits | quote }}
+            - name: API_RATE_LIMIT_DELEGATED_WRITE_BURST
+              value: {{ dig "write" "burst" 5 $delegatedLimits | quote }}
+            - name: API_RATE_LIMIT_DELEGATED_DELETE_PER_MINUTE
+              value: {{ dig "delete" "perMinute" 5 $delegatedLimits | quote }}
+            - name: API_RATE_LIMIT_DELEGATED_DELETE_BURST
+              value: {{ dig "delete" "burst" 3 $delegatedLimits | quote }}
+            - name: API_RATE_LIMIT_DELEGATED_CLIENT_MULTIPLIER
+              value: {{ dig "clientMultiplier" 20 $delegatedLimits | quote }}
+            - name: DELEGATED_CLIENTS
+              value: {{ include "distant-signal.delegatedClientsJson" . | quote }}
+            - name: DELEGATED_LISTEN_ADDR
+              value: {{ printf "0.0.0.0:%v" (include "distant-signal.delegatedPort" .) | quote }}
+            - name: DELEGATED_DAILY_SAVE_LIMIT
+              value: {{ dig "delegated" "dailySaveLimit" 50 .Values.api | quote }}
+            - name: DELEGATED_DAILY_DELETE_LIMIT
+              value: {{ dig "delegated" "dailyDeleteLimit" 20 .Values.api | quote }}
             - name: SCHEDULE_PROVISIONAL_AFTER_DAYS
               value: {{ .Values.api.scheduleProvisionalAfterDays | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_DATES

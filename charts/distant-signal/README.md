@@ -1837,6 +1837,9 @@ Used only when `postgresql.enabled` is `false`.
 | `api.internalOauth.issuerUrl` | `""` | **Required.** OIDC issuer base URL for the internal-service OAuth2 provider (may be the same Authentik instance as `api.sso.*`, a different Application/Provider). |
 | `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token (the internal provider's client id; must differ from `api.sso.clientId`). |
 | `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account, the only internal-token use left since release B removed `/private`: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. See "Distant-Signal-MCP as a service caller" below. |
+| `api.delegated.clients` | `[]` | Delegated access ([docs/connected-apps.md](../../docs/connected-apps.md)): the registered clients, sent to the api as `DELEGATED_CLIENTS` JSON. Each has `name`, `displayName`, `issuerUrl`, `audience`, `maxScopes`, `enabled` (default `true`; `false` is the kill switch) and `serviceGroup`. Empty (the default) turns the feature off: no delegated listener, no delegated Service, and every delegated bearer refused. |
+| `api.delegated.port` | `8082` | The delegated listener's port, published only by the `<release>-api-delegated` ClusterIP Service and admitted by the NetworkPolicy only from `networkPolicy.apiExtraIngressNamespaces`. The only port that accepts delegated bearers. Must differ from `api.service.port` and `metrics.port`. |
+| `api.delegated.dailySaveLimit` / `.dailyDeleteLimit` | `50` / `20` | Journeys one user's client may save, and delete, per rolling 24 hours (429 `daily_limit`). |
 | `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). |
 | `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off. |
 | `api.rateLimit.login.perMinute` / `.burst` | `10` / `20` | Per client IP, `/public/auth/login` and `/public/auth/callback`. |
@@ -1846,6 +1849,10 @@ Used only when `postgresql.enabled` is `false`.
 | `api.rateLimit.mcp.tripPlan.perMinute` / `.burst` | `100` / `30` | The MCP's own `/Trips/plan` budget: one bucket for the whole service (`svc:mcp`), 5x public. |
 | `api.rateLimit.mcp.trainByUid.perMinute` / `.burst` | `600` / `200` | The MCP's own `/Train/by-uid/*` budget. |
 | `api.rateLimit.mcp.publicWrite.perMinute` / `.burst` | `600` / `200` | The MCP's own public-write budget. Login has no MCP budget: the bearer is ignored there. |
+| `api.rateLimit.delegated.read.perMinute` / `.burst` | `60` / `20` | Per user, for a delegated client's `GET /Journeys/mine` and `GET /Journeys/{id}`. |
+| `api.rateLimit.delegated.write.perMinute` / `.burst` | `10` / `5` | Per user, for a delegated client's `POST /Journeys/itinerary`. |
+| `api.rateLimit.delegated.delete.perMinute` / `.burst` | `5` / `3` | Per user, for a delegated client's `DELETE /Journeys/{id}`. |
+| `api.rateLimit.delegated.clientMultiplier` | `20` | Each delegated client's ceiling across all its users is the per-user values times this. A delegated request must pass both buckets, and never uses the per-IP or MCP ones. |
 | `api.probes.path` | `/public/health` | Path the startup and liveness probes and the `helm test` pod hit: 200 whenever the process listens, so a database blip never restarts the pod. |
 | `api.probes.readinessPath` | `/public/ready` | Path the readiness probe hits: 503 while the pod is draining, and with `api.readiness.checkDatabase` while the database is unreachable. |
 | `api.probes.startup.periodSeconds` | `2` | Startup probe period. |

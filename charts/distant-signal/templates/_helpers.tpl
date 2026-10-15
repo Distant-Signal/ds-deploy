@@ -285,6 +285,50 @@ unit strings like 512MB, prints as-is. Takes the value.
 {{- printf "%s-api" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/*
+Delegated access (api.delegated; docs/connected-apps.md). The client list
+as the JSON DELEGATED_CLIENTS takes, "[]" when empty.
+*/}}
+{{- define "distant-signal.delegatedClientsJson" -}}
+{{- $clients := dig "delegated" "clients" list .Values.api | default list -}}
+{{- toJson $clients -}}
+{{- end }}
+
+{{/*
+"true" when at least one delegated client is enabled (the api then binds
+the delegated listener), else "".
+*/}}
+{{- define "distant-signal.delegatedEnabled" -}}
+{{- $on := false -}}
+{{- range (dig "delegated" "clients" list .Values.api | default list) -}}
+{{- if not (kindIs "map" .) -}}
+{{- fail "api.delegated.clients: every entry must be a map with name, displayName, issuerUrl, audience and maxScopes" -}}
+{{- end -}}
+{{- if dig "enabled" true . -}}
+{{- $on = true -}}
+{{- end -}}
+{{- end -}}
+{{- if $on -}}true{{- end -}}
+{{- end }}
+
+{{/*
+The delegated listener's port, checked against the api's other ports.
+*/}}
+{{- define "distant-signal.delegatedPort" -}}
+{{- $port := dig "delegated" "port" 8082 .Values.api | int -}}
+{{- if eq $port (.Values.api.service.port | int) -}}
+{{- fail "api.delegated.port must differ from api.service.port: the delegated listener must never be the port the Ingress and the tunnel reach" -}}
+{{- end -}}
+{{- if and .Values.metrics.enabled (eq $port (.Values.metrics.port | int)) -}}
+{{- fail "api.delegated.port must differ from metrics.port" -}}
+{{- end -}}
+{{- $port -}}
+{{- end }}
+
+{{- define "distant-signal.apiDelegatedFullname" -}}
+{{- printf "%s-api-delegated" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{- define "distant-signal.frontendFullname" -}}
 {{- printf "%s-frontend" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}

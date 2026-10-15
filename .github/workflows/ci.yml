@@ -2347,6 +2347,80 @@ jobs:
       # RollingUpdate (maxSurge 1, maxUnavailable 0) renders only once the
       # hook Job migrates instead of the api, and its surge pod's pool counts
       # in the INF-7 connection budget.
+      # Delegated access (docs/connected-apps.md, decision D-14): off by
+      # default; with a client, a separate ClusterIP Service and a
+      # NetworkPolicy rule admitting only apiExtraIngressNamespaces to the
+      # delegated port, never the public port's peers.
+      - name: helm template (delegated access)
+        run: |
+          set -euo pipefail
+          base=(
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set networkPolicy.enabled=true
+          )
+          client=(
+            --set 'api.delegated.clients[0].name=ds-mcp'
+            --set 'api.delegated.clients[0].displayName=Distant Signal assistant'
+            --set 'api.delegated.clients[0].issuerUrl=https://sso.example.com/application/o/distant-signal-api/'
+            --set 'api.delegated.clients[0].audience=distant-signal-api'
+            --set 'api.delegated.clients[0].maxScopes={journeys:read,journeys:write,journeys:delete}'
+            --set 'api.delegated.clients[0].serviceGroup=srv-ds-mcp'
+            --set 'networkPolicy.apiExtraIngressNamespaces={ds-mcp}'
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+
+          out=$(render)
+          if grep -q 'distant-signal-api-delegated' <<<"${out}"; then fail "no delegated Service by default"; fi
+          dep=$(render --show-only templates/api-deployment.yaml)
+          if grep -q -- '- name: delegated' <<<"${dep}"; then fail "no delegated port by default"; fi
+          grep -A1 -- '- name: DELEGATED_CLIENTS' <<<"${out}" | grep -q 'value: "\[\]"' || fail "DELEGATED_CLIENTS must default to []"
+
+          svc=$(render "${client[@]}" --show-only templates/api-service.yaml)
+          grep -q 'name: distant-signal-api-delegated' <<<"${svc}" || fail "the delegated Service must render"
+          grep -A12 'name: distant-signal-api-delegated' <<<"${svc}" | grep -q 'type: ClusterIP' || fail "the delegated Service must be ClusterIP"
+          svc=$(render "${client[@]}" --set api.service.type=LoadBalancer --show-only templates/api-service.yaml)
+          grep -A12 'name: distant-signal-api-delegated' <<<"${svc}" | grep -q 'type: ClusterIP' \
+            || fail "the delegated Service stays ClusterIP whatever api.service.type is"
+          dep=$(render "${client[@]}" --show-only templates/api-deployment.yaml)
+          grep -A1 -- '- name: delegated' <<<"${dep}" | grep -q 'containerPort: 8082' \
+            || fail "the delegated container port must render"
+          np=$(render "${client[@]}" --show-only templates/networkpolicy.yaml)
+          delegated_rule() { sed -n '/# The delegated listener/,/port: 8082/p'; }
+          rule=$(delegated_rule <<<"${np}")
+          grep -q 'kubernetes.io/metadata.name: "ds-mcp"' <<<"${rule}" || fail "the delegated port admits apiExtraIngressNamespaces"
+          if grep -q -- '- frontend' <<<"${rule}"; then fail "the frontend must not reach the delegated port"; fi
+          np=$(render "${client[@]}" --set networkPolicy.tunnel.enabled=true --set networkPolicy.tunnel.api=true \
+            --set api.rateLimit.trustXRealIp=false --show-only templates/networkpolicy.yaml)
+          rule=$(delegated_rule <<<"${np}")
+          if grep -q 'cloudflared' <<<"${rule}"; then
+            fail "the tunnel must not reach the delegated port"
+          fi
+          ing=$(render "${client[@]}" --set ingress.enabled=true --set ingress.frontend.enabled=false --set ingress.api.enabled=true \
+            --set ingress.api.host=api.example.com --show-only templates/ingress.yaml)
+          if grep -q 'distant-signal-api-delegated' <<<"${ing}"; then fail "the Ingress must not route to the delegated Service"; fi
+
+          # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
+          {
+            if render "${client[@]}" --set api.delegated.port=8080 >/dev/null 2>&1; then
+              fail "a delegated port equal to api.service.port must fail the render"
+            fi
+          }
+
+          # A disabled client (the kill switch) binds nothing.
+          out=$(render "${client[@]}" --set 'api.delegated.clients[0].enabled=false')
+          if grep -q 'distant-signal-api-delegated' <<<"${out}"; then fail "a disabled client has no Service"; fi
+
       - name: helm template (api rollout strategy)
         run: |
           set -euo pipefail

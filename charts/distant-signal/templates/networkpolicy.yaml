@@ -270,6 +270,29 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.api.service.port }}
+  {{- if and (include "distant-signal.delegatedEnabled" .) .Values.networkPolicy.apiExtraIngressNamespaces }}
+    # The delegated listener (api.delegated, decision D-14): only the
+    # separately-released callers of networkPolicy.apiExtraIngressNamespaces
+    # (ds-mcp), narrowed by apiExtraIngressPodLabels. Not the frontend, the
+    # tunnel or the ingress controller: the only port that accepts delegated
+    # bearers is unreachable from every public path. With no namespace
+    # listed there is no rule, so nothing may reach it.
+    - from:
+      {{- $delegatedPodLabels := .Values.networkPolicy.apiExtraIngressPodLabels | default dict }}
+      {{- range .Values.networkPolicy.apiExtraIngressNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+          {{- with (get $delegatedPodLabels .) }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ include "distant-signal.delegatedPort" . }}
+  {{- end }}
   {{- if .Values.metrics.enabled }}
     # api's own internal-only /metrics listener
     # (crates/api/src/main.rs's spawn_metrics_listener) -- bound on a
@@ -299,7 +322,11 @@ spec:
 {{- with include "distant-signal.extraIngress" (dict "root" . "component" "api") }}
     {{- . | nindent 4 }}
 {{- end }}
-{{- with include "distant-signal.egressSection" (dict "root" . "component" "api" "deps" (dict "postgres" true "idp" true) "internet" true "urls" (list .Values.api.sso.issuerUrl .Values.api.internalOauth.issuerUrl)) }}
+{{- $apiIdpUrls := list .Values.api.sso.issuerUrl .Values.api.internalOauth.issuerUrl }}
+{{- range (dig "delegated" "clients" list .Values.api | default list) }}
+{{- $apiIdpUrls = append $apiIdpUrls (dig "issuerUrl" "" .) }}
+{{- end }}
+{{- with include "distant-signal.egressSection" (dict "root" . "component" "api" "deps" (dict "postgres" true "idp" true) "internet" true "urls" $apiIdpUrls) }}
   {{- . | nindent 2 }}
 {{- end }}
 ---
