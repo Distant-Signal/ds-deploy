@@ -436,6 +436,8 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ dig "delegated" "dailySaveLimit" 50 .Values.api | quote }}
             - name: DELEGATED_DAILY_DELETE_LIMIT
               value: {{ dig "delegated" "dailyDeleteLimit" 20 .Values.api | quote }}
+            - name: DELEGATED_REVOKED_GRANT_RETENTION_DAYS
+              value: {{ dig "delegated" "revokedGrantRetentionDays" 365 .Values.api | quote }}
             - name: SCHEDULE_PROVISIONAL_AFTER_DAYS
               value: {{ .Values.api.scheduleProvisionalAfterDays | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_DATES

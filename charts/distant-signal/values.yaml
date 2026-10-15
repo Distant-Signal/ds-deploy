@@ -1594,6 +1594,11 @@ api:
     # hours (decisions D-2 and D-11). Over the limit: 429 daily_limit.
     dailySaveLimit: 50
     dailyDeleteLimit: 20
+    # -- Days a revoked grant is kept, as the record of when and why an
+    # app's access ended, before the hourly maintenance pass deletes it
+    # (DELEGATED_REVOKED_GRANT_RETENTION_DAYS, 1-36500). Read by the api and
+    # the api-maintenance CronJob alike.
+    revokedGrantRetentionDays: 365
   # -- Network Rail CORPUS as a FALLBACK for the timetable-derived
   # TIPLOC/STANOX->CRS lookups (CORPUS_FALLBACK_ENABLED; see
   # crates/api/src/data/corpus_crosswalk.rs). OFF by default. When on, a
