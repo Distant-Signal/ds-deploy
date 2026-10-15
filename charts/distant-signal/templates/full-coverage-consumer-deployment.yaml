@@ -6,6 +6,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "full-coverage-consumer") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   # Values-driven, symmetry with trust-consumer's own knob (Task 10 of
   # docs/superpowers/plans/2026-09-04-movement-relay-plan.md) -- was a
   # fixed `1` YAML literal: one fixed consumer-group id per deployment,

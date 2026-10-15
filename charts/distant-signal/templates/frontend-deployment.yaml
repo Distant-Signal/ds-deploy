@@ -5,6 +5,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "frontend") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   replicas: {{ .Values.frontend.replicaCount }}
   selector:
     matchLabels:

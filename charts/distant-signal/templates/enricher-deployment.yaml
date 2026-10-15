@@ -159,6 +159,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "enricher") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   replicas: 1
   # enricher.updateStrategy, default Recreate (rollout deadlock, 2026-10-10;
   # see trust-backlog-consumer-deployment.yaml and

@@ -1008,7 +1008,10 @@ jobs:
       # and a new chart version/appVersion changes no pod template but its
       # image tags: CI stamps both on every release, so either one in a pod
       # template restarted every workload (Redis and schedulefeed included)
-      # on every deploy.
+      # on every deploy. Every Deployment and StatefulSet also sets
+      # revisionHistoryLimit from the chart value (Kubernetes' default of
+      # 10 left 177 zero-replica ReplicaSets behind), and the api-maintenance
+      # Jobs get a TTL while the Helm hook Jobs don't.
       - name: pod templates stable across releases
         run: uv run --no-sync scripts/check-pod-labels-chart.py
 
@@ -2019,7 +2022,12 @@ jobs:
             || fail "REDIS_URL must stay credential-free"
           redis=$(render --show-only templates/redis-deployment.yaml)
           grep -q -- '- --aclfile' <<<"${redis}" || fail "redis must start with --aclfile"
-          grep -q 'name: REDISCLI_AUTH' <<<"${redis}" || fail "redis probes must authenticate"
+          # The probes are tcpSocket by default; REDISCLI_AUTH serves the
+          # exec option (and humans' `kubectl exec ... redis-cli`).
+          grep -q 'name: REDISCLI_AUTH' <<<"${redis}" || fail "redis-cli in the redis pod must authenticate"
+          redis_exec=$(render --show-only templates/redis-deployment.yaml --set redis.probes.readiness.type=exec)
+          grep -A7 'readinessProbe:' <<<"${redis_exec}" | grep -q -- '- ds-admin' \
+            || fail "redis exec probes must run redis-cli as ds-admin with the ACL users"
 
           on=$(render --set redis.auth.enabled=true \
             --set redis.auth.existingSecret=redis-auth --set redis.auth.existingSecretKey=pw)
@@ -2464,7 +2472,8 @@ jobs:
 
       # Reboot resilience: redis must roll with Recreate (single RWO AOF
       # volume, INF-1); postgres needs a startupProbe so WAL redo is never
-      # killed by liveness (INF-4); the frontend probes must hit the
+      # killed by liveness (INF-4), and it and redis default to tcpSocket
+      # probes (no exec fork per period); the frontend probes must hit the
       # dependency-free /healthz (FE-1); every background worker needs a
       # /livez liveness probe (SVC-08/INF-9), and the DB-backed ones a
       # /healthz readiness probe (INF-5).
@@ -2491,11 +2500,41 @@ jobs:
           grep -A1 '^  strategy:' <<<"${redis}" | grep -q 'type: Recreate' \
             || fail "redis Deployment must use strategy Recreate"
 
+          # Postgres and Redis probes (postgresql.probes, redis.probes):
+          # tcpSocket by default, so nothing is forked in the container;
+          # readiness every 10s, liveness every 30s with 6 failures
+          # allowed; `type: exec` renders the old commands.
+          # probe_has <render> <kind> <pattern> <failure message>
+          probe_has() { grep -A7 "^          $2Probe:" <<<"$1" | grep -q -- "$3" || fail "$4"; }
           pg=$(render --show-only templates/postgres-statefulset.yaml)
-          grep -A5 'startupProbe:' <<<"${pg}" | grep -q 'pg_isready' \
-            || fail "postgres must have a pg_isready startupProbe"
-          grep -A10 'startupProbe:' <<<"${pg}" | grep -q 'failureThreshold: 90' \
-            || fail "postgres startupProbe budget must default to 90 x 10s"
+          if grep -q 'exec:' <<<"${pg}${redis}"; then
+            fail "postgres and redis probes must not exec by default"
+          fi
+          for kind in startup readiness liveness; do
+            probe_has "${pg}" "${kind}" 'port: postgres$' \
+              "postgres ${kind}Probe must default to tcpSocket on the postgres port"
+            probe_has "${redis}" "${kind}" 'port: redis$' \
+              "redis ${kind}Probe must default to tcpSocket on the redis port"
+          done
+          probe_has "${pg}" startup 'failureThreshold: 90$' \
+            "postgres startupProbe budget must default to 90 x 10s"
+          for out in "${pg}" "${redis}"; do
+            probe_has "${out}" readiness 'periodSeconds: 10$' "readiness must default to a 10s period"
+            probe_has "${out}" liveness 'periodSeconds: 30$' "liveness must default to a 30s period"
+            probe_has "${out}" liveness 'failureThreshold: 6$' "liveness must default to 6 failures"
+          done
+          pg_exec=$(render --show-only templates/postgres-statefulset.yaml \
+            --set postgresql.probes.startup.type=exec)
+          probe_has "${pg_exec}" startup 'pg_isready' \
+            "postgresql.probes.startup.type=exec must run pg_isready"
+          redis_exec=$(render --show-only templates/redis-deployment.yaml \
+            --set redis.probes.liveness.type=exec)
+          probe_has "${redis_exec}" liveness '- ping$' \
+            "redis.probes.liveness.type=exec must run redis-cli ping"
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set postgresql.probes.readiness.type=httpGet >/dev/null 2>&1; then
+            fail "an unknown probe type must fail the render"
+          fi
 
           api=$(render --show-only templates/api-deployment.yaml)
           grep -A6 'startupProbe:' <<<"${api}" | grep -q 'periodSeconds: 2' \

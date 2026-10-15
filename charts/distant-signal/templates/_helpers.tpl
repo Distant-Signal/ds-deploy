@@ -2523,6 +2523,47 @@ livenessProbe:
 {{- end }}
 
 {{/*
+`revisionHistoryLimit` for every Deployment and StatefulSet (values.yaml's
+top-level revisionHistoryLimit). Takes the root context. Every
+Deployment and StatefulSet template must set it; check-pod-labels-chart.py
+fails CI otherwise.
+*/}}
+{{- define "distant-signal.revisionHistoryLimit" -}}
+{{- $n := .Values.revisionHistoryLimit -}}
+{{- if or (not (or (kindIs "float64" $n) (kindIs "int64" $n) (kindIs "int" $n))) (lt (float64 $n) 0.0) (ne (float64 $n) (float64 (int64 $n))) -}}
+{{- fail (printf "revisionHistoryLimit must be a whole number >= 0, got %v" $n) -}}
+{{- end -}}
+{{- int64 $n -}}
+{{- end }}
+
+{{/*
+One probe body for the bundled Postgres or Redis (postgresql.probes.* and
+redis.probes.*). `type: tcpSocket` (the default) connects to the named
+container `port`; it runs in the kubelet, so no process is forked in the
+container. `type: exec` runs `command` (pg_isready, redis-cli ping), which
+forks a process through containerd and the shim on every period. `name` is
+the values path, for the error message.
+Usage:
+  include "distant-signal.dataStoreProbe" (dict "name" "postgresql.probes.readiness" "probe" $p "port" "postgres" "command" (list ...))
+*/}}
+{{- define "distant-signal.dataStoreProbe" -}}
+{{- $p := .probe -}}
+{{- if eq (toString $p.type) "tcpSocket" }}
+tcpSocket:
+  port: {{ .port }}
+{{- else if eq (toString $p.type) "exec" }}
+exec:
+  command:
+    {{- toYaml .command | nindent 4 }}
+{{- else }}
+{{- fail (printf "%s.type is %q; it must be tcpSocket or exec." .name (toString $p.type)) }}
+{{- end }}
+periodSeconds: {{ int64 $p.periodSeconds }}
+timeoutSeconds: {{ int64 $p.timeoutSeconds }}
+failureThreshold: {{ int64 $p.failureThreshold }}
+{{- end }}
+
+{{/*
 One NetworkPolicyPeer selecting the tunnel connector pods
 (networkPolicy.tunnel: namespace, plus podLabels when non-empty). Takes
 root; renders a single `- namespaceSelector: ...` list item.

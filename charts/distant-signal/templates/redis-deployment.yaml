@@ -13,6 +13,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "redis") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   # Fixed at 1 -- this is still a single, non-clustered Redis instance (see
   # values.yaml's own comment on `redis:` for the two consumers of it), not
   # a system of record with any HA story. It stays a Deployment+PVC rather
@@ -269,13 +270,13 @@ spec:
           {{- if $requirePass }}
           env:
             {{- include "distant-signal.redisPasswordEnv" . }}
-            # redis-cli (the probes below) reads its password from here.
+            # redis-cli (`exec` probes below, humans) reads its password from here.
             - name: REDISCLI_AUTH
               value: "$(REDIS_PASSWORD)"
           {{- end }}
           {{- if $acl }}
           env:
-            # redis-cli (the probes below, and humans: `redis-cli --user
+            # redis-cli (`exec` probes below, and humans: `redis-cli --user
             # ds-admin`) authenticates as ds-admin; `default` may be off.
             - name: REDISCLI_AUTH
               valueFrom:
@@ -306,26 +307,21 @@ spec:
           # of 3) to give a slow replay room without a hard-coded delay --
           # same reasoning postgres-statefulset.yaml's own probes already
           # use for its (much slower) startup path.
-          readinessProbe:
-            exec:
-              {{- if $acl }}
-              command: ["redis-cli", "--user", "ds-admin", "ping"]
-              {{- else }}
-              command: ["redis-cli", "ping"]
-              {{- end }}
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            failureThreshold: 6
-          livenessProbe:
-            exec:
-              {{- if $acl }}
-              command: ["redis-cli", "--user", "ds-admin", "ping"]
-              {{- else }}
-              command: ["redis-cli", "ping"]
-              {{- end }}
-            initialDelaySeconds: 15
-            periodSeconds: 10
-            failureThreshold: 6
+          #
+          # redis.probes (values.yaml): tcpSocket by default, so no redis-cli
+          # process is forked through containerd and the shim on every
+          # period. Redis listens while it loads the AOF, so a TCP readiness
+          # probe turns true before the data is loaded (clients get
+          # -LOADING until then); `type: exec` runs `redis-cli ping`, which
+          # authenticates through REDISCLI_AUTH above.
+          {{- $ping := list "redis-cli" "ping" }}
+          {{- if $acl }}
+          {{- $ping = list "redis-cli" "--user" "ds-admin" "ping" }}
+          {{- end }}
+          {{- range $kind := list "readiness" "startup" "liveness" }}
+          {{ $kind }}Probe:
+            {{- include "distant-signal.dataStoreProbe" (dict "name" (printf "redis.probes.%s" $kind) "probe" (get $.Values.redis.probes $kind) "port" "redis" "command" $ping) | trim | nindent 12 }}
+          {{- end }}
           {{- with .Values.redis.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

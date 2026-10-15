@@ -35,6 +35,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "schedulefeed") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   # Fixed at 1, like aggregator: a rolling update would briefly run two
   # ingest verifiers (or, with sftp.separateDeployment false, two SFTP
   # receivers) against the same PVC, so this uses Recreate for the same

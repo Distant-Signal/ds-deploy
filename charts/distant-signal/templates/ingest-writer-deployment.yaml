@@ -16,6 +16,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "ingest-writer") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   # One replica, Recreate (spec §10): the loops' advisory locks would make a
   # second one harmless, but the stream consumers of phase 3 assume one.
   replicas: 1

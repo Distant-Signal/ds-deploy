@@ -27,7 +27,7 @@ explains the format). The kinds:
   `poller-transit-<network>`): `final` rights, but rendered only while its
   client, `redis.acl.clients.<user in camelCase>`, is on. See
   [Optional users](#optional-users-new-producers-that-ship-off).
-- **admin**: `ds-admin`, for humans and the Redis probes: `~* &* +@all`.
+- **admin**: `ds-admin`, for humans and the Redis `exec` probes: `~* &* +@all`.
 
 | User | Kind | Narrow rights (summary) |
 |---|---|---|
@@ -81,7 +81,8 @@ refused. Edit the template and that test together.
   Secret into a memory-backed emptyDir; an empty password, or one with
   whitespace, fails the pod instead of starting Redis with a broken file.
   Redis starts with `--aclfile` instead of `--requirepass`, and its probes
-  run `redis-cli --user ds-admin ping`. A pod annotation with the file's
+  (with `redis.probes.*.type: exec`; tcpSocket by default) run
+  `redis-cli --user ds-admin ping`. A pod annotation with the file's
   checksum restarts Redis when the stage or the users change.
 - **Clients.** `redis.acl.clients.<client>: true` gives that Deployment
   `REDIS_USERNAME` and `REDIS_PASSWORD` from `<user>-password`. The

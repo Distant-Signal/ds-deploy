@@ -639,7 +639,7 @@ exactly what it rendered before the option existed. When enabled:
   `AUTH default <password>`. The password is never in values, in the URL or
   in any rendered manifest, and the services never log it;
 - with `redis.auth.requirePass: true` (the default) the bundled Redis starts
-  with `--requirepass` from the same Secret, and its probes authenticate
+  with `--requirepass` from the same Secret, and `redis-cli` in the pod (the `exec` probes, `kubectl exec`) authenticates
   through `REDISCLI_AUTH`.
 
 The password comes from `redis.auth.existingSecret` / `existingSecretKey`
@@ -683,7 +683,7 @@ them against a real Redis.
 With `redis.acl.enabled` (and the bundled Redis), an initContainer renders
 `users.acl` into a memory-backed emptyDir from one password per user in
 `redis.acl.existingSecret` (`<user>-password`, required), and Redis starts
-with `--aclfile` instead of `--requirepass`. Its probes authenticate as
+with `--aclfile` instead of `--requirepass`. `redis-cli` in the pod (the `exec` probes, `kubectl exec`) authenticates as
 `ds-admin`. `redis.acl.clients.<client>` gives that client `REDIS_USERNAME`
 and its own `REDIS_PASSWORD`.
 
@@ -1405,6 +1405,44 @@ Clap's own argument errors (a missing required env var at startup) are
 still printed by clap as plain text before logging starts, then the process
 exits with code 2.
 
+## Postgres and Redis probes
+
+The bundled Postgres and Redis have startup, readiness and liveness probes
+set by `postgresql.probes` and `redis.probes`. Each probe's `type` is
+`tcpSocket` (the default) or `exec`:
+
+- `tcpSocket`: the kubelet opens a TCP connection to the container port.
+  Nothing runs in the container. The defaults probe readiness every 10s
+  and liveness every 30s, allowing 6 liveness failures (3 minutes).
+- `exec`: the old commands, `pg_isready` and `redis-cli ping` (`--user
+  ds-admin` with `redis.acl.enabled`). Each period forks a process
+  through containerd and its shim. Until this chart version, readiness
+  ran every 5s, which adds load to a CPU-saturated node.
+
+The trade-off: a TCP probe passes once the server listens, before it can
+answer queries.
+
+- Readiness turns true slightly earlier during Postgres crash recovery
+  (WAL redo after an unclean shutdown) and while Redis loads its AOF.
+  Until they finish, clients get "the database system is starting up" or
+  `-LOADING` errors instead of finding no endpoint.
+- Liveness no longer kills Postgres in the middle of WAL redo, or Redis in
+  the middle of a long AOF load. With `exec`, the startup probe's budget
+  (`postgresql.probes.startup`, 10s x 90 = 15 minutes) was all that
+  protected a long redo. A Postgres that listens but has hung is no longer
+  restarted. To keep `pg_isready` semantics for one probe only, set
+  `postgresql.probes.readiness.type: exec` and leave liveness on TCP.
+
+TCP probes come from the node, like the api's and the workers' HTTP
+probes, so they rely on the CNI not applying NetworkPolicy to node-local
+traffic (see `networkPolicy.healthIngress`). On a CNI that does, admit the
+node through `networkPolicy.postgresClients` and `networkPolicy.redisClients`,
+or use `exec`.
+
+Changing either probe changes the pod template, so the upgrade that first
+applies these defaults restarts Postgres (StatefulSet) and Redis
+(Deployment, `Recreate`) once.
+
 ## Values reference
 
 ### Global
@@ -1414,6 +1452,7 @@ exits with code 2.
 | `nameOverride` | `""` | Override the chart name used in resource names and labels. |
 | `fullnameOverride` | `""` | Override the fully-qualified release name entirely. |
 | `imagePullSecrets` | `[]` | Image pull secrets applied to every pod in the chart. |
+| `revisionHistoryLimit` | `3` | Old ReplicaSets and StatefulSet ControllerRevisions kept, on every Deployment and StatefulSet (Kubernetes' default is 10). A whole number >= 0; `helm rollback` does not need them. |
 | `global.imageRegistry` | `""` | Registry (and optional path prefix) put in front of every image in place of the registry its `image.repository` carries, e.g. `registry.example.com/myfork`. Empty keeps each repository as written. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount for the chart's workloads. |
 | `serviceAccount.name` | `""` | Name to use. Empty + `create` uses the fullname. |
@@ -1554,8 +1593,18 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.roles.perService.ldbws_ro.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.roles.perService.ldbws_ro.existingSecretPasswordKey` | `postgres-ldbws-ro-password` | Key within `existingSecret` (and in the chart's Secret). |
 | `postgresql.roles.perService.ldbws_ro.connectionLimit` | `""` | CONNECTION LIMIT. Empty: `pollers.ldbws.internalReads.database.maxConnections` + 1. |
-| `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness starts only after `pg_isready` succeeds, so WAL redo after a reboot is never killed. |
+| `postgresql.probes.startup.type` | `tcpSocket` | `tcpSocket` or `exec` (`pg_isready`). See [Postgres and Redis probes](#postgres-and-redis-probes). |
+| `postgresql.probes.startup.periodSeconds` | `10` | Startup probe period. Liveness and readiness start only after it succeeds. |
+| `postgresql.probes.startup.timeoutSeconds` | `5` | Startup probe timeout. |
 | `postgresql.probes.startup.failureThreshold` | `90` | Startup probe failures allowed (90 x 10s = 15 minutes of crash recovery). |
+| `postgresql.probes.readiness.type` | `tcpSocket` | `tcpSocket` or `exec` (`pg_isready`). TCP turns ready slightly earlier during crash recovery. |
+| `postgresql.probes.readiness.periodSeconds` | `10` | Readiness probe period (5 before tcpSocket became the default). |
+| `postgresql.probes.readiness.timeoutSeconds` | `5` | Readiness probe timeout. |
+| `postgresql.probes.readiness.failureThreshold` | `5` | Readiness probe failures allowed (5 x 10s = 50s). |
+| `postgresql.probes.liveness.type` | `tcpSocket` | `tcpSocket` or `exec` (`pg_isready`). TCP never kills Postgres mid-WAL-redo. |
+| `postgresql.probes.liveness.periodSeconds` | `30` | Liveness probe period. |
+| `postgresql.probes.liveness.timeoutSeconds` | `5` | Liveness probe timeout. |
+| `postgresql.probes.liveness.failureThreshold` | `6` | Liveness probe failures allowed (6 x 30s = 3 minutes). |
 | `postgresql.persistence.enabled` | `true` | Attach a PVC. When false an emptyDir is used and data is lost on reschedule. |
 | `postgresql.persistence.size` | `20Gi` | Requested volume size. |
 | `postgresql.persistence.storageClass` | `""` | StorageClass name. Empty means the cluster default. |
@@ -1885,6 +1934,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `apiMaintenance.activeDeadlineSeconds` | `1800` | Deadline per run. |
 | `apiMaintenance.successfulJobsHistoryLimit` | `1` | Finished Jobs kept. |
 | `apiMaintenance.failedJobsHistoryLimit` | `3` | Failed Jobs kept. |
+| `apiMaintenance.ttlSecondsAfterFinished` | `86400` | The Jobs' `ttlSecondsAfterFinished`: a finished run's Job and pod are deleted a day after it ends, even within the history limits. null leaves them to the history limits. The Helm hook Jobs (migrate, roles setup) have none: their hook delete policy handles them. |
 | `apiMaintenance.logLevel` | `info` | `RUST_LOG`. |
 | `apiMaintenance.resources` | `{}` | Container resources. |
 | `apiMaintenance.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
@@ -2066,7 +2116,7 @@ used for and why persistence defaults on.
 | `redis.enabled` | `true` | Deploy the bundled Redis Deployment and Service. |
 | `redis.externalUrl` | `""` | Connection URL of an externally-managed Redis. Used only when `redis.enabled` is false, where it is **required** — empty aborts the render. |
 | `redis.auth.enabled` | `false` | Redis AUTH: give every Redis client `REDIS_PASSWORD` from a Secret. See "Redis authentication (optional)". |
-| `redis.auth.requirePass` | `true` | With `auth.enabled` and the bundled Redis, start it with `--requirepass` and authenticate its probes. `false` is step 1 of the no-outage enable sequence. |
+| `redis.auth.requirePass` | `true` | With `auth.enabled` and the bundled Redis, start it with `--requirepass` and authenticate `redis-cli` in the pod (`exec` probes). `false` is step 1 of the no-outage enable sequence. |
 | `redis.auth.existingSecret` | `""` | Secret holding the password. Empty: the chart generates `redis-password` in its own Secret (bundled Redis only; an external Redis requires this). |
 | `redis.auth.existingSecretKey` | `redis-password` | Key within `redis.auth.existingSecret`. |
 | `redis.acl.enabled` | `false` | Turn the ACL users on (needs `existingSecret`). |
@@ -2099,6 +2149,18 @@ used for and why persistence defaults on.
 | `redis.protoMaxBulkLen` | `2mb` | Passed as `--proto-max-bulk-len`: the largest single argument a client may send (Redis' default is 512mb). The largest legitimate one is an ingest entry's body (1 MiB accepted). At least `1mb`; empty or null keeps Redis' default. Changing it restarts Redis. |
 | `redis.save` | `""` | Passed as `--save`. `""` disables RDB snapshots (AOF covers durability); null keeps the image's built-in schedule. |
 | `redis.resources` | `{requests: {cpu: 50m, memory: 1536Mi}, limits: {memory: 2560Mi}}` | Container resource requests/limits, sized for `movementRelay.streamMaxLen` at `redis.maxmemory` plus fork copy-on-write; see values.yaml for the arithmetic. |
+| `redis.probes.startup.type` | `tcpSocket` | `tcpSocket` or `exec` (`redis-cli ping`). See [Postgres and Redis probes](#postgres-and-redis-probes). |
+| `redis.probes.startup.periodSeconds` | `5` | Startup probe period. Liveness and readiness start only after it succeeds. |
+| `redis.probes.startup.timeoutSeconds` | `5` | Startup probe timeout. |
+| `redis.probes.startup.failureThreshold` | `60` | Startup probe failures allowed (60 x 5s = 5 minutes for an AOF load). |
+| `redis.probes.readiness.type` | `tcpSocket` | `tcpSocket` or `exec` (`redis-cli ping`). TCP turns ready slightly earlier during an AOF load. |
+| `redis.probes.readiness.periodSeconds` | `10` | Readiness probe period (5 before tcpSocket became the default). |
+| `redis.probes.readiness.timeoutSeconds` | `5` | Readiness probe timeout. |
+| `redis.probes.readiness.failureThreshold` | `3` | Readiness probe failures allowed (3 x 10s = 30s). |
+| `redis.probes.liveness.type` | `tcpSocket` | `tcpSocket` or `exec` (`redis-cli ping`). |
+| `redis.probes.liveness.periodSeconds` | `30` | Liveness probe period. |
+| `redis.probes.liveness.timeoutSeconds` | `5` | Liveness probe timeout. |
+| `redis.probes.liveness.failureThreshold` | `6` | Liveness probe failures allowed (6 x 30s = 3 minutes). |
 | `redis.nodeSelector` | `{}` | Pod node selector. |
 | `redis.tolerations` | `[]` | Pod tolerations. |
 | `redis.affinity` | `{}` | Pod affinity rules. |

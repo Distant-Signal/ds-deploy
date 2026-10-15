@@ -5,6 +5,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "trust-backlog-consumer") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   # Single-consumer-group-per-deployment, same reasoning as every other
   # consumer in this chart (trust-consumer/full-coverage-consumer's own
   # replicaCount comments) -- this crate connects as one fixed Redis

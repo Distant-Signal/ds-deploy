@@ -17,6 +17,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "devauthentik-server") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   replicas: 1
   selector:
     matchLabels:

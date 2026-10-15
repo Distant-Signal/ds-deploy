@@ -29,6 +29,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "movement-relay") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   replicas: 1
   # Explicit, unlike trust-consumer/full-coverage-consumer's own
   # undeclared (default-25%/25%) strategy: a rolling update here MUST NOT

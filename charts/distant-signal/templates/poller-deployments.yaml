@@ -28,6 +28,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" $root "component" $component) | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   # Every poller is a singleton loop; a second copy would just duplicate
   # every upstream request and every ingest POST.
   replicas: 1

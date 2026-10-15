@@ -5,6 +5,7 @@ metadata:
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "notifier") | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   # Fixed at 1 -- two replicas would double-send every push notification,
   # an even more directly user-visible failure mode than aggregator's
   # double-write risk.

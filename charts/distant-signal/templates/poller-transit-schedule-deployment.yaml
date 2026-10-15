@@ -26,6 +26,7 @@ metadata:
     {{- include "distant-signal.labels" (dict "root" $root "component" $component) | nindent 4 }}
     distant-signal/transit-network: {{ $network | quote }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   replicas: 1
   strategy:
     type: Recreate

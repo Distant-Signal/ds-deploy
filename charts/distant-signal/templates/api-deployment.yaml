@@ -119,6 +119,7 @@ with one, NotReady on a database blip empties the Service.
 {{- fail "api.readiness.checkDatabase needs api.replicaCount 2 or more: with one replica a database blip would make the only pod NotReady and empty the Service." }}
 {{- end }}
 spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   replicas: {{ .Values.api.replicaCount }}
   strategy:
     # Recreate, not the default RollingUpdate -- the SAME reasoning

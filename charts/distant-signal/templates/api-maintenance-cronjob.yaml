@@ -39,6 +39,12 @@ spec:
     spec:
       backoffLimit: {{ int64 $m.backoffLimit }}
       activeDeadlineSeconds: {{ int64 $m.activeDeadlineSeconds }}
+      {{- if not (kindIs "invalid" $m.ttlSecondsAfterFinished) }}
+      # The TTL controller deletes each finished Job (and its pod) this long
+      # after it ends, on top of the history limits above. Only here: the
+      # Helm hook Jobs (migrate, roles setup) keep their hook delete policy.
+      ttlSecondsAfterFinished: {{ int64 $m.ttlSecondsAfterFinished }}
+      {{- end }}
       template:
         metadata:
           labels:
