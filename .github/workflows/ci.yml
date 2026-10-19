@@ -707,8 +707,14 @@ jobs:
       SSO_ISSUER_URL: http://sso.example.invalid
       SSO_CLIENT_ID: distant-signal-dummy
       SSO_CLIENT_SECRET: distant-signal-dummy-secret
-      SSO_REDIRECT_URL: http://localhost:3000/api/auth/callback
-      SSO_POST_LOGIN_REDIRECT_URL: http://localhost:3000/
+      # 127.0.0.1, not localhost: the api takes the browser origin it
+      # accepts cookie-authenticated mutations from out of SSO_REDIRECT_URL
+      # (crates/api/src/auth.rs, reject_cross_origin_cookie_mutation), and
+      # the specs drive the browser at E2E_BASE_URL below. With localhost
+      # here, every logged-in PUT/POST/DELETE a page sends was a 403
+      # "cross-origin request rejected".
+      SSO_REDIRECT_URL: http://127.0.0.1:3000/api/auth/callback
+      SSO_POST_LOGIN_REDIRECT_URL: http://127.0.0.1:3000/
       VAPID_PUBLIC_KEY: BDummyVapidPublicKeyForLocalDevOnlyNotARealKeyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
       LINES_DIR: ${{ github.workspace }}/lines
       # The railMcp public URL, read by the frontend server at REQUEST time
