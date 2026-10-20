@@ -1,11 +1,12 @@
 # Schedule feed bucket source
 
 schedule-ingest can take the CIF timetable (`timetable_full.zip`) and Network
-Rail CORPUS (`CORPUSExtract.json.gz`) from a dedicated Google Cloud Storage
+Rail CORPUS (`CORPUSExtract.json.gz`, or the NLC XML snapshot
+`NLC<YYYYMMDD>.xml.gz`) from a dedicated Google Cloud Storage
 bucket that the Rail Data Marketplace pushes into, as well as, or instead of,
 the SFTP receiver ([schedule-feed-sftp.md](schedule-feed-sftp.md)). This page
 is the operator's view from Distant Signal's side. The design and its
-decisions (D1–D13) are in
+decisions (D1–D14) are in
 [the GCS landing design](superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md);
 the bucket, its IAM and its usage alerts are
 [`charts/ds-ingest-bucket`](../charts/ds-ingest-bucket/README.md)'s.
@@ -14,10 +15,52 @@ Every name below is a placeholder (`example-project`, `example-ds-ingest`).
 The real project, bucket, service accounts and budget live in Ranma-Config,
 never in this repository.
 
-**Status (2026-10-02):** the chart side is in place, off by default. The
-schedule-ingest bucket source itself (the Rust reader) is not written yet;
-until it ships, keep `scheduleFeed.bucket.enabled` false. An image without
-it ignores the bucket env vars, so turning it on early does nothing.
+**Status (2026-10-20, DS-22):** the chart side and the schedule-ingest
+bucket source (the Rust reader) are both built, off by default
+(`scheduleFeed.bucket.enabled: false`). Nothing is provisioned yet: the
+remaining steps are in [Switching it on](#switching-it-on). Not built: the
+audit-log shipper (`bucket.auditLogs.ship` only logs a warning), the api's
+`delivery_source` column, and Pub/Sub notifications.
+
+## Switching it on
+
+Each step is the previous one's prerequisite. Every concrete name, id and
+email lives in Ranma-Config, never here.
+
+1. **Ranma: the Google project, keyless sign-in and the bucket.** The
+   dedicated GCP project and its budget, Crossplane and the GCP providers,
+   a `ds-ingest-bucket` release (`enabled: true`, the bucket name, DTD's
+   service accounts as `publisher.members`, the reader as `reader.member`)
+   with every resource `READY`, and for keyless sign-in the workload
+   identity pool and provider (the k3s JWKS uploaded, subject
+   `system:serviceaccount:distant-signal:distant-signal-schedulefeed`,
+   audience `gcp-ds-ingest`), the `roles/iam.workloadIdentityUser` binding
+   on the reader service account, and the `external_account` ConfigMap (its
+   `credential_source.file` is `/var/run/secrets/distant-signal/gcs-token/token`).
+   See Ranma-Config's `docs/specs/ds-ingest-gcs.md`.
+2. **The user: ask RDM/DTD to add the bucket** as a delivery destination
+   for the timetable and CORPUS subscriptions, alongside SFTP, with the
+   questions in the GCS spec §14 (object names, the scanner, read-back
+   time, dual delivery, a test delivery).
+3. **Flip the values** in the DS release (Ranma-Config), SFTP still on:
+
+   ```yaml
+   scheduleFeed:
+     serviceAccount:
+       create: true
+     bucket:
+       enabled: true
+       name: <the bucket>
+       auth: workloadIdentity
+       workloadIdentity:
+         credentialConfigMap: <the external_account ConfigMap>
+   ```
+
+   (Key mode instead: `auth: key` and `existingSecret` naming the sealed
+   reader key.) The first poll logs `bucket source started`; an empty
+   bucket is fine. `DistantSignalScheduleBucketAccessRevoked` firing means
+   step 1's sign-in is not right yet; SFTP carries on regardless.
+4. **Verify both** for a week, as in [Adoption](#adoption-from-dss-side).
 
 ## The two switches
 
@@ -56,10 +99,9 @@ its bootstrap, Crossplane, and a `ds-ingest-bucket` release with its
 resources `READY`. Then:
 
 1. **Turn the source on with SFTP still on**: `scheduleFeed.bucket.enabled:
-   true`, `scheduleFeed.bucket.name`, and `scheduleFeed.bucket.existingSecret`
-   naming the sealed reader key. Add `bucket.auditLogs.ship` and
-   `bucket.auditLogs.bucket` to ship the audit log (below). The image must
-   have the bucket source.
+   true`, `scheduleFeed.bucket.name`, and the credential (keyless, or
+   `scheduleFeed.bucket.existingSecret` naming the sealed reader key). The
+   audit-log shipper (below) is not built yet.
 2. **Ask RDM to add the bucket** as a destination for the timetable and
    CORPUS subscriptions, in addition to SFTP.
 3. **Verify both for at least 7 daily deliveries and one CORPUS**: each
@@ -102,6 +144,53 @@ Data is held in the bucket only in transit (D11):
 The bucket backs this up: versioning is off, soft delete keeps a deleted
 object for 7 days, and a 7-day lifecycle rule deletes anything the reader
 missed.
+
+### How the reader hands a delivery on
+
+The reader (`crates/schedule-ingest/src/bucket.rs`, over the GCS JSON API
+in `gcs.rs`) runs in its own task, so a slow or refused bucket never holds
+up the SFTP scan. A verified object is hard-linked into
+`/data/schedule-feed/sources/bucket/incoming/<name>` with its creation
+time as its mtime. That folder is the bucket's *lane*: every scan interval
+runs the same CIF and CORPUS cycles over each lane, in
+`scheduleFeed.sourcePrecedence` order, as over the SFTP landing folder. So
+a bucket delivery gets exactly the SFTP path's zip extraction caps, CIF
+checks, quarantine, CORPUS JSON/NLC XML handling and records, with the
+object's creation time as `delivered_at`.
+
+With the bucket on, every decision is also appended to a content ledger
+(`/data/schedule-feed/sources/ledger.jsonl`), and each arrival is judged
+against it first (`crates/schedule-ingest/src/sources.rs`):
+
+| What arrives | Outcome |
+| --- | --- |
+| Content (SHA-256) the other source already delivered | `duplicate`: not extracted, checked or recorded again |
+| Different content of the same kind from the other source within `disagreementWindowMinutes` | A disagreement (`schedule_feed_source_disagreement_total{kind}`, `DistantSignalScheduleFeedSourcesDisagree`). The lower-ranked source's copy is `superseded`; the higher-ranked one is ingested, and if the other copy's delivery directory is newer it is retired, so schedule-reference publishes the winner. A quarantined winner never promotes the loser |
+| Anything else | The normal path |
+
+The audit lines gain `source` (`sftp` or `bucket`), and on `duplicate` and
+`superseded` lines `duplicate_of` and `first_source`. With SFTP alone none
+of this runs: no ledger, no new fields.
+
+Reader state on the PVC, all under `/data/schedule-feed/sources/`:
+
+| Path | What |
+| --- | --- |
+| `bucket/.seen` | Confirmed `(name, generation)` pairs (the last 200), so a restart never downloads one again |
+| `bucket/archive/` | Raw objects, `<created>-<generation>-<name>`, the newest `archiveKeep` |
+| `bucket/incoming/` | The bucket lane's landing folder |
+| `bucket/.partial-*` | A download in progress (removed at start) |
+| `ledger.jsonl` | The content ledger (the last 500 to 1000 decisions) |
+
+The reader's metrics, all `{source="bucket"}` and registered at 0:
+`distant_signal_schedule_feed_source_access_revoked`,
+`..._last_new_object_seconds`, `..._errors_total{kind}` (`auth`, `list`,
+`get`, `verify`, `delete`, `size`), `..._unexpected_objects_total{reason}`
+(`name`, `size`, `unroutable`), `..._download_capped`,
+`..._downloaded_bytes_total` and `..._poll_duration_seconds`; plus
+`distant_signal_schedule_feed_source_disagreement_total{kind}` and, keyless,
+`distant_signal_gcp_token_exchange_total{stage,outcome}` and
+`distant_signal_gcp_token_remaining_seconds`.
 
 The reader never re-downloads a confirmed generation, even across restarts,
 and has loop guards: at most `bucket.maxDownloadsPerPoll` downloads per
@@ -205,8 +294,10 @@ key looks the same from DS (`AccessRevoked`); check the Secret exists first.
 
 The bucket's Cloud Audit Logs (Data Access on, so every object read, write
 and delete is logged with the caller's principal and IP) are sunk into a
-private audit-log bucket. With `scheduleFeed.bucket.auditLogs.ship`,
-schedule-ingest reads that bucket with the same key every
+private audit-log bucket. **Not built yet** (the GCS spec's phase 5): today
+`scheduleFeed.bucket.auditLogs.ship` only makes schedule-ingest log a
+warning at start. Once built, with it on, schedule-ingest reads that bucket
+with the same credential every
 `auditLogs.pollIntervalSecs` and writes one JSON line per entry to stdout,
 target `schedule_ingest::bucket_access` (`principal`, `caller_ip`,
 `method`, `object`, `status`, `time`).

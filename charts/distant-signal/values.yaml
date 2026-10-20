@@ -4507,8 +4507,9 @@ scheduleFeed:
   # into, downloads only expected names, verifies size and CRC32C,
   # archives each object on the PVC, then deletes it from the bucket. Runs
   # alongside SFTP or instead of it. The bucket and its IAM are
-  # charts/ds-ingest-bucket's. Off by default. Needs a schedule-ingest
-  # image with the bucket source.
+  # charts/ds-ingest-bucket's. Off by default. schedule-ingest has had the
+  # bucket source since 2026-10-20 (DS-22); older images ignore these
+  # settings.
   bucket:
     enabled: false
     # -- Only `gcs` is implemented.
@@ -4550,11 +4551,14 @@ scheduleFeed:
       # -- Key in credentialConfigMap holding that JSON.
       credentialConfigKey: credential-config.json
     # -- Object names (case-insensitive `*` globs, bucket root only) the
-    # reader downloads. Anything else is flagged and deleted unread after
-    # deleteMinAgeSecs.
+    # reader downloads. A match is downloaded only if it also routes to
+    # CIF (scheduleFeed.ingest.cifFilePattern) or, with scheduleFeed.corpus
+    # on, CORPUS (the JSON extract, or the NLC XML snapshot `NLC*.xml.gz`).
+    # Anything else is flagged and deleted unread after deleteMinAgeSecs.
     expectedKeys:
       - timetable_full.zip
       - CORPUSExtract.json.gz
+      - NLC*.xml.gz
     # -- Seconds between bucket listings. At least 60.
     pollIntervalSecs: 300
     # -- An object is deleted only once it is this old, so the
@@ -4575,7 +4579,9 @@ scheduleFeed:
     # interval while access is revoked. At least pollIntervalSecs.
     maxBackoffSecs: 3600
     # -- Ship the bucket's Cloud Audit Logs (from the audit-log bucket) to
-    # stdout as `schedule_ingest::bucket_access` lines for Loki. Off.
+    # stdout as `schedule_ingest::bucket_access` lines for Loki. Off. Not
+    # implemented in schedule-ingest yet (the GCS spec's phase 5): with it
+    # on, the reader logs a warning at start and ships nothing.
     auditLogs:
       ship: false
       # -- Audit-log bucket name. Required with ship.

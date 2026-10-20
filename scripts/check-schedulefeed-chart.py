@@ -205,7 +205,7 @@ BOTH_ENV = {
     "DISAGREEMENT_WINDOW_MINUTES": "120",
     "BUCKET_NAME": "example-ds-ingest",
     "GOOGLE_SERVICE_ACCOUNT_PATH": f"{KEY_DIR}/service-account.json",
-    "BUCKET_EXPECTED_KEYS": "timetable_full.zip,CORPUSExtract.json.gz",
+    "BUCKET_EXPECTED_KEYS": "timetable_full.zip,CORPUSExtract.json.gz,NLC*.xml.gz",
     "BUCKET_POLL_INTERVAL_SECS": "300",
     "BUCKET_DELETE_MIN_AGE_SECS": "3600",
     "BUCKET_ARCHIVE_KEEP": "5",

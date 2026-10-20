@@ -3087,7 +3087,8 @@ names, verifies size and CRC32C, archives each object on the PVC and deletes
 it from the bucket. `charts/ds-ingest-bucket` provisions the bucket and its
 IAM. See [docs/schedule-feed-bucket.md](../../docs/schedule-feed-bucket.md)
 and `docs/superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md`.
-Off by default; needs a schedule-ingest image with the bucket source.
+Off by default. schedule-ingest has the bucket source since DS-22
+(2026-10-20); an older image ignores these values.
 
 | Key | Default | Description |
 |---|---|---|
@@ -3101,7 +3102,7 @@ Off by default; needs a schedule-ingest image with the bucket source.
 | `scheduleFeed.bucket.workloadIdentity.audience` | `gcp-ds-ingest` | Audience of the projected service-account token: what the Google workload identity pool provider allows. |
 | `scheduleFeed.bucket.workloadIdentity.credentialConfigMap` | `""` | `workloadIdentity` mode: pre-existing ConfigMap holding the `external_account` credential configuration (no secret in it). Required in that mode, refused in `key` mode. Mounted read-only into `ingest` only, as an optional volume, like the key Secret. |
 | `scheduleFeed.bucket.workloadIdentity.credentialConfigKey` | `credential-config.json` | Key in `credentialConfigMap` holding that JSON. |
-| `scheduleFeed.bucket.expectedKeys` | `[timetable_full.zip, CORPUSExtract.json.gz]` | Case-insensitive `*` globs naming the objects (bucket root only) the reader downloads. Anything else is flagged and deleted unread after `deleteMinAgeSecs`. |
+| `scheduleFeed.bucket.expectedKeys` | `[timetable_full.zip, CORPUSExtract.json.gz, NLC*.xml.gz]` | Case-insensitive `*` globs naming the objects (bucket root only) the reader downloads. A match is downloaded only if it also routes to CIF (`ingest.cifFilePattern`) or, with `scheduleFeed.corpus` on, CORPUS (the JSON extract or the NLC XML snapshot). Anything else is flagged and deleted unread after `deleteMinAgeSecs`. |
 | `scheduleFeed.bucket.pollIntervalSecs` | `300` | Seconds between bucket listings. At least 60. |
 | `scheduleFeed.bucket.deleteMinAgeSecs` | `3600` | Objects are deleted only once this old, so the publisher's read-back and scan finish first. Under 6 days (the bucket's lifecycle backstop is 7). |
 | `scheduleFeed.bucket.archiveKeep` | `5` | Raw objects kept under `/data/schedule-feed/sources/bucket/archive`. |
@@ -3110,7 +3111,7 @@ Off by default; needs a schedule-ingest image with the bucket source.
 | `scheduleFeed.bucket.maxDownloadBytesPerHour` | `268435456` | Loop guard: bytes per rolling hour. Hitting it raises `DistantSignalScheduleBucketDownloadBudget`. At most `maxDownloadBytesPerDay`. |
 | `scheduleFeed.bucket.maxDownloadBytesPerDay` | `1073741824` | Loop guard: bytes per rolling day. |
 | `scheduleFeed.bucket.maxBackoffSecs` | `3600` | Ceiling of the exponential backoff after errors, and the retry interval while access is revoked. At least `pollIntervalSecs`. |
-| `scheduleFeed.bucket.auditLogs.ship` | `false` | Ship the bucket's Cloud Audit Logs (from the audit-log bucket) to stdout as `schedule_ingest::bucket_access` lines for Loki. |
+| `scheduleFeed.bucket.auditLogs.ship` | `false` | Ship the bucket's Cloud Audit Logs (from the audit-log bucket) to stdout as `schedule_ingest::bucket_access` lines for Loki. Not implemented in schedule-ingest yet (GCS spec phase 5): it logs a warning at start and ships nothing. |
 | `scheduleFeed.bucket.auditLogs.bucket` | `""` | Audit-log bucket name. Required with `ship`; must differ from `name`. |
 | `scheduleFeed.bucket.auditLogs.pollIntervalSecs` | `600` | Seconds between audit-log bucket listings. At least 60. |
 | `scheduleFeed.sourcePrecedence` | `[bucket, sftp]` | Which source wins when SFTP and the bucket deliver different content within `disagreementWindowMinutes` (decision D5: the bucket). Must be a permutation of `[bucket, sftp]`. |
