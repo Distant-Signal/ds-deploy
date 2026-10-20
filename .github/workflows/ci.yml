@@ -740,6 +740,8 @@ jobs:
       E2E_TRAIN_UID: W12345
       E2E_TRAIN_DATE: 2026-09-17
       E2E_TRACKING_ID: "1"
+      E2E_PLANNED_TRACKING_ID: "3"
+      E2E_JOURNEY_ID: "1"
       E2E_GROUP_ID: fixture-group-1
       E2E_GROUP_INVITE_TOKEN: fixture-invite-token-123456789
       E2E_SESSION_COOKIE: qhE59Tg8RipXqulYsgOav1p46-YsflwgjQxMa1K5lKY
