@@ -87,6 +87,15 @@ spec:
           - poller-{{ $name }}
           {{- end }}
           {{- end }}
+          {{- $transitOn := false }}
+          {{- range $network, $n := .Values.pollerTransitSchedule.networks }}
+          {{- if $n.enabled }}{{ $transitOn = true }}{{ end }}
+          {{- end }}
+          {{- if $transitOn }}
+          # One Deployment per enabled transit network, all sharing this
+          # component (transit networks spec section 13.1).
+          - poller-transit-schedule
+          {{- end }}
           {{- if .Values.scheduleFeed.enabled }}
           - schedulefeed
           {{- end }}
