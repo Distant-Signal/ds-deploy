@@ -1146,8 +1146,9 @@ jobs:
       # its direct read; no /private URL, internal OAuth credential,
       # INGEST_SINK or *_SOURCE renders. Without the prerequisites the
       # render fails once, listing all of them (with no `sink: http`
-      # opt-out left). A retired switch set to anything but its one value
-      # fails, naming it; pinned to that value it renders.
+      # opt-out left). Release D: a leftover retired switch is ignored (no
+      # binary reads INGEST_SINK or *_SOURCE); a writer stream in `shadow`
+      # still fails, naming it.
       # `defaultUser: "on-unshared"` needs no user for a client whose workload is
       # off (the island-of-Ireland pollers by default).
       - name: helm template (release B ingest sinks)
@@ -1233,21 +1234,18 @@ jobs:
           env_is "${dep}" INGEST_WRITER_STREAMS \
             "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,tfl-stops:off,transit-metrolink:off" ingest-writer
 
-          # The retired switches: anything but their one value fails, naming it.
-          for kv in pollers.stations.ingest.sink=http pollers.tfl.ingest.sink=http+shadow \
-              trustConsumer.ingest.sink=http trustBacklogConsumer.ingest.sink=http \
-              fullCoverageConsumer.ingest.sink=http fullCoverageConsumer.internalReads.source=http \
-              trustConsumer.internalReads.source=http pollers.ldbws.internalReads.source=http \
-              scheduleFeed.ingest.sink=http scheduleFeed.reference.ingest.sink=http \
-              ingestWriter.streams.tfl=shadow; do
-            # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-            if err=$(render "${all[@]}" --set "${kv}" 2>&1 >/dev/null); then fail "${kv} must fail the render"; fi
-            grep -qF -- "${kv%%=*}: ${kv#*=}" <<<"${err}" || fail "${kv}: the render must name it: ${err}"
-          done
-          # Pinned to the one value they have left, they render (production
-          # pins scheduleFeed.reference.ingest.sink: db).
-          render "${all[@]}" --set scheduleFeed.reference.ingest.sink=db --set trustConsumer.ingest.sink=db \
-            --set pollers.ldbws.ingest.sink=stream --set fullCoverageConsumer.internalReads.source=db >/dev/null
+          # The writer's removed shadow mode fails, naming it.
+          kv=ingestWriter.streams.tfl=shadow
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if err=$(render "${all[@]}" --set "${kv}" 2>&1 >/dev/null); then fail "${kv} must fail the render"; fi
+          grep -qF -- "${kv%%=*}: ${kv#*=}" <<<"${err}" || fail "${kv}: the render must name it: ${err}"
+          # Release D: a leftover retired switch, whatever its value, is
+          # ignored and still renders no INGEST_SINK or *_SOURCE.
+          left=$(render "${all[@]}" --set scheduleFeed.reference.ingest.sink=http --set trustConsumer.ingest.sink=db \
+            --set pollers.ldbws.ingest.sink=stream --set fullCoverageConsumer.internalReads.source=http)
+          if grep -E -q 'name: INGEST_SINK$|name: [A-Z_]+_SOURCE$' <<<"${left}"; then
+            fail "a leftover retired switch must render no INGEST_SINK or *_SOURCE"
+          fi
 
           # A direct producer never falls back to the app role.
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
@@ -2905,9 +2903,12 @@ jobs:
           corpus_on=$(helm template distant-signal charts/distant-signal "${base[@]}" "${feed[@]}" \
             --set scheduleFeed.corpus.enabled=true)
           grep -q 'alert: DistantSignalCorpusStale' <<<"${corpus_on}"
-          # Both prefixes (phase 5 Q1: ds-store's api_ names become store_).
-          grep -q -F '{__name__=~"distant_signal_(api|store)_corpus_last_delivered_at_seconds", namespace=' <<<"${corpus_on}"
-          grep -q 'corpus_last_delivered_at_seconds".*> 3888000$' <<<"${corpus_on}"
+          # The store_ name only (phase 5 Q1; the release D cleanup dropped api_).
+          grep -q -F 'max by (namespace) (distant_signal_store_corpus_last_delivered_at_seconds{namespace=' <<<"${corpus_on}"
+          grep -q 'corpus_last_delivered_at_seconds{namespace="[^"]*"}) > 3888000$' <<<"${corpus_on}"
+          if grep -q 'distant_signal_(api|store)_\|distant_signal_api_\(corpus\|incident\|schedule_publish\)' <<<"${corpus_on}"; then
+            echo "an alert still reads ds-store's old api_ names" >&2; exit 1
+          fi
 
       # LEG-18 LDBWS volume knobs: off by default, and while off none of
       # their env vars may render (production behaviour is unchanged); set,

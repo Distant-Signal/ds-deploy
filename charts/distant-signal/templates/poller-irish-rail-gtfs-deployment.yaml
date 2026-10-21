@@ -88,8 +88,6 @@ with pollerIrishRailGtfs.extraEnv, which replaces an entry of the same name.
             # ds:ingest:ioi-gtfs stream (the ingest-writer applies
             # it with ingestWriter.streams.ioi-gtfs), as the
             # poller-irish-rail-gtfs ACL user with redis.acl.clients.pollerIrishRailGtfs.
-            - name: INGEST_SINK
-              value: "stream"
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "pollerIrishRailGtfs" "user" "poller-irish-rail-gtfs") }}

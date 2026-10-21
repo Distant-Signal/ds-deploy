@@ -93,9 +93,9 @@ tests:
   # Every count has left the 2h window by 150m: firing from 165m.
   - interval: 1m
     input_series:
-      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="applied"}'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="applied"}'
         values: '0+1x20 20x200'
-      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="too_soon"}'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="too_soon"}'
         values: '0x20 0+1x10 10x190'
     alert_rule_test:
       - eval_time: 155m

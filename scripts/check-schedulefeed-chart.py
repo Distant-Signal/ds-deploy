@@ -72,8 +72,8 @@ checks:
     `ingest` connects as distant_signal_schedule_ingest; each refuses to
     render without its role; the schedulefeed policy has Postgres egress
     and the postgres policy `schedulefeed` ingress (and nothing for
-    schedulefeed-sftp); the retired `scheduleFeed.reference.ingest.sink`
-    refuses anything but `db`.
+    schedulefeed-sftp); a leftover retired
+    `scheduleFeed.reference.ingest.sink` is ignored (release D).
 
 --baseline DIR renders DIR (a copy of charts/distant-signal from another
 commit, e.g. the merge base) and this chart with the same flags, for the
@@ -922,15 +922,18 @@ def check_reference_sink(c: Checker) -> None:
         message="postgres admits schedulefeed-sftp",
     )
 
-    # Release B: the retired switch refuses anything but `db`, which renders.
-    for bad in ("http", "redis"):
-        code, out = c.render(*ON, "--set", f"scheduleFeed.reference.ingest.sink={bad}")
-        c.check(
-            ok=code != 0 and f"scheduleFeed.reference.ingest.sink: {bad}" in out,
-            message=f"sink {bad}: rendered, or failed without naming the value",
+    # Release D: a leftover retired switch is ignored, whatever its value.
+    for leftover in ("http", "db"):
+        code, out = c.render(
+            *ON, "--set", f"scheduleFeed.reference.ingest.sink={leftover}"
         )
-    code, out = c.render(*ON, "--set", "scheduleFeed.reference.ingest.sink=db")
-    c.check(ok=code == 0, message=f"a pinned sink db must render: {out[-300:]}")
+        c.check(
+            ok=code == 0 and "name: INGEST_SINK" not in out,
+            message=(
+                f"a leftover sink {leftover} must render, without INGEST_SINK: "
+                f"{out[-300:]}"
+            ),
+        )
 
 
 def check_audit_and_override(c: Checker) -> None:

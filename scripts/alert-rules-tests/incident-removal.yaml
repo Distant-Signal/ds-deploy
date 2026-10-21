@@ -4,13 +4,13 @@
 rule_files: [rules.yaml]
 evaluation_interval: 1m
 tests:
-  # An older poller (bare array: every snapshot incomplete) and api's
+  # An older poller (bare array: every snapshot incomplete) and its
   # zero-registered `applied` series: fires once `for` has passed.
   - interval: 1m
     input_series:
-      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="incomplete"}'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="incomplete"}'
         values: '0+1x60'
-      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="applied"}'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="applied"}'
         values: '0x60'
     alert_rule_test:
       - eval_time: 10m
@@ -29,11 +29,11 @@ tests:
   # large nightly purge (the next poll applies again). No alert.
   - interval: 1m
     input_series:
-      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="applied"}'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="applied"}'
         values: '0+1x180'
-      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="shrink"}'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="shrink"}'
         values: '0x60 1x120'
-      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="too_soon"}'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="too_soon"}'
         values: '0x30 1x150'
     alert_rule_test:
       - eval_time: 90m
@@ -47,9 +47,9 @@ tests:
   # last applied poll has left the 2h window, plus `for`.
   - interval: 1m
     input_series:
-      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="applied"}'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="applied"}'
         values: '0+1x60 60x180'
-      - series: 'distant_signal_api_incident_removal_inference_total{namespace="distant-signal", pod="api", outcome="empty"}'
+      - series: 'distant_signal_store_incident_removal_inference_total{namespace="distant-signal", pod="poller-incidents", outcome="empty"}'
         values: '0x60 1+1x180'
     alert_rule_test:
       - eval_time: 150m

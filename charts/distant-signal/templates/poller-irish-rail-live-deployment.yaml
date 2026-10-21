@@ -88,8 +88,6 @@ with pollerIrishRailLive.extraEnv, which replaces an entry of the same name.
             # ds:ingest:ioi-live stream (the ingest-writer applies
             # it with ingestWriter.streams.ioi-live), as the
             # poller-irish-rail-live ACL user with redis.acl.clients.pollerIrishRailLive.
-            - name: INGEST_SINK
-              value: "stream"
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "pollerIrishRailLive" "user" "poller-irish-rail-live") }}

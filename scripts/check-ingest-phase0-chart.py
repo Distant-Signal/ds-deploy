@@ -51,9 +51,10 @@ Security review render guards (2026-10-08):
   - M4: `ingestWriter.streams.tfl: apply` refuses without
     `perService.writer.connect`.
 
-Release B: a retired `ingest.sink`, `internalReads.source` or writer
-`shadow` set to anything but its one value refuses to render; set to that
-value it renders.
+Release D: a writer stream in `shadow` refuses to render; a leftover
+retired `ingest.sink` or `internalReads.source` is ignored, and no
+producer, the island-of-Ireland pollers included, renders `INGEST_SINK` or
+a `*_SOURCE`.
 
 --baseline DIR renders DIR (a copy of charts/distant-signal, e.g. the merge
 base) and this chart with the same values, for the defaults (plus
@@ -884,27 +885,45 @@ def check_narrow_role_guards(c: Checker) -> None:
     )
 
 
+RETIRED_ENV = re.compile(r"^(INGEST_SINK|[A-Z_]+_SOURCE)$")
+
+
 def check_retired_switches(c: Checker) -> None:
-    """Release B: the sink and source switches accept only their one value."""
-    for key, bad in (
-        ("pollers.tfl.ingest.sink", "db"),
-        ("pollers.stations.ingest.sink", "http"),
-        ("trustConsumer.ingest.sink", "http"),
-        ("fullCoverageConsumer.internalReads.source", "http"),
-        ("scheduleFeed.reference.ingest.sink", "http"),
-        ("ingestWriter.streams.tfl", "shadow"),
-    ):
-        c.refuses(f"retired {key}={bad}", f"{key}: {bad}", *sets(f"{key}={bad}"))
-    renders(
-        c,
-        "a retired switch pinned to its one value",
+    """Release D: no INGEST_SINK or *_SOURCE; only `shadow` still refuses."""
+    key = "ingestWriter.streams.tfl"
+    c.refuses(f"retired {key}=shadow", f"{key}: shadow", *sets(f"{key}=shadow"))
+    docs = c.docs(
         *SCHEDULE_FEED,
+        *ALL_CLIENTS,
+        *poller("incidents"),
+        *poller("stations"),
+        *poller("ldbws"),
+        *poller("tfl"),
+        *poller("tocs"),
         *sets(
-            "scheduleFeed.reference.ingest.sink=db",
-            "trustConsumer.ingest.sink=db",
-            "fullCoverageConsumer.ingest.sink=stream",
+            "pollerIrishRailGtfs.enabled=true",
+            "pollerIrishRailLive.enabled=true",
+            "pollerNirStations.enabled=true",
+            "ingestWriter.streams.ioi-gtfs=apply",
+            "ingestWriter.streams.ioi-live=apply",
+            "ingestWriter.streams.ioi-nir=apply",
+            # Leftovers: ignored, whatever their value.
+            "scheduleFeed.reference.ingest.sink=http",
+            "pollers.tfl.ingest.sink=db",
+            "fullCoverageConsumer.internalReads.source=http",
         ),
     )
+    c.check(ok=bool(docs), message="release D: the leftover render failed")
+    for doc in docs:
+        if doc.get("kind") != "Deployment":
+            continue
+        for ctr in containers(doc):
+            found = sorted(n for n in env(ctr) if RETIRED_ENV.match(n))
+            where = f"{name_of(doc)}/{ctr.get('name')}"
+            c.check(
+                ok=not found,
+                message=f"{where}: renders {found} (removed in release D)",
+            )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

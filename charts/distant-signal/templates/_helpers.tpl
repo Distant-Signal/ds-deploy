@@ -1605,37 +1605,18 @@ role or XADDs to a Redis stream the ingest-writer applies, with no
 `/private` path to fall back to, so a values file that has not done the
 Postgres per-service roles, the ingest-writer and the Redis ACL rollout
 cannot render. Rather than let the individual guards fail one at a time,
-this lists every missing prerequisite at once. It also refuses the retired
-switches (`ingest.sink`, `internalReads.source`, a writer stream in
-`shadow`) set to anything but the one value release B knows; set to that
-value they are harmless leftovers. The guards stay as the backstop. Renders
-nothing; fails the render when anything is wrong. Called first, from
+this lists every missing prerequisite at once. It also refuses a writer
+stream in the removed `shadow` mode. (Release D removed the producers'
+`INGEST_SINK` / `*_SOURCE` variables, so the retired `ingest.sink` and
+`internalReads.source` keys are no longer checked: a leftover one is
+ignored.) The guards stay as the backstop. Renders nothing; fails the
+render when anything is wrong. Called first, from
 templates/zz-ingest-sink-preflight.yaml. Takes root.
 */ -}}
 {{- define "distant-signal.ingestSinkPreflight" -}}
 {{- $v := .Values -}}
 {{- $root := . -}}
-{{- /* The retired switches: {path: the only value release B accepts}. */ -}}
 {{- $retired := list -}}
-{{- $checks := list -}}
-{{- range $name := list "incidents" "stations" "ldbws" "tfl" "tocs" -}}
-{{- $p := get $v.pollers $name | default dict -}}
-{{- $checks = append $checks (dict "key" (printf "pollers.%s.ingest.sink" $name) "value" (dig "ingest" "sink" "" $p) "want" (ternary "db" "stream" (has $name (list "incidents" "stations")))) -}}
-{{- end -}}
-{{- $checks = append $checks (dict "key" "pollers.ldbws.internalReads.source" "value" (dig "ldbws" "internalReads" "source" "" ($v.pollers | default dict)) "want" "db") -}}
-{{- $checks = append $checks (dict "key" "trustConsumer.ingest.sink" "value" (dig "ingest" "sink" "" $v.trustConsumer) "want" "db") -}}
-{{- $checks = append $checks (dict "key" "trustConsumer.internalReads.source" "value" (dig "internalReads" "source" "" $v.trustConsumer) "want" "db") -}}
-{{- $checks = append $checks (dict "key" "trustBacklogConsumer.ingest.sink" "value" (dig "ingest" "sink" "" $v.trustBacklogConsumer) "want" "db") -}}
-{{- $checks = append $checks (dict "key" "fullCoverageConsumer.ingest.sink" "value" (dig "ingest" "sink" "" $v.fullCoverageConsumer) "want" "stream") -}}
-{{- $checks = append $checks (dict "key" "fullCoverageConsumer.internalReads.source" "value" (dig "internalReads" "source" "" $v.fullCoverageConsumer) "want" "db") -}}
-{{- $checks = append $checks (dict "key" "scheduleFeed.ingest.sink" "value" (dig "ingest" "sink" "" $v.scheduleFeed) "want" "db") -}}
-{{- $checks = append $checks (dict "key" "scheduleFeed.reference.ingest.sink" "value" (dig "reference" "ingest" "sink" "" $v.scheduleFeed) "want" "db") -}}
-{{- range $c := $checks -}}
-{{- $value := toString $c.value -}}
-{{- if and (ne $value "") (ne $value $c.want) -}}
-{{- $retired = append $retired (printf "%s: %s (only %s is left)" $c.key $value $c.want) -}}
-{{- end -}}
-{{- end -}}
 {{- range $name, $mode := $v.ingestWriter.streams -}}
 {{- if eq (toString $mode) "shadow" -}}
 {{- $retired = append $retired (printf "ingestWriter.streams.%s: shadow (only off and apply are left)" $name) -}}

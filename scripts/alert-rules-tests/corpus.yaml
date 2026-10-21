@@ -15,7 +15,7 @@ tests:
   # all normal for CORPUS, so nothing fires.
   - interval: 1m
     input_series:
-      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+      - series: 'distant_signal_store_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="schedulefeed"}'
         values: '-86400x180'
     alert_rule_test:
       - eval_time: 3h
@@ -23,7 +23,7 @@ tests:
         exp_alerts: []
   - interval: 1m
     input_series:
-      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+      - series: 'distant_signal_store_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="schedulefeed"}'
         values: '-1209600x180'
     alert_rule_test:
       - eval_time: 3h
@@ -31,7 +31,7 @@ tests:
         exp_alerts: []
   - interval: 1m
     input_series:
-      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+      - series: 'distant_signal_store_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="schedulefeed"}'
         values: '-2678400x180'
     alert_rule_test:
       - eval_time: 3h
@@ -41,7 +41,7 @@ tests:
   # 40 days: the warning only (corpusStaleWarningDays 35), after `for` (1h).
   - interval: 1m
     input_series:
-      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+      - series: 'distant_signal_store_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="schedulefeed"}'
         values: '-3456000x90'
     alert_rule_test:
       - eval_time: 30m
@@ -60,7 +60,7 @@ tests:
   # stops where the critical starts.
   - interval: 1m
     input_series:
-      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+      - series: 'distant_signal_store_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="schedulefeed"}'
         values: '-4320000x90'
     alert_rule_test:
       - eval_time: 75m
@@ -83,7 +83,7 @@ tests:
         values: '0x4 1x20'
       - series: 'distant_signal_schedule_feed_corpus_failures_total{namespace="distant-signal", pod="schedulefeed", stage="scan"}'
         values: '0x24'
-      - series: 'distant_signal_api_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="api"}'
+      - series: 'distant_signal_store_corpus_last_delivered_at_seconds{namespace="distant-signal", pod="schedulefeed"}'
         values: '-86400x24'
     alert_rule_test:
       - eval_time: 8m

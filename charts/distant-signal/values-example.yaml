@@ -45,7 +45,7 @@ api:
   internalOauth:
     issuerUrl: https://sso.example.com/application/o/distant-signal-internal/
     clientId: distant-signal-internal
-  # resources: deliberately not overridden (values.yaml's 1Gi/3Gi default;
+  # resources: deliberately not overridden (values.yaml's 512Mi/1Gi default;
   # see its comment).
 
 aggregator:

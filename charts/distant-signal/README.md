@@ -794,8 +794,8 @@ HTTP paths, so these are now the only paths, with no switch:
 | full-coverage-consumer, trust-consumer, poller-ldbws (reads) | read Postgres, each as its own read role |
 
 No producer gets a `/private` URL, an internal OAuth credential,
-`INGEST_SINK` or a `*_SOURCE` any more (the binaries still accept those two
-for one release, only with their one value). The producers'
+`INGEST_SINK` or a `*_SOURCE` any more, and since release D the binaries
+no longer read those two. The producers'
 `postgresql.roles.perService.<role>.connect` (and the writer's) default to
 `true`; a `connect` whose component is not deployed is a no-op.
 
@@ -810,11 +810,10 @@ setting. `ci/ingest-prereqs.yaml` is the least a fresh install adds
 The retired switches (`pollers.<name>.ingest.sink`,
 `<consumer>.ingest.sink`, `scheduleFeed.ingest.sink`,
 `scheduleFeed.reference.ingest.sink`, `<reader>.internalReads.source`) are
-gone from `values.yaml`. A values file that still sets one to anything but
-its one value (`db` for the direct writers, `stream` for the stream
-producers, `db` for the reads), or an `ingestWriter.streams` entry to the
-removed `shadow`, fails the render, naming it; set to that value, it is a
-harmless leftover (delete it when convenient). There is no per-producer
+gone from `values.yaml`, and since release D nothing reads them: a values
+file that still sets one renders as if it did not (delete it when
+convenient). An `ingestWriter.streams` entry set to the removed `shadow`
+fails the render, naming it. There is no per-producer
 rollback: going back to the HTTP paths means the previous chart release and
 images (`docs/ingest-phase5-runbook.md`).
 
@@ -1896,7 +1895,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.malloc.arenaMax` | `"2"` | `MALLOC_ARENA_MAX`: caps glibc's retained per-arena memory. |
 | `api.malloc.mmapThreshold` | `"131072"` | `MALLOC_MMAP_THRESHOLD_` in bytes: allocations at least this large are returned to the OS on free. |
 | `api.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
-| `api.resources` | requests `200m`/`1Gi`, limit `3Gi` | Container resource requests/limits. Deliberately generous, stopgap-derived sizes (production's OOM-era overrides); the raw-JSON population relay, ETag reloads and `api.malloc` tuning should bring real usage well below them. Resize from live `kubectl top`. |
+| `api.resources` | requests `200m`/`512Mi`, limit `1Gi` | Container resource requests/limits, sized from production (working set p95 about 300Mi, max 500Mi over 20 days; the resource-tuning study's request, limit twice it). |
 | `api.nodeSelector` | `{}` | Pod node selector. |
 | `api.tolerations` | `[]` | Pod tolerations. |
 | `api.affinity` | `{}` | Pod affinity rules. |
@@ -2617,7 +2616,7 @@ Irish Rail GTFS zip. Off by default; no API key needed.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerIrishRailGtfs.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-gtfs` stream (ingest plan 3c.2: `INGEST_SINK=stream`, `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailGtfs`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-gtfs: apply` with it. |
+| `pollerIrishRailGtfs.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-gtfs` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailGtfs`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-gtfs: apply` with it. |
 | `pollerIrishRailGtfs.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-gtfs` | Image repository. |
 | `pollerIrishRailGtfs.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailGtfs.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
@@ -2643,7 +2642,7 @@ default; no API key needed.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerIrishRailLive.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-live` stream (ingest plan 3c.2: `INGEST_SINK=stream`, `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailLive`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-live: apply` with it. |
+| `pollerIrishRailLive.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-live` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailLive`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-live: apply` with it. |
 | `pollerIrishRailLive.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-live` | Image repository. |
 | `pollerIrishRailLive.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailLive.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
@@ -2669,7 +2668,7 @@ Off by default; no API key needed.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerNirStations.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-nir` stream (ingest plan 3c.2: `INGEST_SINK=stream`, `REDIS_URL`, the user in `redis.acl.clients.pollerNirStations`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-nir: apply` with it. |
+| `pollerNirStations.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-nir` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerNirStations`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-nir: apply` with it. |
 | `pollerNirStations.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-nir-stations` | Image repository. |
 | `pollerNirStations.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerNirStations.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
@@ -2833,7 +2832,7 @@ one-pod layout.
 | `scheduleFeed.reference.healthPort` | `8091` | Health port. Must differ from `workerHealth.port`, which the ingest container in the same pod uses. |
 | `scheduleFeed.reference.progressStallSecs` | `7200` | `/livez` stall window: one cycle publishes every derived product of a full timetable. |
 | `scheduleFeed.reference.metricsPort` | `9092` | Prometheus `/metrics` port. Must differ from `metrics.port`, which the ingest container uses. |
-| `scheduleFeed.reference.resources` | requests `250m`/`3Gi`, limit `4Gi` | schedule-reference container resource requests/limits: the largest in the chart, since it parses the whole timetable. The ~1.2-1.4GiB peak lasts only the nightly publish; afterwards the binary returns its freed heap (`malloc_trim`) and RSS falls to tens of MiB (`distant_signal_schedule_reference_post_publish_resident_memory_bytes`), so a request of about `512Mi` with the `4Gi` limit fits. |
+| `scheduleFeed.reference.resources` | requests `250m`/`512Mi`, limit `2304Mi` | schedule-reference container resource requests/limits: the largest in the chart, since it parses the whole timetable. The ~1.2-1.4GiB peak (1429Mi max in production over 20 days) lasts only the nightly publish; afterwards the binary returns its freed heap (`malloc_trim`) and RSS falls to tens of MiB (`distant_signal_schedule_reference_post_publish_resident_memory_bytes`), so `512Mi` sizes the idle state and the limit is 1.6x the peak. |
 | `scheduleFeed.service.type` | `LoadBalancer` | `LoadBalancer`, or `NodePort` behind an external load balancer. Not an Ingress: SFTP is not HTTP. |
 | `scheduleFeed.service.annotations` | `{}` | Service annotations. |
 | `scheduleFeed.service.nodePort` | `null` | Explicit NodePort for the SFTP port. Empty lets Kubernetes assign one. |

@@ -90,8 +90,6 @@ with pollerNirStations.extraEnv, which replaces an entry of the same name.
             # ds:ingest:ioi-nir stream (the ingest-writer applies
             # it with ingestWriter.streams.ioi-nir), as the
             # poller-nir-stations ACL user with redis.acl.clients.pollerNirStations.
-            - name: INGEST_SINK
-              value: "stream"
             - name: REDIS_URL
               value: {{ include "distant-signal.redisUrl" . | quote }}
             {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "pollerNirStations" "user" "poller-nir-stations") }}
