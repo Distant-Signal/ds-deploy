@@ -174,12 +174,12 @@ AUDIT = (
     "--set",
     "scheduleFeed.bucket.auditLogs.bucket=example-ds-ingest-audit",
 )
+PUBSUB_SUBSCRIPTION = "projects/example-project/subscriptions/ds-ingest-events"
 PUBSUB = (
     "--set",
     "scheduleFeed.bucket.notifications.pubsub.enabled=true",
     "--set",
-    "scheduleFeed.bucket.notifications.pubsub.subscription="
-    "projects/example-project/subscriptions/ds-ingest-events",
+    f"scheduleFeed.bucket.notifications.pubsub.subscription={PUBSUB_SUBSCRIPTION}",
 )
 KEY_DIR = "/var/run/secrets/distant-signal/gcs"
 # Keyless (scheduleFeed.bucket.auth=workloadIdentity).
@@ -228,7 +228,7 @@ AUDIT_ENV = {
     "BUCKET_AUDIT_LOGS_POLL_INTERVAL_SECS": "600",
 }
 PUBSUB_ENV = {
-    "BUCKET_PUBSUB_SUBSCRIPTION": "projects/example-project/subscriptions/ds-ingest-events",
+    "BUCKET_PUBSUB_SUBSCRIPTION": PUBSUB_SUBSCRIPTION,
     "BUCKET_PUBSUB_RECONCILE_INTERVAL_SECS": "3600",
 }
 # Every env var of the chart -> schedule-ingest contract (the chart plan's
