@@ -18,9 +18,10 @@ never in this repository.
 **Status (2026-10-20, DS-22):** the chart side and the schedule-ingest
 bucket source (the Rust reader) are both built, off by default
 (`scheduleFeed.bucket.enabled: false`). Nothing is provisioned yet: the
-remaining steps are in [Switching it on](#switching-it-on). Not built: the
-audit-log shipper (`bucket.auditLogs.ship` only logs a warning), the api's
-`delivery_source` column, and Pub/Sub notifications.
+remaining steps are in [Switching it on](#switching-it-on). The audit-log
+shipper (`bucket.auditLogs.ship`, [below](#audit-log)) and the Pub/Sub
+trigger ([Pub/Sub notifications](#pubsub-notifications)) are built too,
+both off by default.
 
 ## Switching it on
 
@@ -57,7 +58,9 @@ email lives in Ranma-Config, never here.
    ```
 
    (Key mode instead: `auth: key` and `existingSecret` naming the sealed
-   reader key.) The first poll logs `bucket source started`; an empty
+   reader key.) Add `auditLogs: {ship: true, bucket: <the audit-log
+   bucket>}` under `bucket` to ship its audit log (below). The first poll
+   logs `bucket source started`; an empty
    bucket is fine. `DistantSignalScheduleBucketAccessRevoked` firing means
    step 1's sign-in is not right yet; SFTP carries on regardless.
 4. **Verify both** for a week, as in [Adoption](#adoption-from-dss-side).
@@ -100,8 +103,9 @@ resources `READY`. Then:
 
 1. **Turn the source on with SFTP still on**: `scheduleFeed.bucket.enabled:
    true`, `scheduleFeed.bucket.name`, and the credential (keyless, or
-   `scheduleFeed.bucket.existingSecret` naming the sealed reader key). The
-   audit-log shipper (below) is not built yet.
+   `scheduleFeed.bucket.existingSecret` naming the sealed reader key), and
+   `scheduleFeed.bucket.auditLogs.ship: true` with the audit-log bucket
+   (below).
 2. **Ask RDM to add the bucket** as a destination for the timetable and
    CORPUS subscriptions, in addition to SFTP.
 3. **Verify both for at least 7 daily deliveries and one CORPUS**: each
@@ -172,6 +176,13 @@ The audit lines gain `source` (`sftp` or `bucket`), and on `duplicate` and
 `superseded` lines `duplicate_of` and `first_source`. With SFTP alone none
 of this runs: no ledger, no new fields.
 
+Every recorded delivery also names its lane in Postgres:
+`schedule_feed_ingests.delivery_source` and
+`corpus_deliveries.delivery_source` are `sftp` or `bucket` (the accepted
+copy's), whichever sources are on (migration
+`20261021090500_schedule_delivery_source.sql`, DS-89). Rows from before it,
+or from an older schedule-ingest, are NULL: they all came over SFTP.
+
 Reader state on the PVC, all under `/data/schedule-feed/sources/`:
 
 | Path | What |
@@ -198,6 +209,27 @@ poll, and `bucket.maxDownloadBytesPerHour` / `PerDay` bytes per rolling
 hour and day (`DistantSignalScheduleBucketDownloadBudget`). Errors back off
 up to `bucket.maxBackoffSecs`. None of this ever blocks or restarts the SFTP
 source.
+
+### Tests against a GCS emulator
+
+`crates/schedule-ingest/src/bucket_e2e_tests.rs` runs the reader end to
+end against [fake-gcs-server](https://github.com/fsouza/fake-gcs-server):
+paged root listings, generation-pinned downloads, the size, CRC32C and MD5
+checks, the archive and seen ledger, the delete once
+`deleteMinAgeSecs` old, the loop guards, and cross-source dedup with the
+SFTP lane. A small in-process proxy in front of the emulator tampers with
+listings and downloads, plays the publisher mid-poll, refuses calls (403)
+and enforces `ifGenerationMatch` on deletes, which fake-gcs-server 1.55
+ignores. No Google credentials: the reader signs in with a throwaway key.
+The tests are `#[ignore]`d and need `FAKE_GCS_URL`; CI's `rust-db-test`
+job runs them:
+
+```sh
+docker run -d --rm --name fake-gcs -p 127.0.0.1:4443:4443 \
+  fsouza/fake-gcs-server:1.55 -scheme http -port 4443 -backend memory
+FAKE_GCS_URL=http://127.0.0.1:4443 \
+  cargo test -p schedule-ingest bucket_e2e_tests -- --ignored
+```
 
 ### PVC sizing
 
@@ -256,6 +288,96 @@ In keyless mode, revoked access means the impersonation binding or the
 pool provider was removed (or the ConfigMap is missing), and the kill
 switch works the same way: remove the reader's bucket bindings.
 
+## Pub/Sub notifications
+
+Off by default (`scheduleFeed.bucket.notifications.pubsub.enabled: false`):
+polling alone is the chosen design (GCS spec §6) and loses nothing. With
+it on, the bucket's `OBJECT_FINALIZE` notifications go to a Pub/Sub topic
+with a pull subscription, and schedule-ingest
+(`crates/schedule-ingest/src/pubsub.rs`) pulls it over outbound HTTPS, so
+a new object is fetched within seconds instead of at the next poll:
+
+- A message for this bucket's `OBJECT_FINALIZE` wakes the reader for a
+  poll right away (at most one every 60 s, never during a backoff), and is
+  acknowledged once a poll that started after it has finished (its ack
+  deadline extended meanwhile, for up to 30 minutes). Any other message is
+  acknowledged at once.
+- A message is only a hint: the listing decides what is fetched and every
+  guard applies as before. A lost, duplicated or forged message changes
+  the timing only.
+- Polling stays as the fallback: every `reconcileIntervalSecs` (default 1
+  hour) while the subscription delivers, every `pollIntervalSecs` while it
+  fails (refused, missing, unreachable). A failure is logged once per
+  change and retried with backoff.
+- Metrics, all `{source="bucket"}`:
+  `distant_signal_schedule_feed_source_notifications_healthy` (1 while
+  pulls succeed), `..._notifications_total{outcome}` (`wake`, `ignored`) and
+  `..._notification_errors_total{kind}` (`auth`, `pull`, `ack`).
+
+### What Ranma creates (RANMA-87)
+
+Everything below is in Ranma-Config, with its real names; the names here
+are `charts/ds-ingest-bucket`'s defaults and placeholders.
+
+1. **The Pub/Sub API** on the dedicated project:
+   `gcloud services enable pubsub.googleapis.com --project=<project>` (or
+   its OpenTofu `google_project_service`).
+2. **The Cloud Storage service agent**, which publishes the notifications:
+   `gcloud storage service-agent --project=<project>` prints
+   `service-<project number>@gs-project-accounts.iam.gserviceaccount.com`
+   (and creates it if it does not exist yet).
+3. **The Crossplane Pub/Sub provider**: `provider-gcp-pubsub` from
+   provider-upjet-gcp v3.0.0 (`xpkg.upbound.io/upbound/provider-gcp-pubsub`),
+   on the same `ClusterProviderConfig` as the storage provider. The
+   provider's service account needs to create topics and subscriptions and
+   set their IAM policies (`roles/pubsub.admin` on the project), on top of
+   what it has for the bucket (the bucket notification is a bucket update).
+4. **The `ds-ingest-bucket` release values**:
+
+   ```yaml
+   gcp:
+     projectNumber: "<the project's number>"
+   notifications:
+     pubsub:
+       enabled: true
+       # The defaults, shown for reference:
+       topicName: ds-ingest-events
+       subscriptionName: ds-ingest-events-schedule-ingest
+       ackDeadlineSeconds: 600
+       messageRetentionDuration: 604800s
+   ```
+
+   which renders, and Crossplane must report `READY` for each:
+
+   | Resource | What |
+   | --- | --- |
+   | `Topic` `ds-ingest-events` | The notification topic |
+   | `TopicIAMMember` | `roles/pubsub.publisher` on the topic for `serviceAccount:service-<project number>@gs-project-accounts.iam.gserviceaccount.com` only |
+   | `Subscription` `ds-ingest-events-schedule-ingest` | Pull (no push endpoint), ack deadline 600 s, 7-day retention, never expires, no dead-letter topic |
+   | `SubscriptionIAMMember` | `roles/pubsub.subscriber` on the subscription for `reader.member` only (the reader service account; keyless sign-in impersonates it, so nothing more is needed) |
+   | `Notification` | On the delivery bucket: `OBJECT_FINALIZE` only, payload `JSON_API_V1`, to the topic |
+
+5. **The DS release values**, once those are `READY`:
+
+   ```yaml
+   scheduleFeed:
+     bucket:
+       notifications:
+         pubsub:
+           enabled: true
+           subscription: projects/<project>/subscriptions/ds-ingest-events-schedule-ingest
+   ```
+
+   The chart adds `pubsub.googleapis.com` to the schedulefeed egress rule.
+   Check: the `ingest` container logs `bucket Pub/Sub subscriber started`,
+   then `the bucket's Pub/Sub subscription is delivering`, and
+   `..._notifications_healthy` is 1; an upload logs `a new bucket object
+   was notified; polling the bucket early`.
+
+The kill switch needs nothing new: Pub/Sub carries a few small messages a
+day. Removing the subscriber binding only turns the reader back to polling
+every `pollIntervalSecs`; the watcher need not pause it.
+
 ## Restoring a deleted object
 
 Soft delete keeps every deleted object for 7 days, including unexpected
@@ -294,13 +416,38 @@ key looks the same from DS (`AccessRevoked`); check the Secret exists first.
 
 The bucket's Cloud Audit Logs (Data Access on, so every object read, write
 and delete is logged with the caller's principal and IP) are sunk into a
-private audit-log bucket. **Not built yet** (the GCS spec's phase 5): today
-`scheduleFeed.bucket.auditLogs.ship` only makes schedule-ingest log a
-warning at start. Once built, with it on, schedule-ingest reads that bucket
-with the same credential every
-`auditLogs.pollIntervalSecs` and writes one JSON line per entry to stdout,
-target `schedule_ingest::bucket_access` (`principal`, `caller_ip`,
-`method`, `object`, `status`, `time`).
+private audit-log bucket by Ranma's Logging sink, as hourly files
+`cloudaudit.googleapis.com/<log>/YYYY/MM/DD/<hour>_S<n>.json`. With
+`scheduleFeed.bucket.auditLogs.ship` on (and `auditLogs.bucket` naming that
+bucket), schedule-ingest (`crates/schedule-ingest/src/bucket_audit.rs`)
+lists it every `auditLogs.pollIntervalSecs` with the reader's own
+credential, downloads each new file (CRC32C checked, at most 64 MiB) and
+writes one JSON line per entry to stdout, target
+`schedule_ingest::bucket_access`, message `bucket access`:
+
+| Field | From the entry |
+| --- | --- |
+| `principal` | `protoPayload.authenticationInfo.principalEmail` |
+| `caller_ip` | `protoPayload.requestMetadata.callerIp` |
+| `method` | `protoPayload.methodName` (`storage.objects.get`, `.create`, `.delete`, `storage.setIamPermissions`, ...) |
+| `object` | the object's name, when `resourceName` is an object (absent for a bucket-level call) |
+| `resource` | `protoPayload.resourceName`, in full |
+| `status` | `OK`, or the `google.rpc.Code` name (`PERMISSION_DENIED`, `NOT_FOUND`, ...) |
+| `time` | the entry's `timestamp` |
+| `log` | `activity` (Admin Activity) or `data_access` |
+| `insert_id` | the entry's `insertId`, unique per entry |
+
+Every folder from two days back is listed, so a late shard of an earlier
+hour is still shipped; each file is shipped once, recorded in
+`/data/schedule-feed/sources/bucket/.audit-shipped`, so a restart ships
+nothing twice (a crash between a file's lines and that record ships the
+file again: `insert_id` tells copies apart). A first start ships the last
+two days. A refused listing (the reader has no `objectViewer` on the
+audit-log bucket) is logged once and retried at `maxBackoffSecs`; nothing
+here affects the reader or SFTP. Metrics:
+`distant_signal_schedule_feed_bucket_audit_lines_total` and
+`..._bucket_audit_errors_total{kind}` (`auth`, `list`, `get`, `verify`,
+`parse`).
 
 Every bucket call, as a table:
 
@@ -322,7 +469,7 @@ Refused calls:
 
 ```logql
 {namespace="distant-signal", container="ingest"} |= `schedule_ingest::bucket_access`
-  | json status | status =~ "PERMISSION_DENIED|403|401"
+  | json status | status =~ "PERMISSION_DENIED|UNAUTHENTICATED"
 ```
 
 Once Alloy tags these lines, `{audit="bucket-delivery"}` is the cheaper

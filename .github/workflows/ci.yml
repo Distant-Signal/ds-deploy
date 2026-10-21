@@ -469,6 +469,29 @@ jobs:
       - name: cargo test -p schedule-ingest sink::db_tests -- --ignored (DB-backed tests)
         run: cargo test -p schedule-ingest sink::db_tests -- --ignored --test-threads=1
 
+      # The GCS bucket source end to end against fake-gcs-server (DS-92,
+      # crates/schedule-ingest/src/bucket_e2e_tests.rs). A `docker run`
+      # rather than a `services:` entry: the emulator needs command-line
+      # flags (`-scheme http`), which a service container cannot be given.
+      # Pinned by digest. No Google credentials: the reader signs in with a
+      # throwaway key the emulator ignores.
+      - name: Start fake-gcs-server
+        run: |
+          docker run -d --name fake-gcs -p 127.0.0.1:4443:4443 \
+            docker.io/fsouza/fake-gcs-server:1.55@sha256:91afded49de804aa61b5f3eb6c7cd65205acf9e5c5e047cf0ba7d9507af806c8 \
+            -scheme http -port 4443 -backend memory
+          for _ in $(seq 30); do
+            curl -sf http://127.0.0.1:4443/storage/v1/b >/dev/null && exit 0
+            sleep 1
+          done
+          docker logs fake-gcs
+          exit 1
+
+      - name: cargo test -p schedule-ingest bucket_e2e_tests -- --ignored (fake-gcs-server)
+        env:
+          FAKE_GCS_URL: http://127.0.0.1:4443
+        run: cargo test -p schedule-ingest bucket_e2e_tests -- --ignored
+
       # Ingest architecture plan 3b: the TRUST consumers' direct DB sinks
       # (INGEST_SINK=db), parity with the api's routes, and their schema
       # gates. They run again as their narrow roles in the per-service step.

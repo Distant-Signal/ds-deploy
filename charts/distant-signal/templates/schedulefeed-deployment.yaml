@@ -586,5 +586,18 @@ scheduleFeed.ingest.extraEnv by distant-signal.mergeEnv (an extraEnv entry repla
             - name: BUCKET_AUDIT_LOGS_POLL_INTERVAL_SECS
               value: {{ $b.auditLogs.pollIntervalSecs | int64 | quote }}
             {{- end }}
+            {{- with $b.notifications.pubsub }}
+            {{- if .enabled }}
+            # OBJECT_FINALIZE notifications wake a poll early (pubsub.rs).
+            - name: BUCKET_PUBSUB_SUBSCRIPTION
+              value: {{ .subscription | quote }}
+            - name: BUCKET_PUBSUB_RECONCILE_INTERVAL_SECS
+              value: {{ .reconcileIntervalSecs | int64 | quote }}
+            {{- with .baseUrl }}
+            - name: BUCKET_PUBSUB_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- end }}
 {{- end }}

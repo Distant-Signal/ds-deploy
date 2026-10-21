@@ -554,6 +554,11 @@ the key's OAuth endpoint. */}}
 {{- $sfUrls = concat $sfUrls (list "https://storage.googleapis.com" "https://oauth2.googleapis.com") }}
 {{- end }}
 {{- with .Values.scheduleFeed.bucket.baseUrl }}{{ $sfUrls = append $sfUrls . }}{{ end }}
+{{- with .Values.scheduleFeed.bucket.notifications.pubsub }}
+{{- if .enabled }}
+{{- $sfUrls = append $sfUrls (.baseUrl | default "https://pubsub.googleapis.com") }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- /* Postgres for both containers' direct writes: schedule-reference's
 (plan 2a) and schedule-ingest's (plan 2d); no api since release B. The

@@ -174,6 +174,13 @@ AUDIT = (
     "--set",
     "scheduleFeed.bucket.auditLogs.bucket=example-ds-ingest-audit",
 )
+PUBSUB = (
+    "--set",
+    "scheduleFeed.bucket.notifications.pubsub.enabled=true",
+    "--set",
+    "scheduleFeed.bucket.notifications.pubsub.subscription="
+    "projects/example-project/subscriptions/ds-ingest-events",
+)
 KEY_DIR = "/var/run/secrets/distant-signal/gcs"
 # Keyless (scheduleFeed.bucket.auth=workloadIdentity).
 WIF = (
@@ -220,14 +227,26 @@ AUDIT_ENV = {
     "BUCKET_AUDIT_LOGS_BUCKET": "example-ds-ingest-audit",
     "BUCKET_AUDIT_LOGS_POLL_INTERVAL_SECS": "600",
 }
+PUBSUB_ENV = {
+    "BUCKET_PUBSUB_SUBSCRIPTION": "projects/example-project/subscriptions/ds-ingest-events",
+    "BUCKET_PUBSUB_RECONCILE_INTERVAL_SECS": "3600",
+}
 # Every env var of the chart -> schedule-ingest contract (the chart plan's
 # "interface contract" table).
-CONTRACT = {*BOTH_ENV, *AUDIT_ENV, "BUCKET_BASE_URL"}
+CONTRACT = {
+    *BOTH_ENV,
+    *AUDIT_ENV,
+    *PUBSUB_ENV,
+    "BUCKET_BASE_URL",
+    "BUCKET_PUBSUB_BASE_URL",
+}
 SFTP_PORT = 2022
 SFTP_TELEMETRY_PORT = 9097
 HTTPS_PORT = 443
 FAKE_GCS = "http://fake-gcs:4443"
 FAKE_GCS_PORT = 4443
+FAKE_PUBSUB = "http://fake-pubsub:8085"
+FAKE_PUBSUB_PORT = 8085
 
 RULES = ("--set", "metrics.prometheusRule.enabled=true")
 BUCKET_GROUP = "distant-signal.schedule-bucket"
@@ -672,7 +691,13 @@ def check_both(c: Checker) -> None:
     for name, value in BOTH_ENV.items():
         got = ingest.get(name, {}).get("value")
         c.check(ok=got == value, message=f"both: ingest {name}={got!r}, want {value!r}")
-    extra = sorted(n for n in ingest if n == "BUCKET_BASE_URL" or n in AUDIT_ENV)
+    extra = sorted(
+        n
+        for n in ingest
+        if n in {"BUCKET_BASE_URL", "BUCKET_PUBSUB_BASE_URL"}
+        or n in AUDIT_ENV
+        or n in PUBSUB_ENV
+    )
     c.check(ok=not extra, message=f"both: unrequested ingest env {extra}")
     vol = volumes(docs).get("bucket-credentials", {})
     secret = cast("dict[str, object]", vol.get("secret") or {})
@@ -955,17 +980,44 @@ def check_audit_and_override(c: Checker) -> None:
     c.check(ok=found == ["120"], message=f"extraEnv BUCKET_POLL_INTERVAL_SECS: {found}")
 
 
+def check_pubsub(c: Checker) -> None:
+    """Pub/Sub adds its vars and its endpoint's port to the internet rule."""
+    ingest = env(container(c.docs(*ON, *BUCKET, *PUBSUB), "ingest"))
+    for name, value in PUBSUB_ENV.items():
+        got = ingest.get(name, {}).get("value")
+        c.check(ok=got == value, message=f"pubsub: {name}={got!r}, want {value!r}")
+    c.check(
+        ok="BUCKET_PUBSUB_BASE_URL" not in ingest,
+        message="pubsub: BUCKET_PUBSUB_BASE_URL without a baseUrl",
+    )
+    netpol = (*NETPOL, "--set", "networkPolicy.egress.internetPorts={443}")
+    fake = ("--set", f"scheduleFeed.bucket.notifications.pubsub.baseUrl={FAKE_PUBSUB}")
+    docs = c.docs(*ON, *BUCKET, *PUBSUB, *netpol, *fake)
+    got = env(container(docs, "ingest")).get("BUCKET_PUBSUB_BASE_URL", {}).get("value")
+    c.check(ok=got == FAKE_PUBSUB, message=f"pubsub: BUCKET_PUBSUB_BASE_URL={got!r}")
+    ports = internet_ports(schedulefeed_policy(docs))
+    c.check(
+        ok=FAKE_PUBSUB_PORT in ports and HTTPS_PORT in ports,
+        message=f"pubsub baseUrl: internet ports {ports}",
+    )
+
+
 def check_contract_and_secrets(c: Checker) -> None:
     """Every contract var renders; no mode renders a key or the reader Secret."""
-    fake = ("--set", f"scheduleFeed.bucket.baseUrl={FAKE_GCS}")
-    full = c.docs(*ON, *BUCKET, *AUDIT, *fake)
+    fake = (
+        "--set",
+        f"scheduleFeed.bucket.baseUrl={FAKE_GCS}",
+        "--set",
+        f"scheduleFeed.bucket.notifications.pubsub.baseUrl={FAKE_PUBSUB}",
+    )
+    full = c.docs(*ON, *BUCKET, *AUDIT, *PUBSUB, *fake)
     missing = sorted(CONTRACT - set(env(container(full, "ingest"))))
     c.check(ok=not missing, message=f"contract: ingest lacks {missing}")
     modes = {
         "sftp only": ON,
         "both": (*ON, *BUCKET),
         "bucket only": (*ON, *BUCKET, *SFTP_OFF),
-        "everything": (*ON, *BUCKET, *AUDIT, *fake, *NETPOL),
+        "everything": (*ON, *BUCKET, *AUDIT, *PUBSUB, *fake, *NETPOL),
     }
     for label, args in modes.items():
         for doc in c.docs(*args):
@@ -1044,6 +1096,38 @@ FAILURES: tuple[tuple[str, tuple[str, ...], str], ...] = (
         "ftp baseUrl",
         ("--set", "scheduleFeed.bucket.baseUrl=ftp://x"),
         "scheduleFeed.bucket.baseUrl",
+    ),
+    (
+        "pubsub without a subscription",
+        ("--set", "scheduleFeed.bucket.notifications.pubsub.enabled=true"),
+        "scheduleFeed.bucket.notifications.pubsub.subscription",
+    ),
+    (
+        "pubsub with a short subscription name",
+        (
+            *PUBSUB,
+            "--set",
+            "scheduleFeed.bucket.notifications.pubsub.subscription=ds-ingest-events",
+        ),
+        "scheduleFeed.bucket.notifications.pubsub.subscription",
+    ),
+    (
+        "pubsub reconciling faster than the poll",
+        (
+            *PUBSUB,
+            "--set",
+            "scheduleFeed.bucket.notifications.pubsub.reconcileIntervalSecs=60",
+        ),
+        "scheduleFeed.bucket.notifications.pubsub.reconcileIntervalSecs",
+    ),
+    (
+        "pubsub ftp baseUrl",
+        (
+            *PUBSUB,
+            "--set",
+            "scheduleFeed.bucket.notifications.pubsub.baseUrl=ftp://x",
+        ),
+        "scheduleFeed.bucket.notifications.pubsub.baseUrl",
     ),
     (
         "deleteMinAgeSecs of 7 days",
@@ -1350,6 +1434,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_bucket_only(c)
     check_network_policy(c)
     check_audit_and_override(c)
+    check_pubsub(c)
     check_contract_and_secrets(c)
     check_failures(c)
     check_workload_identity(c)
@@ -1357,7 +1442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_reference_sink(c)
     for label, values in (
         ("both", (*ON, *BUCKET)),
-        ("bucket only", (*ON, *BUCKET, *SFTP_OFF, *AUDIT)),
+        ("bucket only", (*ON, *BUCKET, *SFTP_OFF, *AUDIT, *PUBSUB)),
         ("keyless", (*ON, *WIF)),
     ):
         check_no_duplicate_env(c, label, c.docs(*values))

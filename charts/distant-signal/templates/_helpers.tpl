@@ -3213,4 +3213,20 @@ ConfigMap, a dedicated ServiceAccount, and no key anywhere. */ -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- with $b.notifications.pubsub -}}
+{{- if .enabled -}}
+{{- $sub := .subscription | default "" | toString -}}
+{{- if not (regexMatch "^projects/[a-z][-a-z0-9]{4,28}[a-z0-9]/subscriptions/[A-Za-z][-A-Za-z0-9_.~+%]{2,254}$" $sub) -}}
+{{- fail (printf "scheduleFeed.bucket.notifications.pubsub.enabled needs scheduleFeed.bucket.notifications.pubsub.subscription: the pull subscription's full name, projects/<project>/subscriptions/<name> (Ranma's ds-ingest-bucket release); got %q" $sub) -}}
+{{- end -}}
+{{- if lt (.reconcileIntervalSecs | int64) $poll -}}
+{{- fail (printf "scheduleFeed.bucket.notifications.pubsub.reconcileIntervalSecs (%d) must be at least scheduleFeed.bucket.pollIntervalSecs (%d)" (.reconcileIntervalSecs | int64) $poll) -}}
+{{- end -}}
+{{- with .baseUrl -}}
+{{- if not (regexMatch "^https?://[^/]+" (toString .)) -}}
+{{- fail (printf "scheduleFeed.bucket.notifications.pubsub.baseUrl must be empty or an http(s):// URL, got %q" (toString .)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end }}

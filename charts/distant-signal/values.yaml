@@ -4603,14 +4603,37 @@ scheduleFeed:
     # interval while access is revoked. At least pollIntervalSecs.
     maxBackoffSecs: 3600
     # -- Ship the bucket's Cloud Audit Logs (from the audit-log bucket) to
-    # stdout as `schedule_ingest::bucket_access` lines for Loki. Off. Not
-    # implemented in schedule-ingest yet (the GCS spec's phase 5): with it
-    # on, the reader logs a warning at start and ships nothing.
+    # stdout as `schedule_ingest::bucket_access` lines for Loki, with the
+    # reader's credential (it needs objectViewer on the audit-log bucket).
+    # Off. Needs a schedule-ingest image from 2026-10-21 (DS-90) or later;
+    # an older one logs a warning and ships nothing.
     auditLogs:
       ship: false
       # -- Audit-log bucket name. Required with ship.
       bucket: ""
       pollIntervalSecs: 600
+    notifications:
+      pubsub:
+        # -- Wake the reader on the bucket's OBJECT_FINALIZE notifications
+        # (a Pub/Sub pull subscription, outbound HTTPS only) instead of
+        # waiting for the next poll; polling stays as the fallback. Off.
+        # Needs Ranma's ds-ingest-bucket release with
+        # notifications.pubsub.enabled (docs/schedule-feed-bucket.md,
+        # "Pub/Sub notifications") and a schedule-ingest image from
+        # 2026-10-21 (DS-91) on; an older one ignores it and polls.
+        enabled: false
+        # -- The pull subscription's full name,
+        # projects/<project>/subscriptions/<name>. Required when enabled;
+        # set in deploy values. The reader needs roles/pubsub.subscriber on
+        # it.
+        subscription: ""
+        # -- Seconds between polls while the subscription delivers (the
+        # safety net for a lost message). At least pollIntervalSecs; while
+        # it fails, the reader polls every pollIntervalSecs.
+        reconcileIntervalSecs: 3600
+        # -- Empty: https://pubsub.googleapis.com. Set only for a fake
+        # Pub/Sub test server.
+        baseUrl: ""
   # -- Third sibling container in this same Pod (crates/schedule-reference):
   # once `ingest` has moved a verified-complete delivery into
   # storage_dir/<n>/, parses that sequence's TI/A records into the
