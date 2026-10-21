@@ -1456,6 +1456,12 @@ whether the pod is running. poller-ldbws's samples go to the
 `ds:ingest:station-samples` stream (release B removed its api POST and the
 pending-sample buffer); check that stream's alerts too.
 
+`cycle="tfl-stops"` is poller-tfl's daily stops job
+(`pollers.tfl.stops.enabled`; two days without a published snapshot). A
+refused snapshot counts as a failed cycle: check
+`tfl_stops_refused_total{reason}` (`empty`, `sharp_drop`) and the log's
+"refusing the TfL stops snapshot" line. The stored stops stay as they were.
+
 ### DistantSignalLdbwsStationStale
 
 The least recently sampled LDBWS station

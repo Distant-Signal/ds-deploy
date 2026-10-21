@@ -164,6 +164,18 @@ with $poller.extraEnv, which replaces an entry of the same name.
             {{- end }}
             - name: POLL_INTERVAL_SECS
               value: {{ $poller.pollIntervalSecs | quote }}
+            {{- if and (eq $name "tfl") $poller.stops }}
+            # tfl only: the daily stops job (pollers.tfl.stops), off by
+            # default.
+            - name: TFL_STOPS_ENABLED
+              value: {{ $poller.stops.enabled | default false | quote }}
+            {{- if $poller.stops.enabled }}
+            - name: TFL_STOPS_INTERVAL_SECS
+              value: {{ $poller.stops.intervalSecs | default 86400 | int | quote }}
+            - name: TFL_STOPS_MAX_DROP_FRACTION
+              value: {{ $poller.stops.maxDropFraction | default 0.2 | quote }}
+            {{- end }}
+            {{- end }}
             {{- if $poller.hourlyRequestBudget }}
             # ldbws only (LEG-18): optional hourly LDBWS request budget.
             - name: HOURLY_REQUEST_BUDGET

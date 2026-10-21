@@ -1209,6 +1209,24 @@ pollers:
     extraEnv:
       - name: TFL_MODES
         value: "tube,dlr,overground,elizabeth-line,tram"
+    # The daily Tube, DLR and tram stops job
+    # (docs/superpowers/specs/2026-10-20-tfl-stop-lookup-design.md), for
+    # the untracked-leg stop lookup and the planner's Tube transfers. It
+    # reads TfL's StopPoint API with the same key (about 10 calls a run)
+    # and XADDs one `tfl-stops/1` snapshot to `ds:ingest:tfl-stops`, as
+    # the same `poller-tfl` ACL user (its rights include that stream).
+    stops:
+      # -- Off by default (TFL_STOPS_ENABLED). Needs
+      # `ingestWriter.streams.tfl-stops: apply` (the render fails otherwise)
+      # and the grants job re-run after the migration (tfl_stops,
+      # tfl_stop_crs and the writer's `tfl-stops` freshness row).
+      enabled: false
+      # -- Seconds between runs (TFL_STOPS_INTERVAL_SECS).
+      intervalSecs: 86400
+      # -- The feed guard (TFL_STOPS_MAX_DROP_FRACTION): a run whose stop
+      # count fell by more than this fraction of the last snapshot's is
+      # refused, and the stored stops stay.
+      maxDropFraction: 0.2
     # One TfL line-status JSON document per tick.
     #
     # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
@@ -2112,6 +2130,11 @@ ingestWriter:
     full-coverage: apply
     tfl: apply
     reference: apply
+    # poller-tfl's daily stops job (pollers.tfl.stops; off by default):
+    # ds:ingest:tfl-stops (tfl-stops). `apply` needs
+    # postgresql.roles.perService.writer.connect, as tfl does (the
+    # writer's ingest_freshness row policy binds its own role).
+    tfl-stops: "off"
     # One stream per island-of-Ireland poller (security review H1,
     # 2026-10-08): ds:ingest:ioi-gtfs (pollerIrishRailGtfs: ioi-stations,
     # ioi-lines), ds:ingest:ioi-nir (pollerNirStations: the same two) and
@@ -5133,6 +5156,7 @@ metrics:
         "ds:ingest:station-samples": 720
         "ds:ingest:full-coverage": 360
         "ds:ingest:tfl": 288
+        "ds:ingest:tfl-stops": 28
         "ds:ingest:reference": 30
         "ds:ingest:ioi-gtfs": 500
         "ds:ingest:ioi-nir": 500
@@ -5143,6 +5167,7 @@ metrics:
     # applied nothing from it for longer, for `for`. stallAfterSecs is
     # about 3x each stream's cadence (at least 3 minutes, for the 30s
     # gauges): station-samples 1/min, full-coverage 3/min, tfl 1/5 min,
+    # tfl-stops daily (poller-tfl's stops job; off by default),
     # reference daily, ioi-live 1/5 min, ioi-gtfs and ioi-nir daily,
     # transit-metrolink 1/5 min (its situations; off by default).
     ingestStreamStalled:
@@ -5153,6 +5178,7 @@ metrics:
         "ds:ingest:station-samples": 180
         "ds:ingest:full-coverage": 180
         "ds:ingest:tfl": 900
+        "ds:ingest:tfl-stops": 259200
         "ds:ingest:reference": 259200
         "ds:ingest:ioi-gtfs": 259200
         "ds:ingest:ioi-nir": 259200
@@ -5581,7 +5607,9 @@ metrics:
     # that has stopped completing cycles at all. 2x is the smallest safe
     # multiple: a restarted daily poller can wait up to one interval before
     # its first cycle. One rule per enabled poller, in the
-    # `<fullname>-pollers` PrometheusRule.
+    # `<fullname>-pollers` PrometheusRule, plus poller-tfl's stops job
+    # (cycle `tfl-stops`, at its stops.intervalSecs) while
+    # pollers.tfl.stops.enabled.
     pollerStale:
       enabled: true
       intervalMultiple: 2

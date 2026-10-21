@@ -1304,6 +1304,11 @@ Takes (dict "root" $ "name" <pollers key> "poller" <its values>).
 {{- define "distant-signal.pollerSinkStream" -}}
 {{- if and .poller.enabled (has .name (list "ldbws" "tfl" "tocs")) -}}
 {{- include "distant-signal.requireStreamApplied" (dict "root" .root "client" (include "distant-signal.pollerRedisClient" .name) "stream" (include "distant-signal.producerStream" .name) "what" (printf "pollers.%s" .name)) -}}
+{{- if and (eq .name "tfl") (.poller.stops | default dict).enabled -}}
+{{- /* The daily stops job (TfL stop lookup, 2026-10-20) XADDs to its own
+     stream, ds:ingest:tfl-stops, as the same poller-tfl ACL user. */ -}}
+{{- include "distant-signal.requireStreamApplied" (dict "root" .root "client" (include "distant-signal.pollerRedisClient" .name) "stream" "tfl-stops" "what" "pollers.tfl.stops") -}}
+{{- end -}}
 true
 {{- end -}}
 {{- end }}
@@ -1559,6 +1564,9 @@ other than off or apply (release B removed shadow). Takes root.
 {{- end -}}
 {{- if and (eq (toString (get .Values.ingestWriter.streams "tfl")) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" . "service" "writer"))) -}}
 {{- fail "ingestWriter.streams.tfl: apply needs postgresql.roles.perService.writer.connect (security review M4): line_status's row policy (source = 'tfl') applies to the writer's own role only. As the app role the writer could write the aggregator's lines too." -}}
+{{- end -}}
+{{- if and (eq (toString (get .Values.ingestWriter.streams "tfl-stops")) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" . "service" "writer"))) -}}
+{{- fail "ingestWriter.streams.tfl-stops: apply needs postgresql.roles.perService.writer.connect (as tfl, security review M4): the writer's ingest_freshness row policy (source tfl-stops) binds its own role only. As the app role it could write any feed's freshness." -}}
 {{- end -}}
 {{- range $name, $mode := .Values.ingestWriter.streams -}}
 {{- if and (hasPrefix "transit-" $name) (eq (toString $mode) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" $ "service" "writer"))) -}}

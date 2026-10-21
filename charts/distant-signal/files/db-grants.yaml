@@ -362,6 +362,14 @@ tables:
   # --- reference: stations, codes and schedule products.
   stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S, schedule_ingest: S}}
   tocs: {class: reference, grants: {api: S, writer: SIU}}
+  # TfL's Tube, DLR and tram stops (docs/superpowers/specs/2026-10-20-tfl-stop-lookup-design.md;
+  # migration 20261020160000): the writer's tfl-stops/1 handler replaces
+  # both from each daily snapshot (ds_store::tfl_stops::replace: upsert,
+  # delete the stops that left, rebuild the links); the api reads them. The
+  # link rows cascade from tfl_stops (no grant needed) and are never
+  # updated.
+  tfl_stops: {class: reference, grants: {api: S, writer: SIUD}}
+  tfl_stop_crs: {class: reference, grants: {api: S, writer: SID}}
   stanox_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, trust_backlog: S, trust_consumer: S, full_coverage_ro: S, notifier: S}}
   tiploc_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, notifier: S, trust_backlog: S, full_coverage_ro: S, trust_consumer: S}}
   fixed_links: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD}}
@@ -489,7 +497,8 @@ row_policies:
   #     island-of-Ireland catalogue's per-network sources
   #     (ds_store::samples::island_of_ireland), and each transit network's
   #     timetable and situations (common::transit, transit spec §8.5;
-  #     metrolink only, off by default). The two unsuffixed
+  #     metrolink only, off by default), and the TfL stops snapshot
+  #     (tfl-stops, ds_store::tfl_stops). The two unsuffixed
   #     island_of_ireland_* names writers recorded before the per-network
   #     split were dropped a release after it (batch 54; migration
   #     20261010100100 deletes their rows).
@@ -500,6 +509,7 @@ row_policies:
         'full-coverage-window-stats', 'station-full-coverage-samples',
         'island_of_ireland_stations_gtfs', 'island_of_ireland_lines_gtfs',
         'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir',
-        'transit-metrolink-timetable', 'transit-metrolink-situations')
+        'transit-metrolink-timetable', 'transit-metrolink-situations',
+        'tfl-stops')
     stations: {writes: "source = 'stations'"}
     incidents: {writes: "source = 'incidents'"}

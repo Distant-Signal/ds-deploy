@@ -74,7 +74,7 @@ exporter client %R~* +info +ping +config|get +client|list +slowlog|get +slowlog|
 # Future clients, created with their final rights (phase 2c / 3).
 poller-incidents final %W~incident-text-changed +xadd +ping +hello +auth +client|setname +client|setinfo +client|id
 poller-ldbws final ~ds:ingest:station-samples +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
-poller-tfl final ~ds:ingest:tfl +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
+poller-tfl final ~ds:ingest:tfl ~ds:ingest:tfl-stops +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 poller-tocs final ~ds:ingest:reference +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 poller-irish-rail-gtfs final ~ds:ingest:ioi-gtfs +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 poller-irish-rail-live final ~ds:ingest:ioi-live +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id

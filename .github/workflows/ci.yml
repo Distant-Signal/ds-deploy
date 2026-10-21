@@ -1231,7 +1231,7 @@ jobs:
           grep -q 'name: INTERNAL_OAUTH_GROUP_MCP$' <<<"${api}" || fail "the api must keep INTERNAL_OAUTH_GROUP_MCP"
           dep=$(doc Deployment distant-signal-ingest-writer <<<"${out}")
           env_is "${dep}" INGEST_WRITER_STREAMS \
-            "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,transit-metrolink:off" ingest-writer
+            "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,tfl-stops:off,transit-metrolink:off" ingest-writer
 
           # The retired switches: anything but their one value fails, naming it.
           for kv in pollers.stations.ingest.sink=http pollers.tfl.ingest.sink=http+shadow \
@@ -1283,6 +1283,63 @@ jobs:
       # static secret, the token URLs' ports in the egress rule, the
       # token-exchange alert; and every unsafe or incomplete config refuses
       # to render.
+      # poller-tfl's daily stops job (docs/superpowers/specs/2026-10-20-tfl-stop-lookup-design.md):
+      # off by default; on, it needs the writer's tfl-stops stream on apply,
+      # and renders its switches.
+      - name: helm template (TfL stops job)
+        run: |
+          set -euo pipefail
+          base=(
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set pollers.tfl.enabled=true --set redis.acl.clients.pollerTfl=true
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          doc() { awk -v k="$1" -v n="$2" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: " k "\n" && $0 ~ "\n  name: " n "\n" {print}'; }
+          env_is() { grep -A1 "name: $2\$" <<<"$1" | grep -q "value: \"$3\"" || fail "$4: $2 must be \"$3\""; }
+
+          dep=$(render | doc Deployment distant-signal-poller-tfl)
+          env_is "${dep}" TFL_STOPS_ENABLED false "off by default"
+          if grep -q 'name: TFL_STOPS_INTERVAL_SECS$' <<<"${dep}"; then fail "no stops settings while off"; fi
+
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if err=$(render --set pollers.tfl.stops.enabled=true 2>&1 >/dev/null); then
+            fail "the stops job rendered without ingestWriter.streams.tfl-stops: apply"
+          fi
+          grep -q 'ingestWriter.streams.tfl-stops: apply' <<<"${err}" || fail "the failure must name the stream: ${err}"
+
+          out=$(render --set pollers.tfl.stops.enabled=true --set ingestWriter.streams.tfl-stops=apply)
+          dep=$(doc Deployment distant-signal-poller-tfl <<<"${out}")
+          env_is "${dep}" TFL_STOPS_ENABLED true "on"
+          env_is "${dep}" TFL_STOPS_INTERVAL_SECS 86400 "on"
+          env_is "${dep}" TFL_STOPS_MAX_DROP_FRACTION 0.2 "on"
+          writer=$(doc Deployment distant-signal-ingest-writer <<<"${out}")
+          grep -A1 'name: INGEST_WRITER_STREAMS$' <<<"${writer}" | grep -q 'tfl-stops:apply' \
+            || fail "the writer must apply tfl-stops"
+          grep -q '~ds:ingest:tfl ~ds:ingest:tfl-stops ' <<<"${out}" \
+            || fail "the poller-tfl ACL user must reach ds:ingest:tfl-stops"
+
+          # DistantSignalPollerStale for the tfl-stops cycle: only while the
+          # job is on, at 2 x its daily interval.
+          rules=(--set metrics.prometheusRule.enabled=true)
+          off=$(render "${rules[@]}")
+          if grep -q 'cycle="tfl-stops"' <<<"${off}"; then
+            fail "no tfl-stops staleness rule while the job is off"
+          fi
+          on=$(render "${rules[@]}" --set pollers.tfl.stops.enabled=true --set ingestWriter.streams.tfl-stops=apply)
+          stale=$(grep -A1 'cycle="tfl-stops"' <<<"${on}" || true)
+          grep -q '> 172800' <<<"${stale}" || fail "tfl-stops must go stale after 172800s: ${stale}"
+
       - name: helm template (enricher workload identity)
         run: |
           set -euo pipefail
@@ -2963,7 +3020,7 @@ jobs:
           env_is "${dep}" INGEST_WRITER_LOOPS true
           env_is "${dep}" RECONCILIATION_SWEEP_INTERVAL_SECS 300
           env_is "${dep}" DATABASE_MAX_CONNECTIONS 6
-          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,transit-metrolink:off"
+          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,tfl-stops:off,transit-metrolink:off"
 
           # Plan 3a.3: a stream not off brings Redis (env, user, egress, admission),
           # as its own narrow Redis user (security review H3; the guards
