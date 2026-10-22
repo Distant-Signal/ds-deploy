@@ -466,6 +466,10 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.tripPlanLive.lookbackMinutes | quote }}
             - name: TRIP_PLAN_LIVE_MAX_TRAINS
               value: {{ .Values.api.tripPlanLive.maxTrains | quote }}
+            - name: TRIP_PLAN_LIVE_IN_SEARCH
+              value: {{ .Values.api.tripPlanLive.inSearch | quote }}
+            - name: TRIP_PLAN_LIVE_SNAPSHOT_TTL_SECONDS
+              value: {{ .Values.api.tripPlanLive.snapshotTtlSeconds | quote }}
             # Mid-journey changes: the break sweep and its suggestions --
             # see api.journeyBreaks in values.yaml.
             - name: JOURNEY_BREAKS_ENABLED

@@ -1784,6 +1784,17 @@ api:
     lookbackMinutes: 120
     # Most trains whose live data one request reads.
     maxTrains: 60
+    # Search on live times from the first search
+    # (docs/superpowers/specs/2026-10-22-trips-plan-in-search-live-design.md):
+    # every train TRUST knows today to be cancelled, cut short or (fresh
+    # state) running late is replaced in every search, not only the trains
+    # of a plan already found, so the quickest route is found on live times
+    # and no change in it is impossible on them. `false` is the timetable-
+    # first behaviour, with only the bounded re-plans seeing live data.
+    inSearch: true
+    # How long one date's snapshot of that TRUST state is reused (two small
+    # queries and one pass over the day's connections to rebuild).
+    snapshotTtlSeconds: 30
   # -- Mid-journey changes (docs/superpowers/specs/2026-10-22-mid-journey-changes-design.md
   # §5.3, §6): the api's break sweep finds journeys that stopped working
   # (a cancelled or cut-short train, a connection missed on live times and

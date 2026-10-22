@@ -1891,6 +1891,8 @@ Used only when `postgresql.enabled` is `false`.
 | `api.tripPlanLive.trustMaxAgeMinutes` | `30` | Ignore a TRUST delay whose train state was last updated longer ago than this. Actual times and cancellations are always used. |
 | `api.tripPlanLive.horizonMinutes` / `.lookbackMinutes` | `180` / `120` | Only legs booked to depart between `lookbackMinutes` ago and `horizonMinutes` ahead get live data. |
 | `api.tripPlanLive.maxTrains` | `60` | Most trains whose live data one request reads. |
+| `api.tripPlanLive.inSearch` | `true` | Run every search on today's TRUST delays and cancellations (all trains TRUST knows to be cancelled, cut short or running late), so the planner finds the quickest route on live times and never plans a change that is impossible on them. `false`: plan on the timetable first and let only the bounded re-plans see live data. |
+| `api.tripPlanLive.snapshotTtlSeconds` | `30` | How long one service date's snapshot of that TRUST state is reused before it is read and built again. |
 | `api.journeyBreaks.enabled` | `false` | Kill switch for mid-journey suggestions: the api's break sweep and the notifier's suggestion pushes (docs/journey-breaks.md). Off, the in-app banner and sheet still work. |
 | `api.journeyBreaks.intervalSecs` | `60` | Break sweep cadence; each tick holds an advisory lock, so one api replica runs it. |
 | `api.journeyBreaks.maxJourneysPerTick` | `200` | Most journeys the sweep evaluates per tick. |
