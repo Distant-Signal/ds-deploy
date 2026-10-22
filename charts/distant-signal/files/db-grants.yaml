@@ -201,8 +201,9 @@ roles:
   ldbws_ro:
     name: distant_signal_ldbws_ro
     # Plan 4.5/4.7: narrow from creation (never a member of app). Used with
-    # postgresql.roles.perService.ldbws_ro.connect: SELECT on its two views
-    # only (pin counts, custom-line stations), never the personal tables.
+    # postgresql.roles.perService.ldbws_ro.connect: SELECT on its three views
+    # only (pin counts, custom-line stations, tracked stops), never the
+    # personal tables.
     status: narrow
     phase: "4"
     groups: [schema_gate]
@@ -310,6 +311,9 @@ tables:
 
   # --- ingest: snapshots and feeds the producers write.
   station_samples: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD, notifier: S}}
+  # Targeted boards for tracked trains' own stops (poller-ldbws's second
+  # lane, schema tracked-stop-boards/1); the aggregator prunes old rows.
+  tracked_stop_boards: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
   station_full_coverage_samples: {class: ingest, grants: {api: S, writer: SIU}}
   full_coverage_line_stats: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
   full_coverage_line_window_stats: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
@@ -392,6 +396,9 @@ tables:
   # ON CONFLICT (delivered_at) DO UPDATE upsert.
   corpus_deliveries: {class: reference, grants: {api: S, writer: S, schedule_ingest: SIU}}
   schedule_calling_points_full: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
+  # Each train's previous working (pre-departure prediction, DS-127),
+  # replaced per date by schedule-reference; the notifier predicts late starts.
+  schedule_turnarounds: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
   schedule_destination_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
   schedule_network_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
   schedule_line_population: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, full_coverage_ro: S}}
@@ -428,6 +435,7 @@ views:
   ingest_active_tracked_trains: {class: internal, grants: {trust_consumer: S}}
   ingest_sample_station_pins: {class: internal, grants: {ldbws_ro: S}}
   ingest_custom_line_stations: {class: internal, grants: {ldbws_ro: S}}
+  ingest_tracked_stop_targets: {class: internal, grants: {ldbws_ro: S}}
 
 # Every sequence, with the table that owns it.
 sequences:

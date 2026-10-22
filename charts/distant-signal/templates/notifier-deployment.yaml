@@ -141,6 +141,10 @@ with notifier.extraEnv, which replaces an entry of the same name.
             # never wired" gap as the two intervals above.
             - name: TEMPLATE_SWEEP_POLL_INTERVAL_SECS
               value: {{ .Values.notifier.templateSweepPollIntervalSecs | quote }}
+            # Predicted-late-start pushes (DS-127): high confidence only;
+            # 0 turns the check off.
+            - name: PREDICTED_START_POLL_INTERVAL_SECS
+              value: {{ .Values.notifier.predictedStartPollIntervalSecs | int | quote }}
             # 'auto'-mode leg commit-check lead time (spec §3.2 addendum) --
             # see crates/notifier/src/config.rs's auto_commit_lead_minutes
             # doc. Same "declared but never wired" gap as the three above.

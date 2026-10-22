@@ -191,6 +191,16 @@ with $poller.extraEnv, which replaces an entry of the same name.
             - name: SAMPLE_MAX_STATIONS
               value: {{ $poller.sampleMaxStations | quote }}
             {{- end }}
+            {{- with $poller.trackedStops }}
+            {{- if .enabled }}
+            # ldbws only (DS-127): the tracked-stop board lane, with its own
+            # per-cycle request cap.
+            - name: TRACKED_STOP_POLL_ENABLED
+              value: "true"
+            - name: TRACKED_STOP_MAX_REQUESTS_PER_CYCLE
+              value: {{ .maxRequestsPerCycle | default 20 | int | quote }}
+            {{- end }}
+            {{- end }}
             # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int $root.Values.workerHealth.port) | quote }}

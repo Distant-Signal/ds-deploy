@@ -482,6 +482,7 @@ BEGIN
         ('train_reasons'),
         ('notifier_forward_queue'),
         ('station_samples'),
+        ('tracked_stop_boards'),
         ('station_full_coverage_samples'),
         ('full_coverage_line_stats'),
         ('full_coverage_line_window_stats'),
@@ -523,6 +524,7 @@ BEGIN
         ('corpus_locations'),
         ('corpus_deliveries'),
         ('schedule_calling_points_full'),
+        ('schedule_turnarounds'),
         ('schedule_destination_departures'),
         ('schedule_network_departures'),
         ('schedule_line_population'),
@@ -595,6 +597,9 @@ BEGIN
         ('station_samples', 'writer', 'SELECT', ''),
         ('station_samples', 'writer', 'INSERT', ''),
         ('station_samples', 'writer', 'UPDATE', ''),
+        ('tracked_stop_boards', 'writer', 'SELECT', ''),
+        ('tracked_stop_boards', 'writer', 'INSERT', ''),
+        ('tracked_stop_boards', 'writer', 'UPDATE', ''),
         ('station_full_coverage_samples', 'writer', 'SELECT', ''),
         ('station_full_coverage_samples', 'writer', 'INSERT', ''),
         ('station_full_coverage_samples', 'writer', 'UPDATE', ''),
@@ -736,6 +741,10 @@ BEGIN
         ('schedule_calling_points_full', 'schedule_reference', 'INSERT', ''),
         ('schedule_calling_points_full', 'schedule_reference', 'UPDATE', ''),
         ('schedule_calling_points_full', 'schedule_reference', 'DELETE', ''),
+        ('schedule_turnarounds', 'schedule_reference', 'SELECT', ''),
+        ('schedule_turnarounds', 'schedule_reference', 'INSERT', ''),
+        ('schedule_turnarounds', 'schedule_reference', 'UPDATE', ''),
+        ('schedule_turnarounds', 'schedule_reference', 'DELETE', ''),
         ('schedule_destination_departures', 'schedule_reference', 'SELECT', ''),
         ('schedule_destination_departures', 'schedule_reference', 'INSERT', ''),
         ('schedule_destination_departures', 'schedule_reference', 'UPDATE', ''),
@@ -768,7 +777,8 @@ BEGIN
         ('schedule_feed_ingests', 'schedule_ingest', 'SELECT', 'delivered_at'),
         ('ingest_active_tracked_trains', 'trust_consumer', 'SELECT', ''),
         ('ingest_sample_station_pins', 'ldbws_ro', 'SELECT', ''),
-        ('ingest_custom_line_stations', 'ldbws_ro', 'SELECT', '')) AS v(tbl, kind, priv, cols)
+        ('ingest_custom_line_stations', 'ldbws_ro', 'SELECT', ''),
+        ('ingest_tracked_stop_targets', 'ldbws_ro', 'SELECT', '')) AS v(tbl, kind, priv, cols)
         WHERE to_regclass(format('public.%I', v.tbl)) IS NOT NULL
     LOOP
         IF r.cols = '' THEN

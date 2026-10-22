@@ -1329,6 +1329,22 @@ pollers:
     # line-fairly with the most-pinned lines first. 0 = no cap
     # (SAMPLE_MAX_STATIONS).
     sampleMaxStations: 0
+    # Pre-departure prediction phase 1 (DS-127): a second lane that polls
+    # the boards of tracked trains' own stops (boarding, alighting and
+    # change stations with a booked departure), narrowed with
+    # timeOffset/timeWindow to each train's booked time, every 2 minutes
+    # from 2 hours before and every minute from 20 minutes before. The api
+    # reads these boards before the station's general sample, so a tracked
+    # stop gets its platform beyond the 10-row cap and at stations outside
+    # the sample set. Off by default: it adds LDBWS requests. Needs
+    # ingestWriter.streams.station-samples: apply (its boards ride that
+    # stream as tracked-stop-boards/1).
+    trackedStops:
+      # -- Poll tracked trains' own stops (TRACKED_STOP_POLL_ENABLED).
+      enabled: false
+      # -- The lane's own budget: at most this many requests a cycle,
+      # soonest departure first (TRACKED_STOP_MAX_REQUESTS_PER_CYCLE).
+      maxRequestsPerCycle: 20
     # Ingest architecture plan 4.5/4.7: the station list is computed by the
     # poller from the line catalogue in its image and the views
     # `ingest_custom_line_stations` and `ingest_sample_station_pins`, as the
@@ -2624,6 +2640,13 @@ notifier:
   # -- Recurring-journey materialization sweep cadence (spec §3.1) -- see
   # config.rs's own template_sweep_poll_interval_secs doc.
   templateSweepPollIntervalSecs: 3600
+  # -- Predicted-late-start check cadence (DS-127): a tracked train with
+  # no TRUST report yet, within 3 hours of departure, whose previous
+  # working's delay predicts a late start at high confidence and at least
+  # trainDelayThresholdMinutes, gets one push. It shares the delay pushes'
+  # state, so the delay push for the same lateness is not repeated. One
+  # small query a cycle. 0 turns it off (PREDICTED_START_POLL_INTERVAL_SECS).
+  predictedStartPollIntervalSecs: 60
   # -- 'auto'-mode leg commit-check lead time, minutes (spec §3.2 addendum)
   # -- see config.rs's own auto_commit_lead_minutes doc.
   autoCommitLeadMinutes: 120
