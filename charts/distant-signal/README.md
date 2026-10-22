@@ -2092,7 +2092,7 @@ twice.
 | `notifier.forwardQueuePollIntervalSecs` | `15` | Poll cadence for the forwarding queue (notifications api hands over), faster than `pollIntervalSecs`. |
 | `notifier.skipCheckPollIntervalSecs` | `90` | Cadence of the station-skip check for tracked journeys. |
 | `notifier.templateSweepPollIntervalSecs` | `3600` | Cadence of the recurring-journey materialisation sweep. |
-| `notifier.predictedStartPollIntervalSecs` | `60` | Cadence of the predicted-late-start check (DS-127): one push per subscriber for a high-confidence predicted late start at or above `trainDelayThresholdMinutes`, sharing the delay pushes' state. `0` turns it off. |
+| `notifier.predictedStartPollIntervalSecs` | `60` | Cadence of the predicted-late-start check (DS-127): one push per subscriber for a high-confidence predicted late start at or above `trainDelayThresholdMinutes`, sharing the delay pushes' state; an open journey break on the train sends its suggestion push instead. `0` turns it off. |
 | `notifier.autoCommitLeadMinutes` | `120` | Lead time, in minutes, for the commit check on `auto`-mode journey legs. |
 | `notifier.journeyBreaksPollIntervalSecs` | `15` | How often open journey breaks are checked for a suggestion push (only with `api.journeyBreaks.enabled`). |
 | `notifier.push.workers` | `8` | Notifications sent at once (each fans out to all of that user's subscriptions). |
