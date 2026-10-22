@@ -544,6 +544,8 @@ BEGIN
         SELECT v.tbl, current_setting('ds_grants.' || v.kind) AS grantee,
                v.priv, v.cols
         FROM (VALUES
+        ('journey_legs', 'writer', 'SELECT', 'id,kind,train_subscription_id,origin_crs,destination_crs'),
+        ('journey_legs', 'writer', 'UPDATE', 'origin_crs,destination_crs'),
         ('trains', 'writer', 'SELECT', ''),
         ('trains', 'writer', 'INSERT', ''),
         ('trains', 'writer', 'UPDATE', ''),
@@ -551,7 +553,7 @@ BEGIN
         ('trains', 'trust_backlog', 'INSERT', ''),
         ('trains', 'trust_backlog', 'UPDATE', ''),
         ('train_subscriptions', 'writer', 'SELECT', 'id,trains_id,service_date,resolution_status,unresolved_from,pin_origin_crs,pin_scheduled_departure,pin_destination_crs,pin_skipped_stations,pin_platform,pin_planned_platform'),
-        ('train_subscriptions', 'writer', 'UPDATE', 'resolution_status,unresolved_from,trains_id'),
+        ('train_subscriptions', 'writer', 'UPDATE', 'resolution_status,unresolved_from,trains_id,pin_origin_crs,pin_scheduled_departure,pin_destination_crs'),
         ('train_subscriptions', 'trust_backlog', 'SELECT', 'id,trains_id,resolution_status,unresolved_from'),
         ('train_subscriptions', 'trust_backlog', 'UPDATE', 'resolution_status,unresolved_from'),
         ('train_subscriptions', 'trust_consumer', 'SELECT', 'id,trains_id'),

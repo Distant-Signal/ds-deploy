@@ -228,7 +228,10 @@ tables:
   group_members: {class: personal, grants: {api: SIUD}}
   group_trains: {class: personal, grants: {api: SIUD}}
   journeys: {class: personal, grants: {api: SIUD, notifier: SI}}
-  journey_legs: {class: personal, grants: {api: SIUD, notifier: SIU}}
+  # writer: ds_store::trains::fill_route_into_subscribers, run by the
+  # schedule-match and reconciliation loops on the transaction that gives
+  # a train its route, fills a bound train leg's NULL codes (DS-144).
+  journey_legs: {class: personal, grants: {api: SIUD, notifier: SIU, writer: [{privileges: S, columns: [id, kind, train_subscription_id, origin_crs, destination_crs]}, {privileges: U, columns: [origin_crs, destination_crs]}]}}
   # notifier: SELECT ... FOR UPDATE needs UPDATE.
   journey_templates: {class: personal, grants: {api: SIUD, notifier: SU}}
   journey_template_legs: {class: personal, grants: {api: SIUD, notifier: S}}
@@ -265,15 +268,18 @@ tables:
   # and writes (security review M2, 2026-10-08):
   #   writer: the outbox applier, schedule-match, reconciliation and
   #     backlog-match (ds_store::tracking, sweeps, backlog::matching): reads
-  #     the pins and status, sets status/unresolved_from/trains_id;
+  #     the pins and status, sets status/unresolved_from/trains_id, and
+  #     fills NULL pins from a train's route as it arrives
+  #     (ds_store::trains::fill_route_into_subscribers, DS-144);
   #   trust_backlog: reinstatement reopens (tracking.rs
   #     reopen_subscriptions_after_reinstatement);
   #   trust_consumer: `SELECT trains_id ... WHERE id` (upsert_train_event_on);
   #   aggregator: `EXISTS ... WHERE trains_id` (prune, archive);
   #   notifier: candidates and legs (id, user_id, trains_id,
-  #     notifications_enabled, pin_destination_crs) and
-  #     create_subscription_for_train's insert and re-enable.
-  train_subscriptions: {class: personal, grants: {api: SIUD, writer: [{privileges: S, columns: [id, trains_id, service_date, resolution_status, unresolved_from, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_skipped_stations, pin_platform, pin_planned_platform]}, {privileges: U, columns: [resolution_status, unresolved_from, trains_id]}], trust_backlog: [{privileges: S, columns: [id, trains_id, resolution_status, unresolved_from]}, {privileges: U, columns: [resolution_status, unresolved_from]}], trust_consumer: {privileges: S, columns: [id, trains_id]}, aggregator: {privileges: S, columns: [trains_id]}, notifier: [{privileges: S, columns: [id, user_id, trains_id, notifications_enabled, pin_destination_crs]}, {privileges: I, columns: [user_id, trains_id, service_date, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: U, columns: [notifications_enabled]}]}}
+  #     notifications_enabled, the pins: a leg's route falls back to them,
+  #     DS-144), create_subscription_for_train's insert and re-enable, and
+  #     the NULL-pin fill on its CIF enrichment (fill_route_into_subscribers).
+  train_subscriptions: {class: personal, grants: {api: SIUD, writer: [{privileges: S, columns: [id, trains_id, service_date, resolution_status, unresolved_from, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_skipped_stations, pin_platform, pin_planned_platform]}, {privileges: U, columns: [resolution_status, unresolved_from, trains_id, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}], trust_backlog: [{privileges: S, columns: [id, trains_id, resolution_status, unresolved_from]}, {privileges: U, columns: [resolution_status, unresolved_from]}], trust_consumer: {privileges: S, columns: [id, trains_id]}, aggregator: {privileges: S, columns: [trains_id]}, notifier: [{privileges: S, columns: [id, user_id, trains_id, notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: I, columns: [user_id, trains_id, service_date, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: U, columns: [notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}]}}
   # No UPDATE for anyone (security review L3): every writer inserts with
   # ON CONFLICT (trains_id, dedup_key) DO NOTHING. The conflict target
   # needs SELECT on its columns, so trust_consumer (outside read_shared)
