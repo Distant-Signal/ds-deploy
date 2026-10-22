@@ -146,6 +146,13 @@ with notifier.extraEnv, which replaces an entry of the same name.
             # doc. Same "declared but never wired" gap as the three above.
             - name: AUTO_COMMIT_LEAD_MINUTES
               value: {{ .Values.notifier.autoCommitLeadMinutes | quote }}
+            # Auto-suggest notices for broken journeys: the same kill switch
+            # as the api's break sweep (api.journeyBreaks.enabled), so the
+            # two are on or off together.
+            - name: JOURNEY_BREAK_NOTICES_ENABLED
+              value: {{ .Values.api.journeyBreaks.enabled | quote }}
+            - name: JOURNEY_BREAKS_POLL_INTERVAL_SECS
+              value: {{ .Values.notifier.journeyBreaksPollIntervalSecs | quote }}
             - name: VAPID_SUBJECT
               value: {{ .Values.notifier.vapid.subject | quote }}
             - name: VAPID_PUBLIC_KEY

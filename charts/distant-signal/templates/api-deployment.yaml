@@ -466,6 +466,16 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.tripPlanLive.lookbackMinutes | quote }}
             - name: TRIP_PLAN_LIVE_MAX_TRAINS
               value: {{ .Values.api.tripPlanLive.maxTrains | quote }}
+            # Mid-journey changes: the break sweep and its suggestions --
+            # see api.journeyBreaks in values.yaml.
+            - name: JOURNEY_BREAKS_ENABLED
+              value: {{ .Values.api.journeyBreaks.enabled | quote }}
+            - name: JOURNEY_BREAKS_INTERVAL_SECS
+              value: {{ .Values.api.journeyBreaks.intervalSecs | quote }}
+            - name: JOURNEY_BREAKS_MAX_JOURNEYS_PER_TICK
+              value: {{ .Values.api.journeyBreaks.maxJourneysPerTick | quote }}
+            - name: JOURNEY_BREAKS_SUGGESTIONS_MAX_AGE_SECS
+              value: {{ .Values.api.journeyBreaks.suggestionsMaxAgeSecs | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see api.fullCoverageEnabledDefault's own comment in values.yaml.
             # The binary defaults to false, the chart value to true; it must be

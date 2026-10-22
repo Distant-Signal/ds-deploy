@@ -1768,6 +1768,21 @@ api:
     lookbackMinutes: 120
     # Most trains whose live data one request reads.
     maxTrains: 60
+  # -- Mid-journey changes (docs/superpowers/specs/2026-10-22-mid-journey-changes-design.md
+  # §5.3, §6): the api's break sweep finds journeys that stopped working
+  # (a cancelled or cut-short train, a connection missed on live times and
+  # minimum change times) and plans alternatives, and the notifier pushes one
+  # suggestion notice per break. `enabled` is the kill switch for both, off
+  # by default; with it off, "I missed this train", the alternatives sheet
+  # and the in-app banner still work, computed on request.
+  journeyBreaks:
+    enabled: false
+    # Sweep cadence; each tick holds an advisory lock, so one replica runs it.
+    intervalSecs: 60
+    # Most journeys evaluated per tick.
+    maxJourneysPerTick: 200
+    # Stored suggestions older than this are re-planned when opened.
+    suggestionsMaxAgeSecs: 120
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `data::station_stats::full_coverage_enabled_for` (crates/api) treats
@@ -2612,6 +2627,9 @@ notifier:
   # -- 'auto'-mode leg commit-check lead time, minutes (spec §3.2 addendum)
   # -- see config.rs's own auto_commit_lead_minutes doc.
   autoCommitLeadMinutes: 120
+  # -- How often open journey breaks are checked for a suggestion notice
+  # (on only with api.journeyBreaks.enabled).
+  journeyBreaksPollIntervalSecs: 15
   # Web Push worker pool (services review SVC-02): cycles only decide and
   # enqueue; these workers send. See crates/notifier/src/push_queue.rs.
   push:

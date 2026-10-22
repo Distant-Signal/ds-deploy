@@ -1891,6 +1891,10 @@ Used only when `postgresql.enabled` is `false`.
 | `api.tripPlanLive.trustMaxAgeMinutes` | `30` | Ignore a TRUST delay whose train state was last updated longer ago than this. Actual times and cancellations are always used. |
 | `api.tripPlanLive.horizonMinutes` / `.lookbackMinutes` | `180` / `120` | Only legs booked to depart between `lookbackMinutes` ago and `horizonMinutes` ahead get live data. |
 | `api.tripPlanLive.maxTrains` | `60` | Most trains whose live data one request reads. |
+| `api.journeyBreaks.enabled` | `false` | Kill switch for mid-journey suggestions: the api's break sweep and the notifier's suggestion pushes (docs/journey-breaks.md). Off, the in-app banner and sheet still work. |
+| `api.journeyBreaks.intervalSecs` | `60` | Break sweep cadence; each tick holds an advisory lock, so one api replica runs it. |
+| `api.journeyBreaks.maxJourneysPerTick` | `200` | Most journeys the sweep evaluates per tick. |
+| `api.journeyBreaks.suggestionsMaxAgeSecs` | `120` | Stored suggestions older than this are re-planned when opened. |
 | `api.fullCoverageEnabledDefault` | `true` | Treat every catalogued line as `full_coverage_enabled`, whatever its `lines/*.toml` entry says, so TRUST-vs-schedule delay and cancellation data is used everywhere. Set `aggregator.fullCoverageEnabledDefault` to the same value: both services gate on it. |
 | `api.malloc.arenaMax` | `"2"` | `MALLOC_ARENA_MAX`: caps glibc's retained per-arena memory. |
 | `api.malloc.mmapThreshold` | `"131072"` | `MALLOC_MMAP_THRESHOLD_` in bytes: allocations at least this large are returned to the OS on free. |
@@ -2089,6 +2093,7 @@ twice.
 | `notifier.skipCheckPollIntervalSecs` | `90` | Cadence of the station-skip check for tracked journeys. |
 | `notifier.templateSweepPollIntervalSecs` | `3600` | Cadence of the recurring-journey materialisation sweep. |
 | `notifier.autoCommitLeadMinutes` | `120` | Lead time, in minutes, for the commit check on `auto`-mode journey legs. |
+| `notifier.journeyBreaksPollIntervalSecs` | `15` | How often open journey breaks are checked for a suggestion push (only with `api.journeyBreaks.enabled`). |
 | `notifier.push.workers` | `8` | Notifications sent at once (each fans out to all of that user's subscriptions). |
 | `notifier.push.queueCapacity` | `1024` | Notifications waiting for a worker. Beyond this new ones are dropped (`distant_signal_notifier_push_dropped_total`). |
 | `notifier.push.perUserInFlight` | `2` | At most this many of one user's notifications in flight, so one user's slow endpoints cannot take the whole pool. |

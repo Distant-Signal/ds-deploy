@@ -241,6 +241,14 @@ tables:
   delegated_grant_confirmations: {class: personal, grants: {api: SIUD}}
   delegated_deletions: {class: personal, grants: {api: SIUD}}
   journey_idempotency_keys: {class: personal, grants: {api: SIUD}}
+  # Mid-journey changes (docs/superpowers/specs/2026-10-22-mid-journey-changes-design.md
+  # §4.1): plan snapshots and breaks, written by the api. The notifier reads
+  # open breaks, stamps notified_at/notified_severity (its push bookkeeping)
+  # and reads the opt-out switch (§6.3, §6.5).
+  journey_revisions: {class: personal, grants: {api: SIUD}}
+  journey_revision_legs: {class: personal, grants: {api: SIUD}}
+  journey_breaks: {class: personal, grants: {api: SIUD, notifier: [S, {privileges: U, columns: [notified_at, notified_severity]}]}}
+  notification_preferences: {class: personal, grants: {api: SIUD, notifier: S}}
   # Bookkeeping of the tracked-trains-as-journeys migration (DS-124), for
   # its rollback script; only the owner reads it, and phase 3 drops both.
   standalone_track_conversions: {class: personal, grants: {}}
@@ -428,7 +436,9 @@ sequences:
   delegated_grants_id_seq: {table: delegated_grants}
   fixed_links_id_seq: {table: fixed_links}
   incident_history_id_seq: {table: incident_history}
+  journey_breaks_id_seq: {table: journey_breaks}
   journey_legs_id_seq: {table: journey_legs}
+  journey_revisions_id_seq: {table: journey_revisions}
   journey_template_legs_id_seq: {table: journey_template_legs}
   journey_templates_id_seq: {table: journey_templates}
   journeys_id_seq: {table: journeys}
