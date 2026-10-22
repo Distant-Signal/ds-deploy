@@ -241,6 +241,10 @@ tables:
   delegated_grant_confirmations: {class: personal, grants: {api: SIUD}}
   delegated_deletions: {class: personal, grants: {api: SIUD}}
   journey_idempotency_keys: {class: personal, grants: {api: SIUD}}
+  # Bookkeeping of the tracked-trains-as-journeys migration (DS-124), for
+  # its rollback script; only the owner reads it, and phase 3 drops both.
+  standalone_track_conversions: {class: personal, grants: {}}
+  group_train_share_moves: {class: personal, grants: {}}
 
   # --- shared-train: trains and their movements, shared by users.
   # aggregator: SELECT ... FOR UPDATE OF t needs U or D (it has D).
