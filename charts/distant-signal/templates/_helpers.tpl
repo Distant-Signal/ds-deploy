@@ -1861,10 +1861,9 @@ a moment. Takes (dict "root" $ "service" ...).
 {{- else if eq .service "api" -}}
 {{- $pool := int $cfg.maxConnections -}}
 {{- add (mul (add (int $root.Values.api.replicaCount) 1) $pool) 2 (include "distant-signal.apiMaintenancePool" $root) -}}
-{{- else if eq .service "writer" -}}
-{{- /* Its servicePool already counts the lock session: pool + 1 (spec §6.6). */ -}}
-{{- include "distant-signal.servicePool" . -}}
 {{- else -}}
+{{- /* The writer's servicePool already counts its lock session, so it too
+gets the +1 every role has for a probe or brief overlap: pool + lock + 1. */ -}}
 {{- add (include "distant-signal.servicePool" .) 1 -}}
 {{- end -}}
 {{- end }}

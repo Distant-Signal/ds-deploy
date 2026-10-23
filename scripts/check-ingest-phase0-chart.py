@@ -358,7 +358,7 @@ def check_roles_setup(c: Checker) -> None:
         "'--variable=enricher_connection_limit=6'",
         "'--variable=notifier_connection_limit=6'",
         "'--variable=app_connection_limit=75'",
-        "'--variable=writer_connection_limit=7'",
+        "'--variable=writer_connection_limit=8'",
         "'--variable=trust_consumer_connection_limit=3'",
         "'--variable=trust_backlog_connection_limit=4'",
         "'--variable=full_coverage_ro_connection_limit=3'",

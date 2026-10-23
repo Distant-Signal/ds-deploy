@@ -360,8 +360,9 @@ postgresql:
         # -- Key within `existingSecret` (and in the chart's Secret).
         existingSecretPasswordKey: postgres-writer-password
         # -- CONNECTION LIMIT. Empty: its pool
-        # (`ingestWriter.database.maxConnections`, 6) plus 1, the
-        # loop-lock session (spec §6.6: pool 6, limit 7).
+        # (`ingestWriter.database.maxConnections`, 6), plus 1 for the
+        # loop-lock session, plus the 1 every role has for a probe or brief
+        # overlap (pool 6, limit 8).
         connectionLimit: ""
       schedule_ingest:
         # -- Connect schedule-ingest (`scheduleFeed`) as `distant_signal_schedule_ingest` (plan 2d.2): a

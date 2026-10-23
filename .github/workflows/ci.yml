@@ -3092,7 +3092,7 @@ jobs:
           grep -q 'deployment="distant-signal-ingest-writer"' <<<"${rule}" || fail "IngestWriterDown must name the Deployment"
 
           # The writer role.
-          grep -q "'--variable=writer_connection_limit=7'" <<<"${on}" || fail "the writer role's limit must be its pool (6) + the lock session"
+          grep -q "'--variable=writer_connection_limit=8'" <<<"${on}" || fail "the writer role's limit must be its pool (6) + the lock session + 1"
           grep -q 'name: DS_PG_WRITER_PASSWORD$' <<<"${on}" || fail "the setup Job must get the writer's password"
           # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
           grep -q 'postgres://distant_signal_writer:\$(PGPASSWORD)@' <<<"${dep}" \
