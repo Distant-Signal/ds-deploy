@@ -245,6 +245,9 @@ tables:
   delegated_grant_confirmations: {class: personal, grants: {api: SIUD}}
   delegated_deletions: {class: personal, grants: {api: SIUD}}
   journey_idempotency_keys: {class: personal, grants: {api: SIUD}}
+  # Journey follows (DS-146): written and read by the api only. No notifier
+  # grant: followers get no pushes (see the migration, 20261024100000).
+  journey_follows: {class: personal, grants: {api: SIUD}}
   # Mid-journey changes (docs/superpowers/specs/2026-10-22-mid-journey-changes-design.md
   # §4.1): plan snapshots and breaks, written by the api. The notifier reads
   # open breaks, stamps notified_at/notified_severity (its push bookkeeping)
