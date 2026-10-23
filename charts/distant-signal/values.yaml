@@ -1813,7 +1813,10 @@ api:
   # -- Live arrivals on the /tfl/stops/{id} page (DS-136,
   # GET /public/tfl/stops/{id}/arrivals): the api asks TfL's Unified API
   # (`StopPoint/{id}/Arrivals`) on demand and keeps each stop's answer for
-  # `cacheSecs`, one upstream call per stop at a time. Needs egress to
+  # `cacheSecs`, one upstream call per stop at a time across every
+  # replica: the answer is shared through Postgres (`tfl_arrivals_cache`)
+  # with `sharedCache`, each pod keeping a copy in memory for
+  # `memoryCacheSecs` in front of it. Needs egress to
   # `baseUrl` (HTTPS): with networkPolicy.egress.enabled the api's
   # internet rule covers it, and `baseUrl`'s port is added to that rule.
   # Off answers every arrivals request with a 503 ("not available").
@@ -1828,6 +1831,15 @@ api:
     # A failed fetch is remembered this long before the next try.
     errorCacheSecs: 10
     timeoutSecs: 5
+    # Share answers between replicas through Postgres. Off, or with
+    # Postgres unreachable, each pod caches on its own.
+    sharedCache: true
+    # How long a pod keeps a shared answer in memory before reading the
+    # row again (never past the answer's own cacheSecs).
+    memoryCacheSecs: 5
+    # How old an answer may be and still be served while another replica
+    # fetches its replacement.
+    staleSecs: 120
   # -- Global override for every catalogued line's own `full_coverage_enabled`
   # (per-line `lines/*.toml` field, `crates/common/src/lib.rs`). When `true`,
   # `data::station_stats::full_coverage_enabled_for` (crates/api) treats

@@ -1900,9 +1900,12 @@ Used only when `postgresql.enabled` is `false`.
 | `api.tflArrivals.enabled` | `true` | Live arrivals on `/tfl/stops/{id}` (`GET /public/tfl/stops/{id}/arrivals`), fetched from TfL on demand. Off, that route answers 503. Needs egress to `baseUrl`; the api's internet rule allows it and gains `baseUrl`'s port. |
 | `api.tflArrivals.baseUrl` | `https://api.tfl.gov.uk` | TfL Unified API root. |
 | `api.tflArrivals.useTflPollerKey` | `true` | Send `pollers.tfl`'s subscription key (its Secret, when `pollers.tfl` is enabled or has an `existingSecret`; `optional`). Without a key the api calls TfL anonymously, at TfL's lower rate limit. |
-| `api.tflArrivals.cacheSecs` | `30` | How long one stop's arrivals are served from the api's in-memory cache (per pod; one upstream call per stop at a time). |
+| `api.tflArrivals.cacheSecs` | `30` | How long one stop's arrivals are served from the cache (one upstream call per stop at a time, across every replica with `sharedCache`). |
 | `api.tflArrivals.errorCacheSecs` | `10` | How long a failed TfL fetch is remembered before the next try. |
 | `api.tflArrivals.timeoutSecs` | `5` | Per-request timeout for the TfL call. |
+| `api.tflArrivals.sharedCache` | `true` | Share each stop's answer between the api's replicas through Postgres (`tfl_arrivals_cache`, an UNLOGGED table): the replica that finds it stale claims a short lease and fetches, the others serve the previous answer (up to `staleSecs` old) or wait for the new one. Off, or with Postgres unreachable, each pod caches on its own. |
+| `api.tflArrivals.memoryCacheSecs` | `5` | With `sharedCache`: how long a pod keeps a shared answer in memory before reading the row again (never past the answer's own `cacheSecs`). |
+| `api.tflArrivals.staleSecs` | `120` | With `sharedCache`: how old an answer may be and still be served while another replica fetches its replacement. |
 | `api.fullCoverageEnabledDefault` | `true` | Treat every catalogued line as `full_coverage_enabled`, whatever its `lines/*.toml` entry says, so TRUST-vs-schedule delay and cancellation data is used everywhere. Set `aggregator.fullCoverageEnabledDefault` to the same value: both services gate on it. |
 | `api.malloc.arenaMax` | `"2"` | `MALLOC_ARENA_MAX`: caps glibc's retained per-arena memory. |
 | `api.malloc.mmapThreshold` | `"131072"` | `MALLOC_MMAP_THRESHOLD_` in bytes: allocations at least this large are returned to the OS on free. |

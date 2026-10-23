@@ -312,6 +312,10 @@ tables:
   # docs/enricher-anthropic.md): inserted at submission, deleted once the
   # results are written (crates/enricher/src/batch.rs). No UPDATE.
   enricher_llm_batches: {class: internal, grants: {enricher: SID}}
+  # The api's shared TfL arrivals cache (DS-136, UNLOGGED): one row per
+  # stop, upserted by whichever replica refreshes it, pruned by the api
+  # after a day untouched (crates/api/src/data/tfl_arrivals.rs).
+  tfl_arrivals_cache: {class: internal, grants: {api: SIUD}}
   # The publish staging keys (UNLOGGED). Only schedule-reference's publish
   # uses them, as schedule_reference; the app role lost them in release B
   # (app_revokes below), with the api's /private publish routes.

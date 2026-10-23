@@ -483,6 +483,12 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ dig "errorCacheSecs" 10 $tflArrivals | quote }}
             - name: TFL_ARRIVALS_TIMEOUT_SECS
               value: {{ dig "timeoutSecs" 5 $tflArrivals | quote }}
+            - name: TFL_ARRIVALS_SHARED_CACHE
+              value: {{ dig "sharedCache" true $tflArrivals | quote }}
+            - name: TFL_ARRIVALS_MEMORY_CACHE_SECS
+              value: {{ dig "memoryCacheSecs" 5 $tflArrivals | quote }}
+            - name: TFL_ARRIVALS_STALE_SECS
+              value: {{ dig "staleSecs" 120 $tflArrivals | quote }}
             {{- $tflPoller := .Values.pollers.tfl | default dict }}
             {{- if and (dig "enabled" true $tflArrivals) (dig "useTflPollerKey" true $tflArrivals) (or $tflPoller.enabled $tflPoller.existingSecret) }}
             - name: TFL_APP_KEY
