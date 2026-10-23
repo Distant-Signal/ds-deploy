@@ -754,6 +754,11 @@ jobs:
       # The seed's tram network (frontend/e2e/fixtures/seed.sql), for the
       # /transit pages' specs and screenshots. Off in every other setting.
       API_TRANSIT_NETWORKS: metrolink
+      # The api's live TfL arrivals (/tfl/stops/{id}) come from
+      # scripts/tfl-arrivals-stub.py, started below, never from TfL: a fixed
+      # board for the seed's King's Cross St. Pancras and a 503 for every
+      # other stop (tfl-stop.spec.ts, the tfl-stop screenshot).
+      TFL_BASE_URL: http://127.0.0.1:8099
       # frontend/e2e/fixtures/seed.sql's own fixture ids -- see that file's
       # header comment for what each backs and why the dates are fixed.
       E2E_REAL_LINE_ID: lner-ecml
@@ -799,6 +804,20 @@ jobs:
         # ON_ERROR_STOP: plain psql reports a failing statement and carries on
         # with exit 0, which hid a broken group_invite_links insert for days.
         run: psql -v ON_ERROR_STOP=1 "${DATABASE_URL}" -f frontend/e2e/fixtures/seed.sql
+
+      - name: Start the TfL arrivals stub in the background
+        run: |
+          nohup python3 scripts/tfl-arrivals-stub.py --port 8099 > tfl-stub.log 2>&1 &
+          for _ in $(seq 1 10); do
+            if curl -s -o /dev/null http://127.0.0.1:8099/; then
+              echo "TfL stub is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "TfL stub did not start"
+          cat tfl-stub.log
+          exit 1
 
       - name: Start api in the background
         run: |

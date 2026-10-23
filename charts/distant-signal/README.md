@@ -1897,6 +1897,12 @@ Used only when `postgresql.enabled` is `false`.
 | `api.journeyBreaks.intervalSecs` | `60` | Break sweep cadence; each tick holds an advisory lock, so one api replica runs it. |
 | `api.journeyBreaks.maxJourneysPerTick` | `200` | Most journeys the sweep evaluates per tick. |
 | `api.journeyBreaks.suggestionsMaxAgeSecs` | `120` | Stored suggestions older than this are re-planned when opened. |
+| `api.tflArrivals.enabled` | `true` | Live arrivals on `/tfl/stops/{id}` (`GET /public/tfl/stops/{id}/arrivals`), fetched from TfL on demand. Off, that route answers 503. Needs egress to `baseUrl`; the api's internet rule allows it and gains `baseUrl`'s port. |
+| `api.tflArrivals.baseUrl` | `https://api.tfl.gov.uk` | TfL Unified API root. |
+| `api.tflArrivals.useTflPollerKey` | `true` | Send `pollers.tfl`'s subscription key (its Secret, when `pollers.tfl` is enabled or has an `existingSecret`; `optional`). Without a key the api calls TfL anonymously, at TfL's lower rate limit. |
+| `api.tflArrivals.cacheSecs` | `30` | How long one stop's arrivals are served from the api's in-memory cache (per pod; one upstream call per stop at a time). |
+| `api.tflArrivals.errorCacheSecs` | `10` | How long a failed TfL fetch is remembered before the next try. |
+| `api.tflArrivals.timeoutSecs` | `5` | Per-request timeout for the TfL call. |
 | `api.fullCoverageEnabledDefault` | `true` | Treat every catalogued line as `full_coverage_enabled`, whatever its `lines/*.toml` entry says, so TRUST-vs-schedule delay and cancellation data is used everywhere. Set `aggregator.fullCoverageEnabledDefault` to the same value: both services gate on it. |
 | `api.malloc.arenaMax` | `"2"` | `MALLOC_ARENA_MAX`: caps glibc's retained per-arena memory. |
 | `api.malloc.mmapThreshold` | `"131072"` | `MALLOC_MMAP_THRESHOLD_` in bytes: allocations at least this large are returned to the OS on free. |

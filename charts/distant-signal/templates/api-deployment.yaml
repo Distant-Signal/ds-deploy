@@ -470,6 +470,30 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.tripPlanLive.inSearch | quote }}
             - name: TRIP_PLAN_LIVE_SNAPSHOT_TTL_SECONDS
               value: {{ .Values.api.tripPlanLive.snapshotTtlSeconds | quote }}
+            # Live TfL arrivals for /tfl/stops/{id} -- see api.tflArrivals in
+            # values.yaml. The key, when there is one, is poller-tfl's.
+            {{- $tflArrivals := .Values.api.tflArrivals | default dict }}
+            - name: TFL_ARRIVALS_ENABLED
+              value: {{ dig "enabled" true $tflArrivals | quote }}
+            - name: TFL_BASE_URL
+              value: {{ dig "baseUrl" "https://api.tfl.gov.uk" $tflArrivals | quote }}
+            - name: TFL_ARRIVALS_CACHE_SECS
+              value: {{ dig "cacheSecs" 30 $tflArrivals | quote }}
+            - name: TFL_ARRIVALS_ERROR_CACHE_SECS
+              value: {{ dig "errorCacheSecs" 10 $tflArrivals | quote }}
+            - name: TFL_ARRIVALS_TIMEOUT_SECS
+              value: {{ dig "timeoutSecs" 5 $tflArrivals | quote }}
+            {{- $tflPoller := .Values.pollers.tfl | default dict }}
+            {{- if and (dig "enabled" true $tflArrivals) (dig "useTflPollerKey" true $tflArrivals) (or $tflPoller.enabled $tflPoller.existingSecret) }}
+            - name: TFL_APP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "distant-signal.pollerSecretName" (dict "root" . "poller" $tflPoller) }}
+                  key: {{ include "distant-signal.pollerSecretKey" (dict "root" . "name" "tfl" "poller" $tflPoller) }}
+                  # Anonymous rather than a pod that cannot start when the
+                  # key is missing.
+                  optional: true
+            {{- end }}
             # Mid-journey changes: the break sweep and its suggestions --
             # see api.journeyBreaks in values.yaml.
             - name: JOURNEY_BREAKS_ENABLED

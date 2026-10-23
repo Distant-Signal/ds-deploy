@@ -323,6 +323,10 @@ spec:
     {{- . | nindent 4 }}
 {{- end }}
 {{- $apiIdpUrls := list .Values.api.sso.issuerUrl .Values.api.internalOauth.issuerUrl }}
+{{- /* DS-136: the api calls TfL's Unified API for live arrivals. */}}
+{{- if dig "tflArrivals" "enabled" true .Values.api }}
+{{- $apiIdpUrls = append $apiIdpUrls (dig "tflArrivals" "baseUrl" "https://api.tfl.gov.uk" .Values.api) }}
+{{- end }}
 {{- range (dig "delegated" "clients" list .Values.api | default list) }}
 {{- $apiIdpUrls = append $apiIdpUrls (dig "issuerUrl" "" .) }}
 {{- end }}
