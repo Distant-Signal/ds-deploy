@@ -76,7 +76,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.88.0
           components: clippy
@@ -90,7 +90,7 @@ jobs:
       # clippy-driver only wraps the workspace crates). See rust-test's
       # cache step for why only main saves.
       - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: check-all-features
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -115,7 +115,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.88.0
 
@@ -126,7 +126,7 @@ jobs:
 
       # Shared with the clippy job; see there.
       - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: check-all-features
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -148,12 +148,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.88.0
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-deny@0.20.2
 
@@ -205,7 +205,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.88.0
           components: rustfmt
@@ -226,7 +226,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.88.0
 
@@ -258,7 +258,7 @@ jobs:
       # of that same PR, and the repo's 10 GB Actions cache was over its
       # cap and evicting main's entries for them. PRs still restore main's.
       - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -332,7 +332,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -349,7 +349,7 @@ jobs:
       # first #[ignore]d tests in this repo needing a live Redis rather than
       # a live Postgres -- mirrors the postgres: block above exactly.
       redis:
-        image: redis:7
+        image: redis:7@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b
         ports:
           - 6379:6379
         options: >-
@@ -367,7 +367,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.88.0
 
@@ -383,7 +383,7 @@ jobs:
 
       # See rust-test's cache step for save-if.
       - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -398,10 +398,10 @@ jobs:
       # --mode per-service) needs the pinned PyYAML: same uv setup as the
       # scripts-lint job.
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.4"
+          version: "0.13.5"
           enable-cache: true
           cache-dependency-glob: uv.lock
 
@@ -630,10 +630,10 @@ jobs:
       # `npm ci` installed above, so it lives here rather than in
       # scripts-lint (which lints and unit-tests the script itself).
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.4"
+          version: "0.13.5"
           # Nothing to cache: no dependencies are installed.
           enable-cache: false
 
@@ -696,7 +696,7 @@ jobs:
     # duplication.
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -709,7 +709,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7
+        image: redis:7@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b
         ports:
           - 6379:6379
         options: >-
@@ -780,13 +780,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.88.0
 
       # See rust-test's cache step for save-if.
       - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -882,10 +882,10 @@ jobs:
       # locally, so fonts and rendering match. docs/style-guide.md,
       # "Visual regression", says how to update the baselines.
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.4"
+          version: "0.13.5"
           # Nothing to cache: no dependencies are installed.
           enable-cache: false
 
@@ -932,10 +932,10 @@ jobs:
 
       # The script is stdlib-only; uv provides .python-version's interpreter.
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.4"
+          version: "0.13.5"
           # Nothing to cache: no dependencies are installed.
           enable-cache: false
 
@@ -987,12 +987,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # uv itself, pinned (Ranma-Config new-service guidance 3.3a); the
           # annotation is for renovate.json5's customManagers.
           # renovate: datasource=pypi depName=uv
-          version: "0.13.4"
+          version: "0.13.5"
           # Caches uv's download/wheel cache, keyed on uv.lock.
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -1026,7 +1026,7 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          version: v4.2.3
+          version: v4.3.1
 
       - name: alert payload sizes and promtool tests
         run: uv run --no-sync scripts/check-alert-payloads.py --report --download-promtool "${RUNNER_TEMP}/promtool"
@@ -1079,7 +1079,7 @@ jobs:
       # oauth2, openidconnect or api. `cargo tree` only (no build), so no
       # rdkafka packages.
       - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.88.0
 
@@ -1101,7 +1101,7 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          version: v4.2.3
+          version: v4.3.1
 
       - name: helm lint --strict (default values)
         run: helm lint --strict charts/distant-signal
