@@ -47,7 +47,12 @@
 # The grants of the four observed roles come from reading the code
 # (2026-10-06: crates/{aggregator,enricher,notifier}/src, non-test SQL,
 # including common::public_delay). They are confirmed or corrected by the
-# 7-day observe-role-usage.py report before any role is narrowed.
+# 7-day observe-role-usage.py report before any role is narrowed. Audited
+# again for release D (2026-10-23, DS-118; docs/ingest-phase5-runbook.md):
+# the code read against these rows, and the suites run with the four roles
+# narrowed (scripts/test-postgres-roles.py --narrow). It moved the api's
+# backlog replay to the writer (train_event_outbox) and added the
+# aggregator's UPDATE (id) on trains.
 
 version: 1
 
@@ -262,10 +267,14 @@ tables:
   group_train_share_moves: {class: personal, grants: {}}
 
   # --- shared-train: trains and their movements, shared by users.
-  # aggregator: SELECT ... FOR UPDATE OF t needs U or D (it has D).
+  # aggregator: its archive's SELECT ... FOR UPDATE OF t
+  # (aggregator/src/archive.rs delete_batch) needs UPDATE on at least one
+  # column; DELETE does not do (checked against Postgres 16 for DS-118:
+  # every row lock needs UPDATE). So UPDATE on `id` only, which it never
+  # sets: no wider than the DELETE it already holds.
   # trust_consumer: no grant on trains (security review L3, 2026-10-08):
   # it reads tracked trains through the ingest_active_tracked_trains view.
-  trains: {class: shared-train, grants: {api: SIUD, writer: SIU, trust_backlog: SIU, aggregator: SD, notifier: SIU}}
+  trains: {class: shared-train, grants: {api: SIUD, writer: SIU, trust_backlog: SIU, aggregator: [S, D, {privileges: U, columns: [id]}], notifier: SIU}}
   # Each user's subscriptions (user_id, pins): class personal, so not in
   # read_shared; every other role gets exactly the columns its code reads
   # and writes (security review M2, 2026-10-08):
@@ -288,6 +297,9 @@ tables:
   # needs SELECT on its columns, so trust_consumer (outside read_shared)
   # gets just those.
   train_movement_events: {class: shared-train, grants: {api: S, writer: SI, trust_backlog: SI, trust_consumer: [I, {privileges: S, columns: [trains_id, dedup_key]}], aggregator: S, notifier: S}}
+  # api: S only. Its track routes' backlog replays go through
+  # train_event_outbox, and a schedule match no longer completes the train
+  # itself (the writer's sweeps do; DS-118).
   train_current_state: {class: shared-train, grants: {api: S, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: S, notifier: S}}
   # writer: S only (security review L3): backlog-match reads, never updates.
   trust_event_backlog: {class: shared-train, grants: {api: S, writer: S, trust_backlog: SI, aggregator: SD}}
@@ -297,8 +309,14 @@ tables:
   notifier_forward_queue: {class: shared-train, grants: {api: S, writer: SI, trust_consumer: [I, {privileges: S, columns: [dedup_key]}], notifier: S}}
   # Plan 3b.3: trust-consumer's deferred subscription-changing events; the
   # writer's train_event_outbox loop applies (SELECT ... FOR UPDATE) and
-  # deletes them, or marks one rejected.
-  train_event_outbox: {class: internal, grants: {api: S, trust_consumer: SI, writer: SUD}}
+  # deletes them, or marks one rejected, then completes a train whose last
+  # event is the arrival at its known destination.
+  # api: INSERT on the three columns it sets (DS-118): its track routes'
+  # backlog replays (ds_store::backlog::matching, ReplayWrite::Outbox) are
+  # queued here for the writer to apply, since the api may only read
+  # train_movement_events and train_current_state. Its SELECT covers the
+  # ON CONFLICT (tracked_train_id, dedup_key) target.
+  train_event_outbox: {class: internal, grants: {api: [S, {privileges: I, columns: [tracked_train_id, dedup_key, event]}], trust_consumer: SI, writer: SUD}}
 
   # --- internal: one component's own state.
   notifier_cursor: {class: internal, grants: {notifier: SIU, api: S}}

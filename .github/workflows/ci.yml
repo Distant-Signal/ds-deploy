@@ -588,6 +588,25 @@ jobs:
             DATABASE_URL="$DATABASE_URL_INCIDENTS" cargo test -p ingest-writer --bin writer-maintenance -- --ignored --test-threads=1 &&
             DATABASE_URL="$DATABASE_URL_STATIONS" cargo test -p poller-stations -- --ignored --test-threads=1'
 
+      # Ingest phase 5 release D (docs/ingest-phase5-runbook.md §5.5, DS-118)
+      # narrows the api, aggregator, enricher and notifier roles: no longer
+      # members of the app role, exactly their own db-grants.yaml grants.
+      # --narrow renders that before db-grants.yaml says so. These tests run
+      # each narrowed role's runtime writes that reach outside its own
+      # tables, with their fixtures written as the owner: the api's track
+      # routes queue their backlog replay in train_event_outbox and the
+      # writer applies and completes it (a direct replay is refused); the
+      # aggregator's archive takes its FOR UPDATE row lock on trains (which
+      # needs UPDATE, not just DELETE). The full suites still seed most
+      # fixtures through the role's own pool, so they run in the step above.
+      - name: Release D's narrowed roles (api, aggregator, enricher, notifier)
+        run: |
+          # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
+          uv run --no-sync scripts/test-postgres-roles.py --mode per-service --narrow api,aggregator,enricher,notifier -- sh -c '
+            DATABASE_URL="$DATABASE_URL_API" cargo test -p ds-store backlog::matching::db_tests::the_api_queues_its_replay_for_the_writer -- --ignored --exact --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_API" cargo test -p api routes::train::db_tests::post_track_by_uid_backfills_schedule_and_movement_data_from_the_backlog -- --ignored --exact --test-threads=1 &&
+            DATABASE_URL="$DATABASE_URL_AGGREGATOR" cargo test -p aggregator archive::tests:: -- --ignored --test-threads=1'
+
   # Custom: no reusable Piped workflow covers Node/npm at all (its
   # ecosystem coverage is Python + Rust). frontend/package.json now has a
   # `lint` script (`eslint .`, flat config in frontend/eslint.config.mjs
