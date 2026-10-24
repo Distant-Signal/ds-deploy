@@ -1228,6 +1228,15 @@ pollers:
       # count fell by more than this fraction of the last snapshot's is
       # refused, and the stored stops stay.
       maxDropFraction: 0.2
+      # -- The daily route-sequences job (TFL_ROUTES_ENABLED, DS-151):
+      # each Tube, DLR and tram line's routes in stop order (about 30
+      # calls a run), XADDed as `tfl-line-routes/1` to the same stream at
+      # the same interval, under the same drop fraction (of the route
+      # count). The planner's Tube access legs measure rides along them and
+      # charge a change between branches. Only while `enabled`; needs the
+      # grants job re-run after the migration (tfl_line_routes and the
+      # writer's `tfl-line-routes` freshness row).
+      routes: false
     # One TfL line-status JSON document per tick.
     #
     # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
@@ -2205,7 +2214,7 @@ ingestWriter:
     tfl: apply
     reference: apply
     # poller-tfl's daily stops job (pollers.tfl.stops; off by default):
-    # ds:ingest:tfl-stops (tfl-stops). `apply` needs
+    # ds:ingest:tfl-stops (tfl-stops, tfl-line-routes). `apply` needs
     # postgresql.roles.perService.writer.connect, as tfl does (the
     # writer's ingest_freshness row policy binds its own role).
     tfl-stops: "off"

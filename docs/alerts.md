@@ -1462,6 +1462,12 @@ refused snapshot counts as a failed cycle: check
 `tfl_stops_refused_total{reason}` (`empty`, `sharp_drop`) and the log's
 "refusing the TfL stops snapshot" line. The stored stops stay as they were.
 
+`cycle="tfl-routes"` is its route-sequences job (DS-151,
+`pollers.tfl.stops.routes`), on the same schedule. A refused snapshot is a
+failed cycle too: check `tfl_routes_refused_total{reason}` and the log's
+"refusing the TfL route sequences" or "no routes for the ... line" line.
+The stored routes stay; Tube access legs keep measuring along them.
+
 ### DistantSignalLdbwsStationStale
 
 The least recently sampled LDBWS station

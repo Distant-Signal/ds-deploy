@@ -518,6 +518,7 @@ BEGIN
         ('tocs'),
         ('tfl_stops'),
         ('tfl_stop_crs'),
+        ('tfl_line_routes'),
         ('stanox_crs'),
         ('tiploc_crs'),
         ('fixed_links'),
@@ -710,6 +711,9 @@ BEGIN
         ('tfl_stop_crs', 'writer', 'SELECT', ''),
         ('tfl_stop_crs', 'writer', 'INSERT', ''),
         ('tfl_stop_crs', 'writer', 'DELETE', ''),
+        ('tfl_line_routes', 'writer', 'SELECT', ''),
+        ('tfl_line_routes', 'writer', 'INSERT', ''),
+        ('tfl_line_routes', 'writer', 'DELETE', ''),
         ('stanox_crs', 'writer', 'SELECT', ''),
         ('stanox_crs', 'schedule_reference', 'SELECT', ''),
         ('stanox_crs', 'schedule_reference', 'INSERT', ''),
@@ -860,9 +864,9 @@ BEGIN
                    || CASE WHEN v.cmd = 'ALL' THEN '' ELSE '_' || lower(v.cmd) END AS pol
         FROM (VALUES
         ('line_status', 'writer', 'ALL', 'source IN (''tfl'', ''transit'')'),
-        ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'')'),
-        ('ingest_freshness', 'writer', 'UPDATE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'')'),
-        ('ingest_freshness', 'writer', 'DELETE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'')'),
+        ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'', ''tfl-line-routes'')'),
+        ('ingest_freshness', 'writer', 'UPDATE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'', ''tfl-line-routes'')'),
+        ('ingest_freshness', 'writer', 'DELETE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'', ''tfl-line-routes'')'),
         ('ingest_freshness', 'stations', 'INSERT', 'source = ''stations'''),
         ('ingest_freshness', 'stations', 'UPDATE', 'source = ''stations'''),
         ('ingest_freshness', 'stations', 'DELETE', 'source = ''stations'''),
@@ -902,9 +906,9 @@ BEGIN
                           WHEN 'UPDATE' THEN 'w' WHEN 'DELETE' THEN 'd' END AS polcmd
         FROM (VALUES
         ('line_status', 'writer', 'ALL', 'source IN (''tfl'', ''transit'')'),
-        ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'')'),
-        ('ingest_freshness', 'writer', 'UPDATE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'')'),
-        ('ingest_freshness', 'writer', 'DELETE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'')'),
+        ('ingest_freshness', 'writer', 'INSERT', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'', ''tfl-line-routes'')'),
+        ('ingest_freshness', 'writer', 'UPDATE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'', ''tfl-line-routes'')'),
+        ('ingest_freshness', 'writer', 'DELETE', 'source IN (''tfl'', ''tocs'', ''station-samples'', ''full-coverage-stats'', ''full-coverage-window-stats'', ''station-full-coverage-samples'', ''island_of_ireland_stations_gtfs'', ''island_of_ireland_lines_gtfs'', ''island_of_ireland_stations_nir'', ''island_of_ireland_lines_nir'', ''transit-metrolink-timetable'', ''transit-metrolink-situations'', ''tfl-stops'', ''tfl-line-routes'')'),
         ('ingest_freshness', 'stations', 'INSERT', 'source = ''stations'''),
         ('ingest_freshness', 'stations', 'UPDATE', 'source = ''stations'''),
         ('ingest_freshness', 'stations', 'DELETE', 'source = ''stations'''),

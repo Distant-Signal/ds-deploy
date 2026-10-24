@@ -399,6 +399,11 @@ tables:
   # updated.
   tfl_stops: {class: reference, grants: {api: S, writer: SIUD}}
   tfl_stop_crs: {class: reference, grants: {api: S, writer: SID}}
+  # TfL's route sequences (DS-151; migration 20261026100000): the writer's
+  # tfl-line-routes/1 handler deletes every row and inserts the snapshot
+  # (ds_store::tfl_line_routes::replace, no UPDATE); the api's Tube access
+  # legs read them.
+  tfl_line_routes: {class: reference, grants: {api: S, writer: SID}}
   stanox_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, trust_backlog: S, trust_consumer: S, full_coverage_ro: S, notifier: S}}
   tiploc_crs: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD, notifier: S, trust_backlog: S, full_coverage_ro: S, trust_consumer: S}}
   fixed_links: {class: reference, grants: {api: S, writer: S, schedule_reference: SIUD}}
@@ -533,7 +538,8 @@ row_policies:
   #     (ds_store::samples::island_of_ireland), and each transit network's
   #     timetable and situations (common::transit, transit spec §8.5;
   #     metrolink only, off by default), and the TfL stops snapshot
-  #     (tfl-stops, ds_store::tfl_stops). The two unsuffixed
+  #     (tfl-stops, ds_store::tfl_stops) and route sequences
+  #     (tfl-line-routes, ds_store::tfl_line_routes). The two unsuffixed
   #     island_of_ireland_* names writers recorded before the per-network
   #     split were dropped a release after it (batch 54; migration
   #     20261010100100 deletes their rows).
@@ -545,6 +551,6 @@ row_policies:
         'island_of_ireland_stations_gtfs', 'island_of_ireland_lines_gtfs',
         'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir',
         'transit-metrolink-timetable', 'transit-metrolink-situations',
-        'tfl-stops')
+        'tfl-stops', 'tfl-line-routes')
     stations: {writes: "source = 'stations'"}
     incidents: {writes: "source = 'incidents'"}

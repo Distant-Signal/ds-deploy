@@ -2205,6 +2205,11 @@ scoping as above.
 while pollers.tfl.stops.enabled. */}}
 {{- if and .Values.pollers.tfl.enabled ((.Values.pollers.tfl.stops | default dict).enabled) }}
 {{- $_ := set $pollerIntervals "tfl-stops" ((.Values.pollers.tfl.stops).intervalSecs | default 86400) }}
+{{- /* Its route-sequences job (DS-151): label tfl-routes, the same
+interval, while pollers.tfl.stops.routes too. */}}
+{{- if (.Values.pollers.tfl.stops).routes }}
+{{- $_ := set $pollerIntervals "tfl-routes" ((.Values.pollers.tfl.stops).intervalSecs | default 86400) }}
+{{- end }}
 {{- end }}
 {{- range $label, $values := dict "irish-rail-gtfs" .Values.pollerIrishRailGtfs "irish-rail-live" .Values.pollerIrishRailLive "nir-stations" .Values.pollerNirStations }}
 {{- if $values.enabled }}

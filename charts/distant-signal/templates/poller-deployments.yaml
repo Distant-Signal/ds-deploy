@@ -174,6 +174,10 @@ with $poller.extraEnv, which replaces an entry of the same name.
               value: {{ $poller.stops.intervalSecs | default 86400 | int | quote }}
             - name: TFL_STOPS_MAX_DROP_FRACTION
               value: {{ $poller.stops.maxDropFraction | default 0.2 | quote }}
+            # The route-sequences job (pollers.tfl.stops.routes, DS-151):
+            # only with the stops job, at its interval and drop fraction.
+            - name: TFL_ROUTES_ENABLED
+              value: {{ $poller.stops.routes | default false | quote }}
             {{- end }}
             {{- end }}
             {{- if $poller.hourlyRequestBudget }}
