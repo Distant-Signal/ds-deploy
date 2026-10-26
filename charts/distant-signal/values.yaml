@@ -1771,7 +1771,7 @@ api:
   # -- Largest `results=options` /Trips/plan search allowed:
   # (waypoints + 1) * (2 * vias + 1) * (maxChanges + 2) must not exceed it
   # (a 400 otherwise). 252 is twice what 20 waypoints at maxChanges=4 cost;
-  # values outside 8-504 are clamped. `fastest` is not limited by it.
+  # values outside 14-504 are clamped. `fastest` is not limited by it.
   tripPlanMaxOptionsSearchSize: 252
   # -- /Trips/plan live overlay
   # (docs/superpowers/specs/2026-09-28-trips-plan-live-overlay-design.md):

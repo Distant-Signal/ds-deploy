@@ -1884,7 +1884,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.tripPlanGraphCache.maxAgeSecs` | `600` | Rebuild a cached graph after this long, or after a new schedule publish. |
 | `api.tripPlanMaxWaypoints` | `20` | Most `?waypoints=` one `/Trips/plan` request may name (clamped to 1-20). |
 | `api.tripPlanRoadWaterChangeMinutes` | `5` | Extra minutes `/Trips/plan` adds to a change on each bus or ferry side of it (clamped to 0-30): bus-to-train +N, bus-to-bus +2N, never at the start or end of the journey. |
-| `api.tripPlanMaxOptionsSearchSize` | `252` | Largest `results=options` `/Trips/plan` search: `(waypoints + 1) * (2 * vias + 1) * (maxChanges + 2)` (a 400 above it; clamped to 8-504). |
+| `api.tripPlanMaxOptionsSearchSize` | `252` | Largest `results=options` `/Trips/plan` search: `(waypoints + 1) * (2 * vias + 1) * (maxChanges + 2)` (a 400 above it; clamped to 14-504). |
 | `api.tripPlanLive.enabled` | `true` | Apply TRUST and Darwin data to `/Trips/plan` for today's and yesterday's service dates: cancelled trains and calls are withdrawn, known delays applied, and the plan re-run. `false` is the kill-switch: every plan is timetable-only, as with `?live=false`. |
 | `api.tripPlanLive.maxReplans` | `3` | Extra planning passes per `results=fastest` request when newly read live data changes the plan. |
 | `api.tripPlanLive.maxReplansOptions` | `1` | The same for `results=options` (RAPTOR, the expensive pass); 1 keeps the worst case near 1 s. |
