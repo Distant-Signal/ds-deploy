@@ -1293,7 +1293,7 @@ jobs:
           grep -q 'name: INTERNAL_OAUTH_GROUP_MCP$' <<<"${api}" || fail "the api must keep INTERNAL_OAUTH_GROUP_MCP"
           dep=$(doc Deployment distant-signal-ingest-writer <<<"${out}")
           env_is "${dep}" INGEST_WRITER_STREAMS \
-            "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,tfl-stops:off,transit-metrolink:off" ingest-writer
+            "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,tfl-stops:off,transit-metrolink:off,transit-net:off" ingest-writer
 
           # The writer's removed shadow mode fails, naming it.
           kv=ingestWriter.streams.tfl=shadow
@@ -2809,12 +2809,16 @@ jobs:
             --set redis.acl.clients.pollerNirStations=true
             --set redis.acl.clients.pollerTransitMetrolink=true
             --set ingestWriter.streams.transit-metrolink=apply
+            --set redis.acl.clients.pollerTransitNet=true
+            --set ingestWriter.streams.transit-net=apply
+            --set pollerTransitSchedule.networks.net.txcCredentials.existingSecret=tnds-login
           )
           pollers=$(render -f charts/distant-signal/values-example.yaml "${ioi[@]}" \
             --set pollerIrishRailGtfs.enabled=true \
             --set pollerIrishRailLive.enabled=true \
             --set pollerNirStations.enabled=true \
             --set pollerTransitSchedule.networks.metrolink.enabled=true \
+            --set pollerTransitSchedule.networks.net.enabled=true \
             --show-only templates/poller-deployments.yaml \
             --show-only templates/poller-irish-rail-gtfs-deployment.yaml \
             --show-only templates/poller-irish-rail-live-deployment.yaml \
@@ -2822,7 +2826,7 @@ jobs:
             --show-only templates/poller-transit-schedule-deployment.yaml)
           deployments=$(grep -c '^kind: Deployment' <<<"${pollers}")
           probes=$(grep -c 'path: /livez' <<<"${pollers}")
-          [[ "${deployments}" -ge 5 ]] || fail "expected the pollers to render, got ${deployments}"
+          [[ "${deployments}" -ge 6 ]] || fail "expected the pollers to render, got ${deployments}"
           [[ "${probes}" -eq "${deployments}" ]] \
             || fail "every poller needs a /livez liveness probe (${probes} of ${deployments})"
 
@@ -3082,7 +3086,7 @@ jobs:
           env_is "${dep}" INGEST_WRITER_LOOPS true
           env_is "${dep}" RECONCILIATION_SWEEP_INTERVAL_SECS 300
           env_is "${dep}" DATABASE_MAX_CONNECTIONS 6
-          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,tfl-stops:off,transit-metrolink:off"
+          env_is "${dep}" INGEST_WRITER_STREAMS "full-coverage:apply,ioi-gtfs:off,ioi-live:off,ioi-nir:off,reference:apply,station-samples:apply,tfl:apply,tfl-stops:off,transit-metrolink:off,transit-net:off"
 
           # Plan 3a.3: a stream not off brings Redis (env, user, egress, admission),
           # as its own narrow Redis user (security review H3; the guards
@@ -3259,11 +3263,15 @@ jobs:
             --set redis.acl.clients.pollerNirStations=true
             --set redis.acl.clients.pollerTransitMetrolink=true
             --set ingestWriter.streams.transit-metrolink=apply
+            --set redis.acl.clients.pollerTransitNet=true
+            --set ingestWriter.streams.transit-net=apply
+            --set pollerTransitSchedule.networks.net.txcCredentials.existingSecret=tnds-login
           )
           all=$(render "${ioi[@]}" --set pollerIrishRailGtfs.enabled=true \
             --set pollerIrishRailLive.enabled=true \
             --set pollerNirStations.enabled=true \
             --set pollerTransitSchedule.networks.metrolink.enabled=true \
+            --set pollerTransitSchedule.networks.net.enabled=true \
             --show-only templates/networkpolicy.yaml)
           for c in aggregator:8090 enricher:8090 notifier:8090 trust-consumer:8081 \
               trust-backlog-consumer:8083 full-coverage-consumer:8082 movement-relay:8083 \

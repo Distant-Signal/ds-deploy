@@ -471,7 +471,7 @@ counts as deployed. Takes (dict "root" $ "client" <redis.acl.clients key>).
 {{- $own := dict "pollerIrishRailGtfs" "pollerIrishRailGtfs" "pollerIrishRailLive" "pollerIrishRailLive" "pollerNirStations" "pollerNirStations" "movementRelay" "movementRelay" "ingestWriter" "ingestWriter" -}}
 {{- /* poller-transit-schedule, one Deployment per enabled network
      (pollerTransitSchedule.networks.<network>.enabled, transit spec §13.1). */ -}}
-{{- $transit := dict "pollerTransitMetrolink" "metrolink" -}}
+{{- $transit := dict "pollerTransitMetrolink" "metrolink" "pollerTransitNet" "net" -}}
 {{- if hasKey $transit .client -}}
 {{- $networks := ($v.pollerTransitSchedule | default dict).networks | default dict -}}
 {{- if (get $networks (get $transit .client) | default dict).enabled }}true{{ end -}}
@@ -2672,8 +2672,11 @@ every port. Takes (dict "root" $root "ports" (list 443)); renders one
 {{- end }}
 
 {{/*
-The TCP port a URL connects to: its explicit port, else 443 for https and
-80 for http, else nothing. Takes the URL string.
+The TCP port a URL connects to: its explicit port, else 443 for https, 80
+for http and 21 for ftp (whose passive data connections go to ports the
+server picks, so an ftp:// upstream needs the component's internetPorts
+empty when networkPolicy.egress.internetPorts is set), else nothing. Takes
+the URL string.
 */}}
 {{- define "distant-signal.urlPort" -}}
 {{- if contains "://" . -}}
@@ -2685,6 +2688,8 @@ The TCP port a URL connects to: its explicit port, else 443 for https and
 443
 {{- else if eq $u.scheme "http" -}}
 80
+{{- else if eq $u.scheme "ftp" -}}
+21
 {{- end -}}
 {{- end -}}
 {{- end }}

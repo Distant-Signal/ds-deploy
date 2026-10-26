@@ -1659,7 +1659,7 @@ api:
   # transit networks spec §11). Empty by default: every `/public/transit`
   # route answers 404 and the frontend hides its pages. List a network only
   # after its timetable has been applied for a day (spec §15.1), e.g.
-  # `[metrolink]`.
+  # `[metrolink]` or `[metrolink, net]`.
   transitNetworks: []
   # The embedded chatbot (/chat) is open to every logged-in user. The former
   # chatbotAccess and chatbotAccessGroup keys were removed on 2026-10-14;
@@ -2233,6 +2233,10 @@ ingestWriter:
     # `apply` needs postgresql.roles.perService.writer.connect, as tfl
     # does (the writer's ingest_freshness row policy binds its own role).
     transit-metrolink: "off"
+    # ds:ingest:transit-net (pollerTransitSchedule's net network,
+    # Nottingham Express Transit: its timetable only; NET design §7). The
+    # same `apply` prerequisite.
+    transit-net: "off"
   # -- Changed rows only (INGEST_WRITER_CHANGED_ROWS_ONLY; plan 3a.9, spec
   # §7.8): the `station-full-coverage-samples/1` handler stops advancing
   # `resolved_at` on rows whose stats are unchanged (about 2,400 of 2,700
@@ -2935,6 +2939,12 @@ redis:
       # `poller-transit-metrolink-password` key of `existingSecret`, only
       # while this is on. Turning it on restarts Redis once.
       pollerTransitMetrolink: false
+      # -- poller-transit-schedule for network net (Nottingham Express
+      # Transit; off by default), as user `poller-transit-net`
+      # (`~ds:ingest:transit-net +xadd +xrevrange`). An `optional` user, as
+      # pollerTransitMetrolink: needs the `poller-transit-net-password` key
+      # of `existingSecret` while on; turning it on restarts Redis once.
+      pollerTransitNet: false
   image:
     repository: redis
     # -- Pinned to an exact 7.4 patch release and content digest (INF-11);
@@ -4101,14 +4111,15 @@ pollerNirStations:
 # ---------------------------------------------------------------------------
 # pollerTransitSchedule (crates/poller-transit-schedule/src/config.rs:
 # Config) -- transit networks that are neither National Rail nor TfL,
-# Manchester Metrolink first (docs/superpowers/specs/2026-10-09-transit-
-# networks-design.md). One Deployment per enabled network
+# Manchester Metrolink and Nottingham Express Transit
+# (docs/superpowers/specs/2026-10-09-transit-networks-design.md,
+# 2026-10-24-nottingham-net-design.md). One Deployment per enabled network
 # (`<release>-poller-transit-schedule-<network>`), from one image. Each
-# reads its network's public BODS timetable (GTFS) and disruptions
-# (SIRI-SX) and NaPTAN, and XADDs them to its own stream,
-# `ds:ingest:transit-<network>`, as its own Redis user
-# (`redis.acl.clients.pollerTransit<Network>`). No database, no api, no
-# secret beyond the Redis password: the BODS downloads need no key.
+# reads its network's timetable (BODS GTFS, or TNDS TransXChange for NET),
+# BODS disruptions (SIRI-SX) where there are any, and NaPTAN, and XADDs
+# them to its own stream, `ds:ingest:transit-<network>`, as its own Redis
+# user (`redis.acl.clients.pollerTransit<Network>`). No database, no api;
+# no secret beyond the Redis password except NET's TNDS login.
 # ---------------------------------------------------------------------------
 pollerTransitSchedule:
   image:
@@ -4172,6 +4183,75 @@ pollerTransitSchedule:
       # -- The /work emptyDir the GTFS zip is downloaded to.
       workDirSizeLimit: 512Mi
       # The parse streams: 48 MiB peak RSS on the whole North West file.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 192Mi
+        limits:
+          memory: 768Mi
+      extraEnv: []
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+      podAnnotations: {}
+      podSecurityContext: {}
+    net:
+      # -- Nottingham Express Transit (NET design). Off by default. NET is
+      # in no BODS feed, so its timetable is the Traveline National Dataset
+      # (TNDS) East Midlands TransXChange, over FTP with a Traveline login
+      # (txcCredentials). Turning it on needs
+      # `redis.acl.clients.pollerTransitNet: true` (with the
+      # `poller-transit-net-password` Secret key),
+      # `ingestWriter.streams.transit-net: apply` and the login Secret; the
+      # pages stay hidden until `api.transitNetworks` lists `net`. Rollout:
+      # docs/transit-networks.md.
+      enabled: false
+      # -- The timetable source adapter (TRANSIT_ADAPTER): txc, as the
+      # network file says.
+      adapter: txc
+      # -- The TransXChange zip (TRANSIT_TXC_URL): TNDS's East Midlands
+      # region (OGL), filtered to NOC NEXT. `ftp://` needs
+      # txcCredentials; an `https://` zip of TXC documents needs none.
+      txcUrl: "ftp://ftp.tnds.co.uk/EM.zip"
+      # -- The TXC download's byte cap (TRANSIT_TXC_MAX_BYTES; 400 MiB).
+      txcMaxBytes: 419430400
+      txcCredentials:
+        # -- A Secret holding the TNDS (Traveline) FTP login, as
+        # TRANSIT_TXC_USERNAME and TRANSIT_TXC_PASSWORD. Required while
+        # enabled with an `ftp://` txcUrl (the chart refuses otherwise).
+        # Plain FTP sends it in clear; it is a free registration that
+        # guards nothing else.
+        existingSecret: ""
+        # -- The Secret's key for the login name.
+        usernameKey: username
+        # -- The Secret's key for the password.
+        passwordKey: password
+      # -- The BODS SIRI-SX bulk archive. Unused while situationsEnabled is
+      # off: BODS has no Nottingham participant (NET design §2.3).
+      situationsUrl: "https://data.bus-data.dft.gov.uk/disruptions/download/bulk_archive"
+      # -- NaPTAN access nodes; `{area}` is the network file's naptan_area.
+      naptanUrl: "https://naptan.api.dft.gov.uk/v1/access-nodes?atcoAreaCodes={area}&dataFormat=csv"
+      # -- Seconds between timetable fetches (TNDS updates Monday to
+      # Thursday; a daily fetch re-sends an unchanged feed, which keeps its
+      # freshness moving).
+      timetableIntervalSecs: 86400
+      # -- Seconds between SIRI-SX fetches (unused while off).
+      situationsIntervalSecs: 300
+      # -- Must stay off: the producer refuses to start with it on, as NET's
+      # network file names no SIRI-SX participant (no source publishes NET's
+      # disruptions). Its stream is budgeted for the timetable only.
+      situationsEnabled: false
+      # -- Days of service dates stored after today (Q8).
+      horizonDays: 60
+      # -- Sharp-drop guard, as metrolink's.
+      feedMaxDropFraction: 0.3
+      # -- One-shot timetable refresh token, as metrolink's
+      # (docs/transit-networks.md).
+      timetableRefresh: ""
+      # -- The /work emptyDir the TXC zip is downloaded to.
+      workDirSizeLimit: 512Mi
+      # One TXC document is held at a time while it is parsed; NET's are
+      # small.
       resources:
         requests:
           cpu: 100m
@@ -5280,6 +5360,7 @@ metrics:
         "ds:ingest:ioi-nir": 500
         "ds:ingest:ioi-live": 1000
         "ds:ingest:transit-metrolink": 320
+        "ds:ingest:transit-net": 24
     # DistantSignalIngestStreamStalled (critical): producers' XADDs to a
     # stream succeeded within its stallAfterSecs, but the writer has
     # applied nothing from it for longer, for `for`. stallAfterSecs is
@@ -5287,7 +5368,8 @@ metrics:
     # gauges): station-samples 1/min, full-coverage 3/min, tfl 1/5 min,
     # tfl-stops daily (poller-tfl's stops job; off by default),
     # reference daily, ioi-live 1/5 min, ioi-gtfs and ioi-nir daily,
-    # transit-metrolink 1/5 min (its situations; off by default).
+    # transit-metrolink 1/5 min (its situations; off by default),
+    # transit-net daily (its timetable only; off by default).
     ingestStreamStalled:
       enabled: true
       for: 5m
@@ -5302,6 +5384,7 @@ metrics:
         "ds:ingest:ioi-nir": 259200
         "ds:ingest:ioi-live": 900
         "ds:ingest:transit-metrolink": 900
+        "ds:ingest:transit-net": 259200
     # DistantSignalIngestDeadLetters: any entry dead-lettered within
     # `window`.
     ingestDeadLetters:
@@ -5438,6 +5521,8 @@ metrics:
         # situations every 5 minutes (written from batch 4).
         transit-metrolink-timetable: 129600
         transit-metrolink-situations: 1800
+        # NET: the timetable only (no situations source; NET design §8).
+        transit-net-timetable: 129600
       whileStreamApplies:
         station-samples: "ds:ingest:station-samples"
         full-coverage-stats: "ds:ingest:full-coverage"
@@ -5449,6 +5534,7 @@ metrics:
         island_of_ireland_lines_nir: "ds:ingest:ioi-nir"
         transit-metrolink-timetable: "ds:ingest:transit-metrolink"
         transit-metrolink-situations: "ds:ingest:transit-metrolink"
+        transit-net-timetable: "ds:ingest:transit-net"
       for: 10m
       severity: warning
     # DistantSignalDbPoolAcquireTimeouts: a component's Postgres pool timed

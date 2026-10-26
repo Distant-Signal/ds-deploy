@@ -4,7 +4,9 @@ poller-transit-schedule: one Deployment per enabled network
 §13.1). Its only sink is its network's stream, ds:ingest:transit-<network>,
 as its own Redis user (redis.acl.clients.pollerTransit<Network>), which the
 ingest-writer must apply (ingestWriter.streams.transit-<network>: apply).
-Recreate from creation: two pods must never XADD at once.
+Recreate from creation: two pods must never XADD at once. A txc network
+(Nottingham NET) with an ftp:// txcUrl reads its TNDS login from
+txcCredentials.existingSecret (NET design §5).
 */}}
 {{- $root := . }}
 {{- $p := .Values.pollerTransitSchedule }}
@@ -13,6 +15,12 @@ Recreate from creation: two pods must never XADD at once.
 {{- $client := printf "pollerTransit%s" ($network | title) }}
 {{- $component := "poller-transit-schedule" }}
 {{- include "distant-signal.requireStreamApplied" (dict "root" $root "client" $client "stream" (printf "transit-%s" $network) "what" (printf "pollerTransitSchedule.networks.%s.enabled" $network)) }}
+{{- if not (has (toString $n.adapter) (list "gtfs" "txc")) }}
+{{- fail (printf "pollerTransitSchedule.networks.%s.adapter must be gtfs or txc (got %q)" $network (toString $n.adapter)) }}
+{{- end }}
+{{- if and (eq (toString $n.adapter) "txc") (hasPrefix "ftp://" (toString $n.txcUrl)) (not ($n.txcCredentials | default dict).existingSecret) }}
+{{- fail (printf "pollerTransitSchedule.networks.%s: an ftp:// txcUrl (TNDS) needs txcCredentials.existingSecret, a Secret with the Traveline login (keys username and password; docs/transit-networks.md)" $network) }}
+{{- end }}
 {{- $refresh := toString (default "" $n.timetableRefresh) }}
 {{- if and $refresh (not (regexMatch "^[A-Za-z0-9._:-]{1,64}$" $refresh)) }}
 {{- fail (printf "pollerTransitSchedule.networks.%s.timetableRefresh must be 1-64 of A-Z a-z 0-9 . _ : - (got %q)" $network $refresh) }}
@@ -87,8 +95,8 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
-        # The GTFS zip (a zip needs a seekable file), deleted after each
-        # parse.
+        # The GTFS or TXC zip (a zip needs a seekable file), deleted
+        # after each parse.
         - name: work
           emptyDir:
             sizeLimit: {{ $n.workDirSizeLimit }}
@@ -120,10 +128,36 @@ network's extraEnv, which replaces an entry of the same name. Takes (dict
               value: {{ .network | quote }}
             - name: TRANSIT_ADAPTER
               value: {{ $n.adapter | quote }}
+            {{- with $n.gtfsUrl }}
             - name: TRANSIT_GTFS_URL
-              value: {{ $n.gtfsUrl | quote }}
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $n.gtfsMaxBytes }}
             - name: TRANSIT_GTFS_MAX_BYTES
-              value: {{ $n.gtfsMaxBytes | int64 | quote }}
+              value: {{ . | int64 | quote }}
+            {{- end }}
+            {{- with $n.txcUrl }}
+            - name: TRANSIT_TXC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $n.txcMaxBytes }}
+            - name: TRANSIT_TXC_MAX_BYTES
+              value: {{ . | int64 | quote }}
+            {{- end }}
+            {{- $creds := $n.txcCredentials | default dict }}
+            {{- with $creds.existingSecret }}
+            # The TNDS login (NET design §5).
+            - name: TRANSIT_TXC_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $creds.usernameKey | default "username" | quote }}
+            - name: TRANSIT_TXC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $creds.passwordKey | default "password" | quote }}
+            {{- end }}
             - name: TRANSIT_SITUATIONS_URL
               value: {{ $n.situationsUrl | quote }}
             - name: TRANSIT_NAPTAN_URL

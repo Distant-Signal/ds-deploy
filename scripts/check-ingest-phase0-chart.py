@@ -633,41 +633,52 @@ def check_redis_acl_file(c: Checker) -> None:
 def check_optional_acl_users(c: Checker) -> None:
     """Check an `optional` user renders only while its client is on (transit §0).
 
-    poller-transit-metrolink ships off: by default neither its ACL line nor
-    its password env (a Secret key Redis would need) renders, so merging it
-    restarts nothing. With its client on, both render, and the ConfigMap
-    still equals scripts/render-redis-acl.py's with `--client`.
+    poller-transit-metrolink and poller-transit-net (NET design §7) ship
+    off: by default neither one's ACL line nor its password env (a Secret
+    key Redis would need) renders, so merging it restarts nothing. With its
+    client on, both render (and not the other's), and the ConfigMap still
+    equals scripts/render-redis-acl.py's with `--client`.
     """
     acl = load_render_acl()
     text = (CHART / "files" / "redis-users.acl.tpl").read_text(encoding="utf-8")
-    var = "REDIS_ACL_PASSWORD_POLLER_TRANSIT_METROLINK"
-    for on in (False, True):
-        args = sets(f"redis.acl.clients.pollerTransitMetrolink={str(on).lower()}")
-        docs = c.docs(*args)
-        cm = by_name(docs).get("ConfigMap/distant-signal-redis-acl", {})
-        got = cast("dict[str, str]", cm.get("data") or {}).get("users.acl.tpl") or ""
-        want = acl.render(
-            text,
-            stage="narrow",
-            default_user=True,
-            default_password=True,
-            clients=["pollerTransitMetrolink"] if on else [],
-        )
-        c.check(
-            ok=got == want and ("user poller-transit-metrolink " in got) == on,
-            message=f"optional ACL user with its client {on}: ConfigMap {got!r:.80}",
-        )
-        inits = containers(deployment(docs, "-redis"), "initContainers")
-        init_env = env(inits[0]) if inits else {}
-        c.check(
-            ok=(var in init_env) == on
-            and (
-                not on
-                or secret_ref(init_env.get(var))
-                == ("example-redis-users", "poller-transit-metrolink-password")
-            ),
-            message=f"optional ACL user with its client {on}: Redis env {var}",
-        )
+    optional = {
+        "pollerTransitMetrolink": "poller-transit-metrolink",
+        "pollerTransitNet": "poller-transit-net",
+    }
+    for client, user in optional.items():
+        var = "REDIS_ACL_PASSWORD_" + user.upper().replace("-", "_")
+        for on in (False, True):
+            args = sets(f"redis.acl.clients.{client}={str(on).lower()}")
+            docs = c.docs(*args)
+            cm = by_name(docs).get("ConfigMap/distant-signal-redis-acl", {})
+            got = (
+                cast("dict[str, str]", cm.get("data") or {}).get("users.acl.tpl") or ""
+            )
+            want = acl.render(
+                text,
+                stage="narrow",
+                default_user=True,
+                default_password=True,
+                clients=[client] if on else [],
+            )
+            others = [u for u in optional.values() if u != user]
+            c.check(
+                ok=got == want
+                and (f"user {user} " in got) == on
+                and not any(f"user {o} " in got for o in others),
+                message=f"optional user {user}, client {on}: ConfigMap {got!r:.80}",
+            )
+            inits = containers(deployment(docs, "-redis"), "initContainers")
+            init_env = env(inits[0]) if inits else {}
+            c.check(
+                ok=(var in init_env) == on
+                and (
+                    not on
+                    or secret_ref(init_env.get(var))
+                    == ("example-redis-users", f"{user}-password")
+                ),
+                message=f"optional user {user}, client {on}: Redis env {var}",
+            )
     # Not deployed while its network is off, so defaultUser off does not
     # need its client on.
     renders(
@@ -779,6 +790,132 @@ def check_transit_producer(c: Checker) -> None:
         "redis.acl.clients.pollerTransitMetrolink",
         *TRANSIT_ON,
         *sets("redis.acl.clients.pollerTransitMetrolink=false"),
+    )
+
+
+NET_ON = sets(
+    "pollerTransitSchedule.networks.net.enabled=true",
+    "redis.acl.clients.pollerTransitNet=true",
+    "ingestWriter.streams.transit-net=apply",
+    "pollerTransitSchedule.networks.net.txcCredentials.existingSecret=tnds-login",
+)
+FTP_PORT = 21
+
+
+def check_net_producer(c: Checker) -> None:
+    """Check NET's producer: TXC over FTP with its login (NET design §5, §9)."""
+    name = "Deployment/distant-signal-poller-transit-schedule-net"
+    c.check(
+        ok=name not in by_name(c.docs()),
+        message="NET's producer must not render by default",
+    )
+    docs = by_name(c.docs(*NET_ON))
+    net = docs.get(name, {})
+    e = env((containers(net) or [{}])[0])
+    c.check(
+        ok=value(e.get("TRANSIT_NETWORK")) == "net"
+        and value(e.get("TRANSIT_ADAPTER")) == "txc"
+        and value(e.get("TRANSIT_TXC_URL")) == "ftp://ftp.tnds.co.uk/EM.zip"
+        and value(e.get("TRANSIT_TXC_MAX_BYTES")) == "419430400"
+        and value(e.get("TRANSIT_SITUATIONS_ENABLED")) == "false"
+        and "TRANSIT_GTFS_URL" not in e
+        and value(e.get("REDIS_USERNAME")) == "poller-transit-net"
+        and secret_ref(e.get("REDIS_PASSWORD"))
+        == ("example-redis-users", "poller-transit-net-password"),
+        message=f"{name}: txc from TNDS, its Redis user, no GTFS URL: {sorted(e)}",
+    )
+    c.check(
+        ok=secret_ref(e.get("TRANSIT_TXC_USERNAME")) == ("tnds-login", "username")
+        and secret_ref(e.get("TRANSIT_TXC_PASSWORD")) == ("tnds-login", "password"),
+        message=f"{name}: the TNDS login from txcCredentials.existingSecret",
+    )
+    # Metrolink keeps its GTFS env and gets no TXC env.
+    both = by_name(c.docs(*NET_ON, *TRANSIT_ON))
+    metrolink = env(
+        (
+            containers(
+                both.get(
+                    "Deployment/distant-signal-poller-transit-schedule-metrolink", {}
+                )
+            )
+            or [{}]
+        )[0]
+    )
+    c.check(
+        ok=value(metrolink.get("TRANSIT_ADAPTER")) == "gtfs"
+        and bool(value(metrolink.get("TRANSIT_GTFS_URL")))
+        and not any(k.startswith("TRANSIT_TXC_") for k in metrolink)
+        and name in both,
+        message="metrolink and net render side by side, each with its own source env",
+    )
+    c.refuses(
+        "NET over FTP without its TNDS login",
+        "txcCredentials.existingSecret",
+        *NET_ON,
+        *sets("pollerTransitSchedule.networks.net.txcCredentials.existingSecret="),
+    )
+    renders(
+        c,
+        "NET from an https:// TXC zip needs no login",
+        *NET_ON,
+        *sets(
+            "pollerTransitSchedule.networks.net.txcCredentials.existingSecret=",
+            "pollerTransitSchedule.networks.net.txcUrl=https://example.org/em.zip",
+        ),
+    )
+    c.refuses(
+        "an unknown transit adapter",
+        "adapter must be gtfs or txc",
+        *NET_ON,
+        *sets("pollerTransitSchedule.networks.net.adapter=netex"),
+    )
+    c.refuses(
+        "NET's producer without its stream applied",
+        "ingestWriter.streams.transit-net: apply",
+        *NET_ON,
+        *sets("ingestWriter.streams.transit-net=off"),
+    )
+    c.refuses(
+        "NET's producer without its Redis user",
+        "redis.acl.clients.pollerTransitNet",
+        *NET_ON,
+        *sets("redis.acl.clients.pollerTransitNet=false"),
+    )
+    c.refuses(
+        "M4: transit-net apply as the app role",
+        "ingestWriter.streams.transit-net: apply needs",
+        *sets(
+            "ingestWriter.streams.tfl=off",
+            "ingestWriter.streams.transit-net=apply",
+            "postgresql.roles.perService.writer.connect=false",
+        ),
+    )
+    # NetworkPolicy: a port-limited internet rule gains FTP's 21 (the
+    # passive data ports need internetPorts [] for the component; the
+    # runbook says so).
+    policies = by_name(
+        c.docs(
+            *NET_ON,
+            *sets(
+                "networkPolicy.enabled=true",
+                "networkPolicy.egress.enabled=true",
+                "networkPolicy.egress.internetPorts={443}",
+            ),
+        )
+    )
+    policy = policies.get("NetworkPolicy/distant-signal-poller-transit-schedule", {})
+    rules = cast(
+        "list[dict[str, object]]",
+        cast("dict[str, object]", policy.get("spec") or {}).get("egress") or [],
+    )
+    ports = {
+        cast("int", p.get("port"))
+        for r in rules
+        for p in cast("list[dict[str, object]]", r.get("ports") or [])
+    }
+    c.check(
+        ok={REDIS_PORT, HTTPS_PORT, FTP_PORT} <= ports and POSTGRES_PORT not in ports,
+        message=f"NET producer egress: Redis, 443 and 21, no Postgres: {sorted(ports)}",
     )
 
 
@@ -949,6 +1086,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_redis_acl_file(c)
     check_optional_acl_users(c)
     check_transit_producer(c)
+    check_net_producer(c)
     check_redis_user_guards(c)
     check_narrow_role_guards(c)
     check_retired_switches(c)

@@ -466,15 +466,21 @@ own ds:ingest:ioi-* stream, plan 3c.2, D8); no api, no token URL. */}}
 {{- $workers = append $workers (dict "component" "poller-nir-stations" "metricsPort" .Values.pollerNirStations.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" $ioiEgress "urls" (list .Values.pollerNirStations.stationsCsvUrl .Values.pollerNirStations.haltsCsvUrl)) }}
 {{- end }}
 {{- /* poller-transit-schedule (transit spec §13.3): Redis (its network's
-stream) and the public downloads: the BODS GTFS and SIRI-SX URLs, the
-SIRI-SX archive's signed-URL host (download.bus-data.dft.gov.uk) and
-NaPTAN, for every enabled network; no Postgres, no api. One policy for the
-component, whichever networks are on. */}}
+stream) and the downloads: the BODS GTFS and SIRI-SX URLs, the SIRI-SX
+archive's signed-URL host (download.bus-data.dft.gov.uk), a txc network's
+TNDS FTP URL (NET design §5) and NaPTAN, for every enabled network; no
+Postgres, no api. One policy for the component, whichever networks are
+on. */}}
 {{- if include "distant-signal.transitNetworksOn" . }}
 {{- $transitUrls := list "https://download.bus-data.dft.gov.uk/" }}
 {{- range $network, $n := .Values.pollerTransitSchedule.networks }}
 {{- if $n.enabled }}
-{{- $transitUrls = concat $transitUrls (list $n.gtfsUrl $n.situationsUrl ($n.naptanUrl | replace "{area}" "area")) }}
+{{- range $url := list $n.gtfsUrl $n.txcUrl $n.situationsUrl }}
+{{- if $url }}
+{{- $transitUrls = append $transitUrls $url }}
+{{- end }}
+{{- end }}
+{{- $transitUrls = append $transitUrls ($n.naptanUrl | replace "{area}" "area") }}
 {{- end }}
 {{- end }}
 {{- $workers = append $workers (dict "component" "poller-transit-schedule" "metricsPort" .Values.pollerTransitSchedule.metricsPort "healthPorts" (list .Values.workerHealth.port) "egress" (dict "redis" true) "urls" $transitUrls) }}
