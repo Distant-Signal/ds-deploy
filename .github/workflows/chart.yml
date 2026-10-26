@@ -170,7 +170,7 @@ env:
 jobs:
   build-and-push:
     name: ${{ matrix.service }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: write
@@ -598,7 +598,7 @@ jobs:
     needs: build-and-push
     # env.PUBLISH's condition (env isn't available in a job's `if`).
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: write

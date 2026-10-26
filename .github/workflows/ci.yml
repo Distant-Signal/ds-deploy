@@ -70,7 +70,7 @@ jobs:
   # <curl/curl.h>.
   clippy:
     name: cargo clippy -D warnings
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,7 +109,7 @@ jobs:
   # rust-version is bumped on purpose.
   msrv:
     name: cargo +1.88.0 check (MSRV)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -142,7 +142,7 @@ jobs:
   # which verifies the release checksum; the version is pinned exactly.
   cargo-deny:
     name: cargo deny check
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -199,7 +199,7 @@ jobs:
   # is a real regression a PR introduced.
   rustfmt:
     name: cargo fmt --check
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,7 +219,7 @@ jobs:
   # and took ~10 of this job's ~19-23 minutes when both lived here.
   rust-test:
     name: cargo build & test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout repository
@@ -328,7 +328,7 @@ jobs:
   # eval" (and the replay harness with "REPLAY_HISTORY_JSONL must be set").
   rust-db-test:
     name: cargo test -- --ignored (DB/Redis-backed)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     services:
       postgres:
@@ -621,7 +621,7 @@ jobs:
   # built/started frontend, none of which this job stands up. See the
   # `frontend-e2e` job below for that.
   frontend:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         working-directory: frontend
@@ -707,7 +707,7 @@ jobs:
   # which no spec here drives.
   frontend-e2e:
     name: Playwright e2e + accessibility
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     # Same two services, same images, same health-check options as
     # `rust-db-test` above -- copied rather than factored out into a
@@ -942,7 +942,7 @@ jobs:
   # The job name is unchanged in case a branch-protection rule requires it.
   migration-order:
     name: migration versions are newer than the base
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1000,7 +1000,7 @@ jobs:
   # runs the same checks locally (`uv run scripts/lint-scripts.py`).
   scripts-lint:
     name: scripts lint (shellcheck, shfmt, ruff, mypy, actionlint, hadolint)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1112,7 +1112,7 @@ jobs:
   # cluster. `--strict` turns lint warnings into failures too; the only
   # finding left is the [INFO] "icon is recommended", which doesn't fail.
   helm-lint:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
