@@ -1768,6 +1768,20 @@ api:
   # berth is further from the platforms than the station's own minimum
   # change time assumes.
   tripPlanRoadWaterChangeMinutes: 5
+  # -- Transit networks whose trams /Trips/plan plans with
+  # (API_TRIP_PLAN_TRANSIT_NETWORKS; docs/superpowers/specs/2026-10-24-
+  # transit-trip-planning-design.md). Empty by default: the graph, its cache
+  # key and every response are as before. Listed, the network's tram trips
+  # join each cached day graph (about 6 MB a date for Metrolink), and a
+  # request plans with them when it sends `transit=true` or names a tram
+  # stop. Only `metrolink` is accepted; the render fails on anything else.
+  # Rollout: docs/transit-networks.md, "Trip planning".
+  tripPlanTransitNetworks: []
+  # -- Extra minutes /Trips/plan adds on the tram side of a rail-to-tram or
+  # tram-to-rail change (TRIP_PLAN_TRANSIT_CHANGE_MINUTES, 0-15; values
+  # outside are clamped). A change between two trams owes none; the tram
+  # stop's own platform change time covers it.
+  tripPlanTransitChangeMinutes: 2
   # -- Largest `results=options` /Trips/plan search allowed:
   # (waypoints + 1) * (2 * vias + 1) * (maxChanges + 2) must not exceed it
   # (a 400 otherwise). 252 is twice what 20 waypoints at maxChanges=4 cost;

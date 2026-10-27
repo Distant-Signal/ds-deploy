@@ -113,6 +113,16 @@ release and process exit.
 {{- fail (printf "api.terminationGracePeriodSeconds (%d) must be at least api.shutdown.preStopSleepSecs (%d) + api.shutdown.drainSecs (%d) + 5, or the kubelet kills the api mid-drain." $graceSecs $preStopSleepSecs $drainSecs) }}
 {{- end }}
 {{- /*
+Transit networks in /Trips/plan (DS-164): only networks the planner knows
+(crates/api/src/data/transit_planning.rs PLANNER_NETWORKS). The api refuses
+any other at startup too; failing here keeps a typo out of a rollout.
+*/}}
+{{- range $network := (.Values.api.tripPlanTransitNetworks | default list) }}
+{{- if not (has $network (list "metrolink")) }}
+{{- fail (printf "api.tripPlanTransitNetworks: %q is not a network the trip planner can take (known: metrolink)." (toString $network)) }}
+{{- end }}
+{{- end }}
+{{- /*
 The readiness DB check is for 2+ replicas only (user decision, 2026-10-08):
 with one, NotReady on a database blip empties the Service.
 */}}
@@ -448,6 +458,13 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.tripPlanMaxWaypoints | quote }}
             - name: TRIP_PLAN_ROAD_WATER_CHANGE_MINUTES
               value: {{ .Values.api.tripPlanRoadWaterChangeMinutes | quote }}
+            # Transit networks in /Trips/plan (DS-164): empty by default,
+            # so the graph and every response are as before. See
+            # api.tripPlanTransitNetworks in values.yaml.
+            - name: API_TRIP_PLAN_TRANSIT_NETWORKS
+              value: {{ join "," (.Values.api.tripPlanTransitNetworks | default list) | quote }}
+            - name: TRIP_PLAN_TRANSIT_CHANGE_MINUTES
+              value: {{ .Values.api.tripPlanTransitChangeMinutes | quote }}
             - name: TRIP_PLAN_MAX_OPTIONS_SEARCH_SIZE
               value: {{ .Values.api.tripPlanMaxOptionsSearchSize | quote }}
             # The /Trips/plan live overlay -- see api.tripPlanLive in

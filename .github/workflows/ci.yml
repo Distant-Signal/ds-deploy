@@ -773,6 +773,9 @@ jobs:
       # The seed's tram network (frontend/e2e/fixtures/seed.sql), for the
       # /transit pages' specs and screenshots. Off in every other setting.
       API_TRANSIT_NETWORKS: metrolink
+      # Metrolink trams in /Trips/plan (DS-164): plan.spec.ts's rail, tram,
+      # rail route and the transit stop page's "Plan a journey from here".
+      API_TRIP_PLAN_TRANSIT_NETWORKS: metrolink
       # The api's live TfL arrivals (/tfl/stops/{id}) come from
       # scripts/tfl-arrivals-stub.py, started below, never from TfL: a fixed
       # board for the seed's King's Cross St. Pancras and a 503 for every
