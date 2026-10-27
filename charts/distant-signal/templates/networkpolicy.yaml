@@ -439,6 +439,11 @@ the movement stream from Redis. */}}
 {{- if .Values.movementRelay.enabled }}
 {{- $workers = append $workers (dict "component" "movement-relay" "metricsPort" .Values.movementRelay.metricsPort "healthPorts" (list .Values.movementRelay.healthPort) "egress" (dict "redis" true) "brokers" (include "distant-signal.movementRelayKafkaBrokers" .)) }}
 {{- end }}
+{{- /* darwin-relay (DS-152): Redis (its stream) and the Push Port's Kafka
+brokers, whose address is only in its Secret, hence its own port list. */}}
+{{- if .Values.darwinRelay.enabled }}
+{{- $workers = append $workers (dict "component" "darwin-relay" "metricsPort" .Values.darwinRelay.metricsPort "healthPorts" (list .Values.darwinRelay.healthPort) "egress" (dict "redis" true) "ports" .Values.darwinRelay.kafka.brokerPorts) }}
+{{- end }}
 {{- range $enabledPollerNames }}
 {{- $poller := get $root.Values.pollers . }}
 {{- /* Each poller's own upstream, plus (runbook §4.2): stations Postgres;

@@ -70,6 +70,9 @@ spec:
           {{- if .Values.movementRelay.enabled }}
           - movement-relay
           {{- end }}
+          {{- if .Values.darwinRelay.enabled }}
+          - darwin-relay
+          {{- end }}
           {{- if .Values.ingestWriter.enabled }}
           - ingest-writer
           {{- end }}

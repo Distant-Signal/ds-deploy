@@ -1355,6 +1355,46 @@ pollers:
       # -- The lane's own budget: at most this many requests a cycle,
       # soonest departure first (TRACKED_STOP_MAX_REQUESTS_PER_CYCLE).
       maxRequestsPerCycle: 20
+    # Pre-departure prediction phase 3 (DS-152): the tracked-stop lane's
+    # arrivals sub-lane. Departure boards never list a stop where the train
+    # terminates or only sets down (usually the user's destination), so it
+    # also asks the LDBWS arrivals product (GetArrBoardWithDetails, its own
+    # RDM subscription) for each tracked train's alighting stops with a
+    # booked arrival, narrowed to that arrival, on the same cadence. The
+    # api then shows the arrival board's platform there (platformBasis
+    # board). Independent of trackedStops.enabled. Off by default: it adds
+    # requests on the arrivals product. Needs
+    # ingestWriter.streams.station-samples: apply (its boards ride that
+    # stream as tracked-stop-arrival-boards/1). The product's URL and
+    # consumer key come from an existing Secret (never from values): url is
+    # the product's base (up to /LDBWS/api/20220120; the poller appends
+    # /GetArrBoardWithDetails/{crs}), an operation URL (ending in
+    # /Get...; the poller appends /{crs}) or a URL with a {crs}
+    # placeholder. Its host is reached by the internet egress rule on 443
+    # (networkPolicy.egress.internetPorts); a URL on another port needs
+    # networkPolicy.components.poller-ldbws.internetPorts.
+    trackedStopArrivals:
+      # -- Poll tracked trains' alighting stops' arrival boards
+      # (TRACKED_STOP_ARRIVALS_ENABLED).
+      enabled: false
+      # -- The sub-lane's own budget: at most this many requests a cycle,
+      # soonest arrival first (TRACKED_STOP_ARRIVALS_MAX_REQUESTS_PER_CYCLE).
+      # It also has 3 s of the cycle, taken from the departure lane's 10 s,
+      # so the 45 s station rotation and both lanes stay under the 60 s
+      # interval: raise this only with that in mind.
+      maxRequestsPerCycle: 6
+      # -- The existing Secret holding the arrivals product's credentials
+      # (created out of band; the chart never renders it).
+      secretName: distant-signal-ldbws-arrivals
+      # -- Its key with the product URL (LDBWS_ARRIVALS_URL).
+      urlKey: url
+      # -- Its key with the consumer key, sent as x-apikey
+      # (LDBWS_ARRIVALS_CONSUMER_KEY).
+      consumerKeyKey: consumer-key
+      # -- Its key with the consumer secret (LDBWS_ARRIVALS_CONSUMER_SECRET).
+      # Wired but not sent: RDM API products authenticate with the consumer
+      # key alone.
+      consumerSecretKey: consumer-secret
     # Ingest architecture plan 4.5/4.7: the station list is computed by the
     # poller from the line catalogue in its image and the views
     # `ingest_custom_line_stations` and `ingest_sample_station_pins`, as the
@@ -2247,6 +2287,12 @@ ingestWriter:
     # `apply` needs postgresql.roles.perService.writer.connect, as tfl
     # does (the writer's ingest_freshness row policy binds its own role).
     transit-metrolink: "off"
+    # darwin-relay's Darwin Push Port batches (DS-152; off by default):
+    # ds:ingest:darwin (darwin-pushport). `apply` needs
+    # postgresql.roles.perService.writer.connect, as tfl does (the writer's
+    # ingest_freshness row policy binds its own role), and darwinRelay
+    # needs it on `apply`.
+    darwin: "off"
     # ds:ingest:transit-net (pollerTransitSchedule's net network,
     # Nottingham Express Transit: its timetable only; NET design §7). The
     # same `apply` prerequisite.
@@ -2953,6 +2999,12 @@ redis:
       # `poller-transit-metrolink-password` key of `existingSecret`, only
       # while this is on. Turning it on restarts Redis once.
       pollerTransitMetrolink: false
+      # -- darwin-relay (off by default; DS-152), as user `darwin-relay`
+      # (`~ds:ingest:darwin +xadd +xrevrange`). An `optional` user, like
+      # pollerTransitMetrolink: it needs the `darwin-relay-password` key of
+      # `existingSecret` only while this is on, and turning it on restarts
+      # Redis once.
+      darwinRelay: false
       # -- poller-transit-schedule for network net (Nottingham Express
       # Transit; off by default), as user `poller-transit-net`
       # (`~ds:ingest:transit-net +xadd +xrevrange`). An `optional` user, as
@@ -3947,6 +3999,91 @@ movementRelay:
       memory: 128Mi
     limits:
       memory: 192Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+
+# ---------------------------------------------------------------------------
+# darwinRelay -- the Darwin Push Port relay (DS-152; docs/darwin-pushport.md;
+# docs/superpowers/specs/2026-10-21-pre-departure-prediction-design.md phase
+# 3). Reads the Rail Data Marketplace's Push Port JSON topic and produces
+# the parts DS keeps (schedules, train status platforms with their confirmed
+# and suppressed flags, forecasts, associations, cancellations) on
+# ds:ingest:darwin, which the ingest-writer applies to the darwin_* tables.
+# The api then serves `platformBasis: confirmed`, platforms at every stop
+# (terminating ones too), and the notifier/api late-start prediction prefers
+# Darwin's live next-working links.
+#
+# Off by default. Switching on (docs/darwin-pushport.md): the ingest-writer
+# must apply the stream (`ingestWriter.streams.darwin: apply`, which needs
+# `postgresql.roles.perService.writer.connect`), and the relay needs its
+# own Redis user (`redis.acl.clients.darwinRelay`, an `optional` ACL user:
+# the `darwin-relay-password` key of `redis.acl.existingSecret`; turning it
+# on restarts Redis once). The render fails otherwise.
+# ---------------------------------------------------------------------------
+darwinRelay:
+  # -- Deploy darwin-relay.
+  enabled: false
+  image:
+    repository: ghcr.io/fasterspeeding/distant-signal/darwin-relay
+    tag: ""
+    # -- Content digest override (see api.image.digest).
+    digest: ""
+    pullPolicy: IfNotPresent
+  kafka:
+    # -- The Secret with the Push Port's Kafka connection, one key per
+    # setting (deployed by Ranma; never rendered by this chart).
+    existingSecret: distant-signal-darwin-pushport
+    # -- That Secret's key names. Every value comes from the Secret:
+    # bootstrap server(s), topic (the Push Port JSON topic), the RDM-issued
+    # consumer group, SASL user name, password and mechanism, security
+    # protocol, and the Java client's JAAS line (`saslConfig`; optional,
+    # only a fallback source of the user name and password).
+    keys:
+      bootstrapServer: kafka-bootstrap-server
+      topic: kafka-topic
+      consumerGroup: consumer-group
+      username: username
+      password: password
+      saslMechanism: sasl-mechanism
+      securityProtocol: security-protocol
+      saslConfig: sasl-config
+    # -- Where to start when the group has no committed offset
+    # (KAFKA_AUTO_OFFSET_RESET). `latest` (default): the Push Port is
+    # current state, and `earliest` would replay the topic's whole
+    # retention into the writer on the first start.
+    autoOffsetReset: latest
+    # -- The bootstrap server's TCP port(s). The broker address is only in
+    # the Secret, so with `networkPolicy.egress.internetPorts` set the
+    # egress policy cannot read its port: list it here.
+    brokerPorts: [9092]
+  # -- A batch is published this many seconds after its first record
+  # (BATCH_MAX_SECS). At least minBatchMaxSecs: ds:ingest:darwin's MAXLEN
+  # (crates/ingest-stream/src/budget.rs) is budgeted for one batch that
+  # often, covering a two-hour writer outage.
+  batchMaxSecs: 30
+  # -- The budget's batch interval (ingest_stream::budget::DARWIN_BATCH_SECS);
+  # the render refuses a smaller batchMaxSecs.
+  minBatchMaxSecs: 30
+  # -- ... or once it holds this many Kafka records (BATCH_MAX_RECORDS).
+  batchMaxRecords: 5000
+  healthPort: 8083
+  # -- Liveness watchdog (PROGRESS_STALL_SECS); waiting on Kafka or on a
+  # Redis outage never counts.
+  progressStallSecs: 900
+  metricsPort: 9095
+  logLevel: info
+  extraEnv: []
+  # One batch (a few thousand rows) in memory plus librdkafka's fetch
+  # buffers; the topic is far busier than Train Movements.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -5374,6 +5511,7 @@ metrics:
         "ds:ingest:ioi-nir": 500
         "ds:ingest:ioi-live": 1000
         "ds:ingest:transit-metrolink": 320
+        "ds:ingest:darwin": 240
         "ds:ingest:transit-net": 24
     # DistantSignalIngestStreamStalled (critical): producers' XADDs to a
     # stream succeeded within its stallAfterSecs, but the writer has
@@ -5383,7 +5521,8 @@ metrics:
     # tfl-stops daily (poller-tfl's stops job; off by default),
     # reference daily, ioi-live 1/5 min, ioi-gtfs and ioi-nir daily,
     # transit-metrolink 1/5 min (its situations; off by default),
-    # transit-net daily (its timetable only; off by default).
+    # transit-net daily (its timetable only; off by default), darwin
+    # 2/min (darwin-relay; off by default).
     ingestStreamStalled:
       enabled: true
       for: 5m
@@ -5398,6 +5537,7 @@ metrics:
         "ds:ingest:ioi-nir": 259200
         "ds:ingest:ioi-live": 900
         "ds:ingest:transit-metrolink": 900
+        "ds:ingest:darwin": 180
         "ds:ingest:transit-net": 259200
     # DistantSignalIngestDeadLetters: any entry dead-lettered within
     # `window`.
@@ -5535,6 +5675,9 @@ metrics:
         # situations every 5 minutes (written from batch 4).
         transit-metrolink-timetable: 129600
         transit-metrolink-situations: 1800
+        # The Darwin Push Port (DS-152): batches every 30 s, and Darwin
+        # sends something every few seconds all day.
+        darwin-pushport: 900
         # NET: the timetable only (no situations source; NET design §8).
         transit-net-timetable: 129600
       whileStreamApplies:
@@ -5548,9 +5691,34 @@ metrics:
         island_of_ireland_lines_nir: "ds:ingest:ioi-nir"
         transit-metrolink-timetable: "ds:ingest:transit-metrolink"
         transit-metrolink-situations: "ds:ingest:transit-metrolink"
+        darwin-pushport: "ds:ingest:darwin"
         transit-net-timetable: "ds:ingest:transit-net"
       for: 10m
       severity: warning
+    # darwin-relay (DS-152), rendered only with darwinRelay.enabled.
+    # Runbooks: docs/alerts.md.
+    #
+    # DistantSignalDarwinPushPortStale: the newest Darwin message the relay
+    # relayed (distant_signal_darwin_relay_last_message_timestamp_seconds,
+    # Darwin's own `ts`) is older than maxAgeSeconds for `for`, or the gauge
+    # is absent for `for`: the topic, the credentials or the relay is down,
+    # and platforms and associations are going stale. Darwin sends messages
+    # every few seconds all day.
+    #
+    # DistantSignalDarwinConsumerLagHigh: the relay is more than
+    # maxMessages behind the topic's newest message on some partition
+    # (distant_signal_darwin_relay_consumer_lag, from librdkafka every
+    # 30 s) for `for`: it, Redis or the writer cannot keep up.
+    darwinRelay:
+      enabled: true
+      stale:
+        maxAgeSeconds: 600
+        for: 10m
+        severity: warning
+      consumerLag:
+        maxMessages: 50000
+        for: 15m
+        severity: warning
     # DistantSignalDbPoolAcquireTimeouts: a component's Postgres pool timed
     # out handing out a connection (distant_signal_db_pool_acquire_timeouts_total,
     # ds_store::pool) within `window`. Counted only for acquires through

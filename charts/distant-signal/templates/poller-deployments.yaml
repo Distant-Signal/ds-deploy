@@ -205,6 +205,36 @@ with $poller.extraEnv, which replaces an entry of the same name.
               value: {{ .maxRequestsPerCycle | default 20 | int | quote }}
             {{- end }}
             {{- end }}
+            {{- with $poller.trackedStopArrivals }}
+            {{- if .enabled }}
+            {{- if not .secretName }}
+            {{- fail "pollers.ldbws.trackedStopArrivals.enabled is true but trackedStopArrivals.secretName is empty. Set it to the existing Secret with the LDBWS arrivals product's url and consumer key (distant-signal-ldbws-arrivals), or set trackedStopArrivals.enabled=false." }}
+            {{- end }}
+            # ldbws only (DS-152): the tracked-stop lane's arrivals sub-lane,
+            # with its own per-cycle request cap and its own RDM product,
+            # whose URL and consumer key come from an existing Secret.
+            - name: TRACKED_STOP_ARRIVALS_ENABLED
+              value: "true"
+            - name: TRACKED_STOP_ARRIVALS_MAX_REQUESTS_PER_CYCLE
+              value: {{ .maxRequestsPerCycle | default 6 | int | quote }}
+            - name: LDBWS_ARRIVALS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName | quote }}
+                  key: {{ .urlKey | default "url" | quote }}
+            - name: LDBWS_ARRIVALS_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName | quote }}
+                  key: {{ .consumerKeyKey | default "consumer-key" | quote }}
+            - name: LDBWS_ARRIVALS_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName | quote }}
+                  key: {{ .consumerSecretKey | default "consumer-secret" | quote }}
+                  optional: true
+            {{- end }}
+            {{- end }}
             # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int $root.Values.workerHealth.port) | quote }}

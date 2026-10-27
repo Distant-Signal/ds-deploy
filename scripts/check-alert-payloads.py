@@ -132,6 +132,11 @@ RENDER_FLAGS = [
     "pollerTransitSchedule.networks.metrolink.enabled=true",
     "redis.acl.clients.pollerTransitMetrolink=true",
     "ingestWriter.streams.transit-metrolink=apply",
+    # darwin-relay (DS-152): its two alerts and its freshness source, with
+    # its Redis user and its stream applied.
+    "darwinRelay.enabled=true",
+    "redis.acl.clients.darwinRelay=true",
+    "ingestWriter.streams.darwin=apply",
     "postgresql.pgbackrest.enabled=true",
     "postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest",
     "postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0",

@@ -1981,6 +1981,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.streams.ioi-nir` | `off` | Mode of `ds:ingest:ioi-nir` (`pollerNirStations`: `ioi-stations`, `ioi-lines`), as `ioi-gtfs`. |
 | `ingestWriter.streams.ioi-live` | `off` | Mode of `ds:ingest:ioi-live` (`pollerIrishRailLive`: `ioi-station-samples`), as `ioi-gtfs`. |
 | `ingestWriter.streams.transit-metrolink` | `off` | Mode of `ds:ingest:transit-metrolink` (the transit networks' metrolink producer: `transit-timetable`, `transit-timetable-commit`, `transit-situations`, which also writes the network's `line_status` rows). `apply` needs `postgresql.roles.perService.writer.connect`, as `tfl` does. |
+| `ingestWriter.streams.darwin` | `off` | Mode of `ds:ingest:darwin` (darwin-relay's Darwin Push Port batches, `darwin-pushport`; DS-152). `apply` needs `postgresql.roles.perService.writer.connect`, as `tfl` does; `darwinRelay.enabled` needs it on `apply`. |
 | `ingestWriter.streams.transit-net` | `off` | Mode of `ds:ingest:transit-net` (the transit networks' net producer, Nottingham Express Transit: its timetable only, as NET has no disruptions source). `apply` needs `postgresql.roles.perService.writer.connect`, as `tfl` does. |
 | `ingestWriter.changedRowsOnly` | `false` | Changed rows only (`INGEST_WRITER_CHANGED_ROWS_ONLY`, plan 3a.9): `station_full_coverage_samples` rows whose stats are unchanged are not rewritten, and readers derive their age from the feed's observed time. The other snapshot tables keep their per-row time. Turn on only after the api with the derived readers is deployed and `streams.full-coverage` has soaked on `apply`. |
 | `ingestWriter.unsupportedDeadlineSecs` | `3600` | `INGEST_WRITER_UNSUPPORTED_DEADLINE_SECS`: an entry pending as unsupported (a newer schema or envelope version) this long is dead-lettered, reason `unsupported_expired`, instead of blocking its stream for good. Roll the writer forward within this time. `0` never dead-letters it. |
@@ -2160,6 +2161,7 @@ used for and why persistence defaults on.
 | `redis.acl.clients.pollerTfl` / `.pollerTocs` | `false` | poller-tfl's and poller-tocs's stream sinks (ingest plan 3c.2), as users `poller-tfl` and `poller-tocs`. |
 | `redis.acl.clients.pollerIrishRailGtfs` / `.pollerIrishRailLive` / `.pollerNirStations` | `false` | The island-of-Ireland pollers (each one's only sink is its own `ds:ingest:ioi-gtfs`, `ds:ingest:ioi-live` or `ds:ingest:ioi-nir`, D8), as users `poller-irish-rail-gtfs`, `poller-irish-rail-live` and `poller-nir-stations`. |
 | `redis.acl.clients.pollerTransitMetrolink` | `false` | poller-transit-schedule for network metrolink (transit networks; off by default), as user `poller-transit-metrolink` (`~ds:ingest:transit-metrolink +xadd +xrevrange`). An `optional` user: rendered into the ACL file, and so needing the `poller-transit-metrolink-password` Secret key, only while this is on; turning it on restarts Redis once (docs/redis-acl.md). |
+| `redis.acl.clients.darwinRelay` | `false` | darwin-relay (off by default; DS-152), as user `darwin-relay` (`~ds:ingest:darwin +xadd +xrevrange`). An `optional` user like `pollerTransitMetrolink`: it needs the `darwin-relay-password` Secret key only while this is on, and turning it on restarts Redis once. |
 | `redis.acl.clients.pollerTransitNet` | `false` | poller-transit-schedule for network net (Nottingham Express Transit; off by default), as user `poller-transit-net` (`~ds:ingest:transit-net +xadd +xrevrange`). An `optional` user, as `pollerTransitMetrolink`: needs the `poller-transit-net-password` Secret key while on; turning it on restarts Redis once. |
 | `redis.image.repository` | `redis` | Redis image repository (upstream image; this repo builds no Redis image). |
 | `redis.image.tag` | `7.4.11@sha256:…` | Redis 7.4, digest-pinned in the tag. |
@@ -2528,6 +2530,43 @@ credential of its own it uses trust-consumer's; see "Install" above.
 | `movementRelay.podAnnotations` | `{}` | Pod annotations. |
 | `movementRelay.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 
+### darwinRelay
+
+The Darwin Push Port relay (DS-152; [docs/darwin-pushport.md](../../docs/darwin-pushport.md)):
+it reads the Rail Data Marketplace's Push Port JSON topic and produces the
+parts DS keeps (schedules, platforms with their confirmed and suppressed
+flags, forecasts, associations, cancellations) on `ds:ingest:darwin`, which
+the ingest-writer applies. Off by default. Enabling it needs
+`ingestWriter.streams.darwin: apply` and `redis.acl.clients.darwinRelay`;
+the render fails otherwise. Every Kafka setting comes from the Secret
+`darwinRelay.kafka.existingSecret`.
+
+| Key | Default | Description |
+|---|---|---|
+| `darwinRelay.enabled` | `false` | Deploy darwin-relay. |
+| `darwinRelay.image.repository` | `ghcr.io/fasterspeeding/distant-signal/darwin-relay` | darwin-relay image repository. |
+| `darwinRelay.image.tag` | `""` | Empty means "use the chart's appVersion". |
+| `darwinRelay.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `darwinRelay.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
+| `darwinRelay.kafka.existingSecret` | `distant-signal-darwin-pushport` | The Secret holding the Push Port's Kafka connection, one key per setting. Never rendered by this chart. |
+| `darwinRelay.kafka.keys.bootstrapServer` / `.topic` / `.consumerGroup` / `.username` / `.password` / `.saslMechanism` / `.securityProtocol` / `.saslConfig` | `kafka-bootstrap-server`, `kafka-topic`, `consumer-group`, `username`, `password`, `sasl-mechanism`, `security-protocol`, `sasl-config` | That Secret's key names. `saslConfig` (the Java client's JAAS line) is optional and only a fallback for the user name and password. |
+| `darwinRelay.kafka.autoOffsetReset` | `latest` | Where to start when the group has no committed offset. `latest`: the Push Port is current state, and `earliest` would replay the topic's whole retention on the first start. |
+| `darwinRelay.kafka.brokerPorts` | `[9092]` | The bootstrap server's TCP port(s), for the egress policy when `networkPolicy.egress.internetPorts` restricts ports (the address is only in the Secret). |
+| `darwinRelay.batchMaxSecs` | `30` | A batch is published this many seconds after its first record. At least `minBatchMaxSecs`. |
+| `darwinRelay.minBatchMaxSecs` | `30` | The batch interval `ds:ingest:darwin`'s `MAXLEN` is budgeted for (two hours of writer outage); the render refuses a smaller `batchMaxSecs`. |
+| `darwinRelay.batchMaxRecords` | `5000` | ... or once it holds this many Kafka records. |
+| `darwinRelay.healthPort` | `8083` | Port for `/healthz` (readiness: partitions assigned) and `/livez` (liveness). |
+| `darwinRelay.progressStallSecs` | `900` | `/livez` answers 503 once no relay-loop iteration has completed for this many seconds (waiting for Kafka or out a Redis outage never counts). |
+| `darwinRelay.metricsPort` | `9095` | Prometheus `/metrics` port. |
+| `darwinRelay.logLevel` | `info` | `RUST_LOG` value. |
+| `darwinRelay.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
+| `darwinRelay.resources` | requests `100m`/`128Mi`, limit `384Mi` | Container resource requests/limits. |
+| `darwinRelay.nodeSelector` | `{}` | Pod node selector. |
+| `darwinRelay.tolerations` | `[]` | Pod tolerations. |
+| `darwinRelay.affinity` | `{}` | Pod affinity rules. |
+| `darwinRelay.podAnnotations` | `{}` | Pod annotations. |
+| `darwinRelay.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
+
 ### frontend
 
 | Key | Default | Description |
@@ -2631,6 +2670,12 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.ldbws.sampleMaxStations` | `0` | ldbws only (LEG-18): cap on sample stations, chosen line-fairly by api, most-pinned lines first. `0` = no cap. |
 | `pollers.ldbws.trackedStops.enabled` | `false` | ldbws only (DS-127): also poll the boards of tracked trains' own stops, narrowed to each train's booked time. Off by default: it adds LDBWS requests. Needs the grants job to have applied the writer's `tracked-stop-boards` freshness row policy (DS-183); without it every tracked-stop entry dead-letters. |
 | `pollers.ldbws.trackedStops.maxRequestsPerCycle` | `20` | ldbws only (DS-127): the tracked-stop lane's own budget, requests a cycle, soonest departure first. |
+| `pollers.ldbws.trackedStopArrivals.enabled` | `false` | ldbws only (DS-152): also poll the LDBWS arrivals product for tracked trains' alighting stops with a booked arrival, narrowed to that arrival, so a terminating or set-down-only stop gets a live platform. Its own RDM subscription. Needs `ingestWriter.streams.station-samples: apply`. |
+| `pollers.ldbws.trackedStopArrivals.maxRequestsPerCycle` | `6` | ldbws only (DS-152): the arrivals sub-lane's own budget, requests a cycle, soonest arrival first. It also gets 3 s of the cycle, taken from the departure lane's 10 s, so the 45 s rotation and both lanes stay under the 60 s interval. |
+| `pollers.ldbws.trackedStopArrivals.secretName` | `distant-signal-ldbws-arrivals` | The existing Secret with the arrivals product's URL and consumer key (never rendered by the chart). |
+| `pollers.ldbws.trackedStopArrivals.urlKey` | `url` | Its key with the product URL (`LDBWS_ARRIVALS_URL`): the product's base, an operation URL ending in `/Get...`, or a URL with a `{crs}` placeholder. |
+| `pollers.ldbws.trackedStopArrivals.consumerKeyKey` | `consumer-key` | Its key with the consumer key, sent as `x-apikey` (`LDBWS_ARRIVALS_CONSUMER_KEY`). |
+| `pollers.ldbws.trackedStopArrivals.consumerSecretKey` | `consumer-secret` | Its key with the consumer secret (`LDBWS_ARRIVALS_CONSUMER_SECRET`, optional): wired but not sent, as RDM API products authenticate with the consumer key alone. |
 | `pollers.ldbws.internalReads.database.maxConnections` | `1` | ldbws only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 
 ### pollerIrishRailGtfs

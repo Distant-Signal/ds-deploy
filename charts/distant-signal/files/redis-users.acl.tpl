@@ -83,6 +83,10 @@ poller-nir-stations final ~ds:ingest:ioi-nir +xadd +xrevrange +ping +hello +auth
 # by default: XADD to its own stream, XREVRANGE for its cursor and its feed
 # guard's baseline (the last timetable commit).
 poller-transit-metrolink optional ~ds:ingest:transit-metrolink +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
+# darwin-relay (DS-152), off by default: XADD to ds:ingest:darwin only
+# (ingest_stream::Producer; XREVRANGE as every producer user has it, for
+# ingest_stream::last_produced_at).
+darwin-relay optional ~ds:ingest:darwin +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 poller-transit-net optional ~ds:ingest:transit-net +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 # ingest-writer (crates/ingest-stream/src/consumer.rs,
 # crates/ingest-writer/src/stream.rs): its consumer group and gauges on

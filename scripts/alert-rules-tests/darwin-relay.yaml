@@ -1,0 +1,59 @@
+# promtool unit tests for the darwin-relay group (DS-152; see
+# recorded-alerts.yaml's header for how rules.yaml is rendered: darwinRelay
+# is enabled). Defaults: stale past 600s for 10m; lag over 50,000 for 15m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # The newest Darwin message keeps pace with the clock until 20m, then no
+  # new one arrives. 600s after 20m is 30m; plus 10m of `for`, it fires at
+  # 40m.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_darwin_relay_last_message_timestamp_seconds{namespace="distant-signal", pod="d"}'
+        values: '0+60x20 1200x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: DistantSignalDarwinPushPortStale
+        exp_alerts: []
+      - eval_time: 41m
+        alertname: DistantSignalDarwinPushPortStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: No new Darwin Push Port message for over 600s
+              description: "No relayed Darwin message newer than 600s, or no relay: Push Port platforms and associations are going stale."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaldarwinpushportstale
+
+  # A relay that never reported anything fires on absent() after `for`.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: DistantSignalDarwinPushPortStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: No new Darwin Push Port message for over 600s
+              description: "No relayed Darwin message newer than 600s, or no relay: Push Port platforms and associations are going stale."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaldarwinpushportstale
+
+  # Lag on one partition passes 50,000 at 10m and stays there; another
+  # stays low. It fires 15m later.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_darwin_relay_consumer_lag{namespace="distant-signal", pod="d", partition="0"}'
+        values: '100x9 60000x30'
+      - series: 'distant_signal_darwin_relay_consumer_lag{namespace="distant-signal", pod="d", partition="1"}'
+        values: '100x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DistantSignalDarwinConsumerLagHigh
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: DistantSignalDarwinConsumerLagHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: darwin-relay is 60000 messages behind the Push Port topic
+              description: "Over 50000 messages behind for 15m: the relay, Redis or the ingest-writer cannot keep up."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaldarwinconsumerlaghigh

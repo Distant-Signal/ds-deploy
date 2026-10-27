@@ -859,8 +859,9 @@ every 5 min), `stations` and `tocs` 2 days (daily), the stream-only sources
 (`station-samples`, `full-coverage-*`, `station-full-coverage-samples`) 30
 min, the island-of-Ireland catalogues 2 days (daily; one source per table
 and network: `island_of_ireland_{stations,lines}_gtfs` from
-poller-irish-rail-gtfs, `_nir` from poller-nir-stations), and the
-stream-only ones only while the writer applies their stream
+poller-irish-rail-gtfs, `_nir` from poller-nir-stations) and
+`darwin-pushport` 15 min (the Darwin Push Port, DS-152). The stream-only
+ones are checked only while the writer applies their stream
 (`whileStreamApplies`): their rows are written only on the stream path.
 The unsuffixed `island_of_ireland_stations`/`_lines` sources that writers
 recorded before the per-network split are gone: migration
@@ -1566,6 +1567,41 @@ disruptions are kept but show on no line (only at network level). Add
 
 Both transit alerts: the rollout, rollback and recovery steps are in
 [transit-networks.md](transit-networks.md).
+
+## Darwin Push Port (darwin-relay)
+
+Rendered only with `darwinRelay.enabled` (DS-152; docs/darwin-pushport.md).
+
+### DistantSignalDarwinPushPortStale
+
+The newest Darwin message darwin-relay relayed
+(`distant_signal_darwin_relay_last_message_timestamp_seconds`, Darwin's own
+`ts`) is older than `darwinRelay.stale.maxAgeSeconds` (10 min), or the relay
+reports nothing at all, for `for`. Darwin sends something every few
+seconds, so the Push Port data (platforms, confirmations, associations) is
+going stale; the api keeps serving the last rows it has.
+
+1. `kubectl logs deploy/distant-signal-darwin-relay`: a SASL or
+   authorisation error means the credentials in
+   `distant-signal-darwin-pushport` are wrong or revoked (Ranma); a
+   "partitions revoked" loop means another consumer holds the group.
+2. `distant_signal_darwin_relay_records_total{outcome}`: records arriving
+   but all `malformed` or `xml` means the topic in the Secret is not the
+   Push Port JSON topic.
+3. Readiness false (`distant_signal_darwin_relay_ready` 0): no partition
+   assignment, so the broker is unreachable (egress, `brokerPorts`) or the
+   group is wrong.
+
+### DistantSignalDarwinConsumerLagHigh
+
+darwin-relay is over `darwinRelay.consumerLag.maxMessages` messages behind
+the topic's newest on some partition
+(`distant_signal_darwin_relay_consumer_lag{partition}`), for `for`. Each
+batch waits for its Redis write, so a slow or failing Redis, or a writer
+that cannot keep up (the stream's own alerts, e.g.
+[DistantSignalIngestStreamStalled](#distantsignalingeststreamstalled)),
+shows up here first. A restart after a long outage replays from the last
+commit, which also lags until it catches up: that is expected and clears.
 
 ## pgBackRest
 

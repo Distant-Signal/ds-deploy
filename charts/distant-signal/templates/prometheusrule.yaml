@@ -79,6 +79,8 @@ so that clause fired on every rollout.
 {{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $archiveAlertOn $signupSpikeOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
 {{- $archiveHealthOn := and .Values.archive.enabled (or ($rule.archiveStale).enabled ($rule.archiveBatchChurn).enabled) }}
 {{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled }}
+{{- $darwinOn := and ($rule.darwinRelay).enabled .Values.darwinRelay.enabled }}
+{{- $anyOn = or $anyOn $darwinOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -1476,6 +1478,47 @@ spec:
             runbook_url: {{ printf "%s#distantsignalingestsourcestale" $runbook | quote }}
         {{- end }}
         {{- end }}
+        {{- end }}
+    {{- end }}
+    {{- if $darwinOn }}
+    {{- /*
+    darwin-relay (DS-152). Staleness by Darwin's own message time, so a
+    relay that is up but reads nothing (a revoked credential, an empty
+    topic) fires too; absent() covers a relay that never started. The lag
+    is librdkafka's per-partition consumer lag.
+    */}}
+    - name: distant-signal.darwin-relay
+      rules:
+        {{- with $rule.darwinRelay.stale }}
+        - alert: DistantSignalDarwinPushPortStale
+          expr: |
+            (time() - max by (namespace) (distant_signal_darwin_relay_last_message_timestamp_seconds{namespace="{{ $ns }}"})) > {{ .maxAgeSeconds }}
+            or absent(distant_signal_darwin_relay_last_message_timestamp_seconds{namespace="{{ $ns }}"})
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "No new Darwin Push Port message for over {{ .maxAgeSeconds }}s"
+            description: "No relayed Darwin message newer than {{ .maxAgeSeconds }}s, or no relay: Push Port platforms and associations are going stale."
+            runbook_url: {{ printf "%s#distantsignaldarwinpushportstale" $runbook | quote }}
+        {{- end }}
+        {{- with $rule.darwinRelay.consumerLag }}
+        - alert: DistantSignalDarwinConsumerLagHigh
+          expr: |
+            max by (namespace) (distant_signal_darwin_relay_consumer_lag{namespace="{{ $ns }}"}) > {{ .maxMessages }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "darwin-relay is {{ "{{ $value }}" }} messages behind the Push Port topic"
+            description: "Over {{ .maxMessages }} messages behind for {{ .for }}: the relay, Redis or the ingest-writer cannot keep up."
+            runbook_url: {{ printf "%s#distantsignaldarwinconsumerlaghigh" $runbook | quote }}
         {{- end }}
     {{- end }}
     {{- if or $poolTimeoutsOn $directWritesOn }}

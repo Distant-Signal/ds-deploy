@@ -352,6 +352,16 @@ tables:
   # Targeted boards for tracked trains' own stops (poller-ldbws's second
   # lane, schema tracked-stop-boards/1); the aggregator prunes old rows.
   tracked_stop_boards: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
+  # Their alighting stops' arrival boards (the same lane's arrivals
+  # sub-lane, schema tracked-stop-arrival-boards/1, DS-152).
+  tracked_stop_arrival_boards: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
+  # Darwin Push Port (DS-152): services by RID, per-location platform and
+  # forecasts, live associations. ingest-writer applies darwin-pushport/1
+  # (ds:ingest:darwin); the api and the notifier's late-start prediction
+  # read them; the aggregator prunes old service dates.
+  darwin_services: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD, notifier: S}}
+  darwin_calls: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD, notifier: S}}
+  darwin_associations: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD, notifier: S}}
   station_full_coverage_samples: {class: ingest, grants: {api: S, writer: SIU}}
   full_coverage_line_stats: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
   full_coverage_line_window_stats: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
@@ -442,6 +452,9 @@ tables:
   # Each train's previous working (pre-departure prediction, DS-127),
   # replaced per date by schedule-reference; the notifier predicts late starts.
   schedule_turnarounds: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
+  # The CIF joins and divides in force per date (DS-152), replaced per date
+  # by schedule-reference; the late-start prediction caps inferred links.
+  schedule_associations: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
   schedule_destination_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, notifier: S}}
   schedule_network_departures: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD}}
   schedule_line_population: {class: reference, grants: {api: S, schedule_reference: SIUD, aggregator: SD, full_coverage_ro: S}}
@@ -479,6 +492,10 @@ views:
   ingest_sample_station_pins: {class: internal, grants: {ldbws_ro: S}}
   ingest_custom_line_stations: {class: internal, grants: {ldbws_ro: S}}
   ingest_tracked_stop_targets: {class: internal, grants: {ldbws_ro: S}}
+  ingest_tracked_stop_arrival_targets: {class: internal, grants: {ldbws_ro: S}}
+  # Each train's previous working by Darwin's live next-working links
+  # (DS-152), read by the api's and the notifier's late-start prediction.
+  darwin_previous_workings: {class: derived, grants: {api: S, notifier: S}}
 
 # Every sequence, with the table that owns it.
 sequences:
@@ -558,7 +575,9 @@ row_policies:
   # only created roles with write grants on the table; the api and the
   # aggregator (members of app) are unrestricted.
   #   writer: ds_store::freshness::record_ingest from its handlers: tfl,
-  #     tocs, the four snapshot sources (ds_store::samples::sources) and the
+  #     tocs, the snapshot sources (ds_store::samples::sources: the four
+  #     products plus the tracked-stop departure and arrival boards, which
+  #     were missing here until DS-152) and the
   #     island-of-Ireland catalogue's per-network sources
   #     (ds_store::samples::island_of_ireland), and each transit network's
   #     timetable and situations (common::transit, transit spec §8.5;
@@ -569,7 +588,9 @@ row_policies:
   #     boards snapshot (tracked-stop-boards, ds_store::samples::sources;
   #     DS-127, off by default behind pollers.ldbws.trackedStops). The
   #     ingest-writer's freshness_rls test checks every source it records
-  #     against this list. The two unsuffixed
+  #     against this list. And the Darwin Push Port (darwin-pushport) and
+  #     the tracked-stop arrival boards (tracked-stop-arrival-boards), DS-152.
+  #     The two unsuffixed
   #     island_of_ireland_* names writers recorded before the per-network
   #     split were dropped a release after it (batch 54; migration
   #     20261010100100 deletes their rows).
@@ -581,7 +602,7 @@ row_policies:
         'island_of_ireland_stations_gtfs', 'island_of_ireland_lines_gtfs',
         'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir',
         'transit-metrolink-timetable', 'transit-metrolink-situations',
-        'tfl-stops', 'tfl-line-routes', 'tracked-stop-boards',
-        'transit-net-timetable', 'transit-net-situations')
+        'tfl-stops', 'tfl-line-routes', 'tracked-stop-boards', 'darwin-pushport',
+        'tracked-stop-arrival-boards', 'transit-net-timetable', 'transit-net-situations')
     stations: {writes: "source = 'stations'"}
     incidents: {writes: "source = 'incidents'"}

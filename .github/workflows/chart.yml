@@ -238,6 +238,9 @@ jobs:
           - service: movement-relay
             dockerfile: docker/movement-relay.Dockerfile
             target: ""
+          - service: darwin-relay
+            dockerfile: docker/darwin-relay.Dockerfile
+            target: ""
           - service: schedule-ingest
             dockerfile: docker/schedule-ingest.Dockerfile
             target: ""
@@ -717,6 +720,7 @@ jobs:
             [full-coverage-consumer]=".fullCoverageConsumer"
             [trust-backlog-consumer]=".trustBacklogConsumer"
             [movement-relay]=".movementRelay"
+            [darwin-relay]=".darwinRelay"
             [schedule-ingest]=".scheduleFeed.ingest"
             [schedule-reference]=".scheduleFeed.reference"
             [ingest-writer]=".ingestWriter"

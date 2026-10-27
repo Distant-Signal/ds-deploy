@@ -1,0 +1,163 @@
+{{- if .Values.darwinRelay.enabled }}
+{{- /*
+darwin-relay (DS-152; docs/darwin-pushport.md): the Darwin Push Port JSON
+topic (Rail Data Marketplace) to the ds:ingest:darwin stream, which the
+ingest-writer applies (ingestWriter.streams.darwin: apply). Off by
+default. Its Kafka connection is the Secret darwinRelay.kafka.existingSecret
+(distant-signal-darwin-pushport, deployed by Ranma), key by key. Its only
+sink is its stream, so it needs its own narrow Redis user (security review
+H3), and the writer must apply the stream, or nothing would write its data.
+*/}}
+{{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "darwinRelay" "what" "darwinRelay.enabled") }}
+{{- if not .Values.ingestWriter.enabled }}
+{{- fail "darwinRelay.enabled needs ingestWriter.enabled: the writer applies ds:ingest:darwin, nothing else does." }}
+{{- end }}
+{{- if ne (toString (get .Values.ingestWriter.streams "darwin")) "apply" }}
+{{- fail "darwinRelay.enabled needs ingestWriter.streams.darwin: apply (it XADDs to ds:ingest:darwin, which only the writer applies; docs/darwin-pushport.md)." }}
+{{- end }}
+{{- if not .Values.darwinRelay.kafka.existingSecret }}
+{{- fail "darwinRelay.enabled needs darwinRelay.kafka.existingSecret: the Secret holding the Push Port Kafka connection (distant-signal-darwin-pushport)." }}
+{{- end }}
+{{- if lt (int .Values.darwinRelay.batchMaxSecs) (int .Values.darwinRelay.minBatchMaxSecs) }}
+{{- fail (printf "darwinRelay.batchMaxSecs (%d) is below %d: ds:ingest:darwin's MAXLEN is budgeted for at most one batch that often (ingest_stream::budget::DARWIN_BATCH_SECS); a shorter batch would cover less than the two-hour writer outage." (int .Values.darwinRelay.batchMaxSecs) (int .Values.darwinRelay.minBatchMaxSecs)) }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-darwin-relay" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "darwin-relay") | nindent 4 }}
+spec:
+  revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
+  replicas: 1
+  # Like movement-relay: the new pod joins the consumer group before the
+  # old one leaves. Two members at once only split the partitions; every
+  # row is idempotent (Darwin timestamp guards).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "darwin-relay") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "darwin-relay") | nindent 8 }}
+      {{- if or .Values.metrics.enabled .Values.darwinRelay.podAnnotations }}
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.darwinRelay.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.darwinRelay.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "distant-signal.podSecurityContext" (dict "override" .Values.darwinRelay.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: darwin-relay
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.darwinRelay.image) | quote }}
+          imagePullPolicy: {{ .Values.darwinRelay.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.darwinRelay.healthPort }}
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.darwinRelay.metricsPort }}
+              protocol: TCP
+            {{- end }}
+          # Readiness: Kafka partitions assigned (movement-relay's rule).
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          # Liveness: loop progress only. Waiting on a quiet topic, or on
+          # the producer through a Redis outage, is not a stall.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6
+          env:
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.darwinRelayEnv" .) "extra" .Values.darwinRelay.extraEnv) | trim | nindent 12 }}
+          {{- with .Values.darwinRelay.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.darwinRelay.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.darwinRelay.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.darwinRelay.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+{{- /*
+This container's own env entries. distant-signal.mergeEnv renders them
+with darwinRelay.extraEnv, which replaces an entry of the same name. Every
+Kafka value comes from the Push Port Secret.
+*/ -}}
+{{- define "distant-signal.darwinRelayEnv" }}
+{{- $kafka := .Values.darwinRelay.kafka }}
+{{- $secret := $kafka.existingSecret }}
+{{- range $env, $key := dict "KAFKA_BROKERS" $kafka.keys.bootstrapServer "KAFKA_TOPIC" $kafka.keys.topic "KAFKA_CONSUMER_GROUP" $kafka.keys.consumerGroup "KAFKA_SASL_USERNAME" $kafka.keys.username "KAFKA_SASL_PASSWORD" $kafka.keys.password "KAFKA_SASL_MECHANISM" $kafka.keys.saslMechanism "KAFKA_SECURITY_PROTOCOL" $kafka.keys.securityProtocol }}
+            - name: {{ $env }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret | quote }}
+                  key: {{ $key | quote }}
+{{- end }}
+            # The Java client's JAAS line: a fallback for the user name and
+            # password only (librdkafka has no JAAS).
+            - name: KAFKA_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret | quote }}
+                  key: {{ $kafka.keys.saslConfig | quote }}
+                  optional: true
+            - name: KAFKA_AUTO_OFFSET_RESET
+              value: {{ $kafka.autoOffsetReset | quote }}
+            - name: REDIS_URL
+              value: {{ include "distant-signal.redisUrl" . | quote }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "darwinRelay" "user" "darwin-relay") }}
+            - name: BATCH_MAX_SECS
+              value: {{ .Values.darwinRelay.batchMaxSecs | quote }}
+            - name: BATCH_MAX_RECORDS
+              value: {{ .Values.darwinRelay.batchMaxRecords | quote }}
+            - name: HEALTH_BIND_URL
+              value: {{ printf "0.0.0.0:%d" (int .Values.darwinRelay.healthPort) | quote }}
+            - name: PROGRESS_STALL_SECS
+              value: {{ .Values.darwinRelay.progressStallSecs | quote }}
+            - name: METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.darwinRelay.metricsPort | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.darwinRelay.logLevel | quote }}
+{{- end }}
