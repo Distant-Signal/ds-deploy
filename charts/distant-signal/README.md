@@ -2629,7 +2629,7 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.ldbws.hourlyRequestBudget` | `0` | ldbws only (LEG-18): max LDBWS requests per rolling hour, spread evenly over cycles; skipped stations count in `ldbws_budget_skipped_polls_total`. `0` = no budget, env not rendered. |
 | `pollers.ldbws.samplePinnedLinesOnly` | `false` | ldbws only (LEG-18): sample only stations on lines some user has pinned. |
 | `pollers.ldbws.sampleMaxStations` | `0` | ldbws only (LEG-18): cap on sample stations, chosen line-fairly by api, most-pinned lines first. `0` = no cap. |
-| `pollers.ldbws.trackedStops.enabled` | `false` | ldbws only (DS-127): also poll the boards of tracked trains' own stops, narrowed to each train's booked time. Off by default: it adds LDBWS requests. |
+| `pollers.ldbws.trackedStops.enabled` | `false` | ldbws only (DS-127): also poll the boards of tracked trains' own stops, narrowed to each train's booked time. Off by default: it adds LDBWS requests. Needs the grants job to have applied the writer's `tracked-stop-boards` freshness row policy (DS-183); without it every tracked-stop entry dead-letters. |
 | `pollers.ldbws.trackedStops.maxRequestsPerCycle` | `20` | ldbws only (DS-127): the tracked-stop lane's own budget, requests a cycle, soonest departure first. |
 | `pollers.ldbws.internalReads.database.maxConnections` | `1` | ldbws only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 

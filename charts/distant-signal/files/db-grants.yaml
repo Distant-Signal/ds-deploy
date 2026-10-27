@@ -558,7 +558,11 @@ row_policies:
   #     metrolink and net, off by default; net has no situations source
   #     yet, NET design §8), and the TfL stops snapshot
   #     (tfl-stops, ds_store::tfl_stops) and route sequences
-  #     (tfl-line-routes, ds_store::tfl_line_routes). The two unsuffixed
+  #     (tfl-line-routes, ds_store::tfl_line_routes), and the tracked-stop
+  #     boards snapshot (tracked-stop-boards, ds_store::samples::sources;
+  #     DS-127, off by default behind pollers.ldbws.trackedStops). The
+  #     ingest-writer's freshness_rls test checks every source it records
+  #     against this list. The two unsuffixed
   #     island_of_ireland_* names writers recorded before the per-network
   #     split were dropped a release after it (batch 54; migration
   #     20261010100100 deletes their rows).
@@ -570,7 +574,7 @@ row_policies:
         'island_of_ireland_stations_gtfs', 'island_of_ireland_lines_gtfs',
         'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir',
         'transit-metrolink-timetable', 'transit-metrolink-situations',
-        'tfl-stops', 'tfl-line-routes',
+        'tfl-stops', 'tfl-line-routes', 'tracked-stop-boards',
         'transit-net-timetable', 'transit-net-situations')
     stations: {writes: "source = 'stations'"}
     incidents: {writes: "source = 'incidents'"}
