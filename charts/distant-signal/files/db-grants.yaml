@@ -308,7 +308,9 @@ tables:
   train_current_state: {class: shared-train, grants: {api: S, writer: SIU, trust_backlog: SIU, trust_consumer: SIU, aggregator: S, notifier: S}}
   # writer: S only (security review L3): backlog-match reads, never updates.
   trust_event_backlog: {class: shared-train, grants: {api: S, writer: S, trust_backlog: SI, aggregator: SD}}
-  train_reasons: {class: shared-train, grants: {api: S, trust_backlog: SIU}}
+  # notifier: S (DS-184): a cancellation push words where the train now
+  # runs and why (ds_store::trains::cancellation::derive_from_timetable).
+  train_reasons: {class: shared-train, grants: {api: S, trust_backlog: SIU, notifier: S}}
   # trust_consumer: SELECT only on the ON CONFLICT (dedup_key) target
   # (security review L3); the writer has it through read_shared.
   notifier_forward_queue: {class: shared-train, grants: {api: S, writer: SI, trust_consumer: [I, {privileges: S, columns: [dedup_key]}], notifier: S}}
