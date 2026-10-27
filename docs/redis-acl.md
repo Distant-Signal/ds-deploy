@@ -219,6 +219,12 @@ it with no duplicate rows, but it happens again on every restart.
 `on-unshared` replays cleanly. `"off"` still renders, for anyone who
 accepts that.
 
+Valkey 8.1 (the chart's server since DS-174) does not ACL-check that
+replay: in the docs/valkey-migration.md rehearsal it loaded the same AOF
+with `default` off identically and an empty `ACL LOG`, where Redis 7.4
+lost the groups' progress. Stay on `on-unshared` anyway while a rollback
+to Redis 7.4 is possible; revisit `"off"` once it is not.
+
 Steps:
 
 1. Add `default-password` to the users Secret (the SealedSecret in

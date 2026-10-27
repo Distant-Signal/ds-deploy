@@ -133,8 +133,8 @@ for i in api aggregator enricher notifier poller-incidents poller-stations polle
 done
 ```
 
-Redis is **not** in this table: the bundled Redis uses the upstream `redis`
-image (`redis.image.*`), which this repository does not build.
+Redis is **not** in this table: the bundled Redis is the upstream Valkey
+image (`redis.image.*`, `valkey/valkey`), which this repository does not build.
 
 Then point each `*.image.repository` value at `$REG/...`. An empty
 `image.tag` falls back to the chart's `appVersion`.
@@ -157,7 +157,7 @@ and pushing your own images per the table above and want the same
 guarantee for them. `postgresql`, `redis`, `devAuthentik` and
 `scheduleFeed.sftp` (all externally-sourced, not built by this repo) have
 no `digest` field. They are digest-pinned through the tag instead: their
-default `tag` values carry the digest (e.g. `7.4.11@sha256:...`), which
+default `tag` values carry the digest (e.g. `8.1.10-trixie@sha256:...`), which
 `distant-signal.image` appends after `:`, giving `<repository>:<tag>@<digest>`.
 Override one the same way, with a `<tag>@sha256:...` string.
 
@@ -238,6 +238,18 @@ helm upgrade distant-signal ./charts/distant-signal -n distant-signal
 ```
 
 Read the next section before upgrading if you rely on generated secrets.
+
+> **Upgrade note: Redis 7.4 to Valkey 8.1 (DS-174).** `redis.image` is now
+> `valkey/valkey:8.1.x` instead of `redis:7.4.11`. Every value, Secret, port,
+> probe and client is unchanged, but a running Redis 7.4's AOF has an RDB 12
+> preamble that Valkey cannot load. **Before upgrading an install with
+> `redis.persistence.enabled`, rewrite its AOF without the preamble**
+> (`CONFIG SET aof-use-rdb-preamble no`, then `BGREWRITEAOF`), or the new
+> pod crash-loops on startup. The steps, checks and rollback (back to
+> `redis:7.4.11`, which reads what Valkey 8.1 writes) are in
+> `docs/valkey-migration.md`. Keep the previous image with
+> `--set redis.image.repository=redis --set redis.image.tag=7.4.11@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b`
+> until you are ready.
 
 > **Upgrade note: Redis PVC default 1Gi -> 4Gi (2026-09-27).** A PVC can only
 > grow, and only on a StorageClass with `allowVolumeExpansion: true`; k3s
@@ -648,10 +660,11 @@ random 32-character `redis-password` the chart generates in its own Secret
 and keeps across upgrades (see "Generated secrets and the `lookup`
 limitation").
 
-**Enabling it on a running deployment, without an outage.** Redis 7.4 (the
-chart's image) accepts `AUTH default <anything>` while the default user has
-no password yet, and that is the form the clients send (verified against
-`redis:7.4.11`). So give the clients the password first:
+**Enabling it on a running deployment, without an outage.** Valkey 8.1 (the
+chart's image), like Redis 7.4, accepts `AUTH default <anything>` while the
+default user has no password yet, and that is the form the clients send
+(verified against `redis:7.4.11` and `valkey/valkey:8.1.10`). So give the
+clients the password first:
 
 1. Create the Secret, then upgrade with `redis.auth.enabled=true`,
    `redis.auth.requirePass=false`, `redis.auth.existingSecret=<name>`. Only
@@ -2163,8 +2176,8 @@ used for and why persistence defaults on.
 | `redis.acl.clients.pollerTransitMetrolink` | `false` | poller-transit-schedule for network metrolink (transit networks; off by default), as user `poller-transit-metrolink` (`~ds:ingest:transit-metrolink +xadd +xrevrange`). An `optional` user: rendered into the ACL file, and so needing the `poller-transit-metrolink-password` Secret key, only while this is on; turning it on restarts Redis once (docs/redis-acl.md). |
 | `redis.acl.clients.darwinRelay` | `false` | darwin-relay (off by default; DS-152), as user `darwin-relay` (`~ds:ingest:darwin +xadd +xrevrange`). An `optional` user like `pollerTransitMetrolink`: it needs the `darwin-relay-password` Secret key only while this is on, and turning it on restarts Redis once. |
 | `redis.acl.clients.pollerTransitNet` | `false` | poller-transit-schedule for network net (Nottingham Express Transit; off by default), as user `poller-transit-net` (`~ds:ingest:transit-net +xadd +xrevrange`). An `optional` user, as `pollerTransitMetrolink`: needs the `poller-transit-net-password` Secret key while on; turning it on restarts Redis once. |
-| `redis.image.repository` | `redis` | Redis image repository (upstream image; this repo builds no Redis image). |
-| `redis.image.tag` | `7.4.11@sha256:…` | Redis 7.4, digest-pinned in the tag. |
+| `redis.image.repository` | `valkey/valkey` | Server image repository: upstream Valkey, Redis-compatible (this repo builds no image for it). A running Redis 7.4 needs `docs/valkey-migration.md` before switching. |
+| `redis.image.tag` | `8.1.10-trixie@sha256:…` | Valkey 8.1, digest-pinned in the tag. Renovate skips majors: Valkey 9 writes RDB 80, which the `redis:7.4.11` rollback cannot read. |
 | `redis.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `redis.service.port` | `6379` | Service and container port; also sets the `REDIS_URL` every Redis client (api, enricher, the three consumers, movement-relay) gets. |
 | `redis.persistence.enabled` | `true` | Attach a PVC and run redis with `--appendonly yes`. When false an emptyDir is used and data is lost on reschedule. |
@@ -2193,7 +2206,7 @@ used for and why persistence defaults on.
 | `redis.tolerations` | `[]` | Pod tolerations. |
 | `redis.affinity` | `{}` | Pod affinity rules. |
 | `redis.podAnnotations` | `{}` | Pod annotations. |
-| `redis.podSecurityContext` | `{runAsUser: 999, runAsGroup: 999}` | Merged over the chart-wide pod securityContext defaults. Pinned (unlike most other `podSecurityContext` defaults in this chart) because the upstream `redis` image runs as root with no `USER` set at all -- confirmed against `redis:7`'s real image config; 999 is the `redis` user's actual uid/gid per docker-library/redis's own Dockerfile. Override if you point `redis.image` at a different image/tag whose non-root uid differs. |
+| `redis.podSecurityContext` | `{runAsUser: 999, runAsGroup: 999}` | Merged over the chart-wide pod securityContext defaults. Pinned (unlike most other `podSecurityContext` defaults in this chart) because the upstream `valkey/valkey` image (like `redis:7` before it) runs as root with no `USER` set at all; 999 is its `valkey` user's uid/gid, the same as the old `redis` user's, so an existing AOF volume stays readable. Override if you point `redis.image` at a different image/tag whose non-root uid differs. |
 
 ### enricher
 

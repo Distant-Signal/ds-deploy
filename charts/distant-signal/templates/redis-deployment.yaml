@@ -209,11 +209,15 @@ spec:
             - name: redis
               containerPort: {{ .Values.redis.service.port }}
               protocol: TCP
-          # `redis:7`'s entrypoint (docker-library/redis's docker-
-          # entrypoint.sh) prepends `redis-server` itself whenever the first
-          # arg starts with `-`, so `args` alone (no `command` override) is
-          # enough to reach the real `redis-server --appendonly yes`
-          # invocation -- no ConfigMap-mounted redis.conf needed, unlike
+          # The valkey/valkey image's entrypoint (tini, then its docker-
+          # entrypoint.sh) prepends `valkey-server` itself whenever the first
+          # arg starts with `-`, as redis:7's did with `redis-server`, so
+          # `args` alone (no `command` override) is enough to reach the real
+          # `valkey-server --appendonly yes` invocation. Valkey accepts every
+          # Redis option name used here, and the image ships `redis-cli` and
+          # `redis-server` symlinks, so the probes, the redis-acl
+          # initContainer (sh, awk) and humans' `kubectl exec ... redis-cli`
+          # are unchanged. No ConfigMap-mounted redis.conf needed, unlike
           # this chart's other config-via-file cases (e.g. schedulefeed's
           # sftp-entrypoint ConfigMap), which exist for multi-line scripts
           # redis.conf has no equivalent need for here.
@@ -286,9 +290,9 @@ spec:
           {{- end }}
           volumeMounts:
             - name: data
-              # Redis's own default working directory (`dir` in redis.conf,
-              # unset here since no redis.conf is mounted -- see the args
-              # comment above) is `/data` for the official image, and both
+              # The server's own default working directory (`dir`, unset
+              # here since no config file is mounted -- see the args
+              # comment above) is `/data` for the image (WORKDIR), and both
               # its RDB dump.rdb and its AOF appendonlydir/ are written
               # relative to `dir`. No override needed: mount the volume at
               # the same path the image already treats as its data

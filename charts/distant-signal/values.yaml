@@ -2857,8 +2857,9 @@ redis:
   # redis-cli in it (the `exec` probes) authenticates (`REDISCLI_AUTH`).
   #
   # SAFE ENABLE SEQUENCE FOR A RUNNING DEPLOYMENT (no outage). The chart's
-  # Redis is 7.4: the default user accepts `AUTH default <anything>` while
-  # it has no password (verified against redis:7.4.11), and the clients
+  # server is Valkey 8.1: the default user accepts `AUTH default <anything>`
+  # while it has no password (verified against redis:7.4.11 and
+  # valkey/valkey:8.1.10), and the clients
   # send exactly that form, so clients can hold the password before the
   # server requires it:
   #   1. Create the Secret (outside this repo), then deploy with
@@ -3015,11 +3016,17 @@ redis:
       # of `existingSecret` while on; turning it on restarts Redis once.
       pollerTransitNet: false
   image:
-    repository: redis
-    # -- Pinned to an exact 7.4 patch release and content digest (INF-11);
-    # Renovate (helm-values manager) proposes bumps, digest included. 7.4.11
-    # is what the floating `7` tag resolved to on 2026-09-27.
-    tag: "7.4.11@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b"
+    # -- Valkey (BSD-licensed, wire- and data-compatible with Redis 7.2),
+    # in place of `redis` 7.4.11 since DS-174. The Redis-named commands,
+    # config options, `redis-cli` and `REDISCLI_AUTH` all still work. A
+    # running Redis 7.4 must not be switched by a plain image bump: Valkey
+    # cannot read Redis 7.4's RDB 12 AOF preamble (docs/valkey-migration.md).
+    repository: valkey/valkey
+    # -- Pinned to an exact 8.1 patch release and content digest (INF-11);
+    # Renovate (helm-values manager) proposes minor and patch bumps, digest
+    # included. Majors are disabled in renovate.json5: Valkey 9 writes RDB 80,
+    # which redis:7.4.11 (the rollback) cannot read.
+    tag: "8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2"
     pullPolicy: IfNotPresent
   service:
     port: 6379
@@ -3113,8 +3120,8 @@ redis:
   # rate the `60 10000` point fires every ~2 minutes: in production
   # (2026-09-26) that was a fork and a ~105 MB dump.rdb write every 2
   # minutes, for a file nothing reads. When AOF is on, Redis loads the AOF
-  # at startup and ignores dump.rdb entirely. The AOF itself (Redis 7
-  # multi-part, `aof-use-rdb-preamble yes`) already has a compact RDB base
+  # at startup and ignores dump.rdb entirely. The AOF itself (multi-part,
+  # `aof-use-rdb-preamble yes`, the server default) already has a compact RDB base
   # file, which is what gives a fast restart (~3.7s for ~400 MB in
   # production). AOF rewrites still fork, but only when the AOF has doubled
   # in size (`auto-aof-rewrite-percentage 100`), not every 2 minutes.
@@ -3201,25 +3208,16 @@ redis:
   # distant-signal.podSecurityContext helper every other non-postgres
   # workload here uses. runAsUser/runAsGroup are pinned here (unlike most
   # other callers of that helper, which leave this empty and rely on the
-  # image's own numeric USER) because the official `redis` image runs as
-  # root with no USER set at all -- confirmed 2026-09-03 by pulling this
-  # exact repository:tag's manifest/config from Docker Hub's real registry
-  # API: `redis:7`'s resolved digest (org.opencontainers.image.version
-  # 7.4.11, debian/bookworm-slim base) has Config.User == null, which is
-  # exactly what makes kubelet's runAsNonRoot admission check fail with
-  # "container has runAsNonRoot and image will run as root" -- distinct
-  # from the "non-numeric user, cannot verify" failure the chart's 12
-  # custom Rust images hit before their own Dockerfiles pinned a numeric
-  # USER. redis's own docker-entrypoint.sh drops root to a `redis` user via
-  # gosu when started as root; 999 is that user's real uid/gid, confirmed
-  # against docker-library/redis's own Dockerfile source for the exact
-  # revision this digest was built from (debian/Dockerfile:
-  # `groupadd -r -g 999 redis; useradd -r -g redis -u 999 redis`) -- the
-  # same uid the postgres image happens to use, verified independently rather
-  # than assumed from that coincidence. Pinning both runAsUser AND
-  # runAsGroup (not just runAsUser) skips the image's own root-to-999 gosu
-  # step entirely, matching how postgres-statefulset.yaml's inline
-  # equivalent already works.
+  # image's own numeric USER) because the image runs as root with no USER
+  # set at all, which kubelet's runAsNonRoot admission check refuses
+  # ("container has runAsNonRoot and image will run as root"). Its
+  # docker-entrypoint.sh drops root to the `valkey` user (setpriv) when
+  # started as root; that user is uid/gid 999, the same as the `redis`
+  # user of the redis:7.4.11 image this replaced (both checked 2026-10-26
+  # on the pinned digests: Config.User empty, `id valkey` is 999:999, and
+  # /data is owned by it), so an existing AOF volume keeps working.
+  # Pinning both runAsUser AND runAsGroup skips the entrypoint's
+  # root-to-999 step entirely, matching postgres-statefulset.yaml.
   podSecurityContext:
     runAsUser: 999
     runAsGroup: 999

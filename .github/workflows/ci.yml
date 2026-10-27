@@ -347,9 +347,11 @@ jobs:
       # movement-feed's RedisStreamMovementFeed tests (Task 3 of
       # docs/superpowers/plans/2026-09-04-movement-relay-plan.md) are the
       # first #[ignore]d tests in this repo needing a live Redis rather than
-      # a live Postgres -- mirrors the postgres: block above exactly.
+      # a live Postgres -- mirrors the postgres: block above exactly. The
+      # same Valkey image as the chart's `redis.image` (its `redis-cli`
+      # symlink serves the health check).
       redis:
-        image: redis:7@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b
+        image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
         ports:
           - 6379:6379
         options: >-
@@ -728,7 +730,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b
+        image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
         ports:
           - 6379:6379
         options: >-
