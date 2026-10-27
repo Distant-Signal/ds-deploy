@@ -332,7 +332,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+        image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -715,7 +715,7 @@ jobs:
     # duplication.
     services:
       postgres:
-        image: postgres:16@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+        image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -2235,7 +2235,7 @@ jobs:
           pgbackrest=(
             --set postgresql.pgbackrest.enabled=true
             --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest
-            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
+            --set postgresql.pgbackrest.image.tag=pg18.6-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
             --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
@@ -3212,7 +3212,7 @@ jobs:
           pgbackrest=(
             --set postgresql.pgbackrest.enabled=true
             --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest
-            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
+            --set postgresql.pgbackrest.image.tag=pg18.6-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
             --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
@@ -3381,7 +3381,7 @@ jobs:
             --set archive.s3.lifecycleConfirmed=true \
             --set postgresql.pgbackrest.enabled=true \
             --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest \
-            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0 \
+            --set postgresql.pgbackrest.image.tag=pg18.6-pgbackrest2.59.1-tini0.19.0 \
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest \
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com \
             --set postgresql.pgbackrest.repo.s3.bucket=test-bucket \
@@ -3589,7 +3589,7 @@ jobs:
           pgbackrest=(
             --set postgresql.pgbackrest.enabled=true
             --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest
-            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
+            --set postgresql.pgbackrest.image.tag=pg18.6-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
             --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
@@ -3697,7 +3697,7 @@ jobs:
           on=(
             --set postgresql.pgbackrest.enabled=true
             --set postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest
-            --set postgresql.pgbackrest.image.tag=pg16.15-pgbackrest2.59.1-tini0.19.0
+            --set postgresql.pgbackrest.image.tag=pg18.6-pgbackrest2.59.1-tini0.19.0
             --set postgresql.pgbackrest.repo.path=/test/pgbackrest
             --set postgresql.pgbackrest.repo.s3.endpoint=s3.example.com
             --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
@@ -3712,7 +3712,23 @@ jobs:
           if grep -v -E '^ *--' <<<"${off}" | grep -n -i -E 'pgbackrest|archive_mode|archive_command'; then
             fail "pgBackRest is off by default but rendered"
           fi
-          grep -q 'image: "postgres:16' <<<"${off}" || fail "the default Postgres image must stay postgres:16"
+          # The default image is postgresql.image.tag, and its major is the
+          # one CI's DB services (rust-db-test, frontend-e2e) and the compose
+          # stack run: moving a major needs pg_upgrade on existing data
+          # (docs/postgres-18-upgrade.md), so all three move together.
+          pg_tag=$(awk '/^[^ #]/ { top = $0 } top == "postgresql:" && /^  [^ #]/ { sec = $1 }
+            top == "postgresql:" && sec == "image:" && /^    tag: / { gsub(/"/, "", $2); print $2; exit }' \
+            charts/distant-signal/values.yaml)
+          [[ "${pg_tag}" =~ ^[0-9]+\.[0-9]+-trixie@sha256:[0-9a-f]{64}$ ]] \
+            || fail "postgresql.image.tag must be <major>.<minor>-trixie@sha256:<digest>, got '${pg_tag}'"
+          pg_major=${pg_tag%%.*}
+          grep -q "image: \"postgres:${pg_tag}\"" <<<"${off}" \
+            || fail "the default Postgres image must be postgresql.image.tag (postgres:${pg_tag})"
+          for file in .github/workflows/ci.yml docker-compose.yml; do
+            if grep -n -E 'image: postgres:[0-9]' "${file}" | grep -v -E "image: postgres:${pg_major}@sha256:"; then
+              fail "${file}: every Postgres image must be postgres:${pg_major}, the chart's major"
+            fi
+          done
           # Off, the Postgres pod keeps Kubernetes' default grace period
           # (no terminationGracePeriodSeconds) unless it is set explicitly.
           pg_off=$(render --show-only templates/postgres-statefulset.yaml)
@@ -3724,7 +3740,7 @@ jobs:
             || fail "postgresql.terminationGracePeriodSeconds must render when set"
 
           pg=$(render "${on[@]}" --show-only templates/postgres-statefulset.yaml)
-          grep -q 'image: "registry.example.com/postgres-pgbackrest:pg16.15-pgbackrest2.59.1-tini0.19.0"' <<<"${pg}" \
+          grep -q 'image: "registry.example.com/postgres-pgbackrest:pg18.6-pgbackrest2.59.1-tini0.19.0"' <<<"${pg}" \
             || fail "pgBackRest must swap in the postgres-pgbackrest image"
           # The image's ENTRYPOINT (tini, then docker-entrypoint.sh) keeps
           # the postmaster off PID 1, where an async archive-push worker's

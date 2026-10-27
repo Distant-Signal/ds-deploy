@@ -103,13 +103,16 @@ postgresql:
     repository: postgres
     # -- Pinned to an exact patch release, Debian base AND content digest
     # (INF-11); Renovate (renovate.json5, helm-values manager) proposes
-    # bumps, digest included. Stays on major 16: a new major needs
-    # pg_upgrade. Stays on the trixie base the floating `16` tag moved
-    # production to (16.15-1.pgdg13, checked 2026-09-27): switching the
-    # base OS changes glibc, whose collation changes can silently corrupt
-    # text indexes, so never change the `-trixie` suffix without a REINDEX
-    # plan.
-    tag: "16.15-trixie@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97"
+    # minor and digest bumps. Major 18: a new major needs pg_upgrade
+    # (docs/postgres-18-upgrade.md for 16 -> 18), so renovate.json5 never
+    # proposes postgres majors, and an existing 16 data directory must be
+    # upgraded before this image starts on it (an 18 server won't start on it).
+    # Stays on the trixie base production has run since 16.15-1.pgdg13
+    # (checked 2026-09-27): switching the base OS changes glibc, whose
+    # collation changes can silently corrupt text indexes, so never change
+    # the `-trixie` suffix without a REINDEX plan. With pgBackRest on, the
+    # postgres-pgbackrest image must be built on this exact base and digest.
+    tag: "18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6"
     pullPolicy: IfNotPresent
   service:
     # -- Port the headless Service and the container listen on.
@@ -851,7 +854,7 @@ postgresql:
       # build or publish one (docs/postgres-pitr.md).
       repository: ""
       # -- REQUIRED when enabled: the stable tag WITH its digest, e.g.
-      # "pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:...". Only `-tini`
+      # "pg18.6-pgbackrest2.59.1-tini0.19.0@sha256:...". Only `-tini`
       # tags: older images run the postmaster as PID 1, which crash-restarts
       # on every failing async archive-push. Unlike the first-party images
       # this never falls back to the chart's appVersion: a new digest in the
@@ -3212,7 +3215,7 @@ redis:
   # against docker-library/redis's own Dockerfile source for the exact
   # revision this digest was built from (debian/Dockerfile:
   # `groupadd -r -g 999 redis; useradd -r -g redis -u 999 redis`) -- the
-  # same uid postgres:16 happens to use, verified independently rather
+  # same uid the postgres image happens to use, verified independently rather
   # than assumed from that coincidence. Pinning both runAsUser AND
   # runAsGroup (not just runAsUser) skips the image's own root-to-999 gosu
   # step entirely, matching how postgres-statefulset.yaml's inline

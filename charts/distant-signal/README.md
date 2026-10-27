@@ -1043,7 +1043,7 @@ item 2.
 Off by default (`postgresql.pgbackrest.enabled: false`), and while off the
 Postgres pod renders exactly as without it. When enabled, the bundled
 Postgres runs `postgresql.pgbackrest.image` (the same
-`postgres:16.15-trixie` plus pgBackRest and `pgbackrest-daily-check`, with
+`postgres:18.6-trixie` plus pgBackRest and `pgbackrest-daily-check`, with
 tini as PID 1; this repo doesn't build one, see docs/postgres-pitr.md),
 archives its WAL to an S3
 repository with client-side AES-256 encryption, and CronJobs take a weekly
@@ -1483,7 +1483,7 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.auth.existingSecret` | `""` | Read the password from this pre-existing Secret instead. |
 | `postgresql.auth.existingSecretPasswordKey` | `postgres-password` | Key within `postgresql.auth.existingSecret`. |
 | `postgresql.image.repository` | `postgres` | PostgreSQL image repository. |
-| `postgresql.image.tag` | `16.15-trixie@sha256:…` | Postgres 16, the major the compose stack uses, digest-pinned in the tag. |
+| `postgresql.image.tag` | `18.6-trixie@sha256:…` | Postgres 18, the major the compose stack and CI use, digest-pinned in the tag. An existing 16 data directory needs pg_upgrade first (docs/postgres-18-upgrade.md). |
 | `postgresql.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `postgresql.service.port` | `5432` | Port the headless Service and the container listen on. |
 | `postgresql.connectionBudget.externalClients` | `2` | Connections the render-time budget check reserves for clients deployed outside this chart that connect as the app role: Ranma-Config's postgres-exporter (1) and its nightly `pg_dump` (1). The app role is a superuser, so `superuser_reserved_connections` protects none of these. pgBackRest adds 2 more on its own when enabled. |
@@ -1637,7 +1637,7 @@ override only needs to name the keys it changes:
 | `max_wal_size` | `4GB` | `1GB` | Fewer size-triggered checkpoints during bulk writes. Needs up to this much `pg_wal` disk. |
 | `min_wal_size` | `1GB` | `80MB` | Keeps WAL segments recycled rather than deleted and recreated. |
 | `checkpoint_timeout` | `15min` | `5min` | Fewer full-page images. Crash recovery takes longer. |
-| `wal_compression` | `lz4` | `off` | Compresses the full-page images written after each checkpoint. Needs Postgres 15+ built with lz4 (the chart's `postgres:16` image is). |
+| `wal_compression` | `lz4` | `off` | Compresses the full-page images written after each checkpoint. Needs Postgres 15+ built with lz4 (the chart's `postgres:18` image is). |
 | `random_page_cost` | `1.1` | `4` | **Assumes SSD-class storage.** Set `"4"` on spinning disks. |
 | `max_connections` | `200` | `100` | Production's value. The service pools, migrations, backups and psql sessions outgrew 100; the render-time connection budget checks sum against it. Each backend can use `work_mem` per sort/hash node, so check memory before raising it. |
 | `huge_pages` | `off` | `try` | The pod requests no hugepages. `try` can SIGBUS on nodes where hugepages exist but aren't granted to the pod. |
@@ -1740,7 +1740,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 |---|---|---|
 | `postgresql.pgbackrest.enabled` | `false` | Turn on WAL archiving, backups and checks with pgBackRest. Needs `postgresql.enabled`. Turning it on or off restarts Postgres once. |
 | `postgresql.pgbackrest.image.repository` | `""` | **Required when enabled**: a Postgres-plus-pgBackRest image: the `postgresql.image` Postgres with pgBackRest, tini as PID 1 and `/usr/local/bin/pgbackrest-daily-check` (e.g. lucy/postgres-pgbackrest). No default: this chart doesn't build one (docs/postgres-pitr.md). |
-| `postgresql.pgbackrest.image.tag` | `""` | **Required when enabled**: the stable tag with its digest, e.g. `pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:…` (only `-tini` tags: see docs/postgres-pitr.md, "Why tini"). Never falls back to `appVersion`: a per-release image would restart Postgres on every deploy. |
+| `postgresql.pgbackrest.image.tag` | `""` | **Required when enabled**: the stable tag with its digest, e.g. `pg18.6-pgbackrest2.59.1-tini0.19.0@sha256:…` (only `-tini` tags: see docs/postgres-pitr.md, "Why tini"). Never falls back to `appVersion`: a per-release image would restart Postgres on every deploy. |
 | `postgresql.pgbackrest.image.digest` | `""` | Content digest, used instead of `tag` when set. |
 | `postgresql.pgbackrest.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `postgresql.pgbackrest.stanza` | `ds` | pgBackRest stanza name. |

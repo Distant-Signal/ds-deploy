@@ -46,7 +46,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      # NOTE: postgres:16 is the one image in this chart whose default USER
+      # NOTE: postgres (18) is the one image in this chart whose default USER
       # is root -- its entrypoint drops to `postgres` via gosu. A bare
       # `runAsNonRoot: true` would therefore fail admission, so the uid/gid
       # are pinned explicitly below (the image runs correctly when it is
@@ -245,6 +245,15 @@ with postgresql.extraEnv, which replaces an entry of the same name.
             # PGDATA must be a SUBDIRECTORY of the mount, not the mount
             # itself: many CSI drivers put a `lost+found` entry in a fresh
             # volume, and initdb refuses to initialise a non-empty directory.
+            #
+            # Always set, never the image default: from Postgres 18 the
+            # official image defaults PGDATA to /var/lib/postgresql/18/docker
+            # (VOLUME /var/lib/postgresql), and its entrypoint refuses to
+            # start when /var/lib/postgresql/data is a mount and PGDATA is
+            # left at that default. Production's data directory has been at
+            # this path since 16, and the 16 -> 18 pg_upgrade
+            # (docs/postgres-18-upgrade.md) put the 18 cluster back here, so
+            # the volume and this path stay as they are across majors.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
             {{- if include "distant-signal.pgbackrestEnabled" . }}

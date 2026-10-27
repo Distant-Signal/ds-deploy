@@ -29,7 +29,7 @@ never touches the cluster.
 
 | Piece | What it does |
 | --- | --- |
-| Image | `postgresql.pgbackrest.image`, which must be the exact `postgres:16.15-trixie` image the chart pins, plus pgBackRest, `/usr/local/bin/pgbackrest-daily-check` (the check CronJob execs it), and `tini` as PID 1 in front of the stock entrypoint (see "Why tini" below). `lucy/postgres-pgbackrest` is such an image. The chart swaps it in for the stock image. |
+| Image | `postgresql.pgbackrest.image`, which must be the exact `postgres:18.6-trixie` image the chart pins (same version and digest), plus pgBackRest, `/usr/local/bin/pgbackrest-daily-check` (the check CronJob execs it), and `tini` as PID 1 in front of the stock entrypoint (see "Why tini" below). `lucy/postgres-pgbackrest` is such an image. The chart swaps it in for the stock image. |
 | WAL archiving | `archive_mode=on`, `archive_command='pgbackrest --stanza=ds --archive-timeout=30 archive-push %p'` and `archive_timeout=60` are added to the Postgres `-c` args. Archiving is asynchronous, through a spool at `/var/lib/postgresql/data/pgbackrest-spool` on the data volume, beside `PGDATA`. Each archive-push waits up to `--archive-timeout` (`archive.pushTimeoutSecs`) for the async worker; see "Stopping while S3 is unreachable". |
 | Grace period | The Postgres pod's `terminationGracePeriodSeconds` and `PGCTLTIMEOUT` default to 6 x `archive.pushTimeoutSecs` + 60 (240 s). Without pgBackRest the pod sets no grace period (Kubernetes' 30 s), unless `postgresql.terminationGracePeriodSeconds` is set. |
 | Repository | S3 (Thoth on mine-bringer), under `repo.path` in `repo.s3.bucket`. Every file is encrypted client-side with AES-256-CBC before it leaves the pod, and compressed with zstd. |
@@ -155,7 +155,10 @@ backups have aged past the retention window.
    `pg<postgres>-pgbackrest<version>-tini<version>`; read the digest with
    `docker buildx imagetools inspect <repository>:<tag>`. mine-bringer
    runs (Ranma-Config `clusters/base/apps/distant-signal.yaml`, with the
-   registry's pull Secret in the same HelmRelease values):
+   registry's pull Secret in the same HelmRelease values) the Postgres 16
+   image until the 18 upgrade, then the Postgres 18 one
+   (`pg18/Dockerfile` in that repo, published as
+   `pg18.6-pgbackrest2.59.1-tini0.19.0`):
 
    ```yaml
    postgresql:
@@ -163,6 +166,8 @@ backups have aged past the retention window.
        image:
          repository: git-bringer.fox-prometheus.ts.net/lucy/postgres-pgbackrest
          tag: "pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:dafa2a90d251fecf1b29d875d0fba2e300c497b24b4e5b204ae450e6cdb62791"
+         # From the 18 upgrade window (docs/postgres-18-upgrade.md):
+         # tag: "pg18.6-pgbackrest2.59.1-tini0.19.0@sha256:<digest from the Forgejo build>"
    ```
 
    The chart refuses to render without a repository and a tag (or
@@ -172,6 +177,12 @@ backups have aged past the retention window.
    do it on purpose. Keep it on the same Postgres version as
    `postgresql.image.tag`. Never use a tag without `-tini`: its postmaster
    is PID 1 and crash-restarts whenever archiving fails (see "Why tini").
+
+   A Postgres **major** is different: an 18 image can't open a 16 data
+   directory, and the stanza has to follow the new cluster. The 16 -> 18
+   move is a pg_upgrade in a maintenance window, followed by
+   `pgbackrest stanza-upgrade` and a new full backup:
+   [docs/postgres-18-upgrade.md](postgres-18-upgrade.md).
 
 6. **Turn it on:** `postgresql.pgbackrest.enabled: true`, plus `repo.path`,
    `repo.s3.endpoint`, `repo.s3.port`, `repo.s3.bucket` and
