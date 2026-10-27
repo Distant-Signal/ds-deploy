@@ -241,7 +241,9 @@ tables:
   journey_templates: {class: personal, grants: {api: SIUD, notifier: SU}}
   journey_template_legs: {class: personal, grants: {api: SIUD, notifier: S}}
   journey_template_skipped_dates: {class: personal, grants: {api: SIUD, notifier: S}}
-  push_subscriptions: {class: personal, grants: {api: SIUD, notifier: SD}}
+  # notifier: U on last_pushed_at only, stamped on each delivered push for
+  # the Notifications page's device list (DS-153).
+  push_subscriptions: {class: personal, grants: {api: SIUD, notifier: [SD, {privileges: U, columns: [last_pushed_at]}]}}
   tracked_train_tickets: {class: personal, grants: {api: SIUD}}
   unlisted_links: {class: personal, grants: {api: SIUD}}
   # Delegated access (docs/connected-apps.md). The notifier sends the
@@ -261,6 +263,9 @@ tables:
   journey_revision_legs: {class: personal, grants: {api: SIUD}}
   journey_breaks: {class: personal, grants: {api: SIUD, notifier: [S, {privileges: U, columns: [notified_at, notified_severity]}]}}
   notification_preferences: {class: personal, grants: {api: SIUD, notifier: S}}
+  # Quiet hours (DS-153): pushes held until the user's quiet hours end,
+  # written and released by the notifier. The api only exports them.
+  notification_holds: {class: personal, grants: {api: S, notifier: SIUD}}
   # Bookkeeping of the tracked-trains-as-journeys migration (DS-124), for
   # its rollback script; only the owner reads it, and phase 3 drops both.
   standalone_track_conversions: {class: personal, grants: {}}

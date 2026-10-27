@@ -1613,10 +1613,10 @@ api:
     # (the Authentik provider's issuer and client_id; both must differ from
     # every other client id and issuer the api trusts, or it refuses to
     # start), `maxScopes` (any of journeys:read, journeys:write,
-    # journeys:delete), `enabled` (default true; false is the kill switch:
-    # every token for the client gets 401 at once) and `serviceGroup` (the
-    # internal-OAuth group whose token may call POST /delegated-grants/revoke
-    # for this client). For example:
+    # journeys:delete, preferences:read), `enabled` (default true; false is
+    # the kill switch: every token for the client gets 401 at once) and
+    # `serviceGroup` (the internal-OAuth group whose token may call
+    # POST /delegated-grants/revoke for this client). For example:
     #   - name: ds-mcp
     #     displayName: Distant Signal assistant
     #     issuerUrl: https://sso.cursed.solutions/application/o/distant-signal-api/
