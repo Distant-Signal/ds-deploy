@@ -652,14 +652,17 @@ jobs:
   # Ingest phase 5 release D (docs/ingest-phase5-runbook.md §5.5, DS-118)
   # narrows the api, aggregator, enricher and notifier roles: no longer
   # members of the app role, exactly their own db-grants.yaml grants.
-  # --narrow renders that before db-grants.yaml says so. Those tests run
+  # db-grants.yaml says so since 2026-10-28; --narrow keeps the narrowed
+  # step narrowing them whatever the Stage 0b pass observes. Those tests run
   # each narrowed role's runtime writes that reach outside its own
   # tables, with their fixtures written as the owner: the api's track
   # routes queue their backlog replay in train_event_outbox and the
   # writer applies and completes it (a direct replay is refused); the
   # aggregator's archive takes its FOR UPDATE row lock on trains (which
   # needs UPDATE, not just DELETE). The full suites still seed most
-  # fixtures through the role's own pool, so they run in the Stage 0b pass.
+  # fixtures through the role's own pool, so the Stage 0b pass runs the four
+  # `--observe`d (members of app again) until those fixtures move to the
+  # owner pool (scripts/tests/test_postgres_roles_narrow.py pins both lists).
   rust-db-test-per-service:
     name: DB tests as each service's role (Stage 0b, release D)
     needs: rust-db-build
@@ -735,7 +738,7 @@ jobs:
 
       - name: DB-backed tests as each service's own role (Stage 0b)
         run: >-
-          uv run --no-sync scripts/test-postgres-roles.py --mode per-service --check-setup-job --
+          uv run --no-sync scripts/test-postgres-roles.py --mode per-service --check-setup-job --observe api,aggregator,enricher,notifier --
           uv run --no-sync scripts/db-tests.py run per-service --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
 
       - name: Release D's narrowed roles (api, aggregator, enricher, notifier)

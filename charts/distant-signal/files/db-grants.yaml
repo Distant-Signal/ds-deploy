@@ -44,15 +44,16 @@
 # SELECT). Nobody but the owner gets TRUNCATE, REFERENCES, TRIGGER or
 # CREATE, and foreign-key cascades need no grant.
 #
-# The grants of the four observed roles come from reading the code
-# (2026-10-06: crates/{aggregator,enricher,notifier}/src, non-test SQL,
-# including common::public_delay). They are confirmed or corrected by the
-# 7-day observe-role-usage.py report before any role is narrowed. Audited
+# The grants of the api, aggregator, enricher and notifier come from
+# reading the code (2026-10-06: crates/{aggregator,enricher,notifier}/src,
+# non-test SQL, including common::public_delay), confirmed or corrected by
+# the 7-day observe-role-usage.py report before any role is narrowed. Audited
 # again for release D (2026-10-23, DS-118; docs/ingest-phase5-runbook.md):
 # the code read against these rows, and the suites run with the four roles
 # narrowed (scripts/test-postgres-roles.py --narrow). It moved the api's
 # backlog replay to the writer (train_event_outbox) and added the
-# aggregator's UPDATE (id) on trains.
+# aggregator's UPDATE (id) on trains. The 7-day report (2026-10-28) found no
+# write outside them, and release D narrows all four (5.5 step 3).
 
 version: 1
 
@@ -80,29 +81,29 @@ groups:
 roles:
   api:
     name: distant_signal_api
-    status: observed
-    phase: 0b
+    status: narrow
+    phase: "5"
     groups: [read_shared, schema_gate]
     connection_limit: 34
     used_by: the api pools (16 per replica, plus a RollingUpdate surge pod); the api-maintenance CronJob (1B)
   aggregator:
     name: distant_signal_aggregator
-    status: observed
-    phase: 0b
+    status: narrow
+    phase: "5"
     groups: [read_shared, schema_gate]
     connection_limit: 9
     used_by: the aggregator (main pool and the archive pool)
   enricher:
     name: distant_signal_enricher
-    status: observed
-    phase: 0b
+    status: narrow
+    phase: "5"
     groups: [schema_gate]
     connection_limit: 4
     used_by: the enricher
   notifier:
     name: distant_signal_notifier
-    status: observed
-    phase: 0b
+    status: narrow
+    phase: "5"
     groups: [read_shared, schema_gate]
     connection_limit: 5
     used_by: the notifier
@@ -397,9 +398,8 @@ tables:
   # enricher: SELECT on the table, UPDATE only on its extraction columns
   # (Q3 of docs/ingest-phase5-runbook.md): the columns its two UPDATEs set
   # (crates/enricher/src/queries.rs write_extraction and
-  # carry_forward_extraction). The target; no effect while the enricher is
-  # observed (a member of app, so it still holds table-wide UPDATE) until
-  # 5.5 narrows it. Confirm the list against the 0b report first.
+  # carry_forward_extraction). Confirmed by the 0b report; in effect since
+  # release D narrowed the enricher (5.5 step 3).
   incidents: {class: ingest, grants: {api: S, incidents: SIU, aggregator: S, enricher: [S, {privileges: U, columns: [source_text_hash, extracted_category, extracted_periods, extraction_model_version, extracted_at]}]}}
   incident_history: {class: ingest, grants: {api: S, incidents: SI, enricher: S}}
   incident_feed_state: {class: ingest, grants: {api: S, incidents: SIU}}
