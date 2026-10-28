@@ -286,50 +286,123 @@ jobs:
       - name: Validate lines/*.toml external identifiers (fast tier)
         run: cargo run -p line-catalogue-validator
 
-  # Custom: the DATABASE_URL-gated `#[ignore]`d integration tests in `api`,
-  # `aggregator` and `notifier` (confirmed by grepping every
-  # `#[ignore = "..."]` reason in the workspace to need only a live
-  # Postgres), plus the Postgres/Redis-backed ones in `common`, `enricher`
-  # and `movement-feed`. Split out of `rust-test` (same commands, same
-  # services) so the two run in parallel; it has its own rust-cache entry
-  # (the default key includes the job id), since it builds only these
-  # packages' test binaries.
+  # Custom: the DATABASE_URL/REDIS_URL-gated `#[ignore]`d integration tests
+  # (every `#[ignore = "..."]` reason in the workspace needs only a live
+  # Postgres, Redis or fake-gcs-server, except the enricher's LLM-gated
+  # live evals and replay harness, which stay excluded: there is no
+  # LLM_BASE_URL or REPLAY_HISTORY_JSONL in CI). Split out of `rust-test`
+  # so the two run in parallel.
   #
-  # `notifier` joined this list here: it already had several
-  # DATABASE_URL-gated `#[ignore]`d tests
-  # of its own (`queries.rs`'s poll/push-subscription round trips,
-  # `main.rs`'s `run_cycle` transition test) that CI simply never ran, plus
-  # two more this plan's own Tasks 8/9 added --
-  # `list_committed_legs_for_today` and the `skip_notification_state`/
-  # `upsert_skip_notification_state` round-trip -- and `skip_check.rs`'s new
-  # `leg_is_skipped` test from this fix wave. Every one of them calls
-  # `queries.rs`/`skip_check.rs` functions (or, for `run_cycle`, passes a
-  # literal fake VAPID key straight into the function call) directly against
-  # a live Postgres, never through `main()`'s own env-var parsing, so none
-  # need anything beyond the same `DATABASE_URL` this job already sets up
-  # for `api`/`aggregator`.
-  #
-  # `enricher` is a mixed bag, so it's handled in its own step below instead
-  # of being folded into the `-p api -p aggregator -p notifier` step: five
-  # of its six `#[ignore]`d tests (`llm.rs`'s `live_eval_*`) call
-  # `live_client_from_env()` and genuinely need a real `LLM_BASE_URL` with
-  # live model access, so those five stay excluded here -- there is no such
-  # credential in CI. But `main.rs`'s
-  # `process_incident_writes_successfully_and_advances_hash_and_version_when_primary_extraction_is_truncated`
-  # only needs `DATABASE_URL`: it mocks all three LLM calls it makes against
-  # its own `wiremock` server (see that test's doc comment), so it now runs
-  # here too -- verified locally with `DATABASE_URL=postgres://postgres:
-  # postgres@localhost:5432/postgres cargo test -p enricher process_incident
-  # -- --ignored --test-threads=1` against a live Postgres, which passes.
-  # The step below runs every other ignored enricher test too, with
-  # `--skip live_eval --skip replay_` rather than a bare `-p enricher`
-  # addition to the step above, because without the skips the LLM-gated
-  # tests get pulled in and fail with "LLM_BASE_URL must be set for live
-  # eval" (and the replay harness with "REPLAY_HISTORY_JSONL must be set").
-  rust-db-test:
-    name: cargo test -- --ignored (DB/Redis-backed)
+  # Build once, run many (2026-10-27): the suites run several times, as
+  # the superuser and as the role split's roles, and each `cargo test -p`
+  # selection used to unify features differently and recompile `common`,
+  # `ds-store`, the api and the rest. Now `rust-db-build` builds every test
+  # binary once into a cargo-nextest archive (scripts/db-tests.py holds the
+  # package list and every pass's steps, each a former `cargo test`
+  # invocation with the same libtest arguments), and three jobs run the
+  # passes from it in parallel, each against its own Postgres and Redis:
+  # the superuser pass, the app-role passes, and the per-service passes.
+  # Each pass already made its own fresh database, so splitting them
+  # changes nothing they see. The test jobs need no Rust toolchain, cargo
+  # cache or apt packages. `rust-db-test` keeps the old check name and
+  # fails unless all four succeeded.
+  rust-db-build:
+    name: DB tests (build the test archive)
     runs-on: ubuntu-26.04
+    env:
+      # No debuginfo: a failing test's panic message still names its
+      # file:line (the panic location is compiled in); only a backtrace
+      # loses them. Full debuginfo made the cargo cache 4.7 GB (1-4 minutes
+      # to restore), and half of each test binary is line tables alone, so
+      # the archive the test jobs download halves too. Only this job's
+      # builds; rust-test and the rest keep the default.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.88.0
+
+      # None of the tested packages links rdkafka (only movement-relay and
+      # darwin-relay do), so this job needs only openssl-sys's libssl-dev
+      # and pkg-config, not rust-test's cmake, libsasl2-dev and
+      # libcurl4-openssl-dev. The runner image usually has both, so apt is
+      # skipped then; when it is needed, a stalled mirror times out and
+      # retries instead of hanging (it stalled 4-9 minutes on ~5% of runs).
+      - name: Install openssl build dependencies
+        run: |
+          installed="$(dpkg-query -W -f='${db:Status-Status}\n' libssl-dev pkg-config 2>/dev/null | grep -cx installed || true)"
+          if [[ "${installed}" == 2 ]]; then
+            echo "libssl-dev and pkg-config are already installed"
+            exit 0
+          fi
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          # shellcheck disable=SC2086 # word-split on purpose
+          sudo apt-get ${apt_opts} update
+          # shellcheck disable=SC2086 # word-split on purpose
+          sudo apt-get ${apt_opts} install -y --no-install-recommends libssl-dev pkg-config
+
+      # See rust-test's cache step for save-if. The shared key keeps the
+      # entry stable across job renames. Only third-party crates are cached
+      # (the default; spelled out): one feature resolution now, so one
+      # copy of each.
+      - name: Cache cargo registry/target
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust-db-tests
+          cache-all-crates: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # rust-cache keeps ~/.cargo/bin, so on a warm cache this is a no-op.
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-nextest@0.9.148
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # renovate: datasource=pypi depName=uv
+          version: "0.13.5"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Build the DB test archive (scripts/db-tests.py archive)
+        run: |
+          mkdir -p "${RUNNER_TEMP}/db-tests"
+          uv run --locked --no-default-groups scripts/db-tests.py archive --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst"
+          sqlx_bin="$(command -v sqlx)"
+          cp "${sqlx_bin}" "${RUNNER_TEMP}/db-tests/sqlx"
+          ls -l "${RUNNER_TEMP}/db-tests"
+          du -sh target
+
+      - name: Upload the DB test archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: db-tests
+          path: ${{ runner.temp }}/db-tests/
+          # Already zstd-compressed.
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  # The superuser pass on the `postgres` database the migrations ran on,
+  # plus the Redis-only and fake-gcs-server suites. Its steps (the
+  # #[sqlx::test] modules run only here) are scripts/db-tests.py's
+  # `superuser` pass. Every pass extracts the archive into the checkout
+  # (--extract-to), where rust-db-build's target/ was: build-time paths
+  # such as `env!("CARGO_BIN_EXE_api")` (the ticket-parse child's tests)
+  # then still point at the binaries.
+  rust-db-test-superuser:
+    name: DB tests as the superuser (+ Redis, fake-gcs-server)
+    needs: rust-db-build
+    runs-on: ubuntu-26.04
     services:
       postgres:
         image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
@@ -344,12 +417,8 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      # movement-feed's RedisStreamMovementFeed tests (Task 3 of
-      # docs/superpowers/plans/2026-09-04-movement-relay-plan.md) are the
-      # first #[ignore]d tests in this repo needing a live Redis rather than
-      # a live Postgres -- mirrors the postgres: block above exactly. The
-      # same Valkey image as the chart's `redis.image` (its `redis-cli`
-      # symlink serves the health check).
+      # The same Valkey image as the chart's `redis.image` (its
+      # `redis-cli` symlink serves the health check).
       redis:
         image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
         ports:
@@ -359,46 +428,48 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       REDIS_URL: redis://localhost:6379
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+      - name: Download the DB test archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          toolchain: 1.88.0
+          name: db-tests
+          path: ${{ runner.temp }}/db-tests
 
-      # The same packages as rust-test (see there for each one's reason).
-      # Only libssl-dev/pkg-config (openssl-sys, via native-tls) matter to
-      # the packages tested here today; the rest keeps the two jobs' build
-      # environments identical, so a package gaining an rdkafka dependency
-      # can't fail only here.
-      - name: Install rdkafka build dependencies
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-nextest@0.9.148
+
+      # sqlx-cli, built (and cached) by rust-db-build.
+      - name: Put sqlx-cli on PATH
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
+          chmod +x "${RUNNER_TEMP}/db-tests/sqlx"
+          echo "${RUNNER_TEMP}/db-tests" >> "${GITHUB_PATH}"
 
-      # See rust-test's cache step for save-if.
-      - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Install sqlx-cli
-        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
+      # A throwaway server: no durability. A service container takes no
+      # command line, so the settings go in with ALTER SYSTEM (all three
+      # take effect on reload).
+      - name: Tune Postgres for tests (fsync, full_page_writes, synchronous_commit off)
+        run: >-
+          psql "${DATABASE_URL}" -X -q -v ON_ERROR_STOP=1
+          -c "ALTER SYSTEM SET fsync = off"
+          -c "ALTER SYSTEM SET full_page_writes = off"
+          -c "ALTER SYSTEM SET synchronous_commit = off"
+          -c "SELECT pg_reload_conf()"
+          -c "SHOW fsync"
 
       - name: Run the migrations (crates/ds-store/migrations)
         working-directory: crates/ds-store
         run: sqlx migrate run
 
-      # The Python tooling below (gen-db-grants.py, test-postgres-roles.py
-      # --mode per-service) needs the pinned PyYAML: same uv setup as the
-      # scripts-lint job.
+      # The Python tooling below (gen-db-grants.py) needs the pinned PyYAML:
+      # same uv setup as the scripts-lint job.
       - name: Set up uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
@@ -418,59 +489,6 @@ jobs:
       - name: every public table, view and sequence is classified (db-grants.yaml)
         run: uv run --no-sync scripts/gen-db-grants.py check --database-url "${DATABASE_URL}"
 
-      # ds-store: the api's data access as it moves out (ingest architecture
-      # plan phase 1A); its DB tests run everywhere the api's do. ds-migrate
-      # (plan 1B.1): `run` against the migrated database. schedule-reference
-      # (plan 2a.2): its db sink's protocol and parity tests. poller-stations
-      # (plan 2b.1): its two sinks and the schema gate. poller-incidents
-      # (plan 2c.2): its DB sink against the api's write path.
-      - name: cargo test -p api -p ds-store -p ds-migrate -p aggregator -p notifier -p schedule-reference -p poller-stations -p poller-incidents -- --ignored (DB-backed tests)
-        run: cargo test -p api -p ds-store -p ds-migrate -p aggregator -p notifier -p schedule-reference -p poller-stations -p poller-incidents -- --ignored --test-threads=1
-
-      # common::pg's pool-settings tests (statement/idle timeouts actually
-      # applied, a timed-out statement cancelled without leaking, acquire
-      # timeout). Behind common's `postgres` feature.
-      - name: cargo test -p common --features postgres pg::tests -- --ignored (DB-backed tests)
-        run: cargo test -p common --features postgres pg::tests -- --ignored --test-threads=1
-
-      # Every ignored enricher test except the LLM-gated live evals and the
-      # offline replay harness (needs an exported history file): the
-      # DB-backed process_incident/reclaim/carry-forward/query tests, which
-      # mock the LLM with wiremock, and stream.rs's Redis tests.
-      - name: cargo test -p enricher -- --ignored (DB/Redis-backed tests; LLM-gated evals and replays stay excluded)
-        run: cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1
-
-      - name: cargo test -p movement-feed -- --ignored (Redis-backed tests)
-        run: cargo test -p movement-feed -- --ignored --test-threads=1
-
-      # Ingest architecture phase 0c: every Redis ACL user in
-      # charts/distant-signal/files/redis-users.acl.tpl, with its narrow
-      # rights, runs its client's command sequence and is refused the
-      # commands it must not have (crates/common/tests/redis_acl.rs).
-      - name: cargo test -p common --test redis_acl -- --ignored (Redis ACL users)
-        run: cargo test -p common --test redis_acl -- --ignored --test-threads=1
-
-      # Ingest architecture plan 1B.6: the ingest-writer's loop runner under
-      # Postgres advisory locks (crates/ingest-writer/tests/loop_locks.rs).
-      - name: cargo test -p ingest-writer -- --ignored (DB-backed tests)
-        run: cargo test -p ingest-writer -- --ignored --test-threads=1
-
-      # Ingest architecture phase 4: the readers' db sources (#[sqlx::test]
-      # databases, so as the superuser only; ds-store's reads::db_tests,
-      # in the step above, check the views as a role holding only their
-      # grants).
-      - name: cargo test the phase 4 readers' db sources -- --ignored (DB-backed tests)
-        run: |
-          cargo test -p full-coverage-consumer population_reload::db_tests -- --ignored --test-threads=1
-          cargo test -p trust-consumer reads:: -- --ignored --test-threads=1
-          cargo test -p poller-ldbws sample_source:: -- --ignored --test-threads=1
-
-      # Ingest architecture plan 2d: schedule-ingest's direct sink
-      # (INGEST_SINK=db). Only its DB module: the crate's other ignored test
-      # needs a real CORPUS extract.
-      - name: cargo test -p schedule-ingest sink::db_tests -- --ignored (DB-backed tests)
-        run: cargo test -p schedule-ingest sink::db_tests -- --ignored --test-threads=1
-
       # The GCS bucket source end to end against fake-gcs-server (DS-92,
       # crates/schedule-ingest/src/bucket_e2e_tests.rs). A `docker run`
       # rather than a `services:` entry: the emulator needs command-line
@@ -489,125 +507,258 @@ jobs:
           docker logs fake-gcs
           exit 1
 
-      - name: cargo test -p schedule-ingest bucket_e2e_tests -- --ignored (fake-gcs-server)
+      # ds-store: the api's data access (ingest plan 1A); ds-migrate (1B.1)
+      # `run` against the migrated database; schedule-reference (2a.2), its
+      # db sink's protocol and parity tests; poller-stations (2b.1) and
+      # poller-incidents (2c.2), their sinks and schema gates; common::pg's
+      # pool settings; the enricher (minus the LLM-gated evals); the Redis
+      # stream and ACL suites (phases 0c and 3a); the ingest-writer's loop
+      # runner (1B.6); the phase 4 readers' db sources; schedule-ingest's
+      # direct sink (2d) and its bucket source against fake-gcs-server; the
+      # TRUST consumers' direct sinks (3b).
+      - name: DB/Redis-backed tests as the superuser (scripts/db-tests.py run superuser)
         env:
           FAKE_GCS_URL: http://127.0.0.1:4443
-        run: cargo test -p schedule-ingest bucket_e2e_tests -- --ignored
+        run: uv run --no-sync scripts/db-tests.py run superuser --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
 
-      # Ingest architecture plan 3b: the TRUST consumers' direct DB sinks
-      # (INGEST_SINK=db), parity with the api's routes, and their schema
-      # gates. They run again as their narrow roles in the per-service step.
-      - name: cargo test -p trust-backlog-consumer -p trust-consumer -- --ignored (DB-backed tests)
-        run: cargo test -p trust-backlog-consumer -p trust-consumer -- --ignored --test-threads=1
+  # The Postgres role split (docs/postgres-app-role.md): proves no runtime
+  # path needs a superuser. scripts/test-postgres-roles.py makes a fresh
+  # database and roles with the chart's own setup script
+  # (charts/distant-signal/files/postgres-roles.sql), then runs the
+  # DB-backed suites with DATABASE_URL as the DML-only app role and
+  # MIGRATION_DATABASE_URL as the schema owner, as the chart wires them.
+  # `existing` converts a database migrated as the superuser (today's
+  # production); `new` creates the roles first and migrates as the owner
+  # (a new cluster). The #[sqlx::test] modules are skipped: they create a
+  # throwaway database per test, which needs CREATEDB, a test-harness
+  # right, not a runtime one; their DML runs in the superuser job.
+  # --check-setup-job: the setup scripts run once more, through the
+  # setup Job's entrypoint, behind a reader holding ACCESS SHARE on
+  # every table, with lock_timeout=2s: a steady-state release takes no
+  # ACCESS EXCLUSIVE lock (2026-10-14, Helm v252).
+  rust-db-test-app-role:
+    name: DB tests as the app role (existing and new cluster)
+    needs: rust-db-build
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Ingest architecture phase 3a: the stream runtime (produce/consume,
-      # reclaim, dead letters, retries, MAXLEN, the producer policies while
-      # Redis is down, and the poller-ldbws / ingest-writer ACL users).
-      - name: cargo test -p ingest-stream --test redis_stream -- --ignored (Redis-backed tests)
-        run: cargo test -p ingest-stream --test redis_stream -- --ignored --test-threads=1
+      - name: Download the DB test archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: db-tests
+          path: ${{ runner.temp }}/db-tests
 
-      # The Postgres role split (docs/postgres-app-role.md): proves no runtime
-      # path needs a superuser. scripts/test-postgres-roles.py makes a fresh
-      # database and roles with the chart's own setup script
-      # (charts/distant-signal/files/postgres-roles.sql), then runs the
-      # DB-backed suites with DATABASE_URL as the DML-only app role and
-      # MIGRATION_DATABASE_URL as the schema owner, as the chart wires them.
-      # `existing` converts a database migrated as the superuser (today's
-      # production); `new` creates the roles first and migrates as the owner
-      # (a new cluster). The #[sqlx::test] modules are skipped: they create a
-      # throwaway database per test, which needs CREATEDB, a test-harness
-      # right, not a runtime one; their DML runs in the step above.
-      # --check-setup-job: the setup scripts run once more, through the
-      # setup Job's entrypoint, behind a reader holding ACCESS SHARE on
-      # every table, with lock_timeout=2s: a steady-state release takes no
-      # ACCESS EXCLUSIVE lock (2026-10-14, Helm v252).
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-nextest@0.9.148
+
+      - name: Put sqlx-cli on PATH
+        run: |
+          chmod +x "${RUNNER_TEMP}/db-tests/sqlx"
+          echo "${RUNNER_TEMP}/db-tests" >> "${GITHUB_PATH}"
+
+      # See rust-db-test-superuser.
+      - name: Tune Postgres for tests (fsync, full_page_writes, synchronous_commit off)
+        run: >-
+          psql "${DATABASE_URL}" -X -q -v ON_ERROR_STOP=1
+          -c "ALTER SYSTEM SET fsync = off"
+          -c "ALTER SYSTEM SET full_page_writes = off"
+          -c "ALTER SYSTEM SET synchronous_commit = off"
+          -c "SELECT pg_reload_conf()"
+          -c "SHOW fsync"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # renovate: datasource=pypi depName=uv
+          version: "0.13.5"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install the pinned script tools
+        run: uv sync --locked --group lint
+
       - name: DB-backed tests as the non-superuser app role (existing cluster)
         run: >-
-          scripts/test-postgres-roles.py --mode existing --check-setup-job -- sh -c '
-          cargo test -p api -p ds-store -p aggregator -p notifier -- --ignored --test-threads=1
-          --skip corpus::db_tests --skip crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests --skip reads::db_tests
-          && cargo test -p common --features postgres pg::tests -- --ignored --test-threads=1
-          && cargo test -p ingest-writer -- --ignored --test-threads=1
-          && cargo test -p schedule-reference -- --ignored --test-threads=1
-          && cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1'
+          uv run --no-sync scripts/test-postgres-roles.py --mode existing --check-setup-job --
+          uv run --no-sync scripts/db-tests.py run existing --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
 
       - name: DB-backed tests as the non-superuser app role (new cluster)
         run: >-
-          scripts/test-postgres-roles.py --mode new --
-          cargo test -p api -p ds-store -- --ignored --test-threads=1
-          migrate::tests schedule_publish
+          uv run --no-sync scripts/test-postgres-roles.py --mode new --
+          uv run --no-sync scripts/db-tests.py run new --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
 
-      # Stage 0b (postgresql.roles.perService): the same suites, each as its
-      # own service's role from files/postgres-grants.sql. The roles are
-      # still members of the app role, so this passes today; it is the
-      # harness each later narrowing (phases 2-5) runs against. ds-store's
-      # tests run as the api role: in phase 1A they are the api's moved
-      # tests; spec §6.5 runs them per narrowed role later. Each DB service's
-      # tests/schema_gate.rs (plan 1B.2) checks its own role's grants, so
-      # every service with one runs as its own role, the writer included.
-      # schedule-reference's role is narrow (plan 2a.6): its db sink's
-      # parity and protocol tests prove exactly its db-grants.yaml grants.
-      # poller-stations runs last, as its narrow role (plan 2b.3), which
-      # cannot DELETE the test stations it leaves behind. poller-incidents
-      # runs as its narrow role (plan 2c.3) too, cleaning up through
-      # MIGRATION_DATABASE_URL (the owner) since the role has no DELETE.
-      # The TRUST consumers (plan 3b) run as their narrow roles; their
-      # fixtures (users, subscriptions) go through DATABASE_URL_API, and
-      # their tests delete nothing they need. trust-consumer skips its
-      # reads:: tests here (#[sqlx::test]: they create databases, which no
-      # narrow role may). The phase 4 readers' read-only roles
-      # (full_coverage_ro, ldbws_ro; plan 4.7) run each crate's role_reads
-      # test: the schema gate and every db-source query as the role.
-      # ingest-writer's line_status_rls test (plan 3c.3) runs above, as the
-      # writer, reading DATABASE_URL_WRITER/_AGGREGATOR/_API itself.
-      # ds-store's schedule::publish tests run as schedule_reference (the
-      # other suites seed schedule products as the owner,
-      # MIGRATION_DATABASE_URL; ds_store::test_support::schedule_fixture_pool):
-      # since release B the app role (and so the api role) no longer holds
-      # the *_publish_keys tables or analyze_publish_keys (db-grants.yaml
-      # app_revokes). writer-maintenance's backfill-incident-lines preflight
-      # runs as the incidents role, the role that subcommand is run as
-      # (ingest phase 5, 5.4b; the writer run above checks the refusal).
+  # Stage 0b (postgresql.roles.perService): the same suites, each as its
+  # own service's role from files/postgres-grants.sql. The roles are
+  # still members of the app role, so this passes today; it is the
+  # harness each later narrowing (phases 2-5) runs against. ds-store's
+  # tests run as the api role: in phase 1A they are the api's moved
+  # tests; spec §6.5 runs them per narrowed role later. Each DB service's
+  # tests/schema_gate.rs (plan 1B.2) checks its own role's grants, so
+  # every service with one runs as its own role, the writer included.
+  # schedule-reference's role is narrow (plan 2a.6): its db sink's
+  # parity and protocol tests prove exactly its db-grants.yaml grants.
+  # poller-stations runs last, as its narrow role (plan 2b.3), which
+  # cannot DELETE the test stations it leaves behind. poller-incidents
+  # runs as its narrow role (plan 2c.3) too, cleaning up through
+  # MIGRATION_DATABASE_URL (the owner) since the role has no DELETE.
+  # The TRUST consumers (plan 3b) run as their narrow roles; their
+  # fixtures (users, subscriptions) go through DATABASE_URL_API, and
+  # their tests delete nothing they need. trust-consumer skips its
+  # reads:: tests here (#[sqlx::test]: they create databases, which no
+  # narrow role may). The phase 4 readers' read-only roles
+  # (full_coverage_ro, ldbws_ro; plan 4.7) run each crate's role_reads
+  # test: the schema gate and every db-source query as the role.
+  # ingest-writer's line_status_rls test (plan 3c.3) runs as the writer,
+  # reading DATABASE_URL_WRITER/_AGGREGATOR/_API itself.
+  # ds-store's schedule::publish tests run as schedule_reference (the
+  # other suites seed schedule products as the owner,
+  # MIGRATION_DATABASE_URL; ds_store::test_support::schedule_fixture_pool):
+  # since release B the app role (and so the api role) no longer holds
+  # the *_publish_keys tables or analyze_publish_keys (db-grants.yaml
+  # app_revokes). writer-maintenance's backfill-incident-lines preflight
+  # runs as the incidents role, the role that subcommand is run as
+  # (ingest phase 5, 5.4b; the writer run checks the refusal).
+  #
+  # Ingest phase 5 release D (docs/ingest-phase5-runbook.md §5.5, DS-118)
+  # narrows the api, aggregator, enricher and notifier roles: no longer
+  # members of the app role, exactly their own db-grants.yaml grants.
+  # --narrow renders that before db-grants.yaml says so. Those tests run
+  # each narrowed role's runtime writes that reach outside its own
+  # tables, with their fixtures written as the owner: the api's track
+  # routes queue their backlog replay in train_event_outbox and the
+  # writer applies and completes it (a direct replay is refused); the
+  # aggregator's archive takes its FOR UPDATE row lock on trains (which
+  # needs UPDATE, not just DELETE). The full suites still seed most
+  # fixtures through the role's own pool, so they run in the Stage 0b pass.
+  rust-db-test-per-service:
+    name: DB tests as each service's role (Stage 0b, release D)
+    needs: rust-db-build
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the DB test archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: db-tests
+          path: ${{ runner.temp }}/db-tests
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-nextest@0.9.148
+
+      - name: Put sqlx-cli on PATH
+        run: |
+          chmod +x "${RUNNER_TEMP}/db-tests/sqlx"
+          echo "${RUNNER_TEMP}/db-tests" >> "${GITHUB_PATH}"
+
+      # See rust-db-test-superuser.
+      - name: Tune Postgres for tests (fsync, full_page_writes, synchronous_commit off)
+        run: >-
+          psql "${DATABASE_URL}" -X -q -v ON_ERROR_STOP=1
+          -c "ALTER SYSTEM SET fsync = off"
+          -c "ALTER SYSTEM SET full_page_writes = off"
+          -c "ALTER SYSTEM SET synchronous_commit = off"
+          -c "SELECT pg_reload_conf()"
+          -c "SHOW fsync"
+
+      # test-postgres-roles.py --mode per-service reads db-grants.yaml
+      # (PyYAML).
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # renovate: datasource=pypi depName=uv
+          version: "0.13.5"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install the pinned script tools
+        run: uv sync --locked --group lint
+
       - name: DB-backed tests as each service's own role (Stage 0b)
-        run: |
-          # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
-          uv run --no-sync scripts/test-postgres-roles.py --mode per-service --check-setup-job -- sh -c '
-            skip="--skip corpus::db_tests --skip crosswalk::db_tests --skip freshness::db_tests --skip line_timetable::db_tests --skip reads::db_tests"
-            DATABASE_URL="$DATABASE_URL_API" cargo test -p api -- --ignored --test-threads=1 $skip &&
-            DATABASE_URL="$DATABASE_URL_API" cargo test -p ds-store -- --ignored --test-threads=1 $skip --skip schedule::publish:: &&
-            DATABASE_URL="$DATABASE_URL_SCHEDULE_REFERENCE" cargo test -p ds-store schedule::publish:: -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_AGGREGATOR" cargo test -p aggregator -- --ignored --test-threads=1 $skip &&
-            DATABASE_URL="$DATABASE_URL_NOTIFIER" cargo test -p notifier -- --ignored --test-threads=1 $skip &&
-            DATABASE_URL="$DATABASE_URL_WRITER" cargo test -p ingest-writer -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_SCHEDULE_INGEST" cargo test -p schedule-ingest sink::db_tests -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_SCHEDULE_REFERENCE" cargo test -p schedule-reference -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_ENRICHER" cargo test -p enricher -- --ignored --skip live_eval --skip replay_ --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_TRUST_BACKLOG" cargo test -p trust-backlog-consumer -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_TRUST_CONSUMER" cargo test -p trust-consumer -- --ignored --skip reads:: --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_FULL_COVERAGE_RO" cargo test -p full-coverage-consumer --test role_reads -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_LDBWS_RO" cargo test -p poller-ldbws --test role_reads -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_INCIDENTS" cargo test -p poller-incidents -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_INCIDENTS" cargo test -p ingest-writer --bin writer-maintenance -- --ignored --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_STATIONS" cargo test -p poller-stations -- --ignored --test-threads=1'
+        run: >-
+          uv run --no-sync scripts/test-postgres-roles.py --mode per-service --check-setup-job --
+          uv run --no-sync scripts/db-tests.py run per-service --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
 
-      # Ingest phase 5 release D (docs/ingest-phase5-runbook.md §5.5, DS-118)
-      # narrows the api, aggregator, enricher and notifier roles: no longer
-      # members of the app role, exactly their own db-grants.yaml grants.
-      # --narrow renders that before db-grants.yaml says so. These tests run
-      # each narrowed role's runtime writes that reach outside its own
-      # tables, with their fixtures written as the owner: the api's track
-      # routes queue their backlog replay in train_event_outbox and the
-      # writer applies and completes it (a direct replay is refused); the
-      # aggregator's archive takes its FOR UPDATE row lock on trains (which
-      # needs UPDATE, not just DELETE). The full suites still seed most
-      # fixtures through the role's own pool, so they run in the step above.
       - name: Release D's narrowed roles (api, aggregator, enricher, notifier)
+        run: >-
+          uv run --no-sync scripts/test-postgres-roles.py --mode per-service --narrow api,aggregator,enricher,notifier --
+          uv run --no-sync scripts/db-tests.py run narrow --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
+
+  # The old single job's check name, for anything that waits on it: green
+  # only when the archive built and every pass passed.
+  rust-db-test:
+    name: cargo test -- --ignored (DB/Redis-backed)
+    if: ${{ always() }}
+    needs: [rust-db-build, rust-db-test-superuser, rust-db-test-app-role, rust-db-test-per-service]
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Every DB test job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          # shellcheck disable=SC2016 # expanded by the inner sh, from the env test-postgres-roles.py sets
-          uv run --no-sync scripts/test-postgres-roles.py --mode per-service --narrow api,aggregator,enricher,notifier -- sh -c '
-            DATABASE_URL="$DATABASE_URL_API" cargo test -p ds-store backlog::matching::db_tests::the_api_queues_its_replay_for_the_writer -- --ignored --exact --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_API" cargo test -p api routes::train::db_tests::post_track_by_uid_backfills_schedule_and_movement_data_from_the_backlog -- --ignored --exact --test-threads=1 &&
-            DATABASE_URL="$DATABASE_URL_AGGREGATOR" cargo test -p aggregator archive::tests:: -- --ignored --test-threads=1'
+          echo "results: ${RESULTS}"
+          for result in ${RESULTS}; do
+            [[ "${result}" == success ]] || exit 1
+          done
 
   # Custom: no reusable Piped workflow covers Node/npm at all (its
   # ecosystem coverage is Python + Rust). frontend/package.json now has a
@@ -1032,6 +1183,13 @@ jobs:
       # entrypoint's account policy.
       - name: Test scripts
         run: uv run --no-sync python -m unittest discover -s scripts/tests -v
+
+      # The DB jobs run every `#[ignore]`d test of their packages, in a
+      # debug build: an ignored benchmark must do nothing unless its env
+      # var is set (transit_planning_budget's took the DB job from ~30 to
+      # ~78 minutes on 2026-10-27).
+      - name: ignored benchmarks are env-gated
+        run: uv run --no-sync scripts/check-bench-gates.py
 
       # Every chart values.yaml key needs a row in the chart README's "Values
       # reference" tables, and every row must name a real key.
