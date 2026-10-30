@@ -402,12 +402,28 @@ jobs:
       # Keyless/OIDC signing via sigstore's public Fulcio/Rekor instances,
       # same approach Piped's build-container.yml and Reinhard's
       # docker-publish.yml both use.
+      #
+      # Signed once, by digest: a signature attaches to the digest, not a
+      # tag, so signing once per tag only re-signed the same image. Retried
+      # because cosign retries a Rekor upload that times out, and when the
+      # first attempt had in fact landed the retry fails with 409
+      # createLogEntryConflict (seen on main, 2026-10-30). A fresh `cosign
+      # sign` makes new ephemeral keys, so its entry can't conflict.
       - name: Sign the published image
         if: env.PUBLISH == 'true'
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE: ${{ env.IMAGE_BASE }}/${{ matrix.service }}
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: echo "${TAGS}" | xargs -I {} cosign sign --yes "{}@${DIGEST}"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if cosign sign --yes "${IMAGE}@${DIGEST}"; then
+              exit 0
+            fi
+            echo "::warning::cosign sign attempt ${attempt} failed"
+            sleep $((attempt * 10))
+          done
+          exit 1
 
       # Matrix job outputs don't natively aggregate to a downstream job --
       # `push-helm-chart` below needs every one of these 19 legs' own real
