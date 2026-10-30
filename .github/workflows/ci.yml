@@ -1579,6 +1579,15 @@ jobs:
           on=$(render "${rules[@]}" --set pollers.tfl.stops.enabled=true --set ingestWriter.streams.tfl-stops=apply)
           stale=$(grep -A1 'cycle="tfl-stops"' <<<"${on}" || true)
           grep -q '> 172800' <<<"${stale}" || fail "tfl-stops must go stale after 172800s: ${stale}"
+          # DistantSignalTflRoutesMissing (DS-187): only while the routes
+          # job is on too.
+          if grep -q 'alert: DistantSignalTflRoutesMissing' <<<"${on}"; then
+            fail "no DistantSignalTflRoutesMissing while the routes job is off"
+          fi
+          routed=$(render "${rules[@]}" --set pollers.tfl.stops.enabled=true --set pollers.tfl.stops.routes=true \
+            --set ingestWriter.streams.tfl-stops=apply)
+          grep -q 'alert: DistantSignalTflRoutesMissing' <<<"${routed}" \
+            || fail "DistantSignalTflRoutesMissing must render while the routes job is on"
 
       - name: helm template (enricher workload identity)
         run: |

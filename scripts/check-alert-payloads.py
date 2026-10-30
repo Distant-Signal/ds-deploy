@@ -137,6 +137,15 @@ RENDER_FLAGS = [
     "darwinRelay.enabled=true",
     "redis.acl.clients.darwinRelay=true",
     "ingestWriter.streams.darwin=apply",
+    # poller-tfl with its stops and routes jobs, for
+    # DistantSignalTflRoutesMissing (DS-187), with its Redis user and its
+    # streams applied.
+    "pollers.tfl.enabled=true",
+    "pollers.tfl.stops.enabled=true",
+    "pollers.tfl.stops.routes=true",
+    "redis.acl.clients.pollerTfl=true",
+    "ingestWriter.streams.tfl=apply",
+    "ingestWriter.streams.tfl-stops=apply",
     "postgresql.pgbackrest.enabled=true",
     "postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest",
     "postgresql.pgbackrest.image.tag=pg18.6-pgbackrest2.59.1-tini0.19.0",

@@ -2269,12 +2269,16 @@ network: an enabled network's intervals). */}}
 {{- end }}
 {{- $transitRefusedOn := and ($rule.transitFeedRefused).enabled $transitOn }}
 {{- $transitUnmappedOn := and ($rule.transitUnmappedLineRef).enabled $transitOn }}
+{{- /* The api's Tube rides without routes (DS-187): only while poller-tfl's
+routes job is on, so routes are expected. */}}
+{{- $tflStops := .Values.pollers.tfl.stops | default dict }}
+{{- $tflRoutesMissingOn := and ($rule.tflRoutesMissing).enabled .Values.pollers.tfl.enabled $tflStops.enabled $tflStops.routes }}
 {{- $pollerStaleOn := and ($rule.pollerStale).enabled $anyPoller }}
 {{- $ldbwsOn := and ($rule.ldbwsStalestStation).enabled (.Values.pollers.ldbws).enabled }}
 {{- $ldbwsInvalidCrsOn := and ($rule.ldbwsInvalidCrs).enabled (.Values.pollers.ldbws).enabled }}
 {{- $incidentRemovalOn := and ($rule.incidentRemovalStalled).enabled (.Values.pollers.incidents).enabled }}
 {{- $incidentSnapshotsOn := and ($rule.incidentSnapshotsMissing).enabled (.Values.pollers.incidents).enabled }}
-{{- if or $pollerFailuresOn $pollerStaleOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn $incidentSnapshotsOn $transitRefusedOn $transitUnmappedOn }}
+{{- if or $pollerFailuresOn $pollerStaleOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn $incidentSnapshotsOn $transitRefusedOn $transitUnmappedOn $tflRoutesMissingOn }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -2415,6 +2419,28 @@ spec:
             summary: "{{ "{{ $labels.network }}" }} unknown disruption line {{ "{{ $labels.ref }}" }}"
             description: "In the last {{ .window }}. Its disruptions show on no line until the network file has the alias."
             runbook_url: {{ printf "%s#distantsignaltransitunmappedlineref" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.tflRoutesMissing }}
+        {{- if $tflRoutesMissingOn }}
+        {{- /*
+        The api planned a TfL stop end on a line with no routes loaded
+        (tfl_line_routes, DS-151): its rides were straight-line estimates.
+        Only reason="line": a stop a line's routes miss is expected now and
+        then. The api counts per request, so a quiet hour stays quiet.
+        */}}
+        - alert: DistantSignalTflRoutesMissing
+          expr: |
+            sum by (namespace, line) (increase(distant_signal_api_tfl_access_routes_missing_total{namespace="{{ $ns }}", reason="line"}[{{ .window }}])) > 0
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Tube rides on {{ "{{ $labels.line }}" }} planned without its routes"
+            description: "In the last {{ .window }}. Rides are straight-line estimates until poller-tfl's routes job loads the line."
+            runbook_url: {{ printf "%s#distantsignaltflroutesmissing" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.ldbwsStalestStation }}

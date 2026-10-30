@@ -1568,6 +1568,29 @@ disruptions are kept but show on no line (only at network level). Add
 Both transit alerts: the rollout, rollback and recovery steps are in
 [transit-networks.md](transit-networks.md).
 
+### DistantSignalTflRoutesMissing
+
+The api planned a TfL stop end (`/Trips/plan` from or to a Tube, DLR or
+tram stop) on a line with no routes in `tfl_line_routes`, within
+`tflRoutesMissing.window` (1h):
+`api_tfl_access_routes_missing_total{line, reason="line"}`. Its rides were
+measured on the straight-line fallback (`crates/api/src/data/tfl_access.rs`):
+close on most lines, but blind to changes between branches and short where
+two branches lie close. The api also logs one warning an hour per pod
+("planned with no routes loaded"). Rendered only while
+`pollers.tfl.stops.routes` is on.
+
+1. `SELECT line_id, count(*), max(fetched_at) FROM tfl_line_routes GROUP BY 1`:
+   no rows at all means the routes job has not run or not applied. Check
+   `DistantSignalPollerStale` for `tfl-routes`, poller-tfl's log, and the
+   ingest-writer's `tfl-line-routes` freshness row.
+2. Rows for other lines but not `line`: TfL returned no route sequence for
+   it, or the feed guard refused the run (poller-tfl's log); the next daily
+   run tries again.
+
+`reason="stop"` (a stop a line's routes do not pass, such as a new stop)
+does not alert.
+
 ## Darwin Push Port (darwin-relay)
 
 Rendered only with `darwinRelay.enabled` (DS-152; docs/darwin-pushport.md).

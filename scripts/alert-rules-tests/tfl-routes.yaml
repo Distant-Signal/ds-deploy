@@ -1,0 +1,30 @@
+# promtool unit tests for DistantSignalTflRoutesMissing (DS-187; see
+# recorded-alerts.yaml's header for how rules.yaml is rendered; poller-tfl's
+# routes job is on there): any TfL stop end planned on a line with no routes
+# loaded (reason="line") in 1h. No `for`; reason="stop" never alerts.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Northern line ends planned without routes from minute 5 to 10; a
+  # Victoria line stop its routes miss throughout.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_tfl_access_routes_missing_total{namespace="distant-signal", pod="p", line="northern", reason="line"}'
+        values: '0x5 1 2 3 4 5x120'
+      - series: 'distant_signal_api_tfl_access_routes_missing_total{namespace="distant-signal", pod="p", line="victoria", reason="stop"}'
+        values: '0+1x130'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DistantSignalTflRoutesMissing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalTflRoutesMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, line: northern}
+            exp_annotations:
+              summary: Tube rides on northern planned without its routes
+              description: "In the last 1h. Rides are straight-line estimates until poller-tfl's routes job loads the line."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaltflroutesmissing
+      - eval_time: 80m
+        alertname: DistantSignalTflRoutesMissing
+        exp_alerts: []

@@ -6020,6 +6020,15 @@ metrics:
       enabled: true
       window: 1h
       severity: warning
+    # DistantSignalTflRoutesMissing (DS-187): the api planned a TfL stop end
+    # on a line with no routes loaded, within `window`
+    # (distant_signal_api_tfl_access_routes_missing_total{line,
+    # reason="line"}): its rides were straight-line estimates. Only while
+    # pollers.tfl.stops.routes is on (routes are expected).
+    tflRoutesMissing:
+      enabled: true
+      window: 1h
+      severity: warning
     # DistantSignalLdbwsStationStale (SVC-04): the least recently sampled
     # LDBWS station was last sampled more than `maxAgeSeconds` ago
     # (distant_signal_ldbws_stalest_station_age_seconds), i.e. the rotation
