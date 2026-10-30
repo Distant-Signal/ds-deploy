@@ -342,6 +342,10 @@ tables:
   # stop, upserted by whichever replica refreshes it, pruned by the api
   # after a day untouched (crates/api/src/data/tfl_arrivals.rs).
   tfl_arrivals_cache: {class: internal, grants: {api: SIUD}}
+  # Opt-in usage analytics' daily counts (DS-190): no identifiers. The api
+  # upserts them (POST /public/events) and its retention sweep deletes days
+  # older than 13 months.
+  usage_daily: {class: internal, grants: {api: SIUD}}
   # The publish staging keys (UNLOGGED). Only schedule-reference's publish
   # uses them, as schedule_reference; the app role lost them in release B
   # (app_revokes below), with the api's /private publish routes.

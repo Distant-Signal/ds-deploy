@@ -1754,6 +1754,9 @@ api:
     publicWrite:     # every other non-GET public route
       perMinute: 120
       burst: 60
+    events:          # POST /public/events (opt-in usage analytics)
+      perMinute: 60
+      burst: 30
     # -- The Distant-Signal-MCP's own budget (5x the public defaults),
     # used only for requests carrying a verified internal OAuth token in
     # api.internalOauth.groups.mcp. ONE bucket for the whole service, keyed

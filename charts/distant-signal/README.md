@@ -1859,6 +1859,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.rateLimit.tripPlan.perMinute` / `.burst` | `20` / `10` | Per client IP, `/Trips/plan`. |
 | `api.rateLimit.trainByUid.perMinute` / `.burst` | `120` / `60` | Per client IP, `/Train/by-uid/*`. |
 | `api.rateLimit.publicWrite.perMinute` / `.burst` | `120` / `60` | Per client IP, every other non-GET public route. |
+| `api.rateLimit.events.perMinute` / `.burst` | `60` / `30` | Per client IP, `POST /public/events` (opt-in usage analytics, [docs/usage-analytics.md](../../docs/usage-analytics.md)); the MCP gets the same. |
 | `api.rateLimit.mcp.tripPlan.perMinute` / `.burst` | `100` / `30` | The MCP's own `/Trips/plan` budget: one bucket for the whole service (`svc:mcp`), 5x public. |
 | `api.rateLimit.mcp.trainByUid.perMinute` / `.burst` | `600` / `200` | The MCP's own `/Train/by-uid/*` budget. |
 | `api.rateLimit.mcp.publicWrite.perMinute` / `.burst` | `600` / `200` | The MCP's own public-write budget. Login has no MCP budget: the bearer is ignored there. |

@@ -409,6 +409,10 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.rateLimit.publicWrite.perMinute | quote }}
             - name: API_RATE_LIMIT_PUBLIC_WRITE_BURST
               value: {{ .Values.api.rateLimit.publicWrite.burst | quote }}
+            - name: API_RATE_LIMIT_EVENTS_PER_MINUTE
+              value: {{ .Values.api.rateLimit.events.perMinute | quote }}
+            - name: API_RATE_LIMIT_EVENTS_BURST
+              value: {{ .Values.api.rateLimit.events.burst | quote }}
             - name: API_RATE_LIMIT_MCP_TRIP_PLAN_PER_MINUTE
               value: {{ .Values.api.rateLimit.mcp.tripPlan.perMinute | quote }}
             - name: API_RATE_LIMIT_MCP_TRIP_PLAN_BURST
