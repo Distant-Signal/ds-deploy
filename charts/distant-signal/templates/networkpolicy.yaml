@@ -111,6 +111,9 @@ spec:
     # consumer of `distant-signal.redisUrl` in this templates/ directory. Keep
     # this list derived from that helper, not from memory:
     #   grep -l 'distant-signal.redisUrl' templates/*.yaml
+    # and each entry's condition must be the one under which that workload
+    # gets REDIS_URL. scripts/check-redis-netpol-chart.py (CI, scripts-lint)
+    # renders every client and fails on a mismatch in either direction.
     #
     # The original comment here ("api publishes incident-text-changed events,
     # enricher consumes them. Nothing else touches the queue.") was true when
@@ -140,10 +143,19 @@ spec:
                   - trust-consumer
                   - trust-backlog-consumer
                   - full-coverage-consumer
+                  {{- if .Values.movementRelay.enabled }}
                   - movement-relay
-                  {{- if .Values.ingestWriter.enabled }}
-                  # The ingest-writer reads the ds:ingest:* streams (plan 3a.3).
+                  {{- end }}
+                  {{- if include "distant-signal.ingestWriterStreamsOn" . }}
+                  # The ingest-writer reads the ds:ingest:* streams (plan 3a.3);
+                  # it gets REDIS_URL only while one of them is not off.
                   - ingest-writer
+                  {{- end }}
+                  {{- if .Values.darwinRelay.enabled }}
+                  # darwin-relay (DS-152) XADDs the Push Port feed to
+                  # ds:ingest:darwin. Missing here until 2026-10-30, so with
+                  # networkPolicy on every XADD was refused (ECONNREFUSED).
+                  - darwin-relay
                   {{- end }}
                   {{- range $name := list "incidents" "ldbws" "tfl" "tocs" }}
                   {{- if (get $.Values.pollers $name | default dict).enabled }}
