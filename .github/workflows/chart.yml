@@ -820,7 +820,20 @@ jobs:
           IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          cosign sign --yes "${CHART_REF}"
+          # Retried like the image signing above: a Rekor upload that times
+          # out and is retried by cosign can fail with 409
+          # createLogEntryConflict though the first attempt landed; a fresh
+          # `cosign sign` has new ephemeral keys and can't conflict.
+          for attempt in 1 2 3; do
+            if cosign sign --yes "${CHART_REF}"; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              exit 1
+            fi
+            echo "::warning::cosign sign attempt ${attempt} failed"
+            sleep $((attempt * 10))
+          done
           cosign verify "${CHART_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity "${IDENTITY}" > /dev/null
@@ -863,7 +876,20 @@ jobs:
           IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          cosign sign --yes "${CHART_REF}"
+          # Retried like the image signing above: a Rekor upload that times
+          # out and is retried by cosign can fail with 409
+          # createLogEntryConflict though the first attempt landed; a fresh
+          # `cosign sign` has new ephemeral keys and can't conflict.
+          for attempt in 1 2 3; do
+            if cosign sign --yes "${CHART_REF}"; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              exit 1
+            fi
+            echo "::warning::cosign sign attempt ${attempt} failed"
+            sleep $((attempt * 10))
+          done
           cosign verify "${CHART_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity "${IDENTITY}" > /dev/null
