@@ -1467,7 +1467,11 @@ refused snapshot counts as a failed cycle: check
 `pollers.tfl.stops.routes`), on the same schedule. A refused snapshot is a
 failed cycle too: check `tfl_routes_refused_total{reason}` and the log's
 "refusing the TfL route sequences" or "no routes for the ... line" line.
-The stored routes stay; Tube access legs keep measuring along them.
+The stored routes stay; Tube access legs keep measuring along them. A
+route timetable that fails to fetch (DS-206,
+`tfl_route_timetables_failed_total`, log "no running times from this TfL
+timetable") does not fail the cycle: the steps it alone would time fall
+back to the distance estimate.
 
 ### DistantSignalLdbwsStationStale
 

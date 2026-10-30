@@ -1233,12 +1233,14 @@ pollers:
       maxDropFraction: 0.2
       # -- The daily route-sequences job (TFL_ROUTES_ENABLED, DS-151):
       # each Tube, DLR and tram line's routes in stop order (about 30
-      # calls a run), XADDed as `tfl-line-routes/1` to the same stream at
-      # the same interval, under the same drop fraction (of the route
-      # count). The planner's Tube access legs measure rides along them and
-      # charge a change between branches. Only while `enabled`; needs the
-      # grants job re-run after the migration (tfl_line_routes and the
-      # writer's `tfl-line-routes` freshness row).
+      # calls a run), with each route's timetabled running times between
+      # stops (DS-206, one timetable call per route, about 80 more;
+      # `tfl_route_timetables_failed_total`), XADDed as `tfl-line-routes/1`
+      # to the same stream at the same interval, under the same drop
+      # fraction (of the route count). The planner's Tube access legs time
+      # rides along them and charge a change between branches. Only while
+      # `enabled`; needs the grants job re-run after the migration
+      # (tfl_line_routes and the writer's `tfl-line-routes` freshness row).
       routes: false
     # One TfL line-status JSON document per tick.
     #
