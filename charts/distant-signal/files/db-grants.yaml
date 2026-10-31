@@ -529,6 +529,9 @@ sequences:
 # Functions in schema public (extension members excluded), by signature.
 functions:
   "analyze_publish_keys(text)": {grants: [schedule_reference]}
+  # ds_store::transit::commit, after inserting a new transit_networks row:
+  # Postgres 16 lets only the owner ANALYZE (MAINTAIN is 17+).
+  "analyze_transit_networks()": {grants: [writer]}
 
 # What the app role (distant_signal_app, and so every observed role, which
 # inherits from it) loses: every privilege on `tables`, EXECUTE on

@@ -1204,7 +1204,8 @@ BEGIN
     FOR r IN
         SELECT v.sig, current_setting('ds_grants.' || v.kind) AS grantee
         FROM (VALUES
-        ('analyze_publish_keys(text)', 'schedule_reference')) AS v(sig, kind)
+        ('analyze_publish_keys(text)', 'schedule_reference'),
+        ('analyze_transit_networks()', 'writer')) AS v(sig, kind)
         WHERE to_regprocedure('public.' || v.sig) IS NOT NULL
     LOOP
         EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I',
