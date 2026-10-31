@@ -458,6 +458,8 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.tripPlanGraphCache.dates | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_MAX_AGE_SECS
               value: {{ .Values.api.tripPlanGraphCache.maxAgeSecs | quote }}
+            - name: TRIP_PLAN_GRAPH_PREWARM_INTERVAL_SECS
+              value: {{ .Values.api.tripPlanGraphCache.prewarmIntervalSecs | quote }}
             - name: TRIP_PLAN_MAX_WAYPOINTS
               value: {{ .Values.api.tripPlanMaxWaypoints | quote }}
             - name: TRIP_PLAN_ROAD_WATER_CHANGE_MINUTES

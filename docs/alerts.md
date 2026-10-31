@@ -226,8 +226,12 @@ the database (or Redis, or the IdP), see the 2026-10-06 entry in
   `http_requests_total` for the key public routes (`/Trips/plan`,
   `/Train/by-uid/...`, line status, stations, trains search and resolve,
   freshness, incidents, session), each with status 200, 500 and 503; `http_requests_duration_seconds` for the key
-  public routes' 200s; and `api_trip_plan_graph_cache_total` for `hit` and
-  `miss`. Without that, a series appeared at 1 on its first request and
+  public routes' 200s; `api_trip_plan_graph_cache_total` for `hit` and
+  `miss`; and `api_trip_plan_graph_builds_total` for every `reason`
+  (`absent`, `marker`, `expired`) and `trigger` (`request`, `prewarm`),
+  beside `api_trip_plan_graph_build_seconds{phase}` (`read`, `cpu`,
+  `total`). A healthy api builds mostly with `trigger="prewarm"`: a steady
+  `trigger="request"` rate means plans are paying the build. Without that, a series appeared at 1 on its first request and
   `increase()`/`rate()` never counted that request, so a rare route like
   `/Trips/plan` read as zero across api's frequent restarts.
 - For any other route or status code the first request after a restart is
