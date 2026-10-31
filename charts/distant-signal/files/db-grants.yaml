@@ -390,7 +390,7 @@ tables:
   transit_pattern_stops: {class: ingest, grants: {api: S, writer: SI}}
   transit_trips: {class: ingest, grants: {api: S, writer: SI}}
   transit_service_days: {class: ingest, grants: {api: S, writer: SI}}
-  # Upserted from each situations snapshot; absent situations deleted.
+  # Upserted from each situations snapshot; absent ones marked ended, deleted a week later.
   transit_situations: {class: ingest, grants: {api: S, writer: SIUD}}
   # Replaced whole at each timetable activation.
   transit_rail_links: {class: ingest, grants: {api: S, writer: SIUD}}
