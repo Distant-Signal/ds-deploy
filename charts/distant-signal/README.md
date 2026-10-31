@@ -1789,6 +1789,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.backup.activeDeadlineSeconds` | `21600` | Kill a backup or check Job that runs longer. |
 | `postgresql.pgbackrest.backup.backoffLimit` | `1` | Retries of a failed Job. A retried backup resumes. |
 | `postgresql.pgbackrest.backup.startingDeadlineSeconds` | `3600` | Skip a run that can't start within this long of its time. |
+| `postgresql.pgbackrest.backup.ttlSecondsAfterFinished` | `259200` | The Jobs' `ttlSecondsAfterFinished`: a finished Job and its pod are deleted three days after it ends (longer than the alerts' `recentJobWindow`). null leaves them to the history limits. |
 | `postgresql.pgbackrest.backup.image.repository` / `.tag` / `.pullPolicy` | `registry.k8s.io/kubectl`, `v1.36.5@sha256:…`, `IfNotPresent` | The image the CronJobs run `kubectl exec` from. Keep it within one minor version of the cluster. |
 | `postgresql.pgbackrest.backup.resources` | requests `20m`/`32Mi`, limit `128Mi` | CronJob pod resources. The work happens in the Postgres container. |
 | `postgresql.pgbackrest.backup.podSecurityContext` | `{}` | Merged over the CronJob pods' securityContext (non-root uid 65532 by default). |
@@ -1809,6 +1810,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `metrics.prometheusRule.api5xx` | see `values.yaml` | `DistantSignalApiPublic5xx`: `enabled`, `window` (5m), `routeLabel` (`exported_endpoint`: the route label as Prometheus stores it behind the PodMonitor), and under `public` `ratio` (0.05), `minErrors` (3), `for` (10m) and `severity` (warning). (The `ingest` scope went with `/private` in release B.) |
 | `metrics.prometheusRule.cycleStalled` | see `values.yaml` | `DistantSignalAggregatorCycleFailing` / `DistantSignalNotifierCycleFailing`: `enabled`, `maxAgeSeconds` (900), `for` (0m) and `severity` (warning). |
 | `metrics.prometheusRule.pgbackrest` | see `values.yaml` | The pgBackRest alerts' windows, ages, `archiverSelector` and severity (see [Alerts](#alerts)). |
+| `metrics.prometheusRule.scheduledJobs` | see `values.yaml` | The scheduled-job alerts (`<fullname>-scheduled-jobs` PrometheusRule): `enabled`, `recentJobWindow` (26h), `intervalMultiple` (1.5), `minAgeSeconds` (1800), `staleFor` (10m), `pendingFor` (15m) and `severity` (see [Alerts](#alerts) and `docs/scheduled-jobs.md`). |
 
 ### externalDatabase
 
@@ -1972,7 +1974,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `apiMaintenance.failedJobsHistoryLimit` | `3` | Failed Jobs kept. |
 | `apiMaintenance.ttlSecondsAfterFinished` | `86400` | The Jobs' `ttlSecondsAfterFinished`: a finished run's Job and pod are deleted a day after it ends, even within the history limits. null leaves them to the history limits. The Helm hook Jobs (migrate, roles setup) have none: their hook delete policy handles them. |
 | `apiMaintenance.logLevel` | `info` | `RUST_LOG`. |
-| `apiMaintenance.resources` | `{}` | Container resources. |
+| `apiMaintenance.resources` | requests `10m`/`32Mi`/ephemeral `16Mi`, limits `128Mi`/ephemeral `256Mi` | Container resources. Never empty: a BestEffort pod is the first the kubelet evicts. |
 | `apiMaintenance.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 | `apiMaintenance.nodeSelector` | `{}` | Node selector. |
 | `apiMaintenance.tolerations` | `[]` | Tolerations. |
@@ -3157,6 +3159,10 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalPgBackRestFullBackupStale` | warning | No full backup success for 8d, for 10m. |
 | `DistantSignalPgBackRestArchiveFailing` | warning | postgres_exporter's `pg_stat_archiver_failed_count` rose over 15m, for 10m. |
 | `DistantSignalPgBackRestArchiveStalled` | warning | `pg_stat_archiver_archived_count` didn't rise over 15m, for 10m (`archive_timeout` switches segments every minute while anything writes). |
+| `DistantSignalScheduledJobFailed` | warning | A Job of one of the chart's own CronJobs (not pgBackRest's) that started within 26h failed (`kube_job_status_failed`, with its `reason`: `BackoffLimitExceeded`, `DeadlineExceeded`, `Evicted`, or `Other`, which includes the pod failure policy's FailJob on exit 137 or 3). This group is a separate `<fullname>-scheduled-jobs` PrometheusRule (`metrics.prometheusRule.scheduledJobs`) of kube-state-metrics series. Runbook: `docs/scheduled-jobs.md`. |
+| `DistantSignalScheduledJobStale` | warning | One of those CronJobs, not suspended, has had no success (`kube_cronjob_status_last_successful_time`, or since its creation) for 1.5x its schedule interval and at least 30m, for 10m. |
+| `DistantSignalScheduledJobOOMKilled` | warning | A container of a Job pod named `<fullname>-...` created within 26h ended OOMKilled (`kube_pod_container_status_terminated_reason`). `restartPolicy: Never` means no restart, so restart-based OOM alerts miss it. |
+| `DistantSignalScheduledJobPending` | warning | A Job pod named `<fullname>-...` has been Pending for 15m: no room for its requests, or its image won't pull. |
 
 Metric names above omit the `distant_signal_` prefix every app metric
 carries. The dead-letter and stream-gap counters are registered at 0 when

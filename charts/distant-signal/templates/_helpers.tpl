@@ -2164,6 +2164,56 @@ spec:
 {{- end }}
 
 {{/*
+The api-maintenance CronJob's name (its Jobs append "-<minutes>").
+*/}}
+{{- define "distant-signal.apiMaintenanceFullname" -}}
+{{- printf "%s-api-maintenance" (include "distant-signal.fullname" .) | trunc 52 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
+The CronJobs running this chart's own binaries, as a PromQL alternation
+("a|b"), for the scheduled-job alerts (scheduled-jobs-prometheusrule.yaml).
+Empty when none renders. The pgBackRest CronJobs are not in it: they have
+their own failure and staleness alerts. Takes root.
+*/}}
+{{- define "distant-signal.scheduledCronJobNames" -}}
+{{- $names := list -}}
+{{- if .Values.apiMaintenance.enabled -}}
+{{- $names = append $names (include "distant-signal.apiMaintenanceFullname" .) -}}
+{{- end -}}
+{{- join "|" $names -}}
+{{- end }}
+
+{{/*
+The failure handling every scheduled Job of this chart's own binaries shares
+(docs/scheduled-jobs.md): a Job spec fragment, rendered at the Job spec's
+indent. Takes the container's name.
+
+  - podReplacementPolicy Failed: a retry pod starts only once the failed
+    one has fully terminated, so two runs of one Job never overlap.
+  - Exit 137 (the kernel killed it at its memory limit: OOMKilled) and 3
+    (the run refused its input, e.g. a rejected feed) fail the Job at once.
+    Neither gets better on a retry; the next scheduled run tries again.
+  - A DisruptionTarget pod (evicted, preempted, its node drained) is
+    ignored: it doesn't count against backoffLimit.
+  - Anything else (1, a transient error; 143, a SIGTERM, which is how the
+    host's earlyoom kills) counts against backoffLimit and is retried.
+*/}}
+{{- define "distant-signal.scheduledJobFailurePolicy" -}}
+podReplacementPolicy: Failed
+podFailurePolicy:
+  rules:
+    - action: FailJob
+      onExitCodes:
+        containerName: {{ . }}
+        operator: In
+        values: [3, 137]
+    - action: Ignore
+      onPodConditions:
+        - type: DisruptionTarget
+{{- end }}
+
+{{/*
 Per-component devAuthentik object names. Each takes root. The server
 Deployment and the NodePort Service in front of it share ONE name (matching
 how api's Deployment and Service already share distant-signal.apiFullname); the

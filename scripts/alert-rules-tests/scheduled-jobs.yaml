@@ -1,0 +1,197 @@
+# promtool unit tests for the scheduled-jobs group (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered; the
+# api-maintenance CronJob is on there). Defaults: recentJobWindow 26h,
+# intervalMultiple 1.5, minAgeSeconds 1800, staleFor 10m, pendingFor 15m.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # An api-maintenance run gives up after its retries at 5m: one alert, with
+  # kube-state-metrics' reason. The other known reasons' series are 0. A
+  # pgBackRest Job failing at the same time has its own alerts, not this one.
+  - interval: 1m
+    input_series:
+      - series: 'kube_job_status_start_time{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890817"}'
+        values: '0x10'
+      - series: 'kube_job_owner{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890817", owner_kind="CronJob", owner_name="distant-signal-api-maintenance", owner_is_controller="true"}'
+        values: '1x10'
+      - series: 'kube_job_failed{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890817", condition="true"}'
+        values: '_x5 1x5'
+      - series: 'kube_job_status_failed{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890817", reason="BackoffLimitExceeded"}'
+        values: '_x5 1x5'
+      - series: 'kube_job_status_failed{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890817", reason="DeadlineExceeded"}'
+        values: '_x5 0x5'
+      - series: 'kube_job_status_failed{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890817", reason="Evicted"}'
+        values: '_x5 0x5'
+      - series: 'kube_job_status_start_time{namespace="distant-signal", job_name="distant-signal-pgbackrest-diff-29890380"}'
+        values: '0x10'
+      - series: 'kube_job_owner{namespace="distant-signal", job_name="distant-signal-pgbackrest-diff-29890380", owner_kind="CronJob", owner_name="distant-signal-pgbackrest-diff", owner_is_controller="true"}'
+        values: '1x10'
+      - series: 'kube_job_failed{namespace="distant-signal", job_name="distant-signal-pgbackrest-diff-29890380", condition="true"}'
+        values: '_x5 1x5'
+      - series: 'kube_job_status_failed{namespace="distant-signal", job_name="distant-signal-pgbackrest-diff-29890380", reason="BackoffLimitExceeded"}'
+        values: '_x5 1x5'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DistantSignalScheduledJobFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DistantSignalScheduledJobFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, job_name: distant-signal-api-maintenance-29890817, reason: BackoffLimitExceeded}
+            exp_annotations:
+              summary: scheduled Job distant-signal-api-maintenance-29890817 failed (BackoffLimitExceeded)
+              description: "The run gave up; the CronJob's next run tries again. Its pods' logs say why (an exit 137 is an OOM kill)."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalscheduledjobfailed
+
+  # The pod failure policy fails a run at once (an OOM kill, exit 137): the
+  # Failed condition's reason is none kube-state-metrics knows, so its series
+  # has an empty reason and the alert says "Other".
+  - interval: 1m
+    input_series:
+      - series: 'kube_job_status_start_time{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890877"}'
+        values: '0x10'
+      - series: 'kube_job_owner{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890877", owner_kind="CronJob", owner_name="distant-signal-api-maintenance", owner_is_controller="true"}'
+        values: '1x10'
+      - series: 'kube_job_failed{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890877", condition="true"}'
+        values: '_x2 1x8'
+      - series: 'kube_job_status_failed{namespace="distant-signal", job_name="distant-signal-api-maintenance-29890877"}'
+        values: '_x2 1x8'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DistantSignalScheduledJobFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, job_name: distant-signal-api-maintenance-29890877, reason: Other}
+            exp_annotations:
+              summary: scheduled Job distant-signal-api-maintenance-29890877 failed (Other)
+              description: "The run gave up; the CronJob's next run tries again. Its pods' logs say why (an exit 137 is an OOM kill)."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalscheduledjobfailed
+
+  # The hourly api-maintenance last succeeded at 0. 1.5 x 3600s is 5400s
+  # (90m); past it from 91m, plus 10m of `for`, it fires at 101m.
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x120'
+      - series: 'kube_cronjob_created{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x120'
+      - series: 'kube_cronjob_status_last_schedule_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x120'
+      - series: 'kube_cronjob_next_schedule_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '3600x120'
+      - series: 'kube_cronjob_spec_suspend{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 95m
+        alertname: DistantSignalScheduledJobStale
+        exp_alerts: []
+      - eval_time: 102m
+        alertname: DistantSignalScheduledJobStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cronjob: distant-signal-api-maintenance}
+            exp_annotations:
+              summary: "CronJob distant-signal-api-maintenance: no success for 1h 42m 0s"
+              description: "Over 1.5x its schedule interval: its runs fail, are skipped (Forbid, a missed start) or never schedule."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalscheduledjobstale
+
+  # Suspended, or never yet past minAgeSeconds: quiet. A CronJob that never
+  # succeeded counts from its creation.
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x120'
+      - series: 'kube_cronjob_status_last_schedule_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x120'
+      - series: 'kube_cronjob_next_schedule_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '3600x120'
+      - series: 'kube_cronjob_spec_suspend{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '1x120'
+    alert_rule_test:
+      - eval_time: 110m
+        alertname: DistantSignalScheduledJobStale
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x120'
+      - series: 'kube_cronjob_status_last_schedule_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '600x120'
+      - series: 'kube_cronjob_next_schedule_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '1200x120'
+      - series: 'kube_cronjob_spec_suspend{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x120'
+    alert_rule_test:
+      # Every 10 minutes, never succeeded: 15m is past 1.5 x 600s, but not
+      # past minAgeSeconds (30m) until 31m, so it fires at 41m.
+      - eval_time: 35m
+        alertname: DistantSignalScheduledJobStale
+        exp_alerts: []
+      - eval_time: 42m
+        alertname: DistantSignalScheduledJobStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cronjob: distant-signal-api-maintenance}
+            exp_annotations:
+              summary: "CronJob distant-signal-api-maintenance: no success for 42m 0s"
+              description: "Over 1.5x its schedule interval: its runs fail, are skipped (Forbid, a missed start) or never schedule."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalscheduledjobstale
+
+  # A Job pod OOMKilled at 2m (restartPolicy Never: no restart). A
+  # Deployment's pod OOMKilled too is the cluster rules' business, not this.
+  # A Job pod created over 26h before is no longer alerted on.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_terminated_reason{namespace="distant-signal", pod="distant-signal-api-maintenance-29890817-abcde", container="api-maintenance", reason="OOMKilled"}'
+        values: '_x2 1x8'
+      - series: 'kube_pod_owner{namespace="distant-signal", pod="distant-signal-api-maintenance-29890817-abcde", owner_kind="Job", owner_name="distant-signal-api-maintenance-29890817", owner_is_controller="true"}'
+        values: '1x10'
+      - series: 'kube_pod_created{namespace="distant-signal", pod="distant-signal-api-maintenance-29890817-abcde"}'
+        values: '0x10'
+      - series: 'kube_pod_container_status_terminated_reason{namespace="distant-signal", pod="distant-signal-api-6d559788f-h4bpg", container="api", reason="OOMKilled"}'
+        values: '_x2 1x8'
+      - series: 'kube_pod_owner{namespace="distant-signal", pod="distant-signal-api-6d559788f-h4bpg", owner_kind="ReplicaSet", owner_name="distant-signal-api-6d559788f", owner_is_controller="true"}'
+        values: '1x10'
+      - series: 'kube_pod_created{namespace="distant-signal", pod="distant-signal-api-6d559788f-h4bpg"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DistantSignalScheduledJobOOMKilled
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: DistantSignalScheduledJobOOMKilled
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, pod: distant-signal-api-maintenance-29890817-abcde, container: api-maintenance}
+            exp_annotations:
+              summary: Job pod distant-signal-api-maintenance-29890817-abcde (api-maintenance) was OOMKilled
+              description: "It hit its memory limit. The Job fails at once (exit 137) rather than retry; raise the limit or find the growth."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalscheduledjoboomkilled
+  - interval: 1h
+    input_series:
+      - series: 'kube_pod_container_status_terminated_reason{namespace="distant-signal", pod="distant-signal-api-maintenance-29890817-abcde", container="api-maintenance", reason="OOMKilled"}'
+        values: '1x30'
+      - series: 'kube_pod_owner{namespace="distant-signal", pod="distant-signal-api-maintenance-29890817-abcde", owner_kind="Job", owner_name="distant-signal-api-maintenance-29890817", owner_is_controller="true"}'
+        values: '1x30'
+      - series: 'kube_pod_created{namespace="distant-signal", pod="distant-signal-api-maintenance-29890817-abcde"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 27h
+        alertname: DistantSignalScheduledJobOOMKilled
+        exp_alerts: []
+
+  # A migrate hook Job's pod can't be scheduled from 1m: it fires after 15m.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_status_phase{namespace="distant-signal", pod="distant-signal-migrate-64bcz", phase="Pending"}'
+        values: '_ 1x25'
+      - series: 'kube_pod_owner{namespace="distant-signal", pod="distant-signal-migrate-64bcz", owner_kind="Job", owner_name="distant-signal-migrate", owner_is_controller="true"}'
+        values: '1x25'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DistantSignalScheduledJobPending
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: DistantSignalScheduledJobPending
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, pod: distant-signal-migrate-64bcz}
+            exp_annotations:
+              summary: Job pod distant-signal-migrate-64bcz Pending for over 15m
+              description: "It can't be scheduled (no room for its requests) or its image won't pull. The Job's deadline counts this time."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalscheduledjobpending

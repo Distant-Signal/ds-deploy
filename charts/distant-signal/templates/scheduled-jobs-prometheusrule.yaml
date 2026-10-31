@@ -1,0 +1,156 @@
+{{- /*
+Scheduled-job alerts (metrics.prometheusRule.scheduledJobs), a separate
+PrometheusRule like the pgBackRest one. Renders only with metrics.enabled
+and metrics.prometheusRule.enabled. Runbooks: docs/alerts.md, and
+docs/scheduled-jobs.md for how this chart's CronJobs behave.
+
+Every series is kube-state-metrics', which carries no chart labels, so the
+selectors match on names:
+
+  - the CronJobs running this chart's own binaries
+    (distant-signal.scheduledCronJobNames) for the failure and staleness
+    alerts; the pgBackRest CronJobs keep their own;
+  - every Job pod in the namespace whose Job is named "<fullname>-..." for
+    the OOM and Pending alerts: those CronJobs, the pgBackRest ones and the
+    Helm hook Jobs (migrate, roles setup).
+
+Why the cluster-wide rules are not enough: a CronJob pod runs with
+restartPolicy Never, so an OOM kill never raises
+kube_pod_container_status_restarts_total, and a cluster "Job failed" rule
+that skips CronJob-owned Jobs leaves a failed run to a slow "no success for
+three intervals" rule.
+
+Long expressions are recording rules earlier in the group (payload limits:
+see prometheusrule.yaml).
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled }}
+{{- with .Values.metrics.prometheusRule.scheduledJobs }}
+{{- if .enabled }}
+{{- $rule := $.Values.metrics.prometheusRule }}
+{{- $ns := $.Release.Namespace }}
+{{- $fullname := include "distant-signal.fullname" $ }}
+{{- $cronjobs := include "distant-signal.scheduledCronJobNames" $ }}
+{{- $runbook := printf "%s/docs/alerts.md" (trimSuffix "/" $rule.runbookBaseUrl) }}
+{{- $extraLabels := $rule.ruleLabels | default dict }}
+{{- $recent := include "distant-signal.durationSeconds" .recentJobWindow }}
+{{- $jobPods := printf "namespace=%q, owner_kind=\"Job\", owner_name=~%q" $ns (printf "%s-.+" $fullname) }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ printf "%s-scheduled-jobs" $fullname | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" $ "component" "metrics") | nindent 4 }}
+    {{- with $rule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $rule.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+    - name: distant-signal.scheduled-jobs
+      rules:
+        {{- if $cronjobs }}
+        {{- $owned := printf "namespace=%q, owner_kind=\"CronJob\", owner_name=~%q" $ns $cronjobs }}
+        {{- $sel := printf "namespace=%q, cronjob=~%q" $ns $cronjobs }}
+        {{- /*
+        Each failed Job of those CronJobs that started within
+        recentJobWindow, by kube-state-metrics' failure reason. Its
+        kube_job_status_failed series carries reason BackoffLimitExceeded,
+        DeadlineExceeded or Evicted (1 for the one that applies), or an
+        empty reason for any other (a podFailurePolicy FailJob), shown as
+        "Other".
+        */}}
+        - record: distant_signal:scheduled_job_failed:recent
+          expr: |
+            label_replace(max by (namespace, job_name, reason) (kube_job_status_failed{namespace="{{ $ns }}"} > 0), "reason", "Other", "reason", "")
+            and on (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", condition="true"} == 1)
+            and on (namespace, job_name) kube_job_owner{ {{- $owned -}} }
+            and on (namespace, job_name) (time() - kube_job_status_start_time{namespace="{{ $ns }}"} < {{ $recent }})
+        - alert: DistantSignalScheduledJobFailed
+          expr: |
+            distant_signal:scheduled_job_failed:recent{namespace="{{ $ns }}"}
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "scheduled Job {{ "{{ $labels.job_name }}" }} failed ({{ "{{ $labels.reason }}" }})"
+            description: "The run gave up; the CronJob's next run tries again. Its pods' logs say why (an exit 137 is an OOM kill)."
+            runbook_url: {{ printf "%s#distantsignalscheduledjobfailed" $runbook | quote }}
+        {{- /*
+        Seconds since each CronJob's last success (or, never having
+        succeeded, since it was created), and its schedule interval: the
+        gap between its next and its last scheduled time.
+        */}}
+        - record: distant_signal:scheduled_cronjob_success_age:seconds
+          expr: |
+            (time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- $sel -}} }))
+            or (time() - max by (namespace, cronjob) (kube_cronjob_created{ {{- $sel -}} }))
+        - record: distant_signal:scheduled_cronjob_interval:seconds
+          expr: |
+            max by (namespace, cronjob) (kube_cronjob_next_schedule_time{ {{- $sel -}} } - kube_cronjob_status_last_schedule_time{ {{- $sel -}} })
+        {{- /* That age, for each CronJob (not suspended) past both limits. */}}
+        - record: distant_signal:scheduled_cronjob_overdue:seconds
+          expr: |
+            distant_signal:scheduled_cronjob_success_age:seconds{namespace="{{ $ns }}"} > {{ .intervalMultiple }} * distant_signal:scheduled_cronjob_interval:seconds{namespace="{{ $ns }}"}
+            and distant_signal:scheduled_cronjob_success_age:seconds{namespace="{{ $ns }}"} > {{ int64 .minAgeSeconds }}
+            and on (namespace, cronjob) (max by (namespace, cronjob) (kube_cronjob_spec_suspend{namespace="{{ $ns }}"}) == 0)
+        - alert: DistantSignalScheduledJobStale
+          expr: |
+            distant_signal:scheduled_cronjob_overdue:seconds{namespace="{{ $ns }}"}
+          for: {{ .staleFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "CronJob {{ "{{ $labels.cronjob }}" }}: no success for {{ "{{ $value | humanizeDuration }}" }}"
+            description: "Over {{ .intervalMultiple }}x its schedule interval: its runs fail, are skipped (Forbid, a missed start) or never schedule."
+            runbook_url: {{ printf "%s#distantsignalscheduledjobstale" $runbook | quote }}
+        {{- end }}
+        {{- /*
+        Each container of a Job pod of this release that was OOMKilled and
+        whose pod was created within recentJobWindow. With restartPolicy
+        Never its reason stays on the pod's current state until the pod is
+        deleted, so the age bound keeps a kept pod from alerting for days.
+        */}}
+        - record: distant_signal:scheduled_job_oom_killed:recent
+          expr: |
+            max by (namespace, pod, container) (kube_pod_container_status_terminated_reason{namespace="{{ $ns }}", reason="OOMKilled"} == 1)
+            and on (namespace, pod) kube_pod_owner{ {{- $jobPods -}} }
+            and on (namespace, pod) (time() - kube_pod_created{namespace="{{ $ns }}"} < {{ $recent }})
+        - alert: DistantSignalScheduledJobOOMKilled
+          expr: |
+            distant_signal:scheduled_job_oom_killed:recent{namespace="{{ $ns }}"}
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Job pod {{ "{{ $labels.pod }}" }} ({{ "{{ $labels.container }}" }}) was OOMKilled"
+            description: "It hit its memory limit. The Job fails at once (exit 137) rather than retry; raise the limit or find the growth."
+            runbook_url: {{ printf "%s#distantsignalscheduledjoboomkilled" $runbook | quote }}
+        - alert: DistantSignalScheduledJobPending
+          expr: |
+            max by (namespace, pod) (kube_pod_status_phase{namespace="{{ $ns }}", phase="Pending"} == 1)
+            and on (namespace, pod) kube_pod_owner{ {{- $jobPods -}} }
+          for: {{ .pendingFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Job pod {{ "{{ $labels.pod }}" }} Pending for over {{ .pendingFor }}"
+            description: "It can't be scheduled (no room for its requests) or its image won't pull. The Job's deadline counts this time."
+            runbook_url: {{ printf "%s#distantsignalscheduledjobpending" $runbook | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

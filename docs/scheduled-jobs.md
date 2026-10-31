@@ -1,0 +1,102 @@
+# Scheduled jobs
+
+How the chart's CronJobs behave, what alerts on them, and what to do when
+one goes wrong. Alerts: [scheduled jobs](alerts.md#scheduled-jobs).
+
+| CronJob | What it runs | Values |
+|---|---|---|
+| `<fullname>-api-maintenance` | The api image's `maintenance` binary: one pass of the session, dead-link, retention and delegated-access sweeps. | `apiMaintenance` |
+| `<fullname>-pgbackrest-{full,diff,check,verify}` | `kubectl exec` of pgBackRest in the Postgres pod. | `postgresql.pgbackrest.backup` ([Postgres PITR](postgres-pitr.md)) |
+
+## How a run behaves
+
+Every CronJob sets:
+
+- **`timeZone`**, always explicit (CI fails a CronJob without one). Without
+  it the schedule follows the node's local zone. Maintenance and backups use
+  `Etc/UTC`; anything tied to the GB rail day uses `Europe/London` and stays
+  out of 01:00-02:59 local, where DST skips or repeats a run.
+- **`concurrencyPolicy: Forbid`.** A run still going when the next is due
+  makes the controller skip that one; it is not queued and not doubled.
+- **`startingDeadlineSeconds`.** A start missed by more than this (the
+  control plane was down, the node rebooted) is skipped instead of run late.
+  It also keeps a long outage from hitting the controller's "more than 100
+  missed starts" refusal, which would otherwise stop the CronJob for good.
+- **`activeDeadlineSeconds`** on the Job: a run that hangs, or that waits
+  Pending for room on the node, is killed and the Job fails with
+  `DeadlineExceeded`. This replaces a Deployment's liveness probe.
+- **History and TTL.** `successfulJobsHistoryLimit`/`failedJobsHistoryLimit`
+  keep the last runs to read logs from, and `ttlSecondsAfterFinished`
+  deletes each finished Job and its pod after a day (pgBackRest: three days,
+  longer than its alerts' window).
+
+The Jobs of this chart's own binaries also set (`distant-signal.scheduledJobFailurePolicy`):
+
+- **`restartPolicy: Never`** and **`podReplacementPolicy: Failed`**: a retry
+  is a new pod, started only once the failed one has fully stopped, so two
+  pods of one run never overlap and each attempt keeps its own log.
+- **A pod failure policy**:
+
+  | The pod ended with | What the Job does |
+  |---|---|
+  | exit 137 (OOMKilled at its memory limit) | fails at once: the same input would OOM again |
+  | exit 3 (the run refused its input) | fails at once |
+  | a `DisruptionTarget` condition (evicted, preempted, node drained) | retries, without counting it |
+  | anything else: 1 (a transient error), 143 (SIGTERM, as the host's earlyoom kills) | retries, up to `backoffLimit` |
+
+  A failed Job is not retried until the next scheduled run.
+- **Resources**, requests and limits, ephemeral storage included. A pod with
+  none is BestEffort: the first the kubelet evicts and earlyoom kills.
+
+**Runs must be idempotent.** Kubernetes creates a CronJob's Job "about once"
+per schedule: rarely twice, rarely not at all. `api-maintenance`'s steps are
+all idempotent, and pgBackRest's own lock refuses a second backup.
+
+**Running alongside deploys.** A Helm upgrade changes only the Jobs created
+after it; a run already going finishes on its old image. Nothing needs to be
+suspended for an ordinary deploy.
+
+## Alerts
+
+From kube-state-metrics, in the `<fullname>-scheduled-jobs` PrometheusRule
+(`metrics.prometheusRule.scheduledJobs`):
+
+- `DistantSignalScheduledJobFailed`: a run failed, with the reason.
+- `DistantSignalScheduledJobStale`: no success for 1.5 times the schedule
+  interval (and at least 30 minutes).
+- `DistantSignalScheduledJobOOMKilled`: a Job pod was killed at its memory
+  limit. The cluster's restart-based OOM alert can't see this: nothing
+  restarts under `restartPolicy: Never`.
+- `DistantSignalScheduledJobPending`: a Job pod can't be scheduled, or its
+  image won't pull.
+
+A short-lived pod is gone before Prometheus scrapes it, so these alerts read
+the Job and pod objects, not the run's own `/metrics`; a run's details are in
+its log.
+
+## When one fails
+
+1. `kubectl get jobs -n distant-signal --sort-by=.metadata.creationTimestamp`
+   and `kubectl describe job <job>`: the Failed condition's reason, and for
+   a pod failure policy, which rule matched.
+2. `kubectl logs -n distant-signal job/<job>` (kept until the TTL).
+3. Run it again now, if the next run is far off:
+   `kubectl create job -n distant-signal --from=cronjob/<cronjob> <cronjob>-manual-$(date +%s)`.
+4. To stop it for a while, set the CronJob's `suspend` value (or
+   `kubectl patch cronjob <cronjob> -p '{"spec":{"suspend":true}}'`, which the
+   next Helm upgrade reverts). A run already going is not stopped.
+
+**OOMKilled:** raise the workload's `resources.limits.memory` (the run's peak
+plus half again) and release.
+
+**Pending:** a scheduled pod reserves its requests only while it runs, so the
+room it needs at its time can have gone to other pods. `kubectl describe pod`
+says why it can't be placed.
+
+## Rollback
+
+Each CronJob has its own switch (`apiMaintenance.enabled`,
+`postgresql.pgbackrest.backup.suspend`). The failure policy, the replacement
+policy and the TTLs need no rollback of their own: removing them only makes a
+Job retry an OOM kill, count evictions, and keep its pods until the history
+limits.

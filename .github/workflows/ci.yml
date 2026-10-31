@@ -1269,6 +1269,15 @@ jobs:
       - name: pod templates stable across releases
         run: uv run --no-sync scripts/check-pod-labels-chart.py
 
+      # Every CronJob the chart renders (docs/scheduled-jobs.md): a known
+      # spec.timeZone, Forbid, a starting deadline, a Job backoffLimit,
+      # deadline and TTL, restartPolicy Never, and CPU/memory requests and a
+      # memory limit on every container. Its own binaries' CronJobs also
+      # need ephemeral-storage resources, podReplacementPolicy Failed and the
+      # shared pod failure policy (exit 137 and 3 fail the Job).
+      - name: CronJob safe defaults
+        run: uv run --no-sync scripts/check-cronjobs-chart.py
+
       # enricher.llm.provider (docs/enricher-anthropic.md): openai renders
       # the enricher as before; anthropic renders the Claude env, key Secret
       # and egress port, batch mode its knobs; bad combinations refuse.

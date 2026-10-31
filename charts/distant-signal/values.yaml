@@ -987,6 +987,13 @@ postgresql:
       # -- A run that can't start within this many seconds of its time is
       # skipped.
       startingDeadlineSeconds: 3600
+      # -- Seconds after a Job finishes before the TTL controller deletes it
+      # and its pod: three days, longer than the alerts'
+      # `metrics.prometheusRule.pgbackrest.recentJobWindow` (26h), so a
+      # failure still alerts. Without it every finished pod stayed until the
+      # history limits pushed it out (twelve on mine-bringer, 2026-10-31).
+      # null leaves them to the history limits.
+      ttlSecondsAfterFinished: 259200
       # -- The image the CronJobs run `kubectl exec` from. Digest-pinned in
       # the tag; Renovate bumps it. Keep it within one minor version of the
       # cluster.
@@ -2216,7 +2223,19 @@ apiMaintenance:
   ttlSecondsAfterFinished: 86400
   # -- tracing-subscriber EnvFilter (RUST_LOG).
   logLevel: info
-  resources: {}
+  # -- Container resources. A pass is a few SQL statements over a
+  # two-connection pool; without any, the pod was BestEffort, the first
+  # thing the kubelet evicts and the host's earlyoom kills. The memory limit
+  # turns a runaway into an OOMKilled pod (exit 137), which the Job's
+  # podFailurePolicy fails at once instead of retrying.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+      ephemeral-storage: 16Mi
+    limits:
+      memory: 128Mi
+      ephemeral-storage: 256Mi
   # -- Merged over the chart-wide pod securityContext defaults.
   podSecurityContext: {}
   nodeSelector: {}
@@ -5528,6 +5547,35 @@ metrics:
       archiveWindow: 15m
       archiveStallWindow: 15m
       archiverSelector: ""
+      severity: warning
+    # Scheduled Jobs (this chart's CronJobs and their pods), rendered as a
+    # separate `<fullname>-scheduled-jobs` PrometheusRule from
+    # kube-state-metrics series. The cluster-wide rules miss these: a
+    # CronJob pod runs with restartPolicy Never, so an OOM never shows as a
+    # restart. The pgBackRest CronJobs keep their own failure and staleness
+    # alerts above and are left out of the first and third. Runbook:
+    # docs/alerts.md and docs/scheduled-jobs.md.
+    #
+    # DistantSignalScheduledJobFailed: a Job of one of these CronJobs that
+    # started within `recentJobWindow` failed, with kube-state-metrics'
+    # failure `reason` (BackoffLimitExceeded, DeadlineExceeded, Evicted, or
+    # "Other": a podFailurePolicy FailJob among them).
+    # DistantSignalScheduledJobOOMKilled: a container of a Job pod of this
+    # release was OOMKilled within `recentJobWindow` (Helm hook Jobs
+    # included).
+    # DistantSignalScheduledJobStale: a CronJob (not suspended) has not
+    # succeeded for `intervalMultiple` x its schedule interval, and at
+    # least `minAgeSeconds`; a CronJob that never succeeded counts from
+    # its creation.
+    # DistantSignalScheduledJobPending: a Job pod of this release has been
+    # Pending (unschedulable, or its image won't pull) for `pendingFor`.
+    scheduledJobs:
+      enabled: true
+      recentJobWindow: 26h
+      intervalMultiple: 1.5
+      minAgeSeconds: 1800
+      staleFor: 10m
+      pendingFor: 15m
       severity: warning
     # DistantSignalPostgresDown (critical): the database is down, for
     # `for`: postgres_exporter's pg_up is 0, or (with postgresql.enabled)

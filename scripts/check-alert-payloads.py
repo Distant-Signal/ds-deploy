@@ -153,6 +153,9 @@ RENDER_FLAGS = [
     "postgresql.pgbackrest.repo.s3.endpoint=s3.example.com",
     "postgresql.pgbackrest.repo.s3.bucket=test-bucket",
     "postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds",
+    # A CronJob of the chart's own, for the scheduled-jobs group's failure
+    # and staleness rules.
+    "apiMaintenance.enabled=true",
 ]
 
 # What a template expression in an annotation expands to, for the size

@@ -1632,8 +1632,6 @@ commit, which also lags until it catches up: that is expected and clears.
 
 ## pgBackRest
 
-## pgBackRest
-
 Details and procedures: [Postgres PITR](postgres-pitr.md#alerts). The Job
 alerts read kube-state-metrics; the archiver alerts read postgres_exporter's
 `pg_stat_archiver_*` series.
@@ -1680,3 +1678,54 @@ No WAL segment was archived (`pg_stat_archiver_archived_count`) over
 `archiveStallWindow`, although `archive_timeout` switches segments every
 minute while anything writes. Check the Postgres log, and
 `pg_stat_archiver`'s `last_failed_wal`.
+
+## scheduled jobs
+
+The chart's own CronJobs (`api-maintenance` and any other workload run on a
+schedule) and the pods of every Job in the release, from kube-state-metrics.
+How these Jobs behave, and what to do when one fails:
+[scheduled jobs](scheduled-jobs.md). The pgBackRest CronJobs keep their own
+failure and staleness alerts above.
+
+### DistantSignalScheduledJobFailed
+
+A Job of one of the chart's CronJobs failed within `recentJobWindow`
+(`distant_signal:scheduled_job_failed:recent`). The `reason` label is
+kube-state-metrics': `BackoffLimitExceeded` (every retry failed),
+`DeadlineExceeded` (it ran, or sat Pending, past `activeDeadlineSeconds`),
+`Evicted`, or `Other`, which includes the pod failure policy failing it at
+once on exit 137 (OOM kill) or 3 (the run refused its input). Nothing is
+retried until the next scheduled run. Read the pods' logs
+(`kubectl logs -n distant-signal job/<job_name>`); if the next run is far
+off, run one now with `kubectl create job --from=cronjob/<cronjob> <name>`.
+
+### DistantSignalScheduledJobStale
+
+A CronJob has not succeeded (or, never having succeeded, has existed) for
+`intervalMultiple` times its schedule interval, and at least
+`minAgeSeconds`, and isn't suspended. Its runs fail (see
+DistantSignalScheduledJobFailed), are skipped (`concurrencyPolicy: Forbid`
+skips a run while the last one still runs; a start missed by more than
+`startingDeadlineSeconds` is skipped), or never get scheduled (see
+DistantSignalScheduledJobPending). `kubectl get jobs -n distant-signal
+--sort-by=.metadata.creationTimestamp` and the CronJob's events show which.
+
+### DistantSignalScheduledJobOOMKilled
+
+A container of a Job pod of this release was killed at its memory limit
+within `recentJobWindow`. With `restartPolicy: Never` nothing restarts, so
+the cluster's restart-based OOM alert never sees it. The Job fails at once
+(exit 137 is a FailJob in the pod failure policy): a retry on the same input
+would only OOM again. Compare the container's limit with its peak in Grafana
+and raise the workload's `resources.limits.memory`, or find what grew.
+
+### DistantSignalScheduledJobPending
+
+A Job pod of this release has been Pending for `pendingFor`: the node has no
+room for its requests (`kubectl describe pod` shows `FailedScheduling`
+"Insufficient memory"), or its image won't pull. The time counts against the
+Job's `activeDeadlineSeconds`, so it ends as `DeadlineExceeded`. A scheduled
+Job reserves its requests only while it runs, so capacity freed by moving a
+worker to a schedule can be taken by other pods in between: free room, or
+lower another workload's requests.
+

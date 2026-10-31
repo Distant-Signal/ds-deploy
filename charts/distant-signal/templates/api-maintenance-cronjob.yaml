@@ -19,7 +19,7 @@ the bootstrap user), and its pool counts in the connection budget.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ printf "%s-api-maintenance" (include "distant-signal.fullname" .) | trunc 52 | trimSuffix "-" }}
+  name: {{ include "distant-signal.apiMaintenanceFullname" . }}
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "api-maintenance") | nindent 4 }}
 spec:
@@ -39,10 +39,12 @@ spec:
     spec:
       backoffLimit: {{ int64 $m.backoffLimit }}
       activeDeadlineSeconds: {{ int64 $m.activeDeadlineSeconds }}
+      {{- include "distant-signal.scheduledJobFailurePolicy" "api-maintenance" | nindent 6 }}
       {{- if not (kindIs "invalid" $m.ttlSecondsAfterFinished) }}
       # The TTL controller deletes each finished Job (and its pod) this long
-      # after it ends, on top of the history limits above. Only here: the
-      # Helm hook Jobs (migrate, roles setup) keep their hook delete policy.
+      # after it ends, on top of the history limits above. CronJobs only:
+      # the Helm hook Jobs (migrate, roles setup) keep their hook delete
+      # policy.
       ttlSecondsAfterFinished: {{ int64 $m.ttlSecondsAfterFinished }}
       {{- end }}
       template:

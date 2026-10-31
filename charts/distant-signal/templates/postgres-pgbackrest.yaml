@@ -127,6 +127,11 @@ spec:
     spec:
       backoffLimit: {{ int64 $pb.backup.backoffLimit }}
       activeDeadlineSeconds: {{ int64 $pb.backup.activeDeadlineSeconds }}
+      {{- if not (kindIs "invalid" $pb.backup.ttlSecondsAfterFinished) }}
+      # Deletes each finished Job and its pod this long after it ends, on
+      # top of the history limits (longer than the alerts' recentJobWindow).
+      ttlSecondsAfterFinished: {{ int64 $pb.backup.ttlSecondsAfterFinished }}
+      {{- end }}
       template:
         metadata:
           labels:
