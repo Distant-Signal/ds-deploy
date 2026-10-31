@@ -2181,7 +2181,134 @@ their own failure and staleness alerts. Takes root.
 {{- if .Values.apiMaintenance.enabled -}}
 {{- $names = append $names (include "distant-signal.apiMaintenanceFullname" .) -}}
 {{- end -}}
+{{- $root := . -}}
+{{- range $name, $poller := .Values.pollers -}}
+{{- if and $poller.enabled (eq ($poller.mode | default "deployment") "cronjob") -}}
+{{- $names = append $names (include "distant-signal.cronWorkerFullname" (dict "root" $root "component" (printf "poller-%s" $name))) -}}
+{{- end -}}
+{{- end -}}
 {{- join "|" $names -}}
+{{- end }}
+
+{{/*
+A worker run on a schedule instead of as an always-on Deployment
+(docs/scheduled-jobs.md): one CronJob with the chart's safe defaults.
+
+  - concurrencyPolicy Forbid, an explicit timeZone, startingDeadlineSeconds;
+  - its Job: backoffLimit, activeDeadlineSeconds, ttlSecondsAfterFinished,
+    and distant-signal.scheduledJobFailurePolicy;
+  - its pod: restartPolicy Never, the component's own pod labels (so the
+    component's NetworkPolicies, Redis ACL user and Secrets apply exactly as
+    to its Deployment), no probes, ports or scrape annotations (a run is
+    gone before Prometheus would scrape it).
+
+Takes dict:
+  "root"       the chart root;
+  "component"  the component label (e.g. "poller-tocs");
+  "cron"       the workload's `cron` values (schedule, timeZone, suspend,
+               startingDeadlineSeconds, activeDeadlineSeconds, backoffLimit,
+               successfulJobsHistoryLimit, failedJobsHistoryLimit,
+               ttlSecondsAfterFinished, resources);
+  "image"      the workload's image values;
+  "env"        the container's env, a list of {name, value|valueFrom};
+  "workload"   the workload's values, for podSecurityContext, nodeSelector,
+               tolerations and affinity.
+The CronJob is named <fullname>-<component> (52 characters at most, so its
+Jobs' names fit).
+*/}}
+{{- define "distant-signal.cronWorkerSpec" -}}
+{{- $root := .root -}}
+{{- $cron := .cron -}}
+{{- $w := .workload -}}
+{{- $component := .component -}}
+{{- $what := printf "%s.cron" $component -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "distant-signal.cronWorkerFullname" (dict "root" $root "component" $component) }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" $root "component" $component) | nindent 4 }}
+spec:
+  schedule: {{ required (printf "%s.schedule is required" $what) $cron.schedule | quote }}
+  # Explicit, never the node's local zone (chart README, "Scheduled jobs and
+  # time zones"; CI checks every CronJob has one).
+  timeZone: {{ required (printf "%s.timeZone is required" $what) $cron.timeZone | quote }}
+  # One run at a time: a run still going when the next is due skips that
+  # one instead of doubling it.
+  concurrencyPolicy: Forbid
+  suspend: {{ eq (toString $cron.suspend) "true" }}
+  startingDeadlineSeconds: {{ int64 (required (printf "%s.startingDeadlineSeconds is required" $what) $cron.startingDeadlineSeconds) }}
+  successfulJobsHistoryLimit: {{ int64 $cron.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ int64 $cron.failedJobsHistoryLimit }}
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "distant-signal.podLabels" (dict "root" $root "component" $component) | nindent 8 }}
+    spec:
+      backoffLimit: {{ int64 $cron.backoffLimit }}
+      activeDeadlineSeconds: {{ int64 (required (printf "%s.activeDeadlineSeconds is required" $what) $cron.activeDeadlineSeconds) }}
+      ttlSecondsAfterFinished: {{ int64 (required (printf "%s.ttlSecondsAfterFinished is required" $what) $cron.ttlSecondsAfterFinished) }}
+      {{- include "distant-signal.scheduledJobFailurePolicy" $component | nindent 6 }}
+      template:
+        metadata:
+          labels:
+            {{- include "distant-signal.podLabels" (dict "root" $root "component" $component) | nindent 12 }}
+        spec:
+          serviceAccountName: {{ include "distant-signal.serviceAccountName" $root }}
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          {{- with $root.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- include "distant-signal.podSecurityContext" (dict "override" $w.podSecurityContext) | nindent 12 }}
+          containers:
+            - name: {{ $component }}
+              image: {{ include "distant-signal.image" (dict "root" $root "image" .image) | quote }}
+              imagePullPolicy: {{ .image.pullPolicy }}
+              securityContext:
+                {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 16 }}
+              env:
+                {{- toYaml .env | nindent 16 }}
+              resources:
+                {{- toYaml (required (printf "%s.resources is required" $what) $cron.resources) | nindent 16 }}
+          {{- with $w.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $w.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $w.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
+
+{{/*
+A scheduled worker's CronJob name. Takes dict "root" and "component".
+*/}}
+{{- define "distant-signal.cronWorkerFullname" -}}
+{{- printf "%s-%s" (include "distant-signal.fullname" .root) .component | trunc 52 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
+A workload's `mode`: "deployment" (the default) or "cronjob". Fails on
+anything else, and on "cronjob" for a workload whose binary can't yet run
+once (its once-mode exit must wait for its writes; docs/scheduled-jobs.md).
+Takes dict "what" (the values path, for messages), "mode" and "cronCapable".
+*/}}
+{{- define "distant-signal.workloadMode" -}}
+{{- $mode := .mode | default "deployment" -}}
+{{- if not (has $mode (list "deployment" "cronjob")) -}}
+{{- fail (printf "%s.mode must be deployment or cronjob, not %q." .what $mode) -}}
+{{- end -}}
+{{- if and (eq $mode "cronjob") (not .cronCapable) -}}
+{{- fail (printf "%s.mode: cronjob is not supported for this workload yet: its binary must first wait for its writes before a once-mode exit (docs/scheduled-jobs.md). Use mode: deployment." .what) -}}
+{{- end -}}
+{{- $mode -}}
 {{- end }}
 
 {{/*

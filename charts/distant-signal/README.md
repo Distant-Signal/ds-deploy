@@ -2695,6 +2695,18 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.ldbws.trackedStopArrivals.consumerKeyKey` | `consumer-key` | Its key with the consumer key, sent as `x-apikey` (`LDBWS_ARRIVALS_CONSUMER_KEY`). |
 | `pollers.ldbws.trackedStopArrivals.consumerSecretKey` | `consumer-secret` | Its key with the consumer secret (`LDBWS_ARRIVALS_CONSUMER_SECRET`, optional): wired but not sent, as RDM API products authenticate with the consumer key alone. |
 | `pollers.ldbws.internalReads.database.maxConnections` | `1` | ldbws only: its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
+| `pollers.tocs.mode` | `deployment` | tocs only: `deployment` (an always-on pod) or `cronjob` (a CronJob, `cron` below: each run polls once with `RUN_ONCE`, waits for its snapshot to reach the stream, and exits). Exactly one renders. As a CronJob it has no `/metrics`, so its DistantSignalPollerStale rule is off and DistantSignalPollerFailing can't see it; the scheduled-job alerts and the `tocs` ingest_freshness source cover it. Other pollers refuse `cronjob` until their binaries wait for their writes. See `docs/scheduled-jobs.md`. |
+| `pollers.tocs.cron.schedule` | `"40 4 * * *"` | tocs only, `mode: cronjob`: the run's schedule (daily, clear of the 03:00 and 05:00 UTC backups). |
+| `pollers.tocs.cron.timeZone` | `Etc/UTC` | The schedule's time zone. Required. |
+| `pollers.tocs.cron.suspend` | `false` | Suspend the CronJob (a run already going is not stopped). |
+| `pollers.tocs.cron.startingDeadlineSeconds` | `3600` | A start missed by more than this is skipped. |
+| `pollers.tocs.cron.activeDeadlineSeconds` | `900` | Kill a run, or one still Pending, after this long. |
+| `pollers.tocs.cron.backoffLimit` | `2` | Retries of a run that failed transiently (exit 1). Exit 3 (the feed refused) and 137 (OOMKilled) fail the Job at once. |
+| `pollers.tocs.cron.successfulJobsHistoryLimit` | `1` | Finished Jobs kept. |
+| `pollers.tocs.cron.failedJobsHistoryLimit` | `3` | Failed Jobs kept. |
+| `pollers.tocs.cron.ttlSecondsAfterFinished` | `86400` | A finished Job and its pod are deleted this long after it ends. |
+| `pollers.tocs.cron.skipIfFresherThanSecs` | `43200` | `RUN_ONCE_SKIP_IF_FRESHER_THAN_SECS`: a run finding the TOC list landed less than this long ago fetches nothing, so a doubled or manual run spends no RDM request. `0` always fetches. |
+| `pollers.tocs.cron.resources` | requests `5m`/`16Mi`/ephemeral `16Mi`, limits `128Mi`/ephemeral `256Mi` | The run's container resources (`pollers.tocs.resources` is the Deployment's). |
 
 ### pollerIrishRailGtfs
 

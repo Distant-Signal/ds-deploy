@@ -7,6 +7,7 @@ one goes wrong. Alerts: [scheduled jobs](alerts.md#scheduled-jobs).
 |---|---|---|
 | `<fullname>-api-maintenance` | The api image's `maintenance` binary: one pass of the session, dead-link, retention and delegated-access sweeps. | `apiMaintenance` |
 | `<fullname>-pgbackrest-{full,diff,check,verify}` | `kubectl exec` of pgBackRest in the Postgres pod. | `postgresql.pgbackrest.backup` ([Postgres PITR](postgres-pitr.md)) |
+| `<fullname>-poller-tocs` (only with `pollers.tocs.mode: cronjob`) | poller-tocs, once: one fetch of the TOC list onto `ds:ingest:reference`. | `pollers.tocs.cron` |
 
 ## How a run behaves
 
@@ -50,11 +51,68 @@ The Jobs of this chart's own binaries also set (`distant-signal.scheduledJobFail
 
 **Runs must be idempotent.** Kubernetes creates a CronJob's Job "about once"
 per schedule: rarely twice, rarely not at all. `api-maintenance`'s steps are
-all idempotent, and pgBackRest's own lock refuses a second backup.
+all idempotent, pgBackRest's own lock refuses a second backup, and a poller's
+once mode skips a run whose data is still fresh (below).
 
 **Running alongside deploys.** A Helm upgrade changes only the Jobs created
 after it; a run already going finishes on its old image. Nothing needs to be
 suspended for an ordinary deploy.
+
+## Workers on a schedule
+
+A worker with a `mode` value runs either as its always-on Deployment
+(`deployment`, the default) or as a CronJob (`cronjob`); the chart renders
+exactly one, and CI checks it. Today only `pollers.tocs` has one: a daily
+poller that spends the rest of the day idle. The CronJob comes from
+`distant-signal.cronWorkerSpec` with the defaults above, and its pods keep
+the component's labels, so its NetworkPolicies, Redis ACL user, database
+role and Secrets apply exactly as they did to the Deployment.
+
+Each run sets `RUN_ONCE=true`, which every poller's loop
+(`common::poller_loop`) understands:
+
+1. It reads the same last-fetch cursor the Deployment does (for tocs, the
+   newest `tocs/1` entry on its stream). If the data landed less than
+   `cron.skipIfFresherThanSecs` ago (half a day for tocs), it logs "data
+   still fresh; skipping this run" and exits 0 without calling upstream. A
+   doubled Job, a manual run or a retry soon after a success therefore
+   costs no RDM request.
+2. Otherwise it runs one cycle. A stream producer then waits (up to two
+   minutes) for its snapshot to be written to Redis before it exits; the
+   writer applies it as before. If the write doesn't finish in time, the run
+   exits 1 and the Job retries.
+3. Exit codes: 0 for success or a skip; 1 for a transient failure (the
+   upstream, Redis or the database), which the Job retries up to
+   `cron.backoffLimit`; 3 for refused data, which fails the Job at once.
+
+A run serves no `/metrics` (`METRICS_ENABLED=false`): it would be gone
+before Prometheus scraped it. So DistantSignalPollerStale has no rule for a
+poller on a schedule, and DistantSignalPollerFailing can't see it. It is
+covered instead by:
+
+- the scheduled-job alerts below, which add its CronJob to their
+  failure and staleness rules;
+- `DistantSignalIngestSourceStale` for its `ingest_freshness` source (for
+  tocs, older than 48 hours), which the always-on ingest-writer exports.
+
+A poller only gets a `cronjob` mode once its binary waits for its writes
+before a once-mode exit (`common::poller_loop::finish_once`); until then
+the chart refuses it. Pollers with several loops in one process (poller-tfl,
+poller-transit-schedule) need splitting first.
+
+### Switching tocs over, and back
+
+To switch, set `pollers.tocs.mode: cronjob` in the deploy values. The
+release deletes the Deployment and creates the CronJob, which first runs at
+`cron.schedule` (04:40 UTC). To check it before then, start a run by hand
+(`kubectl create job --from=cronjob/<fullname>-poller-tocs ...`). Within
+half a day of the Deployment's last fetch, that run logs the skip and
+exits 0.
+
+To roll back, set `pollers.tocs.mode: deployment` (or remove the value). The
+Deployment returns and waits out what is left of its day from the same
+cursor, so it doesn't re-fetch. Nothing else changes: the stream, the
+writer, the Redis user and the database are the same either way.
 
 ## Alerts
 
@@ -96,7 +154,7 @@ says why it can't be placed.
 ## Rollback
 
 Each CronJob has its own switch (`apiMaintenance.enabled`,
-`postgresql.pgbackrest.backup.suspend`). The failure policy, the replacement
+`postgresql.pgbackrest.backup.suspend`, `pollers.tocs.mode`). The failure policy, the replacement
 policy and the TTLs need no rollback of their own: removing them only makes a
 Job retry an OOM kill, count evictions, and keep its pods until the history
 limits.

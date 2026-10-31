@@ -25,6 +25,19 @@ The pgBackRest CronJobs only `kubectl exec` into the Postgres pod, whose
 exit codes are pgBackRest's, so they are held to everything but the last
 two points.
 
+Workloads with a `mode` (deployment or cronjob; today `pollers.tocs`):
+
+  - no component (its pod template's `app.kubernetes.io/component`) is
+    both a Deployment and a CronJob, in any render;
+  - each mode renders exactly one of the two, named `<fullname>-<component>`;
+  - as a CronJob its container runs once (`RUN_ONCE=true`, the skip
+    threshold) with `METRICS_ENABLED=false`, no probes and no ports, and
+    keeps its component's pod labels (its NetworkPolicies select on them);
+  - with alerts on, its DistantSignalPollerStale rule is gone and the
+    scheduled-jobs rules name its CronJob;
+  - a bad mode, or `cronjob` for a poller that can't run once yet, refuses
+    to render.
+
 Exit 1 with one line per failed check. Needs helm on PATH (or --helm) and
 PyYAML (pyproject.toml's lint group).
 """
@@ -54,6 +67,7 @@ EXPECTED = (
     "distant-signal-pgbackrest-diff",
     "distant-signal-pgbackrest-check",
     "distant-signal-pgbackrest-verify",
+    "distant-signal-poller-tocs",
 )
 FAIL_JOB_EXIT_CODES = [3, 137]
 
@@ -88,7 +102,19 @@ EVERYTHING = sets(
     "postgresql.pgbackrest.repo.s3.endpoint=s3.example.com",
     "postgresql.pgbackrest.repo.s3.bucket=test-bucket",
     "postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds",
+    "pollers.tocs.enabled=true",
+    "pollers.tocs.baseUrl=https://tocs.example.com",
+    "redis.acl.clients.pollerTocs=true",
+    "pollers.tocs.mode=cronjob",
 )
+# poller-tocs on, in either mode, with its alerts.
+TOCS = sets(
+    "pollers.tocs.enabled=true",
+    "pollers.tocs.baseUrl=https://tocs.example.com",
+    "redis.acl.clients.pollerTocs=true",
+    "metrics.prometheusRule.enabled=true",
+)
+TOCS_NAME = "distant-signal-poller-tocs"
 RENDERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("defaults", ()),
     ("values-example.yaml", ("-f", str(CHART / "values-example.yaml"))),
@@ -224,6 +250,132 @@ def render(helm: str, args: Sequence[str]) -> tuple[list[Doc], str]:
     return [cast("Doc", d) for d in yaml.safe_load_all(result.stdout) if d], ""
 
 
+def component_of(doc: Mapping[str, object]) -> str | None:
+    """Return the `app.kubernetes.io/component` of a Deployment's or CronJob's pods."""
+    spec = as_map(doc.get("spec"))
+    if doc.get("kind") == "CronJob":
+        spec = as_map(as_map(spec.get("jobTemplate")).get("spec"))
+    labels = as_map(as_map(as_map(spec.get("template")).get("metadata")).get("labels"))
+    component = labels.get("app.kubernetes.io/component")
+    return component if isinstance(component, str) else None
+
+
+def exclusivity_problems(docs: Sequence[Doc]) -> list[str]:
+    """Each component that is both a Deployment and a CronJob."""
+    by_kind: dict[str, set[str]] = {"Deployment": set(), "CronJob": set()}
+    for doc in docs:
+        kind = doc.get("kind")
+        component = component_of(doc)
+        if isinstance(kind, str) and kind in by_kind and component:
+            by_kind[kind].add(component)
+    return [
+        f"component {c} renders both a Deployment and a CronJob"
+        for c in sorted(by_kind["Deployment"] & by_kind["CronJob"])
+    ]
+
+
+def env_of(container: Mapping[str, object]) -> dict[str, object]:
+    """Return a container's plain `value` env entries, by name."""
+    return {
+        str(e.get("name")): e.get("value")
+        for e in (as_map(x) for x in as_list(container.get("env")))
+    }
+
+
+def cron_worker_problems(doc: Mapping[str, object]) -> list[str]:
+    """Return what is wrong with a scheduled worker's (tocs') CronJob pod."""
+    job_spec = as_map(as_map(as_map(doc.get("spec")).get("jobTemplate")).get("spec"))
+    pod_spec = as_map(as_map(job_spec.get("template")).get("spec"))
+    containers = [as_map(c) for c in as_list(pod_spec.get("containers"))]
+    if len(containers) != 1:
+        return [f"expected one container, found {len(containers)}"]
+    container = containers[0]
+    problems: list[str] = []
+    env = env_of(container)
+    want = {
+        "RUN_ONCE": "true",
+        "RUN_ONCE_SKIP_IF_FRESHER_THAN_SECS": "43200",
+        "METRICS_ENABLED": "false",
+    }
+    problems.extend(
+        f"env {k} is {env.get(k)!r}, not {v!r}"
+        for k, v in want.items()
+        if env.get(k) != v
+    )
+    names = [str(as_map(e).get("name")) for e in as_list(container.get("env"))]
+    problems.extend(
+        f"env {n} appears {names.count(n)} times"
+        for n in sorted(set(names))
+        if names.count(n) > 1
+    )
+    problems.extend(
+        f"container has {key}"
+        for key in ("ports", "livenessProbe", "readinessProbe", "startupProbe")
+        if key in container
+    )
+    if component_of(doc) != "poller-tocs":
+        problems.append(f"pod component is {component_of(doc)!r}, not poller-tocs")
+    return problems
+
+
+def check_modes(helm: str) -> list[str]:
+    """Check pollers.tocs' two modes, its alerts, and refused modes."""
+    failures: list[str] = []
+    for mode, kind in (("deployment", "Deployment"), ("cronjob", "CronJob")):
+        label = f"tocs mode {mode}"
+        docs, error = render(helm, (*TOCS, *sets(f"pollers.tocs.mode={mode}")))
+        if error:
+            failures.append(f"{label}: render failed: {error}")
+            continue
+        named = [
+            str(d.get("kind"))
+            for d in docs
+            if d.get("kind") in ("Deployment", "CronJob")
+            and as_map(d.get("metadata")).get("name") == TOCS_NAME
+        ]
+        if named != [kind]:
+            failures.append(f"{label}: {TOCS_NAME} renders as {named}, not [{kind}]")
+        failures.extend(f"{label}: {p}" for p in exclusivity_problems(docs))
+        rules = yaml.safe_dump([d for d in docs if d.get("kind") == "PrometheusRule"])
+        stale = 'cycle="tocs"' in rules
+        if stale == (mode == "cronjob"):
+            failures.append(
+                f"{label}: its DistantSignalPollerStale rule must"
+                f" {'not ' if mode == 'cronjob' else ''}render"
+            )
+        named_in_rules = f'owner_name=~"{TOCS_NAME}"' in rules
+        if named_in_rules != (mode == "cronjob"):
+            failures.append(
+                f"{label}: the scheduled-jobs rules must"
+                f" {'' if mode == 'cronjob' else 'not '}name {TOCS_NAME}"
+            )
+        if mode == "cronjob":
+            failures.extend(
+                f"{label}: {p}"
+                for d in docs
+                if d.get("kind") == "CronJob"
+                and as_map(d.get("metadata")).get("name") == TOCS_NAME
+                for p in cron_worker_problems(d)
+            )
+    refused = (
+        ("an unknown mode", (*TOCS, *sets("pollers.tocs.mode=sometimes"))),
+        (
+            "cronjob for a poller that can't run once",
+            sets(
+                "pollers.stations.enabled=true",
+                "pollers.stations.baseUrl=https://stations.example.com",
+                "pollers.stations.mode=cronjob",
+            ),
+        ),
+    )
+    for label, flags in refused:
+        _, error = render(helm, flags)
+        if "mode" not in error:
+            failures.append(f"{label} must refuse to render (got {error!r})")
+    print(f"tocs modes: {len(failures)} problems")
+    return failures
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run every check; print failures."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
@@ -245,11 +397,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if n not in names
             )
         failures.extend(f"{label}: {p}" for d in cronjobs for p in cronjob_problems(d))
+        failures.extend(f"{label}: {p}" for p in exclusivity_problems(docs))
         print(f"{label}: {len(cronjobs)} CronJobs checked")
+    failures.extend(check_modes(helm))
     for failure in failures:
         print(failure)
     if not failures:
-        print("ok: every CronJob has its time zone, resources and safe defaults")
+        print(
+            "ok: every CronJob has its time zone, resources and safe defaults;"
+            " each workload renders as exactly one of Deployment or CronJob"
+        )
     return 1 if failures else 0
 
 

@@ -20,6 +20,20 @@ order is stable: incidents, ldbws, stations, tfl, tocs.
 {{- fail (printf "pollers.%s.enabled is true but pollers.%s.baseUrl is empty. Set it to this feed's base URL (for the four Rail Data Marketplace pollers -- incidents, stations, tocs, ldbws -- the URL from your RDM subscription; tfl defaults to https://api.tfl.gov.uk). See the chart README's \"Enabling the pollers\" and local.env.example / dev.env.example in the repository root, or set pollers.%s.enabled=false." $name $name $name) }}
 {{- end }}
 {{- $component := printf "poller-%s" $name }}
+{{- /* Pollers whose binary waits for its writes before a once-mode exit
+(common::poller_loop::finish_once); docs/scheduled-jobs.md. */}}
+{{- $mode := include "distant-signal.workloadMode" (dict "what" (printf "pollers.%s" $name) "mode" $poller.mode "cronCapable" (has $name (list "tocs"))) }}
+{{- if eq $mode "cronjob" }}
+{{- /* Once mode: one cycle unless the data is fresher than
+skipIfFresherThanSecs, then exit. No /metrics listener: a run is gone
+before Prometheus would scrape it (its alerts are the scheduled-job ones
+and its ingest_freshness source's). These replace the same names in the
+chart's env and extraEnv. */}}
+{{- $once := list (dict "name" "RUN_ONCE" "value" "true") (dict "name" "RUN_ONCE_SKIP_IF_FRESHER_THAN_SECS" "value" ($poller.cron.skipIfFresherThanSecs | int | toString)) (dict "name" "METRICS_ENABLED" "value" "false") }}
+{{- $env := include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerEnv" (dict "root" $root "name" $name "poller" $poller)) "extra" (concat ($poller.extraEnv | default list) $once)) | fromYamlArray }}
+---
+{{ include "distant-signal.cronWorkerSpec" (dict "root" $root "component" $component "cron" $poller.cron "image" $poller.image "env" $env "workload" $poller) }}
+{{- else }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -99,6 +113,7 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
 

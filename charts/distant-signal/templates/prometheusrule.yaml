@@ -2237,10 +2237,14 @@ scoping as above.
 {{- end }}
 {{- end }}
 {{- $pollerFailuresOn := and ($rule.pollerFailures).enabled $anyPoller }}
-{{- /* Each enabled poller's label (common::poller_loop) -> pollIntervalSecs. */}}
+{{- /* Each enabled poller's label (common::poller_loop) -> pollIntervalSecs.
+A poller run as a CronJob (mode: cronjob) has none: it exports no
+/metrics, so its gauge would only ever be absent; the scheduled-job alerts
+(scheduled-jobs-prometheusrule.yaml) and its ingest_freshness source cover
+it instead. */}}
 {{- $pollerIntervals := dict }}
 {{- range $name, $poller := .Values.pollers }}
-{{- if $poller.enabled }}
+{{- if and $poller.enabled (ne ($poller.mode | default "deployment") "cronjob") }}
 {{- $_ := set $pollerIntervals $name $poller.pollIntervalSecs }}
 {{- end }}
 {{- end }}
