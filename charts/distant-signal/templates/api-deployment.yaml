@@ -118,8 +118,8 @@ Transit networks in /Trips/plan (DS-164): only networks the planner knows
 any other at startup too; failing here keeps a typo out of a rollout.
 */}}
 {{- range $network := (.Values.api.tripPlanTransitNetworks | default list) }}
-{{- if not (has $network (list "metrolink")) }}
-{{- fail (printf "api.tripPlanTransitNetworks: %q is not a network the trip planner can take (known: metrolink)." (toString $network)) }}
+{{- if not (has $network (list "metrolink" "tfl")) }}
+{{- fail (printf "api.tripPlanTransitNetworks: %q is not a network the trip planner can take (known: metrolink, tfl)." (toString $network)) }}
 {{- end }}
 {{- end }}
 {{- /*

@@ -1820,10 +1820,12 @@ api:
   # (API_TRIP_PLAN_TRANSIT_NETWORKS; docs/superpowers/specs/2026-10-24-
   # transit-trip-planning-design.md). Empty by default: the graph, its cache
   # key and every response are as before. Listed, the network's tram trips
-  # join each cached day graph (about 6 MB a date for Metrolink), and a
-  # request plans with them when it sends `transit=true` or names a tram
-  # stop. Only `metrolink` is accepted; the render fails on anything else.
-  # Rollout: docs/transit-networks.md, "Trip planning".
+  # join each cached day graph (about 6 MB a date for Metrolink, 28 MB for
+  # tfl), and a request plans with them when it sends `transit=true` or
+  # names a tram stop (a TfL stop only with `transit=true`). `metrolink` and
+  # `tfl` are accepted; the render fails on anything else. Each must also
+  # be in api.transitNetworks. Rollout: docs/transit-networks.md, "Trip
+  # planning".
   tripPlanTransitNetworks: []
   # -- Extra minutes /Trips/plan adds on the tram side of a rail-to-tram or
   # tram-to-rail change (TRIP_PLAN_TRANSIT_CHANGE_MINUTES, 0-15; values
