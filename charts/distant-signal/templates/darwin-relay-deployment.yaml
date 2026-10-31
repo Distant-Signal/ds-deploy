@@ -30,14 +30,27 @@ metadata:
 spec:
   revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   replicas: 1
-  # Like movement-relay: the new pod joins the consumer group before the
-  # old one leaves. Two members at once only split the partitions; every
-  # row is idempotent (Darwin timestamp guards).
+  # Recreate, NOT movement-relay's new-before-old RollingUpdate: the Push
+  # Port topic has ONE partition, and readiness is a confirmed partition
+  # assignment. A surge pod joins the group, but the single partition stays
+  # with one member; when that is the old pod the new one never becomes
+  # Ready, maxUnavailable 0 never stops the old one, and the rollout
+  # deadlocks (build 833, 2026-10-31: ProgressDeadlineExceeded, cleared by
+  # scaling to 0 and back). Recreate stops the old pod first, a gap of
+  # seconds: offsets are committed by hand only after a batch is in Redis,
+  # so the new pod resumes from the group's committed offset (KAFKA_AUTO_
+  # OFFSET_RESET applies only with none) and loses nothing; a batch the
+  # old pod had read but not committed is re-read, and Darwin timestamp
+  # guards make the duplicate harmless. scripts/check-kafka-rollout-chart.py
+  # holds each relay's partition count and fails a strategy that can
+  # deadlock.
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
+    # Explicit null: the live Deployment is RollingUpdate, and under
+    # server-side apply it keeps its `rollingUpdate` block, which the API
+    # server rejects with `type: Recreate` ("rollingUpdate: Forbidden");
+    # see redis-deployment.yaml.
+    rollingUpdate: null
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "darwin-relay") | nindent 6 }}

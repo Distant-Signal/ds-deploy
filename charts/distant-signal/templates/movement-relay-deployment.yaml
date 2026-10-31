@@ -37,6 +37,16 @@ spec:
   # doc's Decision 5. This is the OPPOSITE intent from every Recreate-typed
   # Deployment in this chart (aggregator, notifier, poller-deployments,
   # schedulefeed), stated explicitly for the same reason they state theirs.
+  #
+  # Safe ONLY because the TRUST topic has more partitions (2, seen in this
+  # relay's own "partition assignment confirmed" logs) than the 2 members
+  # a surge makes: readiness is a confirmed partition assignment, so the
+  # surge pod must be assigned one while the old pod still holds the rest.
+  # On a single-partition topic it may get none, never become Ready, and
+  # deadlock the rollout -- what happened to darwin-relay (build 833,
+  # 2026-10-31), which is Recreate now. scripts/check-kafka-rollout-chart.py
+  # holds the partition count and fails a strategy that can deadlock; if
+  # RDM ever shrinks the topic to one partition, switch this to Recreate.
   strategy:
     type: RollingUpdate
     rollingUpdate:

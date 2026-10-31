@@ -1243,6 +1243,15 @@ jobs:
       - name: darwin-relay chart
         run: uv run --no-sync scripts/check-darwin-chart.py
 
+      # The Kafka relays' rollout strategies against their topics'
+      # partition counts: readiness is a partition assignment, so a
+      # new-before-old RollingUpdate with more pods than partitions can
+      # leave the surge pod unassigned and deadlock the rollout (build 833
+      # on darwin-relay's one-partition topic). A new Kafka Deployment must
+      # be listed with its partition count.
+      - name: Kafka relay rollout strategies
+        run: uv run --no-sync scripts/check-kafka-rollout-chart.py
+
       # The Redis NetworkPolicy admits exactly the workloads whose env has
       # REDIS_URL, rendered with every Redis client on (and with none of the
       # optional ones): darwin-relay shipped without its entry and every
