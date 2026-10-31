@@ -633,8 +633,9 @@ def check_redis_acl_file(c: Checker) -> None:
 def check_optional_acl_users(c: Checker) -> None:
     """Check an `optional` user renders only while its client is on (transit §0).
 
-    poller-transit-metrolink and poller-transit-net (NET design §7) ship
-    off: by default neither one's ACL line nor its password env (a Secret
+    poller-transit-metrolink, poller-transit-net (NET design §7) and
+    poller-transit-tfl (the TfL design §9) ship
+    off: by default no one's ACL line nor its password env (a Secret
     key Redis would need) renders, so merging it restarts nothing. With its
     client on, both render (and not the other's), and the ConfigMap still
     equals scripts/render-redis-acl.py's with `--client`.
@@ -644,6 +645,7 @@ def check_optional_acl_users(c: Checker) -> None:
     optional = {
         "pollerTransitMetrolink": "poller-transit-metrolink",
         "pollerTransitNet": "poller-transit-net",
+        "pollerTransitTfl": "poller-transit-tfl",
     }
     for client, user in optional.items():
         var = "REDIS_ACL_PASSWORD_" + user.upper().replace("-", "_")
@@ -919,6 +921,59 @@ def check_net_producer(c: Checker) -> None:
     )
 
 
+TFL_ON = sets(
+    "pollerTransitSchedule.networks.tfl.enabled=true",
+    "redis.acl.clients.pollerTransitTfl=true",
+    "ingestWriter.streams.transit-tfl=apply",
+)
+
+
+def check_tfl_producer(c: Checker) -> None:
+    """Check TfL's producer: TXC over HTTPS, no login (the TfL design §9)."""
+    name = "Deployment/distant-signal-poller-transit-schedule-tfl"
+    c.check(
+        ok=name not in by_name(c.docs()),
+        message="TfL's producer must not render by default",
+    )
+    docs = by_name(c.docs(*TFL_ON))
+    tfl = docs.get(name, {})
+    e = env((containers(tfl) or [{}])[0])
+    c.check(
+        ok=value(e.get("TRANSIT_NETWORK")) == "tfl"
+        and value(e.get("TRANSIT_ADAPTER")) == "txc"
+        and value(e.get("TRANSIT_TXC_URL"))
+        == "https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip"
+        and value(e.get("TRANSIT_SITUATIONS_ENABLED")) == "false"
+        and "TRANSIT_GTFS_URL" not in e
+        and "TRANSIT_TXC_USERNAME" not in e
+        and value(e.get("REDIS_USERNAME")) == "poller-transit-tfl"
+        and secret_ref(e.get("REDIS_PASSWORD"))
+        == ("example-redis-users", "poller-transit-tfl-password"),
+        message=f"{name}: txc from TfL, no login, its Redis user: {sorted(e)}",
+    )
+    c.refuses(
+        "TfL's producer without its stream applied",
+        "ingestWriter.streams.transit-tfl: apply",
+        *TFL_ON,
+        *sets("ingestWriter.streams.transit-tfl=off"),
+    )
+    c.refuses(
+        "TfL's producer without its Redis user",
+        "redis.acl.clients.pollerTransitTfl",
+        *TFL_ON,
+        *sets("redis.acl.clients.pollerTransitTfl=false"),
+    )
+    c.refuses(
+        "M4: transit-tfl apply as the app role",
+        "ingestWriter.streams.transit-tfl: apply needs",
+        *sets(
+            "ingestWriter.streams.tfl=off",
+            "ingestWriter.streams.transit-tfl=apply",
+            "postgresql.roles.perService.writer.connect=false",
+        ),
+    )
+
+
 def renders(c: Checker, label: str, *args: str) -> None:
     """Check that the render succeeds."""
     code, out = c.render(*args)
@@ -1087,6 +1142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_optional_acl_users(c)
     check_transit_producer(c)
     check_net_producer(c)
+    check_tfl_producer(c)
     check_redis_user_guards(c)
     check_narrow_role_guards(c)
     check_retired_switches(c)

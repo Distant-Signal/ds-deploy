@@ -2305,6 +2305,10 @@ ingestWriter:
     # Nottingham Express Transit: its timetable only; NET design §7). The
     # same `apply` prerequisite.
     transit-net: "off"
+    # ds:ingest:transit-tfl (pollerTransitSchedule's tfl network: TfL's
+    # Underground, DLR and London Trams, its timetable only; status comes
+    # from the tfl stream; TfL design §9). The same `apply` prerequisite.
+    transit-tfl: "off"
   # -- Changed rows only (INGEST_WRITER_CHANGED_ROWS_ONLY; plan 3a.9, spec
   # §7.8): the `station-full-coverage-samples/1` handler stops advancing
   # `resolved_at` on rows whose stats are unchanged (about 2,400 of 2,700
@@ -3020,6 +3024,12 @@ redis:
       # pollerTransitMetrolink: needs the `poller-transit-net-password` key
       # of `existingSecret` while on; turning it on restarts Redis once.
       pollerTransitNet: false
+      # -- poller-transit-schedule for network tfl (TfL's Underground, DLR
+      # and London Trams; off by default), as user `poller-transit-tfl`
+      # (`~ds:ingest:transit-tfl +xadd +xrevrange`). An `optional` user, as
+      # pollerTransitMetrolink: needs the `poller-transit-tfl-password` key
+      # of `existingSecret` while on; turning it on restarts Redis once.
+      pollerTransitTfl: false
   image:
     # -- Valkey (BSD-licensed, wire- and data-compatible with Redis 7.2),
     # in place of `redis` 7.4.11 since DS-174. The Redis-named commands,
@@ -4421,6 +4431,69 @@ pollerTransitSchedule:
       affinity: {}
       podAnnotations: {}
       podSecurityContext: {}
+    tfl:
+      # -- TfL's Underground, DLR and London Trams (the TfL design,
+      # docs/superpowers/specs/2026-10-30-tfl-transit-design.md). Off by
+      # default. The timetable is TfL's weekly Journey Planner export
+      # (TransXChange, a zip of zips; no login). Its lines' status is TfL's
+      # own (poller-tfl), so there is no situations loop. Turning it on
+      # needs `redis.acl.clients.pollerTransitTfl: true` (with the
+      # `poller-transit-tfl-password` Secret key) and
+      # `ingestWriter.streams.transit-tfl: apply`; the pages stay hidden
+      # until `api.transitNetworks` lists `tfl`. Rollout:
+      # docs/transit-networks.md.
+      enabled: false
+      # -- The timetable source adapter (TRANSIT_ADAPTER): txc, as the
+      # network file says.
+      adapter: txc
+      # -- TfL's Journey Planner timetables (TRANSIT_TXC_URL), about 141 MB
+      # on 2026-10-26; the network file names the inner zip it reads.
+      txcUrl: "https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip"
+      # -- The TXC download's byte cap (TRANSIT_TXC_MAX_BYTES; 400 MiB).
+      txcMaxBytes: 419430400
+      # -- No login: TfL's export is public. Leave empty.
+      txcCredentials:
+        existingSecret: ""
+        usernameKey: username
+        passwordKey: password
+      # -- Unused: the situations loop must stay off for tfl.
+      situationsUrl: "https://data.bus-data.dft.gov.uk/disruptions/download/bulk_archive"
+      # -- NaPTAN access nodes; `{area}` is the network file's naptan_area.
+      naptanUrl: "https://naptan.api.dft.gov.uk/v1/access-nodes?atcoAreaCodes={area}&dataFormat=csv"
+      # -- Seconds between timetable fetches (TfL updates weekly; a daily
+      # fetch re-sends an unchanged feed, which keeps its freshness moving).
+      timetableIntervalSecs: 86400
+      # -- Seconds between SIRI-SX fetches (unused).
+      situationsIntervalSecs: 300
+      # -- Must stay off: the producer refuses to start with it on, as the
+      # network file names no SIRI-SX participant (TfL's status comes from
+      # poller-tfl). Its stream is budgeted for the timetable only.
+      situationsEnabled: false
+      # -- Days of service dates stored after today (Q8). TfL's export runs
+      # about 60 days ahead.
+      horizonDays: 60
+      # -- Sharp-drop guard, as metrolink's.
+      feedMaxDropFraction: 0.3
+      # -- One-shot timetable refresh token, as metrolink's
+      # (docs/transit-networks.md).
+      timetableRefresh: ""
+      # -- The /work emptyDir the export is downloaded to.
+      workDirSizeLimit: 512Mi
+      # One TXC document is held at a time while it is parsed, but the
+      # journeys of the whole export are kept: 332 MiB peak RSS on TfL's
+      # 2026-10-26 export (release build).
+      resources:
+        requests:
+          cpu: 100m
+          memory: 448Mi
+        limits:
+          memory: 1Gi
+      extraEnv: []
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+      podAnnotations: {}
+      podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
 # scheduleFeed -- OPT-IN CIF SCHEDULE feed SFTP-push receiver
@@ -5519,6 +5592,7 @@ metrics:
         "ds:ingest:transit-metrolink": 320
         "ds:ingest:darwin": 240
         "ds:ingest:transit-net": 24
+        "ds:ingest:transit-tfl": 128
     # DistantSignalIngestStreamStalled (critical): producers' XADDs to a
     # stream succeeded within its stallAfterSecs, but the writer has
     # applied nothing from it for longer, for `for`. stallAfterSecs is
@@ -5527,8 +5601,8 @@ metrics:
     # tfl-stops daily (poller-tfl's stops job; off by default),
     # reference daily, ioi-live 1/5 min, ioi-gtfs and ioi-nir daily,
     # transit-metrolink 1/5 min (its situations; off by default),
-    # transit-net daily (its timetable only; off by default), darwin
-    # 2/min (darwin-relay; off by default).
+    # transit-net and transit-tfl daily (their timetables only; off by
+    # default), darwin 2/min (darwin-relay; off by default).
     ingestStreamStalled:
       enabled: true
       for: 5m
@@ -5545,6 +5619,7 @@ metrics:
         "ds:ingest:transit-metrolink": 900
         "ds:ingest:darwin": 180
         "ds:ingest:transit-net": 259200
+        "ds:ingest:transit-tfl": 259200
     # DistantSignalIngestDeadLetters: any entry dead-lettered within
     # `window`.
     ingestDeadLetters:
@@ -5577,11 +5652,12 @@ metrics:
       for: 0m
       severity: critical
     # DistantSignalIngestStreamMemoryHigh: the ingest streams and their
-    # dead-letter streams use over `ratio` of budgetBytes (D5: 512 MiB of
-    # Redis), for `for`.
+    # dead-letter streams use over `ratio` of budgetBytes (D5's 512 MiB of
+    # Redis, 576 MiB since the TfL timetable stream; keep it equal to
+    # crates/ingest-stream/src/budget.rs BUDGET_BYTES), for `for`.
     ingestStreamMemoryHigh:
       enabled: true
-      budgetBytes: 536870912
+      budgetBytes: 603979776
       ratio: 0.75
       for: 10m
       severity: warning
@@ -5686,6 +5762,9 @@ metrics:
         darwin-pushport: 900
         # NET: the timetable only (no situations source; NET design §8).
         transit-net-timetable: 129600
+        # TfL (TfL design §9): the timetable only, re-sent daily even when
+        # TfL's weekly file has not changed, so 36 h as the others.
+        transit-tfl-timetable: 129600
       whileStreamApplies:
         station-samples: "ds:ingest:station-samples"
         full-coverage-stats: "ds:ingest:full-coverage"
@@ -5699,6 +5778,7 @@ metrics:
         transit-metrolink-situations: "ds:ingest:transit-metrolink"
         darwin-pushport: "ds:ingest:darwin"
         transit-net-timetable: "ds:ingest:transit-net"
+        transit-tfl-timetable: "ds:ingest:transit-tfl"
       for: 10m
       severity: warning
     # darwin-relay (DS-152), rendered only with darwinRelay.enabled.

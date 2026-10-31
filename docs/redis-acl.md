@@ -41,6 +41,7 @@ explains the format). The kinds:
 | `poller-transit-metrolink` | optional | XADD and XREVRANGE on `ds:ingest:transit-metrolink` (transit networks; rendered only with `redis.acl.clients.pollerTransitMetrolink`) |
 | `darwin-relay` | optional | XADD and XREVRANGE on `ds:ingest:darwin` (the Darwin Push Port, DS-152; rendered only with `redis.acl.clients.darwinRelay`) |
 | `poller-transit-net` | optional | XADD and XREVRANGE on `ds:ingest:transit-net` (Nottingham Express Transit; rendered only with `redis.acl.clients.pollerTransitNet`, Secret key `poller-transit-net-password`) |
+| `poller-transit-tfl` | optional | XADD and XREVRANGE on `ds:ingest:transit-tfl` (TfL's Underground, DLR and London Trams timetable; rendered only with `redis.acl.clients.pollerTransitTfl`, Secret key `poller-transit-tfl-password`) |
 | `ingest-writer` | final | consumer-group and gauge commands on `ds:ingest:*` (never XADD, XTRIM or XDEL there); XADD, XTRIM, XLEN, XRANGE and MEMORY USAGE on `ds:dlq:*` |
 | `ds-admin` | admin | everything |
 | `default` | (values) | `defaultUser: "on"`: today's password and rights; `"on-unshared"`: on, with its own password that no client is given (step 4); `"off"`: disabled |

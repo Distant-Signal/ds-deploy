@@ -88,6 +88,7 @@ poller-transit-metrolink optional ~ds:ingest:transit-metrolink +xadd +xrevrange 
 # ingest_stream::last_produced_at).
 darwin-relay optional ~ds:ingest:darwin +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 poller-transit-net optional ~ds:ingest:transit-net +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
+poller-transit-tfl optional ~ds:ingest:transit-tfl +xadd +xrevrange +ping +hello +auth +client|setname +client|setinfo +client|id
 # ingest-writer (crates/ingest-stream/src/consumer.rs,
 # crates/ingest-writer/src/stream.rs): its consumer group and gauges on
 # ds:ingest:*, but never XADD, XTRIM or XDEL there, so it cannot forge or

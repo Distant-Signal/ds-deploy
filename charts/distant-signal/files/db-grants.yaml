@@ -585,8 +585,9 @@ row_policies:
   #     island-of-Ireland catalogue's per-network sources
   #     (ds_store::samples::island_of_ireland), and each transit network's
   #     timetable and situations (common::transit, transit spec §8.5;
-  #     metrolink and net, off by default; net has no situations source
-  #     yet, NET design §8), and the TfL stops snapshot
+  #     metrolink, net and tfl, off by default; net and tfl have no
+  #     situations source, NET design §8 and the TfL design §9), and the
+  #     TfL stops snapshot
   #     (tfl-stops, ds_store::tfl_stops) and route sequences
   #     (tfl-line-routes, ds_store::tfl_line_routes), and the tracked-stop
   #     boards snapshot (tracked-stop-boards, ds_store::samples::sources;
@@ -607,6 +608,7 @@ row_policies:
         'island_of_ireland_stations_nir', 'island_of_ireland_lines_nir',
         'transit-metrolink-timetable', 'transit-metrolink-situations',
         'tfl-stops', 'tfl-line-routes', 'tracked-stop-boards', 'darwin-pushport',
-        'tracked-stop-arrival-boards', 'transit-net-timetable', 'transit-net-situations')
+        'tracked-stop-arrival-boards', 'transit-net-timetable', 'transit-net-situations',
+        'transit-tfl-timetable', 'transit-tfl-situations')
     stations: {writes: "source = 'stations'"}
     incidents: {writes: "source = 'incidents'"}

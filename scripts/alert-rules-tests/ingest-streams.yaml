@@ -195,8 +195,8 @@ tests:
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestproducerxaddfailing
 
   # Memory: station-samples is reported by two writer pods during a
-  # rollout (counted once, 100 MiB), full-coverage 200 MiB then 300 MiB
-  # from 10m: 400 MiB > 384 MiB fires after `for: 10m`. Summed per pod
+  # rollout (counted once, 100 MiB), full-coverage 200 MiB then 350 MiB
+  # from 10m: 450 MiB > 432 MiB fires after `for: 10m`. Summed per pod
   # it would already be 400 MiB at the start.
   - interval: 1m
     input_series:
@@ -205,7 +205,7 @@ tests:
       - series: 'distant_signal_ingest_stream_bytes{namespace="distant-signal", pod="w2", stream="ds:ingest:station-samples"}'
         values: '104857600x30'
       - series: 'distant_signal_ingest_stream_bytes{namespace="distant-signal", pod="w1", stream="ds:ingest:full-coverage"}'
-        values: '209715200x9 314572800x20'
+        values: '209715200x9 367001600x20'
     alert_rule_test:
       - eval_time: 15m
         alertname: DistantSignalIngestStreamMemoryHigh
@@ -215,8 +215,8 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warning, namespace: distant-signal}
             exp_annotations:
-              summary: the ingest streams use 400MiB of Redis
-              description: "Over 0.75 of their 512 MiB budget (D5). Check for a backlog or a full dead-letter stream."
+              summary: the ingest streams use 450MiB of Redis
+              description: "Over 0.75 of their 576 MiB budget (D5). Check for a backlog or a full dead-letter stream."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingeststreammemoryhigh
 
   # Clock skew. station-samples: a series not registered at 0 appears at

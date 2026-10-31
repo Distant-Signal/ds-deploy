@@ -1042,10 +1042,10 @@ and reports readiness `stream_unavailable`.
 ### DistantSignalIngestStreamMemoryHigh
 
 The ingest streams and their dead-letter streams together use over
-`ingestStreamMemoryHigh.ratio` (0.75) of `budgetBytes` (512 MiB, D5) of
-Redis (`sum(ingest_stream_bytes)`, the `MEMORY USAGE` of each stream and
-its dead-letter stream). Every stream at its cap is about 292 MB worst
-case, so a breach means a cap or an entry size is larger than budgeted
+`ingestStreamMemoryHigh.ratio` (0.75) of `budgetBytes` (576 MiB: D5's
+512 MiB, raised for the TfL timetable stream) of Redis
+(`sum(ingest_stream_bytes)`, the `MEMORY USAGE` of each stream and its
+dead-letter stream). Every stream at its cap is about 426 MB worst case, so a breach means a cap or an entry size is larger than budgeted
 (`crates/ingest-stream/src/budget.rs`). Look at the per-stream values, then
 fix the backlog or drain dead letters
 ([ingest-streams-deadletter](ingest-streams-deadletter.md)). Redis's

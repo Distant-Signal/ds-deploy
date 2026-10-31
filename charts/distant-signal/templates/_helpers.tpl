@@ -471,7 +471,7 @@ counts as deployed. Takes (dict "root" $ "client" <redis.acl.clients key>).
 {{- $own := dict "pollerIrishRailGtfs" "pollerIrishRailGtfs" "pollerIrishRailLive" "pollerIrishRailLive" "pollerNirStations" "pollerNirStations" "movementRelay" "movementRelay" "darwinRelay" "darwinRelay" "ingestWriter" "ingestWriter" -}}
 {{- /* poller-transit-schedule, one Deployment per enabled network
      (pollerTransitSchedule.networks.<network>.enabled, transit spec §13.1). */ -}}
-{{- $transit := dict "pollerTransitMetrolink" "metrolink" "pollerTransitNet" "net" -}}
+{{- $transit := dict "pollerTransitMetrolink" "metrolink" "pollerTransitNet" "net" "pollerTransitTfl" "tfl" -}}
 {{- if hasKey $transit .client -}}
 {{- $networks := ($v.pollerTransitSchedule | default dict).networks | default dict -}}
 {{- if (get $networks (get $transit .client) | default dict).enabled }}true{{ end -}}
