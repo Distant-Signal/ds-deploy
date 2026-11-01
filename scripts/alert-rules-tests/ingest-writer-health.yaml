@@ -220,3 +220,28 @@ tests:
               summary: ds:ingest:station-samples is 90% of its MAXLEN behind
               description: "Over 0.8 of MAXLEN: entries are about to be trimmed unapplied. Fix the ingest-writer."
               runbook_url: *backlog_runbook
+
+  # poller-tfl's daily jobs (in its Deployment or, pollers.tfl.stops.mode:
+  # cronjob, a CronJob), 172800s each, while ds:ingest:tfl-stops applies.
+  # tfl-line-routes last landed at 0: over 2 days from 48h 1m, firing from
+  # 48h 11m. tfl-stops lands every minute.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="tfl-line-routes"}'
+        values: '0x3000'
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="tfl-stops"}'
+        values: '0+60x3000'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:tfl-stops", mode="apply"}'
+        values: '1x3000'
+    alert_rule_test:
+      - eval_time: 48h5m
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts: []
+      - eval_time: 48h12m
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, source: tfl-line-routes}
+            exp_annotations:
+              summary: "tfl-line-routes data last landed 2d 0h 12m 0s ago"
+              description: "Its ingest_freshness row is over 172800s old: its producer is down or failing, or writes nowhere."
+              runbook_url: *source_runbook

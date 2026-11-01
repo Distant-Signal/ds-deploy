@@ -23,6 +23,21 @@ order is stable: incidents, ldbws, stations, tfl, tocs.
 {{- /* Pollers whose binary waits for its writes before a once-mode exit
 (common::poller_loop::finish_once); docs/scheduled-jobs.md. */}}
 {{- $mode := include "distant-signal.workloadMode" (dict "what" (printf "pollers.%s.mode" $name) "mode" $poller.mode "cronCapable" (has $name (list "tocs" "stations"))) }}
+{{- /* poller-tfl's daily stops and routes jobs (pollers.tfl.stops.mode):
+`cronjob` runs them as a CronJob of their own (TFL_JOBS=daily, RUN_ONCE)
+and the Deployment runs the five-minute status poll alone
+(TFL_JOBS=status). Both keep the poller-tfl component's labels. */}}
+{{- $tflSplit := false }}
+{{- if eq $name "tfl" }}
+{{- $stops := $poller.stops | default dict }}
+{{- $stopsMode := include "distant-signal.workloadMode" (dict "what" "pollers.tfl.stops.mode" "mode" $stops.mode "cronCapable" true) }}
+{{- if eq $stopsMode "cronjob" }}
+{{- if not $stops.enabled }}
+{{- fail "pollers.tfl.stops.mode: cronjob needs pollers.tfl.stops.enabled: it runs the daily stops (and routes) jobs, which are off." }}
+{{- end }}
+{{- $tflSplit = true }}
+{{- end }}
+{{- end }}
 {{- if eq $mode "cronjob" }}
 {{- /* Once mode: one cycle unless the data is fresher than
 skipIfFresherThanSecs, then exit. No /metrics listener: a run is gone
@@ -96,7 +111,7 @@ spec:
               protocol: TCP
           {{- end }}
           env:
-            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerEnv" (dict "root" $root "name" $name "poller" $poller)) "extra" $poller.extraEnv) | trim | nindent 12 }}
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerEnv" (dict "root" $root "name" $name "poller" $poller "tflJobs" (ternary "status" "all" $tflSplit))) "extra" $poller.extraEnv) | trim | nindent 12 }}
           {{- with $poller.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -113,6 +128,16 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- if $tflSplit }}
+{{- /* The daily jobs once each (each skips while its snapshot is fresher
+than skipIfFresherThanSecs), then exit; no /metrics. These replace the
+same names in the chart's env and extraEnv. */}}
+{{- $cron := $poller.stops.cron }}
+{{- $once := list (dict "name" "TFL_JOBS" "value" "daily") (dict "name" "RUN_ONCE" "value" "true") (dict "name" "RUN_ONCE_SKIP_IF_FRESHER_THAN_SECS" "value" ($cron.skipIfFresherThanSecs | int | toString)) (dict "name" "METRICS_ENABLED" "value" "false") }}
+{{- $env := include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerEnv" (dict "root" $root "name" $name "poller" $poller "tflJobs" "daily")) "extra" (concat ($poller.extraEnv | default list) $once)) | fromYamlArray }}
+---
+{{ include "distant-signal.cronWorkerSpec" (dict "root" $root "component" $component "name" "poller-tfl-daily" "cron" $cron "image" $poller.image "env" $env "workload" $poller) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -194,6 +219,11 @@ with $poller.extraEnv, which replaces an entry of the same name.
             - name: TFL_ROUTES_ENABLED
               value: {{ $poller.stops.routes | default false | quote }}
             {{- end }}
+            # Which jobs this workload runs: all, or (pollers.tfl.stops.mode:
+            # cronjob) the status poll here and the daily jobs in their
+            # CronJob.
+            - name: TFL_JOBS
+              value: {{ .tflJobs | default "all" | quote }}
             {{- end }}
             {{- if $poller.hourlyRequestBudget }}
             # ldbws only (LEG-18): optional hourly LDBWS request budget.

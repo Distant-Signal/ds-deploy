@@ -1295,6 +1295,54 @@ pollers:
       # `enabled`; needs the grants job re-run after the migration
       # (tfl_line_routes and the writer's `tfl-line-routes` freshness row).
       routes: false
+      # -- How the daily jobs run: `deployment` (in the poller-tfl
+      # Deployment, beside the status poll; TFL_JOBS=all) or `cronjob` (a
+      # CronJob of their own, `cron` below, whose run does each enabled
+      # daily job once and exits: TFL_JOBS=daily; the Deployment then runs
+      # the status poll alone, TFL_JOBS=status). Needs `enabled`.
+      # docs/scheduled-jobs.md. As a CronJob their DistantSignalPollerStale
+      # rules (tfl-stops, tfl-routes) are off (no /metrics); the
+      # scheduled-job alerts and the `tfl-stops` and `tfl-line-routes`
+      # ingest_freshness sources cover them.
+      mode: deployment
+      # -- The daily jobs' CronJob, while `mode: cronjob`.
+      cron:
+        # -- 05:40 UTC: clear of the 03:00 dump, the 03:30/04:00/04:20/04:40
+        # scheduled pollers and the 05:00 pgBackRest backups (a diff takes
+        # about 3 minutes); early, so the routes are fresh before the
+        # morning peak, and before TfL's daytime traffic.
+        schedule: "40 5 * * *"
+        # -- Required (CI checks every CronJob has one).
+        timeZone: Etc/UTC
+        suspend: false
+        # -- A start missed by more than this is skipped; the next day's run
+        # catches up (the freshness alerts allow 2 days).
+        startingDeadlineSeconds: 3600
+        # -- Kill a run (or one still Pending) after this long: about 110
+        # TfL calls at 250 ms gaps, plus waits TfL asks for on a 429 (up to
+        # six attempts a call).
+        activeDeadlineSeconds: 2700
+        # -- Retries of a run that failed transiently (exit 1; a job that
+        # succeeded skips on the retry). Exit 3 (a feed guard refused a
+        # snapshot) and 137 (OOMKilled) fail the Job at once.
+        backoffLimit: 2
+        successfulJobsHistoryLimit: 1
+        failedJobsHistoryLimit: 3
+        # -- A finished Job and its pod are deleted this long after.
+        ttlSecondsAfterFinished: 86400
+        # -- RUN_ONCE_SKIP_IF_FRESHER_THAN_SECS: a job whose own snapshot on
+        # the stream is newer than this fetches nothing. Half a day.
+        skipIfFresherThanSecs: 43200
+        # -- The run's container resources: the routes job's peak (the
+        # poller-tfl pod held 88 MiB after it before the heap release).
+        resources:
+          requests:
+            cpu: 10m
+            memory: 96Mi
+            ephemeral-storage: 16Mi
+          limits:
+            memory: 256Mi
+            ephemeral-storage: 256Mi
     # One TfL line-status JSON document per tick.
     #
     # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
@@ -6100,6 +6148,13 @@ metrics:
         # TfL (TfL design §9): the timetable only, re-sent daily even when
         # TfL's weekly file has not changed, so 36 h as the others.
         transit-tfl-timetable: 129600
+        # poller-tfl's daily stops and route-sequences jobs (in its
+        # Deployment or, with pollers.tfl.stops.mode: cronjob, a CronJob):
+        # daily, so 2 days as the other reference data. tfl-line-routes is
+        # recorded only while pollers.tfl.stops.routes; a source whose row
+        # was never written raises nothing.
+        tfl-stops: 172800
+        tfl-line-routes: 172800
       whileStreamApplies:
         station-samples: "ds:ingest:station-samples"
         full-coverage-stats: "ds:ingest:full-coverage"
@@ -6114,6 +6169,8 @@ metrics:
         darwin-pushport: "ds:ingest:darwin"
         transit-net-timetable: "ds:ingest:transit-net"
         transit-tfl-timetable: "ds:ingest:transit-tfl"
+        tfl-stops: "ds:ingest:tfl-stops"
+        tfl-line-routes: "ds:ingest:tfl-stops"
       for: 10m
       severity: warning
     # darwin-relay (DS-152), rendered only with darwinRelay.enabled.

@@ -2293,7 +2293,10 @@ it instead. */}}
 {{- end }}
 {{- /* poller-tfl's daily stops job: its own loop, label tfl-stops, only
 while pollers.tfl.stops.enabled. */}}
-{{- if and .Values.pollers.tfl.enabled ((.Values.pollers.tfl.stops | default dict).enabled) }}
+{{- /* Not while they run as a CronJob (pollers.tfl.stops.mode: cronjob):
+no /metrics there; the scheduled-job alerts and the tfl-stops and
+tfl-line-routes freshness sources cover them. */}}
+{{- if and .Values.pollers.tfl.enabled ((.Values.pollers.tfl.stops | default dict).enabled) (ne ((.Values.pollers.tfl.stops).mode | default "deployment") "cronjob") }}
 {{- $_ := set $pollerIntervals "tfl-stops" ((.Values.pollers.tfl.stops).intervalSecs | default 86400) }}
 {{- /* Its route-sequences job (DS-151): label tfl-routes, the same
 interval, while pollers.tfl.stops.routes too. */}}

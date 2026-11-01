@@ -868,8 +868,11 @@ every 5 min), `stations` and `tocs` 2 days (daily), the stream-only sources
 (`station-samples`, `full-coverage-*`, `station-full-coverage-samples`) 30
 min, the island-of-Ireland catalogues 2 days (daily; one source per table
 and network: `island_of_ireland_{stations,lines}_gtfs` from
-poller-irish-rail-gtfs, `_nir` from poller-nir-stations) and
-`darwin-pushport` 15 min (the Darwin Push Port, DS-152). The stream-only
+poller-irish-rail-gtfs, `_nir` from poller-nir-stations),
+`darwin-pushport` 15 min (the Darwin Push Port, DS-152), and `tfl-stops`
+and `tfl-line-routes` 2 days (poller-tfl's daily jobs, while
+`ds:ingest:tfl-stops` applies; `tfl-line-routes` is written only while
+`pollers.tfl.stops.routes`). The stream-only
 ones are checked only while the writer applies their stream
 (`whileStreamApplies`): their rows are written only on the stream path.
 The unsuffixed `island_of_ireland_stations`/`_lines` sources that writers
@@ -1505,7 +1508,11 @@ refused snapshot counts as a failed cycle: check
 "refusing the TfL stops snapshot" line. The stored stops stay as they were.
 
 `cycle="tfl-routes"` is its route-sequences job (DS-151,
-`pollers.tfl.stops.routes`), on the same schedule. A refused snapshot is a
+`pollers.tfl.stops.routes`), on the same schedule. Neither has a rule
+while the daily jobs run as a CronJob (`pollers.tfl.stops.mode: cronjob`,
+[scheduled jobs](scheduled-jobs.md)). DistantSignalScheduledJobFailed
+and DistantSignalIngestSourceStale (`tfl-stops`, `tfl-line-routes`) cover
+them then. A refused snapshot is a
 failed cycle too: check `tfl_routes_refused_total{reason}` and the log's
 "refusing the TfL route sequences" or "no routes for the ... line" line.
 The stored routes stay; Tube access legs keep measuring along them. A

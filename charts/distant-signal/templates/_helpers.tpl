@@ -2189,6 +2189,10 @@ their own failure and staleness alerts. Takes root.
 {{- $names = append $names (include "distant-signal.cronWorkerFullname" (dict "root" $root "component" (printf "poller-%s" $name))) -}}
 {{- end -}}
 {{- end -}}
+{{- $tfl := .Values.pollers.tfl -}}
+{{- if and $tfl.enabled ($tfl.stops).enabled (eq (($tfl.stops).mode | default "deployment") "cronjob") -}}
+{{- $names = append $names (include "distant-signal.cronWorkerFullname" (dict "root" $root "component" "poller-tfl-daily")) -}}
+{{- end -}}
 {{- range $network, $n := .Values.pollerTransitSchedule.networks -}}
 {{- if and $n.enabled (eq ($n.timetableMode | default "deployment") "cronjob") -}}
 {{- $names = append $names (include "distant-signal.cronWorkerFullname" (dict "root" $root "component" (printf "poller-transit-schedule-%s" $network))) -}}

@@ -26,12 +26,14 @@ exit codes are pgBackRest's, so they are held to everything but the last
 two points.
 
 Workloads with a mode (deployment or cronjob: `pollers.tocs.mode`,
-`pollers.stations.mode`, and `timetableMode` of the tfl and metrolink
-transit networks):
+`pollers.stations.mode`, `pollers.tfl.stops.mode` (poller-tfl's daily jobs;
+its status poll stays a Deployment) and `timetableMode` of the tfl and
+metrolink transit networks):
 
   - no loop of a workload (its pod template's `app.kubernetes.io/component`,
     with its transit network if any; a transit pod's loops are its
-    `TRANSIT_LOOPS`) runs in two workloads, in any render;
+    `TRANSIT_LOOPS`, a poller-tfl pod's `TFL_JOBS`) runs in two workloads,
+    in any render;
   - each mode renders what it should under the workload's name: the
     Deployment, or the CronJob (and, for a transit network with its
     situations loop on, the Deployment again running `situations` alone,
@@ -89,6 +91,8 @@ EXPECTED = (
     "distant-signal-poller-tocs",
     "distant-signal-poller-stations",
     "distant-signal-poller-transit-schedule-tfl",
+    "distant-signal-poller-transit-schedule-metrolink",
+    "distant-signal-poller-tfl-daily",
     "distant-signal-schedule-reference",
 )
 FAIL_JOB_EXIT_CODES = [3, 137]
@@ -125,6 +129,14 @@ TRANSIT_METROLINK = sets(
     "redis.acl.clients.pollerTransitMetrolink=true",
     "ingestWriter.streams.transit-metrolink=apply",
 )
+TFL_DAILY = sets(
+    "pollers.tfl.enabled=true",
+    "redis.acl.clients.pollerTfl=true",
+    "ingestWriter.streams.tfl=apply",
+    "pollers.tfl.stops.enabled=true",
+    "pollers.tfl.stops.routes=true",
+    "ingestWriter.streams.tfl-stops=apply",
+)
 EVERYTHING = sets(
     "apiMaintenance.enabled=true",
     "postgresql.pgbackrest.enabled=true",
@@ -144,12 +156,14 @@ EVERYTHING = sets(
     "pollerTransitSchedule.networks.tfl.timetableMode=cronjob",
     "pollerTransitSchedule.networks.metrolink.timetableMode=cronjob",
     "pollerTransitSchedule.networks.metrolink.situationsEnabled=true",
+    "pollers.tfl.stops.mode=cronjob",
     "scheduleFeed.enabled=true",
     "scheduleFeed.sftp.authMethod=password",
     "scheduleFeed.reference.mode=cronjob",
 )
 EVERYTHING = (
     *EVERYTHING,
+    *TFL_DAILY,
     *TRANSIT_TFL,
     # Metrolink's timetable CronJob beside its situations Deployment, and
     # tfl's CronJob: one component, three workloads, no loop twice.
@@ -178,6 +192,11 @@ class ModeWorkload:
     # Text in the rendered rules in both modes (the situations loop's
     # DistantSignalPollerStale rule, which its Deployment keeps).
     kept_marker: str | None = None
+    # A Deployment of another name that stays in both modes (poller-tfl's
+    # status poll beside its daily jobs' CronJob), and the env it has in
+    # cron mode.
+    deployment_name: str | None = None
+    kept_env: Mapping[str, str] = field(default_factory=dict)
 
 
 WORKLOADS = (
@@ -238,6 +257,18 @@ WORKLOADS = (
         "metrolink",
         ("CronJob", "Deployment"),
         'cycle="transit-situations"',
+    ),
+    ModeWorkload(
+        "tfl daily jobs",
+        "distant-signal-poller-tfl-daily",
+        "poller-tfl",
+        TFL_DAILY,
+        "pollers.tfl.stops.mode",
+        'cycle="tfl-stops"',
+        {"TFL_JOBS": "daily"},
+        kept_marker='cycle="tfl"',
+        deployment_name="distant-signal-poller-tfl",
+        kept_env={"TFL_JOBS": "status"},
     ),
 )
 # The situations-only Deployment's memory request (situationsResources).
@@ -395,15 +426,23 @@ def workload_of(doc: Mapping[str, object]) -> str | None:
     return f"{component}/{network}" if isinstance(network, str) else component
 
 
+# What a selector's "everything" value stands for.
+ALL_LOOPS = {
+    "TRANSIT_LOOPS": ("both", ("timetable", "situations")),
+    "TFL_JOBS": ("all", ("status", "daily")),
+}
+
+
 def loops_of(doc: Mapping[str, object]) -> tuple[str, ...]:
-    """Return the loops a workload's pods run: a transit pod's TRANSIT_LOOPS."""
+    """Return the loops a workload's pods run: TRANSIT_LOOPS, or TFL_JOBS."""
     containers = as_list(as_map(pod_template_of(doc).get("spec")).get("containers"))
-    loops = {env_of(as_map(c)).get("TRANSIT_LOOPS") for c in containers} - {None}
-    if not loops:
-        return ("all",)
-    if "both" in loops:
-        return ("timetable", "situations")
-    return tuple(sorted(str(loop) for loop in loops))
+    for key, (everything, each) in ALL_LOOPS.items():
+        loops = {env_of(as_map(c)).get(key) for c in containers} - {None}
+        if loops:
+            if everything in loops:
+                return each
+            return tuple(sorted(str(loop) for loop in loops))
+    return ("all",)
 
 
 def exclusivity_problems(docs: Sequence[Doc]) -> list[str]:
@@ -512,6 +551,34 @@ def situations_deployment_problems(doc: Mapping[str, object]) -> list[str]:
     return problems
 
 
+def kept_deployment_problems(
+    docs: Sequence[Doc], w: ModeWorkload, *, cron: bool
+) -> list[str]:
+    """Return what is wrong with `w`'s Deployment that stays in both modes."""
+    if not w.deployment_name:
+        return []
+    kept = [
+        d
+        for d in docs
+        if d.get("kind") in ("Deployment", "CronJob")
+        and as_map(d.get("metadata")).get("name") == w.deployment_name
+    ]
+    if sorted(str(d.get("kind")) for d in kept) != ["Deployment"]:
+        return [f"{w.deployment_name} must stay one Deployment"]
+    if not cron:
+        return []
+    containers = as_list(as_map(pod_template_of(kept[0]).get("spec")).get("containers"))
+    env = env_of(as_map(containers[0])) if containers else {}
+    problems = [
+        f"{w.deployment_name}: env {k} is {env.get(k)!r}, not {v!r}"
+        for k, v in w.kept_env.items()
+        if env.get(k) != v
+    ]
+    if "RUN_ONCE" in env:
+        problems.append(f"{w.deployment_name}: must not run once")
+    return problems
+
+
 def mode_problems(helm: str, w: ModeWorkload, mode: str) -> list[str]:
     """Return what is wrong with workload `w` rendered in `mode`."""
     kind = "CronJob" if mode == "cronjob" else "Deployment"
@@ -527,11 +594,15 @@ def mode_problems(helm: str, w: ModeWorkload, mode: str) -> list[str]:
     ]
     named = sorted(str(d.get("kind")) for d in mine)
     cron = mode == "cronjob"
-    want = sorted(w.cron_kinds) if cron else [kind]
+    # In deployment mode a workload with a kept Deployment of another name
+    # renders nothing under its own.
+    deployed: list[str] = [] if w.deployment_name else [kind]
+    want = sorted(w.cron_kinds) if cron else deployed
     if named != want:
         problems.append(f"{w.name} renders as {named}, not {want}")
+    problems.extend(kept_deployment_problems(docs, w, cron=cron))
     problems.extend(exclusivity_problems(docs))
-    if cron:
+    if cron and w.network:
         problems.extend(
             p
             for d in mine
@@ -691,6 +762,15 @@ REFUSED = (
             "redis.acl.clients.pollerTfl=true",
             "ingestWriter.streams.tfl=apply",
             "pollers.tfl.mode=cronjob",
+        ),
+    ),
+    (
+        "the tfl daily jobs' CronJob without the stops job on",
+        sets(
+            "pollers.tfl.enabled=true",
+            "redis.acl.clients.pollerTfl=true",
+            "ingestWriter.streams.tfl=apply",
+            "pollers.tfl.stops.mode=cronjob",
         ),
     ),
     (
