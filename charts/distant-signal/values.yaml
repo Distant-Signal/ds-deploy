@@ -1848,7 +1848,8 @@ api:
   # still land. 7 is the publish horizon before it grew to 28 days.
   scheduleProvisionalAfterDays: 7
   # -- TRIPS-1: /Trips/plan keeps the built connections graph for this many
-  # service dates (~100 MB each; 0 disables the cache), rebuilt after a new
+  # service dates (about 27.5 MB each for rail, 44 MB with Metrolink and
+  # tfl; 0 disables the cache), rebuilt after a new
   # schedule publish or transit feed, or after maxAgeSecs (a safety net for
   # changes no marker records; 600 until DS-225). Every
   # prewarmIntervalSecs the api builds today's and tomorrow's graphs ahead
@@ -1872,7 +1873,7 @@ api:
   # (API_TRIP_PLAN_TRANSIT_NETWORKS; docs/superpowers/specs/2026-10-24-
   # transit-trip-planning-design.md). Empty by default: the graph, its cache
   # key and every response are as before. Listed, the network's tram trips
-  # join each cached day graph (about 6 MB a date for Metrolink, 28 MB for
+  # join each cached day graph (about 5 MB a date for Metrolink, 8 MB for
   # tfl), and a request plans with them when it sends `transit=true` or
   # names a tram stop (a TfL stop only with `transit=true`). `metrolink` and
   # `tfl` are accepted; the render fails on anything else. Each must also
