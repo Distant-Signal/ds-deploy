@@ -2266,7 +2266,11 @@ interval, while pollers.tfl.stops.routes too. */}}
 {{- /* poller-transit-schedule's two loops (one label each, whichever
 network: an enabled network's intervals). */}}
 {{- range $_, $n := .Values.pollerTransitSchedule.networks }}
-{{- if $n.enabled }}
+{{- /* A network whose timetable runs as a CronJob (timetableMode:
+cronjob) has no always-on pod and exports neither gauge; the scheduled-job
+alerts and its transit-<network>-timetable ingest_freshness source cover
+it. */}}
+{{- if and $n.enabled (ne ($n.timetableMode | default "deployment") "cronjob") }}
 {{- $_ := set $pollerIntervals "transit-timetable" $n.timetableIntervalSecs }}
 {{- $_ := set $pollerIntervals "transit-situations" $n.situationsIntervalSecs }}
 {{- end }}

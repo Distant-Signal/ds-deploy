@@ -1150,6 +1150,50 @@ pollers:
         maxConnections: 1
     # -- RSPS5050 P-03-00 Rev A section 6: once every 24 hours, overnight.
     pollIntervalSecs: 86400
+    # -- How it runs: `deployment` (an always-on pod polling every
+    # pollIntervalSecs) or `cronjob` (a CronJob, `cron` below, whose run
+    # polls once and exits; docs/scheduled-jobs.md). Exactly one renders.
+    # As a CronJob its DistantSignalPollerStale/PollerFailing rules are off
+    # (no /metrics): the scheduled-job alerts and its `stations`
+    # ingest_freshness source cover it. Its write is one awaited
+    # transaction inside the run.
+    mode: deployment
+    # -- The CronJob, while `mode: cronjob`.
+    cron:
+      # -- Daily, clear of the 03:00 UTC dump, the 05:00 UTC pgBackRest
+      # backups and the other scheduled pollers (transit tfl 04:00, tocs
+      # 04:40).
+      schedule: "20 4 * * *"
+      # -- Required (CI checks every CronJob has one).
+      timeZone: Etc/UTC
+      suspend: false
+      # -- A start missed by more than this is skipped; the next day's run
+      # catches up.
+      startingDeadlineSeconds: 3600
+      # -- Kill a run (or one still Pending) after this long: the fetch,
+      # plus the write's own retry budget (15 minutes) through a database
+      # restart.
+      activeDeadlineSeconds: 1800
+      # -- Retries of a run that failed transiently (exit 1). Exit 3 (the
+      # write refused the data) and 137 (OOMKilled) fail the Job at once.
+      backoffLimit: 2
+      successfulJobsHistoryLimit: 1
+      failedJobsHistoryLimit: 3
+      # -- A finished Job and its pod are deleted this long after.
+      ttlSecondsAfterFinished: 86400
+      # -- RUN_ONCE_SKIP_IF_FRESHER_THAN_SECS: a run finding the stations
+      # landed less than this long ago fetches nothing. Half a day.
+      skipIfFresherThanSecs: 43200
+      # -- The run's container resources: the ~37 MB feed and its parse
+      # peaked at 168Mi as a Deployment (p95 80Mi).
+      resources:
+        requests:
+          cpu: 5m
+          memory: 128Mi
+          ephemeral-storage: 16Mi
+        limits:
+          memory: 256Mi
+          ephemeral-storage: 256Mi
     apiKey: ""
     existingSecret: ""
     existingSecretApiKeyKey: rdm-stations-api-key
@@ -4561,6 +4605,57 @@ pollerTransitSchedule:
       affinity: {}
       podAnnotations: {}
       podSecurityContext: {}
+      # -- How the timetable runs: `deployment` (one always-on pod running
+      # the daily timetable loop, TRANSIT_LOOPS=both) or `cronjob` (a
+      # CronJob, `timetableCron` below, whose run fetches and publishes one
+      # timetable and exits; TRANSIT_LOOPS=timetable). Exactly one renders.
+      # tfl has no situations loop, so as a CronJob nothing of it stays
+      # always on: its 448Mi request is held only while a run goes.
+      # docs/scheduled-jobs.md. As a CronJob its pod serves no /metrics:
+      # the scheduled-job alerts and its transit-tfl-timetable
+      # ingest_freshness source (36h) cover it.
+      timetableMode: deployment
+      # -- The timetable CronJob, while `timetableMode: cronjob`.
+      timetableCron:
+        # -- Daily (TfL publishes weekly; a daily run re-sends an unchanged
+        # feed, which keeps its freshness moving). 04:00 UTC: after the
+        # 03:00 UTC dump (about 11 minutes), before the 05:00 UTC pgBackRest
+        # backups, and apart from the other scheduled pollers (stations
+        # 04:20, tocs 04:40), so its parse peak meets no other.
+        schedule: "0 4 * * *"
+        # -- Required (CI checks every CronJob has one).
+        timeZone: Etc/UTC
+        suspend: false
+        # -- A start missed by more than this is skipped; the next day's run
+        # catches up (the freshness alert allows 36h).
+        startingDeadlineSeconds: 3600
+        # -- Kill a run (or one still Pending: it needs 448Mi of free
+        # requests on the node) after this long. A run is about 20 s: the
+        # 141 MB download, a 12 s parse and the XADD of 61 parts.
+        activeDeadlineSeconds: 1800
+        # -- Retries of a run that failed transiently (exit 1). Exit 3 (the
+        # feed guard refused the timetable; the previous one stays active)
+        # and 137 (OOMKilled) fail the Job at once.
+        backoffLimit: 2
+        successfulJobsHistoryLimit: 1
+        failedJobsHistoryLimit: 3
+        # -- A finished Job and its pod are deleted this long after.
+        ttlSecondsAfterFinished: 86400
+        # -- RUN_ONCE_SKIP_IF_FRESHER_THAN_SECS: a run finding a timetable
+        # commit on the stream newer than this fetches nothing (a refresh
+        # token, timetableRefresh, overrides it). Half a day.
+        skipIfFresherThanSecs: 43200
+        # -- The run's container resources: as the Deployment's (332 MiB
+        # peak parsing the 2026-10-26 export). Ephemeral storage covers the
+        # /work emptyDir (the 141 MB zip) and the logs.
+        resources:
+          requests:
+            cpu: 100m
+            memory: 448Mi
+            ephemeral-storage: 192Mi
+          limits:
+            memory: 1Gi
+            ephemeral-storage: 768Mi
 
 # ---------------------------------------------------------------------------
 # scheduleFeed -- OPT-IN CIF SCHEDULE feed SFTP-push receiver

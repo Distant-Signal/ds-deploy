@@ -1547,7 +1547,10 @@ poller-transit-schedule (a transit network's producer, docs/superpowers/specs/20
 refused its network's timetable within `transitFeedRefused.window` (26h):
 `transit_feed_refused_total{network, reason}`. The previous timetable
 stays active and the next daily cycle tries again, so pages keep working;
-they show an older timetable. By `reason`:
+they show an older timetable. A network whose timetable runs as a CronJob
+(`timetableMode: cronjob`) exports no counter: its refused run exits 3 and
+fails its Job, which fires DistantSignalScheduledJobFailed (reason
+`Other`) instead, and its log says why. By `reason`:
 
 - `sharp_drop`: the line, stop or trip count fell by more than
   `feedMaxDropFraction` (0.3) since the last commit. Compare the log's

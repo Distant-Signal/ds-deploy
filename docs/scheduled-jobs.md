@@ -7,7 +7,9 @@ one goes wrong. Alerts: [scheduled jobs](alerts.md#scheduled-jobs).
 |---|---|---|
 | `<fullname>-api-maintenance` | The api image's `maintenance` binary: one pass of the session, dead-link, retention and delegated-access sweeps. | `apiMaintenance` |
 | `<fullname>-pgbackrest-{full,diff,check,verify}` | `kubectl exec` of pgBackRest in the Postgres pod. | `postgresql.pgbackrest.backup` ([Postgres PITR](postgres-pitr.md)) |
-| `<fullname>-poller-tocs` (only with `pollers.tocs.mode: cronjob`) | poller-tocs, once: one fetch of the TOC list onto `ds:ingest:reference`. | `pollers.tocs.cron` |
+| `<fullname>-poller-tocs` (only with `pollers.tocs.mode: cronjob`) | poller-tocs, once: one fetch of the TOC list onto `ds:ingest:reference`. 04:40 UTC. | `pollers.tocs.cron` |
+| `<fullname>-poller-stations` (only with `pollers.stations.mode: cronjob`) | poller-stations, once: one fetch of the stations feed, written to Postgres in one transaction. 04:20 UTC. | `pollers.stations.cron` |
+| `<fullname>-poller-transit-schedule-tfl` (only with `pollerTransitSchedule.networks.tfl.timetableMode: cronjob`) | poller-transit-schedule for TfL, once: one timetable download, parse and publish onto `ds:ingest:transit-tfl`. 04:00 UTC. | `pollerTransitSchedule.networks.tfl.timetableCron` |
 
 ## How a run behaves
 
@@ -62,8 +64,10 @@ suspended for an ordinary deploy.
 
 A worker with a `mode` value runs either as its always-on Deployment
 (`deployment`, the default) or as a CronJob (`cronjob`); the chart renders
-exactly one, and CI checks it. Today only `pollers.tocs` has one: a daily
-poller that spends the rest of the day idle. The CronJob comes from
+exactly one, and CI checks it. Three have one, each a daily job that
+spends the rest of the day idle: `pollers.tocs.mode`,
+`pollers.stations.mode` and, for poller-transit-schedule's TfL network,
+`pollerTransitSchedule.networks.tfl.timetableMode`. The CronJob comes from
 `distant-signal.cronWorkerSpec` with the defaults above, and its pods keep
 the component's labels, so its NetworkPolicies, Redis ACL user, database
 role and Secrets apply exactly as they did to the Deployment.
@@ -72,14 +76,18 @@ Each run sets `RUN_ONCE=true`, which every poller's loop
 (`common::poller_loop`) understands:
 
 1. It reads the same last-fetch cursor the Deployment does (for tocs, the
-   newest `tocs/1` entry on its stream). If the data landed less than
+   newest `tocs/1` entry on its stream; for stations, its `ingest_freshness`
+   row; for a transit timetable, the newest commit on its stream, unless a
+   `timetableRefresh` token is unanswered). If the data landed less than
    `cron.skipIfFresherThanSecs` ago (half a day for tocs), it logs "data
    still fresh; skipping this run" and exits 0 without calling upstream. A
    doubled Job, a manual run or a retry soon after a success therefore
    costs no RDM request.
 2. Otherwise it runs one cycle. A stream producer then waits (up to two
    minutes) for its snapshot to be written to Redis before it exits; the
-   writer applies it as before. If the write doesn't finish in time, the run
+   writer applies it as before. poller-stations writes Postgres itself, in
+   one awaited transaction inside the cycle (retrying a transient failure
+   for up to 15 minutes), so its data is committed before the exit. If the write doesn't finish in time, the run
    exits 1 and the Job retries.
 3. Exit codes: 0 for success or a skip; 1 for a transient failure (the
    upstream, Redis or the database), which the Job retries up to
@@ -92,17 +100,52 @@ covered instead by:
 
 - the scheduled-job alerts below, which add its CronJob to their
   failure and staleness rules;
-- `DistantSignalIngestSourceStale` for its `ingest_freshness` source (for
-  tocs, older than 48 hours), which the always-on ingest-writer exports.
+- `DistantSignalIngestSourceStale` for its `ingest_freshness` source
+  (`tocs` and `stations` older than 48 hours, `transit-tfl-timetable`
+  older than 36 hours), which the always-on ingest-writer exports.
 
 A poller only gets a `cronjob` mode once its binary waits for its writes
-before a once-mode exit (`common::poller_loop::finish_once`); until then
-the chart refuses it. Pollers with several loops in one process (poller-tfl,
-poller-transit-schedule) need splitting first.
+before a once-mode exit (`common::poller_loop::finish_once`, or a write
+awaited inside the cycle); until then the chart refuses it.
 
-### Switching tocs over, and back
+### The transit timetable
 
-To switch, set `pollers.tocs.mode: cronjob` in the deploy values. The
+poller-transit-schedule runs two loops in one process, the daily timetable
+and the five-minute situations (SIRI-SX). `TRANSIT_LOOPS` picks them:
+`both` (the default, one Deployment), `timetable` or `situations`. Once mode
+needs `timetable` alone, or whichever loop returned first would end the
+run. TfL has no situations loop, so its timetable CronJob is all of it. A
+network with situations on (Metrolink) would need its situations loop
+moved to a Deployment of its own (`TRANSIT_LOOPS=situations`) beside the
+timetable CronJob. The binary supports that, but the chart doesn't render
+it yet, so it refuses `timetableMode: cronjob` for any network but tfl, and
+for tfl with `situationsEnabled`.
+
+A TfL run downloads the Journey Planner export (141 MB on 2026-10-26) into
+its `/work` emptyDir, parses it (12 s, a 332 MiB peak), and publishes 61
+parts. It requests the Deployment's 448Mi, but only for the run's 20
+seconds or so, not all day. It runs at 04:00 UTC, after the 03:00 UTC dump,
+before the 05:00 UTC pgBackRest backups, and apart from the other scheduled
+pollers, so its peak meets no other. A refused timetable (the feed guard:
+a sharp drop, no service today, ...) exits 3: the previous timetable stays
+active, the Job fails without downloading again, and
+DistantSignalScheduledJobFailed fires (DistantSignalTransitFeedRefused
+can't see a run that exports no metrics). A refusal now waits for the next
+interval in the always-on loop too, instead of re-downloading the export
+on the failed-cycle backoff.
+
+**Capacity.** A Job's requests are only reserved while it runs, so the
+448Mi the Deployment held all day is free between runs, and other pods can
+take it. If the node has no room for 448Mi at 04:00, the pod waits Pending:
+DistantSignalScheduledJobPending fires after 15 minutes, and the run fails
+at `activeDeadlineSeconds` (30 minutes). The next day's run, or a manual
+one, catches up within the 36-hour freshness allowance.
+
+### Switching a worker over, and back
+
+The same for each (shown for tocs; stations uses `pollers.stations.mode`,
+the TfL timetable `pollerTransitSchedule.networks.tfl.timetableMode`). To
+switch, set `pollers.tocs.mode: cronjob` in the deploy values. The
 release deletes the Deployment and creates the CronJob, which first runs at
 `cron.schedule` (04:40 UTC). To check it before then, start a run by hand
 (`kubectl create job --from=cronjob/<fullname>-poller-tocs ...`). Within
@@ -154,7 +197,8 @@ says why it can't be placed.
 ## Rollback
 
 Each CronJob has its own switch (`apiMaintenance.enabled`,
-`postgresql.pgbackrest.backup.suspend`, `pollers.tocs.mode`). The failure policy, the replacement
+`postgresql.pgbackrest.backup.suspend`, `pollers.tocs.mode`,
+`pollers.stations.mode`, `pollerTransitSchedule.networks.tfl.timetableMode`). The failure policy, the replacement
 policy and the TTLs need no rollback of their own: removing them only makes a
 Job retry an OOM kill, count evictions, and keep its pods until the history
 limits.

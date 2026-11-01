@@ -22,7 +22,7 @@ order is stable: incidents, ldbws, stations, tfl, tocs.
 {{- $component := printf "poller-%s" $name }}
 {{- /* Pollers whose binary waits for its writes before a once-mode exit
 (common::poller_loop::finish_once); docs/scheduled-jobs.md. */}}
-{{- $mode := include "distant-signal.workloadMode" (dict "what" (printf "pollers.%s" $name) "mode" $poller.mode "cronCapable" (has $name (list "tocs"))) }}
+{{- $mode := include "distant-signal.workloadMode" (dict "what" (printf "pollers.%s.mode" $name) "mode" $poller.mode "cronCapable" (has $name (list "tocs" "stations"))) }}
 {{- if eq $mode "cronjob" }}
 {{- /* Once mode: one cycle unless the data is fresher than
 skipIfFresherThanSecs, then exit. No /metrics listener: a run is gone

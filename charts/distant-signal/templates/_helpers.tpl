@@ -2187,6 +2187,11 @@ their own failure and staleness alerts. Takes root.
 {{- $names = append $names (include "distant-signal.cronWorkerFullname" (dict "root" $root "component" (printf "poller-%s" $name))) -}}
 {{- end -}}
 {{- end -}}
+{{- range $network, $n := .Values.pollerTransitSchedule.networks -}}
+{{- if and $n.enabled (eq ($n.timetableMode | default "deployment") "cronjob") -}}
+{{- $names = append $names (include "distant-signal.cronWorkerFullname" (dict "root" $root "component" (printf "poller-transit-schedule-%s" $network))) -}}
+{{- end -}}
+{{- end -}}
 {{- join "|" $names -}}
 {{- end }}
 
@@ -2212,8 +2217,14 @@ Takes dict:
   "image"      the workload's image values;
   "env"        the container's env, a list of {name, value|valueFrom};
   "workload"   the workload's values, for podSecurityContext, nodeSelector,
-               tolerations and affinity.
-The CronJob is named <fullname>-<component> (52 characters at most, so its
+               tolerations and affinity;
+optionally:
+  "name"       the CronJob's name after <fullname>- (default: the
+               component), for a component with one CronJob per instance;
+  "labels"     extra labels on the CronJob and its pods (e.g. the transit
+               network);
+  "volumes" and "volumeMounts", the pod's and the container's.
+The CronJob is named <fullname>-<name> (52 characters at most, so its
 Jobs' names fit).
 */}}
 {{- define "distant-signal.cronWorkerSpec" -}}
@@ -2225,9 +2236,12 @@ Jobs' names fit).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "distant-signal.cronWorkerFullname" (dict "root" $root "component" $component) }}
+  name: {{ include "distant-signal.cronWorkerFullname" (dict "root" $root "component" (.name | default $component)) }}
   labels:
     {{- include "distant-signal.labels" (dict "root" $root "component" $component) | nindent 4 }}
+    {{- with .labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   schedule: {{ required (printf "%s.schedule is required" $what) $cron.schedule | quote }}
   # Explicit, never the node's local zone (chart README, "Scheduled jobs and
@@ -2244,6 +2258,9 @@ spec:
     metadata:
       labels:
         {{- include "distant-signal.podLabels" (dict "root" $root "component" $component) | nindent 8 }}
+        {{- with .labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       backoffLimit: {{ int64 $cron.backoffLimit }}
       activeDeadlineSeconds: {{ int64 (required (printf "%s.activeDeadlineSeconds is required" $what) $cron.activeDeadlineSeconds) }}
@@ -2253,6 +2270,9 @@ spec:
         metadata:
           labels:
             {{- include "distant-signal.podLabels" (dict "root" $root "component" $component) | nindent 12 }}
+            {{- with .labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
         spec:
           serviceAccountName: {{ include "distant-signal.serviceAccountName" $root }}
           automountServiceAccountToken: false
@@ -2271,8 +2291,16 @@ spec:
                 {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 16 }}
               env:
                 {{- toYaml .env | nindent 16 }}
+              {{- with .volumeMounts }}
+              volumeMounts:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
               resources:
                 {{- toYaml (required (printf "%s.resources is required" $what) $cron.resources) | nindent 16 }}
+          {{- with .volumes }}
+          volumes:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with $w.nodeSelector }}
           nodeSelector:
             {{- toYaml . | nindent 12 }}
@@ -2298,15 +2326,16 @@ A scheduled worker's CronJob name. Takes dict "root" and "component".
 A workload's `mode`: "deployment" (the default) or "cronjob". Fails on
 anything else, and on "cronjob" for a workload whose binary can't yet run
 once (its once-mode exit must wait for its writes; docs/scheduled-jobs.md).
-Takes dict "what" (the values path, for messages), "mode" and "cronCapable".
+Takes dict "what" (the mode value's path, for messages), "mode" and
+"cronCapable".
 */}}
 {{- define "distant-signal.workloadMode" -}}
 {{- $mode := .mode | default "deployment" -}}
 {{- if not (has $mode (list "deployment" "cronjob")) -}}
-{{- fail (printf "%s.mode must be deployment or cronjob, not %q." .what $mode) -}}
+{{- fail (printf "%s must be deployment or cronjob, not %q." .what $mode) -}}
 {{- end -}}
 {{- if and (eq $mode "cronjob") (not .cronCapable) -}}
-{{- fail (printf "%s.mode: cronjob is not supported for this workload yet: its binary must first wait for its writes before a once-mode exit (docs/scheduled-jobs.md). Use mode: deployment." .what) -}}
+{{- fail (printf "%s: cronjob is not supported for this workload yet: its binary must first wait for its writes before a once-mode exit (docs/scheduled-jobs.md). Use mode: deployment." .what) -}}
 {{- end -}}
 {{- $mode -}}
 {{- end }}
