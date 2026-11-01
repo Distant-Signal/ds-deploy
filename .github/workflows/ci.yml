@@ -1284,9 +1284,10 @@ jobs:
       # memory limit on every container. Its own binaries' CronJobs also
       # need ephemeral-storage resources, podReplacementPolicy Failed and the
       # shared pod failure policy (exit 137 and 3 fail the Job). A workload
-      # with a mode (pollers.tocs, pollers.stations, the TfL transit
-      # timetable) renders exactly one of its Deployment and CronJob, runs
-      # once as the latter, and drops its pod-scraped poller alerts.
+      # with a mode (pollers.tocs, pollers.stations, the TfL and Metrolink
+      # transit timetables) runs each loop in exactly one Deployment or
+      # CronJob, runs once as the latter, and drops its pod-scraped poller
+      # alerts; Metrolink's situations loop stays a small Deployment.
       - name: CronJob safe defaults
         run: uv run --no-sync scripts/check-cronjobs-chart.py
 

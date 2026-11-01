@@ -26,12 +26,16 @@ exit codes are pgBackRest's, so they are held to everything but the last
 two points.
 
 Workloads with a mode (deployment or cronjob: `pollers.tocs.mode`,
-`pollers.stations.mode`, `pollerTransitSchedule.networks.tfl.timetableMode`):
+`pollers.stations.mode`, and `timetableMode` of the tfl and metrolink
+transit networks):
 
-  - no workload (its pod template's `app.kubernetes.io/component`, with its
-    transit network if any) is both a Deployment and a CronJob, in any
-    render;
-  - each mode renders exactly one of the two, under the workload's name;
+  - no loop of a workload (its pod template's `app.kubernetes.io/component`,
+    with its transit network if any; a transit pod's loops are its
+    `TRANSIT_LOOPS`) runs in two workloads, in any render;
+  - each mode renders what it should under the workload's name: the
+    Deployment, or the CronJob (and, for a transit network with its
+    situations loop on, the Deployment again running `situations` alone,
+    with its own small resources);
   - as a CronJob its container runs once (`RUN_ONCE=true`, the skip
     threshold; the transit timetable with `TRANSIT_LOOPS=timetable` and its
     /work volume) with `METRICS_ENABLED=false`, no probes and no ports, and
@@ -39,8 +43,8 @@ Workloads with a mode (deployment or cronjob: `pollers.tocs.mode`,
   - with alerts on, its DistantSignalPollerStale rule is gone and the
     scheduled-jobs rules name its CronJob;
   - a bad mode, `cronjob` for a workload that can't run once yet, or a
-    transit network's timetable CronJob with its situations loop on,
-    refuses to render.
+    transit network's timetable CronJob with its situations loop on but no
+    `situationsResources`, refuses to render.
 
 Exit 1 with one line per failed check. Needs helm on PATH (or --helm) and
 PyYAML (pyproject.toml's lint group).
@@ -127,12 +131,14 @@ EVERYTHING = sets(
     "pollers.stations.baseUrl=https://stations.example.com",
     "pollers.stations.mode=cronjob",
     "pollerTransitSchedule.networks.tfl.timetableMode=cronjob",
+    "pollerTransitSchedule.networks.metrolink.timetableMode=cronjob",
+    "pollerTransitSchedule.networks.metrolink.situationsEnabled=true",
 )
 EVERYTHING = (
     *EVERYTHING,
     *TRANSIT_TFL,
-    # Metrolink stays a Deployment of the same component: the two must not
-    # count as one workload in both kinds.
+    # Metrolink's timetable CronJob beside its situations Deployment, and
+    # tfl's CronJob: one component, three workloads, no loop twice.
     *TRANSIT_METROLINK,
 )
 ALERTS = sets("metrics.prometheusRule.enabled=true")
@@ -152,6 +158,12 @@ class ModeWorkload:
     stale_marker: str
     extra_env: Mapping[str, str] = field(default_factory=dict)
     network: str | None = None
+    # What renders under its name in cron mode: the CronJob, plus the
+    # situations-only Deployment for a transit network with situations on.
+    cron_kinds: tuple[str, ...] = ("CronJob",)
+    # Text in the rendered rules in both modes (the situations loop's
+    # DistantSignalPollerStale rule, which its Deployment keeps).
+    kept_marker: str | None = None
 
 
 WORKLOADS = (
@@ -188,7 +200,34 @@ WORKLOADS = (
         {"TRANSIT_LOOPS": "timetable"},
         "tfl",
     ),
+    ModeWorkload(
+        "transit metrolink, situations off",
+        "distant-signal-poller-transit-schedule-metrolink",
+        "poller-transit-schedule",
+        TRANSIT_METROLINK,
+        "pollerTransitSchedule.networks.metrolink.timetableMode",
+        'cycle="transit-timetable"',
+        {"TRANSIT_LOOPS": "timetable"},
+        "metrolink",
+    ),
+    ModeWorkload(
+        "transit metrolink, situations on",
+        "distant-signal-poller-transit-schedule-metrolink",
+        "poller-transit-schedule",
+        (
+            *TRANSIT_METROLINK,
+            *sets("pollerTransitSchedule.networks.metrolink.situationsEnabled=true"),
+        ),
+        "pollerTransitSchedule.networks.metrolink.timetableMode",
+        'cycle="transit-timetable"',
+        {"TRANSIT_LOOPS": "timetable"},
+        "metrolink",
+        ("CronJob", "Deployment"),
+        'cycle="transit-situations"',
+    ),
 )
+# The situations-only Deployment's memory request (situationsResources).
+SITUATIONS_MEMORY = "32Mi"
 RENDERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("defaults", ()),
     ("values-example.yaml", ("-f", str(CHART / "values-example.yaml"))),
@@ -342,17 +381,36 @@ def workload_of(doc: Mapping[str, object]) -> str | None:
     return f"{component}/{network}" if isinstance(network, str) else component
 
 
+def loops_of(doc: Mapping[str, object]) -> tuple[str, ...]:
+    """Return the loops a workload's pods run: a transit pod's TRANSIT_LOOPS."""
+    containers = as_list(as_map(pod_template_of(doc).get("spec")).get("containers"))
+    loops = {env_of(as_map(c)).get("TRANSIT_LOOPS") for c in containers} - {None}
+    if not loops:
+        return ("all",)
+    if "both" in loops:
+        return ("timetable", "situations")
+    return tuple(sorted(str(loop) for loop in loops))
+
+
 def exclusivity_problems(docs: Sequence[Doc]) -> list[str]:
-    """Return each workload that is both a Deployment and a CronJob."""
-    by_kind: dict[str, set[str]] = {"Deployment": set(), "CronJob": set()}
+    """Return each loop of a workload that runs in more than one workload."""
+    runners: dict[tuple[str, str], list[str]] = {}
     for doc in docs:
-        kind = doc.get("kind")
         workload = workload_of(doc)
-        if isinstance(kind, str) and kind in by_kind and workload:
-            by_kind[kind].add(workload)
+        name = str(as_map(doc.get("metadata")).get("name"))
+        # The pgBackRest CronJobs are one component, four different jobs.
+        if (
+            doc.get("kind") not in ("Deployment", "CronJob")
+            or not workload
+            or name.startswith(FOREIGN)
+        ):
+            continue
+        for loop in loops_of(doc):
+            runners.setdefault((workload, loop), []).append(str(doc.get("kind")))
     return [
-        f"workload {w} renders both a Deployment and a CronJob"
-        for w in sorted(by_kind["Deployment"] & by_kind["CronJob"])
+        f"workload {w} runs its {loop} loop in {len(kinds)} workloads ({kinds})"
+        for (w, loop), kinds in sorted(runners.items())
+        if len(kinds) > 1
     ]
 
 
@@ -410,6 +468,36 @@ def cron_worker_problems(doc: Mapping[str, object], w: ModeWorkload) -> list[str
     return problems
 
 
+def situations_deployment_problems(doc: Mapping[str, object]) -> list[str]:
+    """Return what is wrong with a transit network's situations-only Deployment."""
+    containers = [
+        as_map(c)
+        for c in as_list(as_map(pod_template_of(doc).get("spec")).get("containers"))
+    ]
+    if len(containers) != 1:
+        return [
+            f"situations Deployment: expected one container, found {len(containers)}"
+        ]
+    container = containers[0]
+    env = env_of(container)
+    problems: list[str] = []
+    if env.get("TRANSIT_LOOPS") != "situations":
+        problems.append(
+            f"situations Deployment: TRANSIT_LOOPS is {env.get('TRANSIT_LOOPS')!r}"
+        )
+    if "RUN_ONCE" in env:
+        problems.append("situations Deployment: must not run once")
+    requests = as_map(as_map(container.get("resources")).get("requests"))
+    if requests.get("memory") != SITUATIONS_MEMORY:
+        problems.append(
+            f"situations Deployment: memory request {requests.get('memory')!r},"
+            f" not situationsResources' {SITUATIONS_MEMORY}"
+        )
+    if "livenessProbe" not in container:
+        problems.append("situations Deployment: no liveness probe")
+    return problems
+
+
 def mode_problems(helm: str, w: ModeWorkload, mode: str) -> list[str]:
     """Return what is wrong with workload `w` rendered in `mode`."""
     kind = "CronJob" if mode == "cronjob" else "Deployment"
@@ -417,21 +505,32 @@ def mode_problems(helm: str, w: ModeWorkload, mode: str) -> list[str]:
     if error:
         return [f"render failed: {error}"]
     problems: list[str] = []
-    named = [
-        str(d.get("kind"))
+    mine = [
+        d
         for d in docs
         if d.get("kind") in ("Deployment", "CronJob")
         and as_map(d.get("metadata")).get("name") == w.name
     ]
-    if named != [kind]:
-        problems.append(f"{w.name} renders as {named}, not [{kind}]")
-    problems.extend(exclusivity_problems(docs))
-    rules = yaml.safe_dump([d for d in docs if d.get("kind") == "PrometheusRule"])
+    named = sorted(str(d.get("kind")) for d in mine)
     cron = mode == "cronjob"
+    want = sorted(w.cron_kinds) if cron else [kind]
+    if named != want:
+        problems.append(f"{w.name} renders as {named}, not {want}")
+    problems.extend(exclusivity_problems(docs))
+    if cron:
+        problems.extend(
+            p
+            for d in mine
+            if d.get("kind") == "Deployment"
+            for p in situations_deployment_problems(d)
+        )
+    rules = yaml.safe_dump([d for d in docs if d.get("kind") == "PrometheusRule"])
     if (w.stale_marker in rules) == cron:
         problems.append(
             f"its DistantSignalPollerStale rule must {'not ' if cron else ''}render"
         )
+    if w.kept_marker and w.kept_marker not in rules:
+        problems.append(f"its {w.kept_marker} DistantSignalPollerStale rule must stay")
     if (f'owner_name=~"{w.name}"' in rules) != cron:
         problems.append(
             f"the scheduled-jobs rules must {'' if cron else 'not '}name {w.name}"
@@ -459,14 +558,17 @@ REFUSED = (
         ),
     ),
     (
-        "a timetable CronJob for a network that can't run one (metrolink)",
-        (
-            *TRANSIT_METROLINK,
-            *sets("pollerTransitSchedule.networks.metrolink.timetableMode=cronjob"),
+        "a timetable CronJob for a network that can't run one (net)",
+        sets(
+            "pollerTransitSchedule.networks.net.enabled=true",
+            "redis.acl.clients.pollerTransitNet=true",
+            "ingestWriter.streams.transit-net=apply",
+            "pollerTransitSchedule.networks.net.txcCredentials.existingSecret=tnds",
+            "pollerTransitSchedule.networks.net.timetableMode=cronjob",
         ),
     ),
     (
-        "a timetable CronJob with its situations loop on",
+        "a timetable CronJob with situations on but no situationsResources (tfl)",
         (
             *TRANSIT_TFL,
             *sets(
@@ -523,7 +625,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not failures:
         print(
             "ok: every CronJob has its time zone, resources and safe defaults;"
-            " each workload renders as exactly one of Deployment or CronJob"
+            " each loop of a workload runs in exactly one Deployment or CronJob"
         )
     return 1 if failures else 0
 

@@ -8,12 +8,15 @@ Recreate from creation: two pods must never XADD at once. A txc network
 (Nottingham NET) with an ftp:// txcUrl reads its TNDS login from
 txcCredentials.existingSecret (NET design §5).
 
-timetableMode (tfl only for now; docs/scheduled-jobs.md): `deployment`
+timetableMode (tfl and metrolink; docs/scheduled-jobs.md): `deployment`
 renders that Deployment, running both loops (TRANSIT_LOOPS=both);
-`cronjob` renders instead a CronJob whose run is one timetable cycle
-(TRANSIT_LOOPS=timetable, RUN_ONCE). A network with its situations loop on
-would need that loop split into a Deployment of its own, which isn't built
-yet (Metrolink, a later phase), so the chart refuses it.
+`cronjob` renders a CronJob whose run is one timetable cycle
+(TRANSIT_LOOPS=timetable, RUN_ONCE) and, only while situationsEnabled, the
+Deployment again under the same name running the situations loop alone
+(TRANSIT_LOOPS=situations, situationsResources). Each loop runs in exactly
+one workload in either mode, so two pods never XADD the same schema: the
+CronJob's Forbid and podReplacementPolicy keep its timetable runs apart,
+and the situations pod produces no timetable.
 */}}
 {{- $root := . }}
 {{- $p := .Values.pollerTransitSchedule }}
@@ -33,11 +36,9 @@ yet (Metrolink, a later phase), so the chart refuses it.
 {{- fail (printf "pollerTransitSchedule.networks.%s.timetableRefresh must be 1-64 of A-Z a-z 0-9 . _ : - (got %q)" $network $refresh) }}
 {{- end }}
 {{- $what := printf "pollerTransitSchedule.networks.%s" $network }}
-{{- $mode := include "distant-signal.workloadMode" (dict "what" (printf "%s.timetableMode" $what) "mode" $n.timetableMode "cronCapable" (has $network (list "tfl"))) }}
-{{- if eq $mode "cronjob" }}
-{{- if $n.situationsEnabled }}
-{{- fail (printf "%s.timetableMode: cronjob needs situationsEnabled: false: a network's situations loop would need its own Deployment, which the chart doesn't render yet (docs/scheduled-jobs.md)." $what) }}
-{{- end }}
+{{- $mode := include "distant-signal.workloadMode" (dict "what" (printf "%s.timetableMode" $what) "mode" $n.timetableMode "cronCapable" (has $network (list "tfl" "metrolink"))) }}
+{{- $split := eq $mode "cronjob" }}
+{{- if $split }}
 {{- /* One timetable cycle, unless the stream's newest commit is fresher
 than skipIfFresherThanSecs, then exit; no /metrics (a run is gone before a
 scrape). These replace the same names in the chart's env and extraEnv. */}}
@@ -45,7 +46,15 @@ scrape). These replace the same names in the chart's env and extraEnv. */}}
 {{- $env := include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerTransitScheduleEnv" (dict "root" $root "network" $network "n" $n "client" $client "loops" "timetable")) "extra" (concat ($n.extraEnv | default list) $once)) | fromYamlArray }}
 ---
 {{ include "distant-signal.cronWorkerSpec" (dict "root" $root "component" $component "name" (printf "%s-%s" $component $network) "labels" (dict "distant-signal/transit-network" $network) "cron" $n.timetableCron "image" $p.image "env" $env "workload" $n "volumeMounts" (list (dict "name" "work" "mountPath" "/work")) "volumes" (list (dict "name" "work" "emptyDir" (dict "sizeLimit" $n.workDirSizeLimit)))) }}
-{{- else }}
+{{- end }}
+{{- /* The always-on Deployment: both loops, or (split) the situations loop
+alone while it is on. */}}
+{{- if or (not $split) $n.situationsEnabled }}
+{{- $loops := ternary "situations" "both" $split }}
+{{- $resources := $n.resources }}
+{{- if $split }}
+{{- $resources = required (printf "%s.situationsResources is required with timetableMode: cronjob and situationsEnabled" $what) $n.situationsResources }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -107,11 +116,11 @@ spec:
               protocol: TCP
           {{- end }}
           env:
-            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerTransitScheduleEnv" (dict "root" $root "network" $network "n" $n "client" $client "loops" "both")) "extra" $n.extraEnv) | trim | nindent 12 }}
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerTransitScheduleEnv" (dict "root" $root "network" $network "n" $n "client" $client "loops" $loops)) "extra" $n.extraEnv) | trim | nindent 12 }}
           volumeMounts:
             - name: work
               mountPath: /work
-          {{- with $n.resources }}
+          {{- with $resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -141,7 +150,7 @@ spec:
 One network's env entries. distant-signal.mergeEnv renders them with the
 network's extraEnv, which replaces an entry of the same name. Takes (dict
 "root" $ "network" <name> "n" <its values> "client" <redis.acl.clients key>
-"loops" <TRANSIT_LOOPS: both or timetable>).
+"loops" <TRANSIT_LOOPS: both, timetable or situations>).
 */ -}}
 {{- define "distant-signal.pollerTransitScheduleEnv" }}
 {{- $root := .root }}

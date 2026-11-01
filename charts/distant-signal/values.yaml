@@ -4479,6 +4479,69 @@ pollerTransitSchedule:
       affinity: {}
       podAnnotations: {}
       podSecurityContext: {}
+      # -- How the timetable runs: `deployment` (one always-on pod running
+      # both loops, TRANSIT_LOOPS=both) or `cronjob` (a CronJob,
+      # `timetableCron` below, whose run fetches and publishes one timetable
+      # and exits: TRANSIT_LOOPS=timetable). With `cronjob` and
+      # situationsEnabled, the Deployment (same name) stays for the
+      # five-minute situations loop alone (TRANSIT_LOOPS=situations,
+      # `situationsResources`). Each loop runs in exactly one workload.
+      # docs/scheduled-jobs.md. As a CronJob the timetable serves no
+      # /metrics: the scheduled-job alerts and its
+      # transit-metrolink-timetable ingest_freshness source (36h) cover it;
+      # the situations Deployment keeps its own gauges and the
+      # transit-metrolink-situations source (30m).
+      timetableMode: deployment
+      # -- The timetable CronJob, while `timetableMode: cronjob`.
+      timetableCron:
+        # -- Daily (BODS rebuilds the file nightly). 03:30 UTC: after the
+        # 03:00 UTC dump (about 11 minutes), and apart from the other
+        # scheduled pollers (TfL 04:00, stations 04:20, tocs 04:40) and the
+        # 05:00 UTC pgBackRest backups.
+        schedule: "30 3 * * *"
+        # -- Required (CI checks every CronJob has one).
+        timeZone: Etc/UTC
+        suspend: false
+        # -- A start missed by more than this is skipped; the next day's run
+        # catches up (the freshness alert allows 36h).
+        startingDeadlineSeconds: 3600
+        # -- Kill a run (or one still Pending) after this long. A run is the
+        # ~159 MB GTFS download, a streaming parse and the XADD.
+        activeDeadlineSeconds: 1800
+        # -- Retries of a run that failed transiently (exit 1). Exit 3 (the
+        # feed guard refused the timetable) and 137 (OOMKilled) fail the
+        # Job at once.
+        backoffLimit: 2
+        successfulJobsHistoryLimit: 1
+        failedJobsHistoryLimit: 3
+        # -- A finished Job and its pod are deleted this long after.
+        ttlSecondsAfterFinished: 86400
+        # -- RUN_ONCE_SKIP_IF_FRESHER_THAN_SECS: a run finding a timetable
+        # commit on the stream newer than this fetches nothing (an
+        # unanswered timetableRefresh token overrides it). Half a day.
+        skipIfFresherThanSecs: 43200
+        # -- The run's container resources. The parse streams (48 MiB peak
+        # RSS on the whole North West file); the limit keeps the
+        # Deployment's headroom for the encode and produce. Ephemeral
+        # storage covers the /work emptyDir (the ~159 MB zip) and the logs.
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+            ephemeral-storage: 192Mi
+          limits:
+            memory: 512Mi
+            ephemeral-storage: 768Mi
+      # -- The situations-only Deployment's resources, while
+      # `timetableMode: cronjob` and situationsEnabled (the Deployment's
+      # `resources` apply otherwise). One SIRI-SX archive every five
+      # minutes; the whole pod idled at 11Mi with both loops.
+      situationsResources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 256Mi
     net:
       # -- Nottingham Express Transit (NET design). Off by default. NET is
       # in no BODS feed, so its timetable is the Traveline National Dataset

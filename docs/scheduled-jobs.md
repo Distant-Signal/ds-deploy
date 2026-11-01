@@ -10,6 +10,7 @@ one goes wrong. Alerts: [scheduled jobs](alerts.md#scheduled-jobs).
 | `<fullname>-poller-tocs` (only with `pollers.tocs.mode: cronjob`) | poller-tocs, once: one fetch of the TOC list onto `ds:ingest:reference`. 04:40 UTC. | `pollers.tocs.cron` |
 | `<fullname>-poller-stations` (only with `pollers.stations.mode: cronjob`) | poller-stations, once: one fetch of the stations feed, written to Postgres in one transaction. 04:20 UTC. | `pollers.stations.cron` |
 | `<fullname>-poller-transit-schedule-tfl` (only with `pollerTransitSchedule.networks.tfl.timetableMode: cronjob`) | poller-transit-schedule for TfL, once: one timetable download, parse and publish onto `ds:ingest:transit-tfl`. 04:00 UTC. | `pollerTransitSchedule.networks.tfl.timetableCron` |
+| `<fullname>-poller-transit-schedule-metrolink` (only with `pollerTransitSchedule.networks.metrolink.timetableMode: cronjob`) | poller-transit-schedule for Metrolink's timetable, once, onto `ds:ingest:transit-metrolink`. 03:30 UTC. Its situations loop stays in the always-on Deployment of the same name. | `pollerTransitSchedule.networks.metrolink.timetableCron` |
 
 ## How a run behaves
 
@@ -64,10 +65,10 @@ suspended for an ordinary deploy.
 
 A worker with a `mode` value runs either as its always-on Deployment
 (`deployment`, the default) or as a CronJob (`cronjob`); the chart renders
-exactly one, and CI checks it. Three have one, each a daily job that
-spends the rest of the day idle: `pollers.tocs.mode`,
-`pollers.stations.mode` and, for poller-transit-schedule's TfL network,
-`pollerTransitSchedule.networks.tfl.timetableMode`. The CronJob comes from
+exactly one of them per loop, and CI checks it. Four have one, each a
+daily job that spends the rest of the day idle: `pollers.tocs.mode`,
+`pollers.stations.mode` and, for poller-transit-schedule's TfL and
+Metrolink networks, `pollerTransitSchedule.networks.<network>.timetableMode`. The CronJob comes from
 `distant-signal.cronWorkerSpec` with the defaults above, and its pods keep
 the component's labels, so its NetworkPolicies, Redis ACL user, database
 role and Secrets apply exactly as they did to the Deployment.
@@ -114,12 +115,35 @@ poller-transit-schedule runs two loops in one process, the daily timetable
 and the five-minute situations (SIRI-SX). `TRANSIT_LOOPS` picks them:
 `both` (the default, one Deployment), `timetable` or `situations`. Once mode
 needs `timetable` alone, or whichever loop returned first would end the
-run. TfL has no situations loop, so its timetable CronJob is all of it. A
-network with situations on (Metrolink) would need its situations loop
-moved to a Deployment of its own (`TRANSIT_LOOPS=situations`) beside the
-timetable CronJob. The binary supports that, but the chart doesn't render
-it yet, so it refuses `timetableMode: cronjob` for any network but tfl, and
-for tfl with `situationsEnabled`.
+run. TfL has no situations loop, so its timetable CronJob is all of it.
+
+Metrolink's situations loop runs every five minutes, so with
+`timetableMode: cronjob` and `situationsEnabled` the network is two
+workloads:
+
+| Workload | Runs | Resources |
+|---|---|---|
+| CronJob `<fullname>-poller-transit-schedule-metrolink` | the timetable, once a day at 03:30 UTC (`TRANSIT_LOOPS=timetable`, `RUN_ONCE`) | `timetableCron.resources`: requests `128Mi`, limit `512Mi`, while it runs |
+| Deployment `<fullname>-poller-transit-schedule-metrolink` (the same Deployment, changed in place) | the situations loop alone (`TRANSIT_LOOPS=situations`), always on | `situationsResources`: requests `32Mi`, limit `256Mi` |
+
+Each loop runs in exactly one of them, and CI checks that for every render.
+So two pods never XADD the same schema: the CronJob's `Forbid` and
+`podReplacementPolicy: Failed` keep its timetable runs apart, and the
+situations pod produces no timetable. They share the network's stream and
+Redis user, as the two loops did in one pod. The situations Deployment
+keeps its `/metrics`, its DistantSignalPollerStale rule
+(`transit-situations`) and the `transit-metrolink-situations` freshness
+source (30 minutes). The timetable is covered by the scheduled-job alerts
+and the `transit-metrolink-timetable` source (36 hours).
+
+A Metrolink run downloads the BODS North West GTFS (about 159 MB) into its
+`/work` emptyDir, streams the parse (a 48 MiB peak) and publishes. It runs
+at 03:30 UTC, after the 03:00 UTC dump and before TfL (04:00), stations
+(04:20), tocs (04:40) and the 05:00 UTC backups.
+
+The chart refuses `timetableMode: cronjob` for `net`. It also refuses it for
+a network with `situationsEnabled` but no `situationsResources` (only
+Metrolink has them).
 
 A TfL run downloads the Journey Planner export (141 MB on 2026-10-26) into
 its `/work` emptyDir, parses it (12 s, a 332 MiB peak), and publishes 61
@@ -135,8 +159,10 @@ interval in the always-on loop too, instead of re-downloading the export
 on the failed-cycle backoff.
 
 **Capacity.** A Job's requests are only reserved while it runs, so the
-448Mi the Deployment held all day is free between runs, and other pods can
-take it. If the node has no room for 448Mi at 04:00, the pod waits Pending:
+448Mi the TfL Deployment held all day (and the 160Mi Metrolink's gives
+back) is free between runs, and other pods can take it. If the node has no
+room for a run's requests at its time (448Mi at 04:00, 128Mi at 03:30),
+the pod waits Pending:
 DistantSignalScheduledJobPending fires after 15 minutes, and the run fails
 at `activeDeadlineSeconds` (30 minutes). The next day's run, or a manual
 one, catches up within the 36-hour freshness allowance.
@@ -144,7 +170,9 @@ one, catches up within the 36-hour freshness allowance.
 ### Switching a worker over, and back
 
 The same for each (shown for tocs; stations uses `pollers.stations.mode`,
-the TfL timetable `pollerTransitSchedule.networks.tfl.timetableMode`). To
+a transit timetable `pollerTransitSchedule.networks.<network>.timetableMode`;
+for Metrolink the release changes the Deployment to situations only rather
+than deleting it). To
 switch, set `pollers.tocs.mode: cronjob` in the deploy values. The
 release deletes the Deployment and creates the CronJob, which first runs at
 `cron.schedule` (04:40 UTC). To check it before then, start a run by hand
@@ -198,7 +226,9 @@ says why it can't be placed.
 
 Each CronJob has its own switch (`apiMaintenance.enabled`,
 `postgresql.pgbackrest.backup.suspend`, `pollers.tocs.mode`,
-`pollers.stations.mode`, `pollerTransitSchedule.networks.tfl.timetableMode`). The failure policy, the replacement
-policy and the TTLs need no rollback of their own: removing them only makes a
-Job retry an OOM kill, count evictions, and keep its pods until the history
-limits.
+`pollers.stations.mode`, `pollerTransitSchedule.networks.<network>.timetableMode`).
+Setting a transit network back to `deployment` returns its Deployment to
+both loops; the timetable waits out its day from the stream cursor. The
+failure policy, the replacement policy and the TTLs need no rollback of
+their own: removing them only makes a Job retry an OOM kill, count
+evictions, and keep its pods until the history limits.
