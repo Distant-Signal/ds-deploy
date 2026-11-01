@@ -1527,7 +1527,11 @@ poll (`tfl_fetch_retries_total{what, status}`;
 that is a sustained rate limit or outage. A 404 is TfL publishing no
 timetable for that route (trams: only from Wimbledon). It is not a failure:
 it counts `tfl_route_timetables_unpublished_total` and logs once a process
-("TfL publishes no timetable for this route").
+("TfL publishes no timetable for this route"). Such a route takes, for each
+step no timetable times, the same two stops' time in the other direction,
+counted in `tfl_route_steps_mirrored_total{line}` and logged per route
+("timed steps of a route TfL publishes no timetable for from the reverse
+direction"). A step TfL does time is never replaced.
 
 ### DistantSignalLdbwsStationStale
 
