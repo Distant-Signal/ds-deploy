@@ -1791,7 +1791,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.backup.startingDeadlineSeconds` | `3600` | Skip a run that can't start within this long of its time. |
 | `postgresql.pgbackrest.backup.ttlSecondsAfterFinished` | `259200` | The Jobs' `ttlSecondsAfterFinished`: a finished Job and its pod are deleted three days after it ends (longer than the alerts' `recentJobWindow`). null leaves them to the history limits. |
 | `postgresql.pgbackrest.backup.image.repository` / `.tag` / `.pullPolicy` | `registry.k8s.io/kubectl`, `v1.36.5@sha256:…`, `IfNotPresent` | The image the CronJobs run `kubectl exec` from. Keep it within one minor version of the cluster. |
-| `postgresql.pgbackrest.backup.resources` | requests `20m`/`32Mi`, limit `128Mi` | CronJob pod resources. The work happens in the Postgres container. |
+| `postgresql.pgbackrest.backup.resources` | requests `20m`/`64Mi`, limit `128Mi` | CronJob pod resources. The work happens in the Postgres container. |
 | `postgresql.pgbackrest.backup.podSecurityContext` | `{}` | Merged over the CronJob pods' securityContext (non-root uid 65532 by default). |
 | `metrics.prometheusRule.ingestWriterDown` | see `values.yaml` | `DistantSignalIngestWriterDown`: `enabled`, `for` (5m), `severity` (critical). Renders only with `ingestWriter.enabled`. |
 | `metrics.prometheusRule.ingestStreamBacklog` / `ingestStreamStalled` / `ingestDeadLetters` / `ingestDeadLetterExpiring` / `ingestUnsupportedSchema` / `ingestProducerXaddFailing` / `ingestStreamMemoryHigh` / `ingestClockSkew` | see `values.yaml` | The ingest stream alerts (ingest spec §14.2): `DistantSignalIngestStreamBacklog` (pending over 600s or 0.5 of MAXLEN: warning; 0.8: critical, which replaces the warning once it fires; `maxlen` per stream, kept in step with `crates/ingest-stream/src/budget.rs`), `…StreamStalled` (XADDs succeed but nothing applied for `stallAfterSecs` per stream; critical), `…DeadLetters` (any in 15m), `…DeadLetterExpiring` (within 4h of the 7-day trim), `…UnsupportedSchema` (critical), `…ProducerXaddFailing` (every XADD failed for 10m; critical), `…StreamMemoryHigh` (over 0.75 of 576 MiB), `…ClockSkew` (an observed time clamped, D13). (`…ShadowMismatch` went with the producers' `http+shadow` sink in release B.) Each has `enabled`, `for`, `severity`. Render only with `ingestWriter.enabled`, and silent until a stream is on. Runbooks: `docs/alerts.md`, `docs/ingest-streams-deadletter.md`. |
@@ -1951,7 +1951,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `migrate.job.connectDeadlineSecs` | `120` | `MIGRATION_CONNECT_DEADLINE_SECS`: how long `ds-migrate run` retries its first connection (a saturated node, a late NetworkPolicy) before failing. At least 1. |
 | `migrate.job.activeDeadlineSeconds` | `900` | Deadline for the whole Job, the Postgres wait included. The HelmRelease `timeout` must cover it. |
 | `migrate.job.logLevel` | `info` | `RUST_LOG`. |
-| `migrate.job.resources` | `{}` | The migrate container's resources. |
+| `migrate.job.resources` | requests `10m`/`64Mi`, limit `512Mi` | The migrate container's resources (keeps the hook pod out of BestEffort; the wait-for-postgres init container has fixed `10m`/`16Mi`, limit `64Mi`). |
 | `migrate.job.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 | `migrate.job.nodeSelector` | `{}` | Node selector. |
 | `migrate.job.tolerations` | `[]` | Tolerations. |
@@ -2008,7 +2008,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.progressStallSecs` | `900` | `/livez` stall window (`PROGRESS_STALL_SECS`). |
 | `ingestWriter.logLevel` | `info` | `RUST_LOG`. |
 | `ingestWriter.extraEnv` | `[]` | Extra env entries; one with a chart entry's name replaces it. |
-| `ingestWriter.resources` | `{}` | Container resources. |
+| `ingestWriter.resources` | requests `25m`/`192Mi`, limit `384Mi` | Container resources (production p95 141Mi, max 167Mi). |
 | `ingestWriter.nodeSelector` | `{}` | Node selector. |
 | `ingestWriter.tolerations` | `[]` | Tolerations. |
 | `ingestWriter.affinity` | `{}` | Affinity. |

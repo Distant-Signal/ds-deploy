@@ -1002,11 +1002,13 @@ postgresql:
         tag: "v1.37.1@sha256:b7cab618e281b1ee7484e7b706a96e2135fbb6e072c2a573a7dab4e87d7f2385"
         pullPolicy: IfNotPresent
       # -- CronJob pod resources. kubectl only streams pgBackRest's output;
-      # the work happens in the Postgres container.
+      # the work happens in the Postgres container. The kubectl process's
+      # working set is 60-65Mi in production (30 days to 2026-11-01), so
+      # 64Mi requests what it uses; the limit is about 2x that.
       resources:
         requests:
           cpu: 20m
-          memory: 32Mi
+          memory: 64Mi
         limits:
           memory: 128Mi
       # -- Merged over the CronJob pods' securityContext (non-root uid 65532
@@ -2256,8 +2258,17 @@ migrate:
     activeDeadlineSeconds: 900
     # -- tracing-subscriber EnvFilter (RUST_LOG).
     logLevel: info
-    # -- The migrate container's resources (the wait container gets none).
-    resources: {}
+    # -- The migrate container's resources. Requests keep the hook pod out
+    # of BestEffort, the class node-pressure eviction and earlyoom reach
+    # first, so a migration isn't killed half-way. The run is too short
+    # for Prometheus to have scraped it; 512Mi bounds a runaway. The
+    # wait-for-postgres init container has fixed requests of its own.
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        memory: 512Mi
     # -- Merged over the chart-wide pod securityContext defaults.
     podSecurityContext: {}
     nodeSelector: {}
@@ -2453,7 +2464,16 @@ ingestWriter:
   # -- Extra env entries; one with the same name as a chart entry replaces
   # it.
   extraEnv: []
-  resources: {}
+  # -- The writer's container resources. Working set in production (7 days
+  # to 2026-11-01, with the TfL and Metrolink transit streams applied):
+  # p95 141Mi, max 167Mi, CPU p95 4m. 192Mi is about p95 x 1.2; the limit
+  # is 2x the request.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 192Mi
+    limits:
+      memory: 384Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}

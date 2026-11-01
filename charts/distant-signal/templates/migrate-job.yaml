@@ -105,6 +105,13 @@ spec:
             runAsUser: 999
             runAsGroup: 999
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          # pg_isready in a shell loop: a 7Mi working set in production.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
       containers:
         - name: migrate
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) | quote }}
