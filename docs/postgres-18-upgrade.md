@@ -18,10 +18,13 @@ Decisions (2026-10-26):
   initialised with `initdb --no-data-checksums`. 18's initdb turns them on
   by default, and `pg_upgrade --check` refuses to upgrade a cluster without
   checksums into one with them.
-- **pgBackRest stays 2.59.1** (it supports 18). The stanza (`ds`) follows
+- **pgBackRest moves to 2.59.3** (still the 2.59 line, which supports 18;
+  pgdg's trixie repo dropped 2.59.1, so every 0.2.0 image, the rebuilt
+  pg16 one included, ships 2.59.3, which reads the existing 2.59.1 repo).
+  The stanza (`ds`) follows
   the new cluster with `pgbackrest stanza-upgrade`, then a new full backup.
 - The images come from `lucy/postgres-pgbackrest` (Forgejo):
-  `pg18.6-pgbackrest2.59.1-tini0.19.0` (Postgres 18 + pgBackRest + tini)
+  `pg18.6-pgbackrest2.59.3-tini0.19.0` (Postgres 18 + pgBackRest + tini)
   and the one-off `upgrade-pg16.15-to-pg18.6` (Postgres 18 plus the exact
   16.15 server binaries, `postgresql-16=16.15-1.pgdg13+2`, installed at
   build time). Its CI upgrades a 16 cluster with the same commands on
@@ -31,7 +34,7 @@ Decisions (2026-10-26):
 
 | Piece | Before | After |
 | --- | --- | --- |
-| Postgres image (`postgresql.pgbackrest.image.tag`, Ranma-Config `clusters/base/apps/distant-signal.yaml`) | `pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:dafa2a90…` | `pg18.6-pgbackrest2.59.1-tini0.19.0@sha256:<Forgejo digest>` |
+| Postgres image (`postgresql.pgbackrest.image.tag`, Ranma-Config `clusters/base/apps/distant-signal.yaml`) | `pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:dafa2a90…` | `pg18.6-pgbackrest2.59.3-tini0.19.0@sha256:<Forgejo digest>` |
 | Chart default `postgresql.image.tag` (used only with pgBackRest off) | `16.15-trixie` | `18.6-trixie` (this repo, already on `main`) |
 | Nightly `pg_dump` CronJob `distant-signal-postgres-backup` (Ranma-Config `clusters/mine-bringer/apps/distant-signal.yaml`) | `postgres:16@sha256:1a6ab3f5…` | `postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6`. A 16 `pg_dump` refuses an 18 server ("server version mismatch"), so this moves in the same change. |
 | pgBackRest repository | stanza `ds`, archive id `16-1` | same stanza, plus db 2 / archive id `18-2` after `stanza-upgrade`. The 16 backups and WAL stay until retention expires them. |
@@ -117,7 +120,7 @@ Findings that shaped this runbook:
 Days before:
 
 1. **Images.** `lucy/postgres-pgbackrest` 0.2.0 merged and published:
-   note the digests of `pg18.6-pgbackrest2.59.1-tini0.19.0` and
+   note the digests of `pg18.6-pgbackrest2.59.3-tini0.19.0` and
    `upgrade-pg16.15-to-pg18.6` from the Containers run's job summary. The
    pg18 build must include the daily-check fix (CHANGELOG 0.2.0, "Fixed").
 2. **Ranma-Config change, prepared but not merged:**
@@ -351,7 +354,7 @@ image by hand, so the app stays down until the checks pass:
 
 ```sh
 kubectl -n $ns set image statefulset/distant-signal-postgres \
-  postgres=git-bringer.fox-prometheus.ts.net/lucy/postgres-pgbackrest:pg18.6-pgbackrest2.59.1-tini0.19.0@sha256:<digest>
+  postgres=git-bringer.fox-prometheus.ts.net/lucy/postgres-pgbackrest:pg18.6-pgbackrest2.59.3-tini0.19.0@sha256:<digest>
 kubectl -n $ns scale statefulset distant-signal-postgres --replicas=1
 kubectl -n $ns wait --for=condition=ready pod/$pg --timeout=600s
 kubectl -n $ns exec $pg -c postgres -- psql -U distant_signal -d distant_signal -Atc \
