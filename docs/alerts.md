@@ -1198,6 +1198,17 @@ schedule-reference has been waiting to read its last completed publish
 (`distant_signal_schedule_reference`); the container's warn log names the
 error.
 
+As a CronJob (`scheduleFeed.reference.mode: cronjob`): no run has read its
+marker for `cronNotSeededAfter` (1h: the schedule's 30-minute interval plus
+`notSeededFor`), from the ingest-writer's
+`schedule_reference_recorded_signal_timestamp_seconds{kind="seeded"}` (each
+run records it in `schedule_reference_signals` once it has read the
+marker). Every run fails before it publishes; DistantSignalScheduledJobFailed
+fires alongside. Read the newest Job's log
+(`kubectl logs -n distant-signal job/<job>`). Quiet while the CronJob is
+suspended. If the writer is down its own alerts fire and this one goes
+quiet (no series).
+
 ### DistantSignalScheduleFeedZipRejected
 
 schedule-ingest refused to extract an uploaded CIF delivery zip: over
@@ -1287,6 +1298,13 @@ new delivery arrived (check schedule-ingest and the SFTP upload) or one keeps
 failing to publish (check `schedule_reference_publishes_total` by `outcome`,
 and the reference container's error log).
 
+As a CronJob it reads the ingest-writer's
+`schedule_reference_recorded_published_delivery_timestamp_seconds` (the
+newest `schedule_reference_publishes` row's delivery) with the same
+threshold. A delivery that keeps failing shows as failed Jobs; one settled
+after a rejection waits for the next delivery
+([scheduled jobs](scheduled-jobs.md#schedule-reference)).
+
 ### DistantSignalSchedulePublishStagedMismatch
 
 A publish finished with a staged key count that did not match the
@@ -1294,7 +1312,11 @@ publisher's total, so the rows that publish left out were not deleted. They
 stay until the next complete publish. Counted by schedule-reference
 (`store_schedule_publish_staged_mismatch_total{product}`; the api's
 `api_` series went with its `/private` publish routes in release B); its
-warn log has the `publish_id` and both counts.
+warn log has the `publish_id` and both counts. The publish also records it
+in `schedule_reference_signals` (`kind = 'staged_mismatch'`), in the same
+transaction: as a CronJob the alert reads that, through the ingest-writer's
+`schedule_reference_recorded_signal_timestamp_seconds{kind="staged_mismatch"}`,
+for the same `mismatchWindow`.
 
 ### DistantSignalScheduleReferencePublishRejected
 
@@ -1304,6 +1326,16 @@ the delivery is not recorded as published, so that product keeps its
 previous rows (a restart tries the delivery again). Usually a schema skew
 between the image and the migrations; the reference container's error log
 has the constraint.
+
+As a CronJob the rejection is recorded in `schedule_reference_signals`
+(`kind = 'rejected'`, by product) and the alert reads the ingest-writer's
+`schedule_reference_recorded_signal_timestamp_seconds{kind="rejected"}` for
+the same `rejectedWindow`. The run exits 3 (DistantSignalScheduledJobFailed,
+reason `Other`) and settles the delivery: later runs skip it until a newer
+delivery lands, rather than republish it every half hour. To try the same
+delivery again after a fix, clear the settled row as the owner
+(`DELETE FROM schedule_reference_signals WHERE kind = 'settled'`) and start
+a run by hand.
 
 ### DistantSignalLinePopulationMissing
 
@@ -1715,7 +1747,9 @@ off, run one now with `kubectl create job --from=cronjob/<cronjob> <name>`.
 
 A CronJob has not succeeded (or, never having succeeded, has existed) for
 `intervalMultiple` times its schedule interval, and at least
-`minAgeSeconds`, and isn't suspended. Its runs fail (see
+`minAgeSeconds`, and isn't suspended or running now (a run still going,
+like schedule-reference's nightly publish, isn't staleness: it ends by
+`activeDeadlineSeconds`, failing if it hits it). Its runs fail (see
 DistantSignalScheduledJobFailed), are skipped (`concurrencyPolicy: Forbid`
 skips a run while the last one still runs; a start missed by more than
 `startingDeadlineSeconds` is skipped), or never get scheduled (see

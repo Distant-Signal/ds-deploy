@@ -1,0 +1,144 @@
+# promtool unit tests for schedule-reference's alerts as a CronJob
+# (scheduleFeed.reference.mode: cronjob; CronJob phase 4, DS-241). This
+# directory runs against scripts/check-alert-payloads.py's
+# `schedule-reference-cronjob` render: the RENDER_FLAGS one plus that mode,
+# as rules.yaml. The alerts read the ingest-writer's gauges of
+# schedule-reference's database rows, with the deployment mode's windows
+# (schedulePipeline defaults: cronNotSeededAfter 1h, staleAfterHours 30,
+# mismatchWindow 6h, rejectedWindow 6h).
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # NotSeeded: the last run that read its marker was at 0s. Quiet for the
+  # hour (two missed runs), then fires; the in-pod gauge at 0 (a leftover
+  # series) is not read.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace="distant-signal", pod="writer", kind="seeded", product=""}'
+        values: '0x90'
+      - series: 'kube_cronjob_spec_suspend{namespace="distant-signal", cronjob="distant-signal-schedule-reference"}'
+        values: '0x90'
+      - series: 'distant_signal_schedule_reference_seeded{namespace="distant-signal", pod="sf"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DistantSignalScheduleReferenceNotSeeded
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: DistantSignalScheduleReferenceNotSeeded
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: schedule-reference runs not seeded for 1h
+              description: "No run could read its last publish from Postgres, so none publishes. Check the run logs and Postgres."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulereferencenotseeded
+  # A run seeds every 30 minutes: never fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace="distant-signal", pod="writer", kind="seeded", product=""}'
+        values: '0x29 1800x30 3600x30 5400x30'
+      - series: 'kube_cronjob_spec_suspend{namespace="distant-signal", cronjob="distant-signal-schedule-reference"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 61m
+        alertname: DistantSignalScheduleReferenceNotSeeded
+        exp_alerts: []
+      - eval_time: 115m
+        alertname: DistantSignalScheduleReferenceNotSeeded
+        exp_alerts: []
+  # Suspended: quiet however old the seed.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace="distant-signal", pod="writer", kind="seeded", product=""}'
+        values: '0x120'
+      - series: 'kube_cronjob_spec_suspend{namespace="distant-signal", cronjob="distant-signal-schedule-reference"}'
+        values: '1x120'
+    alert_rule_test:
+      - eval_time: 110m
+        alertname: DistantSignalScheduleReferenceNotSeeded
+        exp_alerts: []
+  # PublishStale: the newest completed publish's delivery was at 0s. Over
+  # 30h old for 15 minutes: fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_recorded_published_delivery_timestamp_seconds{namespace="distant-signal", pod="writer"}'
+        values: '0x1900'
+      # The in-pod gauge, if left over, is not read.
+      - series: 'distant_signal_schedule_reference_last_published_delivery_timestamp_seconds{namespace="distant-signal", pod="sf"}'
+        values: '0x1900'
+    alert_rule_test:
+      - eval_time: 30h
+        alertname: DistantSignalScheduleReferencePublishStale
+        exp_alerts: []
+      - eval_time: 30h30m
+        alertname: DistantSignalScheduleReferencePublishStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: no CIF delivery fully published for 30h
+              description: "No new delivery arrived, or one keeps failing to publish. Check schedule-ingest, the SFTP upload and the reference log."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulereferencepublishstale
+  # A delivery published at 29h resets it.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_recorded_published_delivery_timestamp_seconds{namespace="distant-signal", pod="writer"}'
+        values: '0x1739 104400x200'
+    alert_rule_test:
+      - eval_time: 30h30m
+        alertname: DistantSignalScheduleReferencePublishStale
+        exp_alerts: []
+  # StagedMismatch: a mismatch recorded at 10m fires at once, per product,
+  # until it is 6h old.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace="distant-signal", pod="writer", kind="staged_mismatch", product="schedule_destination_departures"}'
+        values: '_x10 600x400'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalSchedulePublishStagedMismatch
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DistantSignalSchedulePublishStagedMismatch
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, product: schedule_destination_departures}
+            exp_annotations:
+              summary: schedule_destination_departures publish kept stale rows
+              description: "Its staged key count did not match the publisher's total, so rows it left out stay until the next complete publish."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
+      - eval_time: 371m
+        alertname: DistantSignalSchedulePublishStagedMismatch
+        exp_alerts: []
+  # Rejected: likewise, labelled with the product's kind.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace="distant-signal", pod="writer", kind="rejected", product="stanox_crs"}'
+        values: '_x10 600x400'
+      # Another kind of signal and another namespace's rejection: not read.
+      - series: 'distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace="distant-signal", pod="writer", kind="settled", product=""}'
+        values: '_x10 600x400'
+      - series: 'distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace="other", pod="writer", kind="rejected", product="tiploc_crs"}'
+        values: '_x10 600x400'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalScheduleReferencePublishRejected
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DistantSignalScheduleReferencePublishRejected
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, product: stanox_crs}
+            exp_annotations:
+              summary: schedule-reference's stanox_crs publish was rejected
+              description: "Refused as bad data: not retried for this delivery, and the product keeps its previous rows. Usually schema skew."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulereferencepublishrejected
+      - eval_time: 371m
+        alertname: DistantSignalScheduleReferencePublishRejected
+        exp_alerts: []
+  # The in-pod counter, if left over, is not read.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_publishes_total{namespace="distant-signal", pod="sf", product="stanox_crs", outcome="rejected"}'
+        values: '0x5 1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalScheduleReferencePublishRejected
+        exp_alerts: []

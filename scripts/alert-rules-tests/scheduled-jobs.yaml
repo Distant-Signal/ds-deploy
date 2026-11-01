@@ -93,6 +93,36 @@ tests:
               description: "Over 1.5x its schedule interval: its runs fail, are skipped (Forbid, a missed start) or never schedule."
               runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalscheduledjobstale
 
+  # A run still going (kube_cronjob_status_active 1) is not staleness:
+  # quiet past the threshold until it ends; then, still with no success,
+  # it fires 10m later.
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x150'
+      - series: 'kube_cronjob_created{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x150'
+      - series: 'kube_cronjob_status_last_schedule_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x150'
+      - series: 'kube_cronjob_next_schedule_time{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '3600x150'
+      - series: 'kube_cronjob_spec_suspend{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '0x150'
+      - series: 'kube_cronjob_status_active{namespace="distant-signal", cronjob="distant-signal-api-maintenance"}'
+        values: '1x120 0x30'
+    alert_rule_test:
+      - eval_time: 115m
+        alertname: DistantSignalScheduledJobStale
+        exp_alerts: []
+      - eval_time: 132m
+        alertname: DistantSignalScheduledJobStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cronjob: distant-signal-api-maintenance}
+            exp_annotations:
+              summary: "CronJob distant-signal-api-maintenance: no success for 2h 12m 0s"
+              description: "Over 1.5x its schedule interval: its runs fail, are skipped (Forbid, a missed start) or never schedule."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalscheduledjobstale
+
   # Suspended, or never yet past minAgeSeconds: quiet. A CronJob that never
   # succeeded counts from its creation.
   - interval: 1m

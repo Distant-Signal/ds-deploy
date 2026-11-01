@@ -93,12 +93,17 @@ spec:
         - record: distant_signal:scheduled_cronjob_interval:seconds
           expr: |
             max by (namespace, cronjob) (kube_cronjob_next_schedule_time{ {{- $sel -}} } - kube_cronjob_status_last_schedule_time{ {{- $sel -}} })
-        {{- /* That age, for each CronJob (not suspended) past both limits. */}}
+        {{- /* That age, for each CronJob (not suspended, no run going) past
+        both limits. A run still going is not staleness: a long one (the
+        nightly schedule-reference publish, 20-40 minutes against a
+        30-minute schedule) ends by activeDeadlineSeconds, and a run that
+        hits it fails, which DistantSignalScheduledJobFailed reports. */}}
         - record: distant_signal:scheduled_cronjob_overdue:seconds
           expr: |
             distant_signal:scheduled_cronjob_success_age:seconds{namespace="{{ $ns }}"} > {{ .intervalMultiple }} * distant_signal:scheduled_cronjob_interval:seconds{namespace="{{ $ns }}"}
             and distant_signal:scheduled_cronjob_success_age:seconds{namespace="{{ $ns }}"} > {{ int64 .minAgeSeconds }}
             and on (namespace, cronjob) (max by (namespace, cronjob) (kube_cronjob_spec_suspend{namespace="{{ $ns }}"}) == 0)
+            unless on (namespace, cronjob) (max by (namespace, cronjob) (kube_cronjob_status_active{namespace="{{ $ns }}"}) > 0)
         - alert: DistantSignalScheduledJobStale
           expr: |
             distant_signal:scheduled_cronjob_overdue:seconds{namespace="{{ $ns }}"}

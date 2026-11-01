@@ -1,0 +1,44 @@
+# promtool unit tests for schedule-reference's in-pod alerts, as the
+# Deployment's `reference` container (scheduleFeed.reference.mode:
+# deployment, the default; see recorded-alerts.yaml's header for how
+# rules.yaml is rendered). As a CronJob they read the ingest-writer's
+# gauges instead: schedule-reference-cronjob/.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Not seeded for notSeededFor (30m): fires. The recorded gauge is not
+  # read in this mode.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_seeded{namespace="distant-signal", pod="sf"}'
+        values: '0x40'
+      - series: 'distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace="distant-signal", pod="writer", kind="seeded", product=""}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DistantSignalScheduleReferenceNotSeeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: DistantSignalScheduleReferenceNotSeeded
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: schedule-reference not seeded for 30m
+              description: "It cannot read its last publish from api, so it publishes nothing. Check api and the internal OAuth token endpoint."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulereferencenotseeded
+  # A rejected product counted in-pod fires; a recorded rejection does not.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_reference_publishes_total{namespace="distant-signal", pod="sf", product="stanox_crs", outcome="rejected"}'
+        values: '0x5 1x10'
+      - series: 'distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace="distant-signal", pod="writer", kind="rejected", product="tiploc_crs"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalScheduleReferencePublishRejected
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, product: stanox_crs}
+            exp_annotations:
+              summary: schedule-reference's stanox_crs publish was rejected
+              description: "Refused as bad data: not retried for this delivery, and the product keeps its previous rows. Usually schema skew."
+              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulereferencepublishrejected

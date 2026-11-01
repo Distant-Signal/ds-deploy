@@ -60,6 +60,10 @@ spec:
                   # schedule-reference (plan 2a) and schedule-ingest (plan 2d)
                   # write Postgres directly.
                   - schedulefeed
+                  {{- if eq (include "distant-signal.scheduleReferenceMode" .) "cronjob" }}
+                  # schedule-reference as a CronJob (CronJob phase 4).
+                  - schedule-reference
+                  {{- end }}
                   {{- end }}
                   {{- range $name := list "stations" "incidents" "ldbws" }}
                   {{- if (get $root.Values.pollers $name | default dict).enabled }}
@@ -515,6 +519,14 @@ this file's changes are applied.
 */}}
 {{- if .Values.apiMaintenance.enabled }}
 {{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" $root "component" "api-maintenance" "deps" (dict "postgres" true)) }}
+---
+{{ . }}
+{{- end }}
+{{- end }}
+{{- /* schedule-reference as a CronJob (scheduleFeed.reference.mode:
+cronjob): Postgres and DNS only, like api-maintenance. */}}
+{{- if and .Values.scheduleFeed.enabled (eq (include "distant-signal.scheduleReferenceMode" .) "cronjob") }}
+{{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" $root "component" "schedule-reference" "deps" (dict "postgres" true)) }}
 ---
 {{ . }}
 {{- end }}

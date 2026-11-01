@@ -1,0 +1,40 @@
+{{- /*
+schedule-reference as a CronJob (scheduleFeed.reference.mode: cronjob;
+CronJob phase 4, docs/scheduled-jobs.md, "schedule-reference"), instead of
+the `reference` container of the schedulefeed pod.
+
+Each run (RUN_ONCE) takes the run lock (exit 0 if another run holds it),
+reads its completion marker, and publishes the newest complete delivery
+only if it is new; otherwise it exits 0 in seconds. Exit 1 (a transient
+failure) is retried by the Job, each attempt a full republish; exit 3 (a
+product refused as bad data) fails the Job at once and settles the
+delivery, so later runs skip it.
+
+The pod mounts the schedulefeed PVC READ-ONLY, as the `reference`
+container does. The PVC is ReadWriteOnce, which is per node, not per pod:
+the CronJob's pods share it with the schedulefeed and schedulefeed-sftp
+pods only while all run on the same node, as on the single-node
+local-path cluster this chart targets (whose volume is pinned to that node
+by its PV's node affinity anyway). scheduleFeed.nodeSelector, tolerations
+and affinity apply to it as to those pods.
+
+Its pods carry the component label schedule-reference: Postgres admits
+it (networkpolicy.yaml) and its egress policy allows only Postgres and
+DNS. No ports, probes or /metrics (METRICS_ENABLED=false): its alerts read
+the ingest-writer's gauges of its database rows, and the scheduled-job
+alerts cover its runs.
+*/}}
+{{- if .Values.scheduleFeed.enabled }}
+{{- if eq (include "distant-signal.scheduleReferenceMode" .) "cronjob" }}
+{{- $ref := .Values.scheduleFeed.reference }}
+{{- $env := list (dict "name" "STORAGE_DIR" "value" "/data/schedule-feed") (dict "name" "LINES_DIR" "value" "/app/lines") (dict "name" "SCHEDULE_FORWARD_PUBLISH_DAYS" "value" ($ref.forwardPublishDays | int | toString)) }}
+{{- if include "distant-signal.scheduleReferenceDbSink" . }}
+{{- $env = concat $env (include "distant-signal.databaseEnvFor" (dict "root" . "service" "schedule_reference") | fromYamlArray) }}
+{{- $env = concat $env (list (dict "name" "DATABASE_MAX_CONNECTIONS" "value" ($ref.ingest.database.maxConnections | int | toString)) (dict "name" "CORPUS_FALLBACK_ENABLED" "value" (.Values.api.corpusFallback.enabled | toString))) }}
+{{- end }}
+{{- $env = concat $env (list (dict "name" "RUN_ONCE" "value" "true") (dict "name" "METRICS_ENABLED" "value" "false") (dict "name" "HEALTH_BIND_URL" "value" (printf "127.0.0.1:%d" (int $ref.healthPort))) (dict "name" "PROGRESS_STALL_SECS" "value" ($ref.progressStallSecs | toString)) (dict "name" "RUST_LOG" "value" (.Values.scheduleFeed.logLevel | toString))) }}
+{{- $volumes := list (dict "name" "data" "persistentVolumeClaim" (dict "claimName" (default (include "distant-signal.scheduleFeedFullname" .) .Values.scheduleFeed.persistence.existingClaim) "readOnly" true)) }}
+{{- $mounts := list (dict "name" "data" "mountPath" "/data/schedule-feed" "readOnly" true) }}
+{{ include "distant-signal.cronWorkerSpec" (dict "root" . "component" "schedule-reference" "cron" $ref.cron "image" $ref.image "env" $env "workload" .Values.scheduleFeed "volumes" $volumes "volumeMounts" $mounts) }}
+{{- end }}
+{{- end }}

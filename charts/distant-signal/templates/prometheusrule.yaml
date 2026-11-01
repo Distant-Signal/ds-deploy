@@ -1795,8 +1795,38 @@ spec:
     {{- end }}
     {{- if $pipelineOn }}
     {{- with $rule.schedulePipeline }}
+    {{- /*
+    schedule-reference as a CronJob (scheduleFeed.reference.mode: cronjob,
+    docs/scheduled-jobs.md): a run exits before any scrape, so its four
+    alerts below read the ingest-writer's gauges of its database rows
+    (schedule_reference_signals, schedule_reference_publishes) instead of
+    its own, with the same windows.
+    */}}
+    {{- $refCron := eq (include "distant-signal.scheduleReferenceMode" $) "cronjob" }}
+    {{- $signal := printf "distant_signal_schedule_reference_recorded_signal_timestamp_seconds{namespace=%q" $ns }}
     - name: distant-signal.schedule-pipeline
       rules:
+        {{- if $refCron }}
+        {{- /*
+        No run has read its completion marker for cronNotSeededAfter (the
+        schedule's interval plus notSeededFor): every run fails before it
+        publishes. Not while the CronJob is suspended.
+        */}}
+        - alert: DistantSignalScheduleReferenceNotSeeded
+          expr: |
+            time() - max by (namespace) ({{ $signal }}, kind="seeded"}) > {{ include "distant-signal.durationSeconds" .cronNotSeededAfter }}
+            unless on (namespace) (max by (namespace) (kube_cronjob_spec_suspend{namespace="{{ $ns }}", cronjob="{{ include "distant-signal.cronWorkerFullname" (dict "root" $ "component" "schedule-reference") }}"}) == 1)
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "schedule-reference runs not seeded for {{ .cronNotSeededAfter }}"
+            description: "No run could read its last publish from Postgres, so none publishes. Check the run logs and Postgres."
+            runbook_url: {{ printf "%s#distantsignalschedulereferencenotseeded" $runbook | quote }}
+        {{- else }}
         {{- /*
         PL-15e: schedule-reference waits (with backoff, while /healthz stays
         healthy) for api to answer its startup seed GET. 0 until it does.
@@ -1814,6 +1844,7 @@ spec:
             summary: "schedule-reference not seeded for {{ .notSeededFor }}"
             description: "It cannot read its last publish from api, so it publishes nothing. Check api and the internal OAuth token endpoint."
             runbook_url: {{ printf "%s#distantsignalschedulereferencenotseeded" $runbook | quote }}
+        {{- end }}
         {{- /*
         PL-5: schedule-ingest quarantined an uploaded delivery zip that
         declares more than scheduleFeed's extraction caps, or whose entries
@@ -1978,7 +2009,11 @@ spec:
         */}}
         - alert: DistantSignalScheduleReferencePublishStale
           expr: |
+            {{- if $refCron }}
+            time() - max by (namespace) (distant_signal_schedule_reference_recorded_published_delivery_timestamp_seconds{namespace="{{ $ns }}"}) > {{ mul (int .staleAfterHours) 3600 }}
+            {{- else }}
             time() - max by (namespace) (distant_signal_schedule_reference_last_published_delivery_timestamp_seconds{namespace="{{ $ns }}"}) > {{ mul (int .staleAfterHours) 3600 }}
+            {{- end }}
           for: 15m
           labels:
             severity: {{ .severity }}
@@ -1998,7 +2033,11 @@ spec:
         */}}
         - alert: DistantSignalSchedulePublishStagedMismatch
           expr: |
+            {{- if $refCron }}
+            time() - max by (namespace, product) ({{ $signal }}, kind="staged_mismatch"}) < {{ include "distant-signal.durationSeconds" .mismatchWindow }}
+            {{- else }}
             sum by (namespace, product) (increase(distant_signal_store_schedule_publish_staged_mismatch_total{namespace="{{ $ns }}"}[{{ .mismatchWindow }}])) > 0
+            {{- end }}
           for: 0m
           labels:
             severity: {{ .severity }}
@@ -2018,7 +2057,11 @@ spec:
         */}}
         - alert: DistantSignalScheduleReferencePublishRejected
           expr: |
+            {{- if $refCron }}
+            time() - max by (namespace, product) ({{ $signal }}, kind="rejected"}) < {{ include "distant-signal.durationSeconds" .rejectedWindow }}
+            {{- else }}
             sum by (namespace, product) (increase(distant_signal_schedule_reference_publishes_total{namespace="{{ $ns }}", outcome="rejected"}[{{ .rejectedWindow }}])) > 0
+            {{- end }}
           for: 0m
           labels:
             severity: {{ .severity }}

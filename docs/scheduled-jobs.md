@@ -11,6 +11,7 @@ one goes wrong. Alerts: [scheduled jobs](alerts.md#scheduled-jobs).
 | `<fullname>-poller-stations` (only with `pollers.stations.mode: cronjob`) | poller-stations, once: one fetch of the stations feed, written to Postgres in one transaction. 04:20 UTC. | `pollers.stations.cron` |
 | `<fullname>-poller-transit-schedule-tfl` (only with `pollerTransitSchedule.networks.tfl.timetableMode: cronjob`) | poller-transit-schedule for TfL, once: one timetable download, parse and publish onto `ds:ingest:transit-tfl`. 04:00 UTC. | `pollerTransitSchedule.networks.tfl.timetableCron` |
 | `<fullname>-poller-transit-schedule-metrolink` (only with `pollerTransitSchedule.networks.metrolink.timetableMode: cronjob`) | poller-transit-schedule for Metrolink's timetable, once, onto `ds:ingest:transit-metrolink`. 03:30 UTC. Its situations loop stays in the always-on Deployment of the same name. | `pollerTransitSchedule.networks.metrolink.timetableCron` |
+| `<fullname>-schedule-reference` (only with `scheduleFeed.reference.mode: cronjob`) | schedule-reference, once: publishes the newest CIF delivery if it is new. Every 30 minutes, Europe/London. | `scheduleFeed.reference.cron` ([below](#schedule-reference)) |
 
 ## How a run behaves
 
@@ -65,10 +66,12 @@ suspended for an ordinary deploy.
 
 A worker with a `mode` value runs either as its always-on Deployment
 (`deployment`, the default) or as a CronJob (`cronjob`); the chart renders
-exactly one of them per loop, and CI checks it. Four have one, each a
-daily job that spends the rest of the day idle: `pollers.tocs.mode`,
+exactly one of them per loop, and CI checks it. Four pollers have one,
+each a daily job that spends the rest of the day idle: `pollers.tocs.mode`,
 `pollers.stations.mode` and, for poller-transit-schedule's TfL and
-Metrolink networks, `pollerTransitSchedule.networks.<network>.timetableMode`. The CronJob comes from
+Metrolink networks, `pollerTransitSchedule.networks.<network>.timetableMode`.
+schedule-reference has `scheduleFeed.reference.mode`
+([below](#schedule-reference)). The CronJob comes from
 `distant-signal.cronWorkerSpec` with the defaults above, and its pods keep
 the component's labels, so its NetworkPolicies, Redis ACL user, database
 role and Secrets apply exactly as they did to the Deployment.
@@ -167,6 +170,128 @@ DistantSignalScheduledJobPending fires after 15 minutes, and the run fails
 at `activeDeadlineSeconds` (30 minutes). The next day's run, or a manual
 one, catches up within the 36-hour freshness allowance.
 
+### schedule-reference
+
+schedule-reference publishes the CIF timetable's derived tables once a
+night, after the delivery lands (22:00-01:30 London), and sits idle the
+rest of the day: about 5Mi between publishes, a 1429Mi peak during one,
+against the 1792Mi the `reference` container requested all day in
+production. With `scheduleFeed.reference.mode: cronjob` it runs as
+`<fullname>-schedule-reference` instead of in the schedulefeed pod.
+
+**The pod.** Its own CronJob (component label `schedule-reference`:
+Postgres admits it, and its egress policy allows Postgres and DNS only),
+mounting the schedulefeed PVC **read-only** at `/data/schedule-feed`, as
+the container did. The PVC is ReadWriteOnce, which binds it to one node,
+not one pod: the schedulefeed-sftp pod already shares it that way. In
+production it is `local-path` on the single node `mine-bringer`, its PV
+pinned there by node affinity (checked 2026-11-01), so the CronJob's pods
+land beside the others. On a multi-node cluster pin them together
+(`scheduleFeed.nodeSelector`/`affinity` apply to the CronJob too).
+
+**The schedule.** `*/30 * * * *` in Europe/London, the Deployment's
+1800-second poll, so a delivery is picked up as quickly as before (from
+extraction to a completed publish took 18-38 minutes, 2026-10-20 to
+10-31). The 01:00-02:59 rule above is about heavy runs that DST skips or
+repeats; here every run is the same cheap check, and only the one that
+finds a new delivery is heavy. On the spring night the 01:00 and 01:30
+runs don't exist, so a delivery landing then waits up to an hour more; on
+the autumn night a repeated run finds the delivery published (or the lock
+held) and exits.
+
+**A run** (`RUN_ONCE=true`, `crates/schedule-reference`'s `run_once`):
+
+1. Takes the run lock, `pg_try_advisory_lock` on a fixed key
+   (`common::advisory_locks::SCHEDULE_REFERENCE_RUN_KEY`, ASCII
+   `dsschref`), on a connection of its own, held for the whole run. If
+   another run holds it (a doubled Job, a manual run) it exits 0. The
+   Deployment takes the same lock for each cycle, so while the mode
+   switches the two never publish at once.
+2. Reads its completion marker (`schedule_reference_publishes`), up to 7
+   times over about a minute (the Deployment waits forever), and records
+   `seeded` in `schedule_reference_signals`. Unreadable: exit 1.
+3. Finds the newest complete delivery on the PVC. None, the one the marker
+   names, or one an earlier run settled (below): exit 0. That is all most
+   runs do, a few seconds.
+4. Otherwise publishes every product, with the same in-run retries as the
+   Deployment's cycle, and writes the marker: exit 0.
+
+Exits:
+
+| Exit | When | The Job |
+|---|---|---|
+| 0 | nothing new, lock held, or a complete publish | succeeds |
+| 1 | the marker unreadable, or a product failed in a way a retry could fix | retries up to `backoffLimit` (2), each attempt a **full republish**; then the next scheduled run tries again |
+| 3 | a product refused as bad data (SQLSTATE class 22/23), or input it can't publish (an ALF with no links, a window with no trains) | fails at once; the delivery is **settled** (`kind = 'settled'`), so later runs skip it until a newer delivery lands |
+
+**No resume.** The Deployment remembered, in memory, which products of a
+failed delivery had gone through and redid only the rest. A run keeps
+nothing: the next one republishes the whole delivery. That is safe because
+every product's publish is idempotent: the crosswalks upsert and prune,
+`tiploc_locations` and `fixed_links` replace the table, the line
+populations and network departures upsert, the per-date products are diff
+publishes under a new publish id (whose first chunk discards whatever an
+abandoned attempt staged), and the marker is an upsert. A DB test
+(`a_full_republish_leaves_the_tables_as_one_publish_does`) publishes the
+same delivery twice and finds the tables as one publish leaves them. The
+cost is a heavier retry: the full publish again, 20-odd minutes and the
+1.4GiB peak.
+
+**Settled deliveries.** As a Deployment, a delivery with a permanent
+failure advanced the in-memory marker (not the durable one), so it was
+not attempted again until a restart. A run has no memory, so it records
+the delivery as settled instead; otherwise every run would republish it
+every 30 minutes until the next delivery. To try it again after a fix:
+`DELETE FROM schedule_reference_signals WHERE kind = 'settled'` (as the
+owner), then start a run by hand.
+
+**Metrics and alerts.** A run serves no `/metrics`. Its four alerts read
+the always-on ingest-writer's gauges of its database rows instead, with
+the same windows (docs/alerts.md):
+
+| Alert | As a Deployment | As a CronJob |
+|---|---|---|
+| DistantSignalScheduleReferenceNotSeeded | `schedule_reference_seeded` 0 for 30m | no `seeded` signal for 1h (`cronNotSeededAfter`: a 30-minute interval plus 30m), not while suspended |
+| DistantSignalScheduleReferencePublishStale | `schedule_reference_last_published_delivery_timestamp_seconds` older than 30h | `schedule_reference_recorded_published_delivery_timestamp_seconds` (the newest `schedule_reference_publishes` row) older than 30h |
+| DistantSignalSchedulePublishStagedMismatch | `increase(store_schedule_publish_staged_mismatch_total[6h]) > 0` | a `staged_mismatch` signal within 6h |
+| DistantSignalScheduleReferencePublishRejected | `increase(schedule_reference_publishes_total{outcome="rejected"}[6h]) > 0` | a `rejected` signal within 6h |
+
+The ingest-writer reads `schedule_reference_signals` and
+`schedule_reference_publishes` every minute
+(`distant_signal_schedule_reference_recorded_signal_timestamp_seconds{kind, product}`
+and `..._recorded_published_delivery_timestamp_seconds`). schedule-reference
+records the signals in either mode; only the rules change with the mode.
+The scheduled-job alerts cover its runs as for the pollers.
+
+**Capacity.** The Job requests 1536Mi (the 1429Mi peak) and 250m CPU, with
+a 4Gi memory limit and 64Mi/512Mi ephemeral storage, only while a run is
+going: seconds every half hour, 20-40 minutes once a night. The budget is
+to **leave about 1.8GiB of memory requests unclaimed** on the node, the
+1792Mi the container held all day, so that each run finds room. Nothing
+reserves it (no PriorityClass, no preemption): it is a budget kept by
+whoever sizes the node's other workloads (Ranma-Config,
+`docs/specs/resource-tuning-2026-10.md`). If it is spent, the nightly run
+waits Pending: DistantSignalScheduledJobPending fires after 15 minutes,
+the run fails at `activeDeadlineSeconds` (90 minutes), and the next run
+30 minutes later tries again; DistantSignalScheduleReferencePublishStale
+follows at 30 hours.
+
+**Connections.** The run lock's session is one connection beside the pool
+(3), so the role's computed limit is now pool + 2 (5), in either mode.
+
+**Switching.** Set `scheduleFeed.reference.mode: cronjob`; the release
+recreates the schedulefeed pod without `reference` (schedule-ingest
+restarts with it; SFTP is in its own pod) and creates the CronJob, which
+first runs at the next :00 or :30. A manual run
+(`kubectl create job --from=cronjob/<fullname>-schedule-reference ...`)
+should log "no new delivery to publish" and exit 0 within seconds.
+`scheduleFeed.reference.resources` no longer applies; the run uses
+`scheduleFeed.reference.cron.resources`. **Rollback:** set it back to
+`deployment` (or remove it). The container returns, seeds from the same
+marker and does not republish a published delivery. The tables, the
+marker and the signals are the same either way; a delivery settled by a
+run is attempted again by the Deployment (it doesn't read `settled`).
+
 ### Switching a worker over, and back
 
 The same for each (shown for tocs; stations uses `pollers.stations.mode`,
@@ -192,7 +317,8 @@ From kube-state-metrics, in the `<fullname>-scheduled-jobs` PrometheusRule
 
 - `DistantSignalScheduledJobFailed`: a run failed, with the reason.
 - `DistantSignalScheduledJobStale`: no success for 1.5 times the schedule
-  interval (and at least 30 minutes).
+  interval (and at least 30 minutes), while no run is going (a long run
+  ends by `activeDeadlineSeconds`; if it hits that, it fails).
 - `DistantSignalScheduledJobOOMKilled`: a Job pod was killed at its memory
   limit. The cluster's restart-based OOM alert can't see this: nothing
   restarts under `restartPolicy: Never`.
@@ -226,7 +352,8 @@ says why it can't be placed.
 
 Each CronJob has its own switch (`apiMaintenance.enabled`,
 `postgresql.pgbackrest.backup.suspend`, `pollers.tocs.mode`,
-`pollers.stations.mode`, `pollerTransitSchedule.networks.<network>.timetableMode`).
+`pollers.stations.mode`, `pollerTransitSchedule.networks.<network>.timetableMode`,
+`scheduleFeed.reference.mode`).
 Setting a transit network back to `deployment` returns its Deployment to
 both loops; the timetable waits out its day from the stream cursor. The
 failure policy, the replacement policy and the TTLs need no rollback of

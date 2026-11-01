@@ -46,6 +46,16 @@ transit networks):
     transit network's timetable CronJob with its situations loop on but no
     `situationsResources`, refuses to render.
 
+schedule-reference (`scheduleFeed.reference.mode`, CronJob phase 4) is a
+container of the schedulefeed pod rather than a Deployment of its own, so
+it has its own checks (`reference_mode_problems`): as a Deployment the
+schedulefeed pod has its `reference` container, the in-pod alert rules
+render and no CronJob does; as a CronJob the pod has no `reference`
+container, the CronJob runs once with no metrics, ports or probes, mounts
+the schedulefeed PVC read-only, keeps the schedule-reference component
+label (Postgres admits it), and its alerts read the ingest-writer's
+recorded gauges, with the scheduled-jobs rules naming it.
+
 Exit 1 with one line per failed check. Needs helm on PATH (or --helm) and
 PyYAML (pyproject.toml's lint group).
 """
@@ -79,6 +89,7 @@ EXPECTED = (
     "distant-signal-poller-tocs",
     "distant-signal-poller-stations",
     "distant-signal-poller-transit-schedule-tfl",
+    "distant-signal-schedule-reference",
 )
 FAIL_JOB_EXIT_CODES = [3, 137]
 
@@ -133,6 +144,9 @@ EVERYTHING = sets(
     "pollerTransitSchedule.networks.tfl.timetableMode=cronjob",
     "pollerTransitSchedule.networks.metrolink.timetableMode=cronjob",
     "pollerTransitSchedule.networks.metrolink.situationsEnabled=true",
+    "scheduleFeed.enabled=true",
+    "scheduleFeed.sftp.authMethod=password",
+    "scheduleFeed.reference.mode=cronjob",
 )
 EVERYTHING = (
     *EVERYTHING,
@@ -546,8 +560,130 @@ def mode_problems(helm: str, w: ModeWorkload, mode: str) -> list[str]:
     return problems
 
 
+SCHEDULE_FEED = sets(
+    "scheduleFeed.enabled=true", "scheduleFeed.sftp.authMethod=password"
+)
+REFERENCE_CRONJOB = "distant-signal-schedule-reference"
+REFERENCE_SCHEDULE = ("*/30 * * * *", "Europe/London")
+
+
+def named(docs: Sequence[Doc], kind: str, name: str) -> list[Doc]:
+    """Return the documents of `kind` named `name`."""
+    return [
+        d
+        for d in docs
+        if d.get("kind") == kind and as_map(d.get("metadata")).get("name") == name
+    ]
+
+
+def reference_cron_problems(doc: Mapping[str, object]) -> list[str]:
+    """Return what is wrong with schedule-reference's CronJob."""
+    spec = as_map(doc.get("spec"))
+    problems: list[str] = []
+    if (spec.get("schedule"), spec.get("timeZone")) != REFERENCE_SCHEDULE:
+        problems.append(
+            f"schedule {spec.get('schedule')!r} in {spec.get('timeZone')!r},"
+            f" not {REFERENCE_SCHEDULE}"
+        )
+    pod_spec = as_map(pod_template_of(doc).get("spec"))
+    containers = [as_map(c) for c in as_list(pod_spec.get("containers"))]
+    if len(containers) != 1:
+        return [*problems, f"expected one container, found {len(containers)}"]
+    container = containers[0]
+    env = env_of(container)
+    want = {"RUN_ONCE": "true", "METRICS_ENABLED": "false"}
+    problems.extend(
+        f"env {k} is {env.get(k)!r}, not {v!r}"
+        for k, v in want.items()
+        if env.get(k) != v
+    )
+    if "DATABASE_URL" not in env:
+        problems.append("no DATABASE_URL")
+    problems.extend(
+        f"container has {key}"
+        for key in ("ports", "livenessProbe", "readinessProbe", "startupProbe")
+        if key in container
+    )
+    if workload_of(doc) != "schedule-reference":
+        problems.append(f"pod labels say {workload_of(doc)!r}, not schedule-reference")
+    mounts = [as_map(m) for m in as_list(container.get("volumeMounts"))]
+    if not any(
+        m.get("mountPath") == "/data/schedule-feed" and m.get("readOnly") is True
+        for m in mounts
+    ):
+        problems.append("the schedulefeed PVC is not mounted read-only")
+    claims = [
+        as_map(as_map(v).get("persistentVolumeClaim"))
+        for v in as_list(pod_spec.get("volumes"))
+    ]
+    if not any(
+        c.get("claimName") == "distant-signal-schedulefeed"
+        and c.get("readOnly") is True
+        for c in claims
+    ):
+        problems.append("the schedulefeed PVC volume is not readOnly")
+    return problems
+
+
+def reference_mode_problems(helm: str, mode: str) -> list[str]:
+    """Return what is wrong with schedule-reference rendered in `mode`."""
+    flags = (
+        *SCHEDULE_FEED,
+        *ALERTS,
+        *sets("networkPolicy.enabled=true", f"scheduleFeed.reference.mode={mode}"),
+    )
+    docs, error = render(helm, flags)
+    if error:
+        return [f"render failed: {error}"]
+    cron = mode == "cronjob"
+    problems: list[str] = []
+    feed = named(docs, "Deployment", "distant-signal-schedulefeed")
+    containers = [
+        str(as_map(c).get("name"))
+        for d in feed
+        for c in as_list(as_map(pod_template_of(d).get("spec")).get("containers"))
+    ]
+    if ("reference" in containers) == cron:
+        problems.append(
+            f"the schedulefeed pod must {'not ' if cron else ''}run `reference`"
+            f" (containers {containers})"
+        )
+    cronjobs = named(docs, "CronJob", REFERENCE_CRONJOB)
+    if len(cronjobs) != int(cron):
+        problems.append(
+            f"{len(cronjobs)} {REFERENCE_CRONJOB} CronJobs, not {int(cron)}"
+        )
+    problems.extend(p for d in cronjobs for p in reference_cron_problems(d))
+    rules = yaml.safe_dump([d for d in docs if d.get("kind") == "PrometheusRule"])
+    in_pod = "distant_signal_schedule_reference_seeded" in rules
+    recorded = (
+        "distant_signal_schedule_reference_recorded_signal_timestamp_seconds" in rules
+    )
+    if in_pod == cron or recorded != cron:
+        problems.append(
+            f"the alerts must read the {'recorded' if cron else 'in-pod'} gauges"
+            f" (in-pod {in_pod}, recorded {recorded})"
+        )
+    if (f'owner_name=~"{REFERENCE_CRONJOB}"' in rules) != cron:
+        problems.append(
+            f"the scheduled-jobs rules must {'' if cron else 'not '}"
+            f"name {REFERENCE_CRONJOB}"
+        )
+    postgres = yaml.safe_dump(named(docs, "NetworkPolicy", "distant-signal-postgres"))
+    if ("- schedule-reference" in postgres) != cron:
+        problems.append(
+            f"the postgres NetworkPolicy must {'' if cron else 'not '}"
+            "admit schedule-reference"
+        )
+    return problems
+
+
 REFUSED = (
     ("an unknown mode", (*WORKLOADS[0].enable, *sets("pollers.tocs.mode=sometimes"))),
+    (
+        "an unknown schedule-reference mode",
+        (*SCHEDULE_FEED, *sets("scheduleFeed.reference.mode=sometimes")),
+    ),
     (
         "cronjob for a poller that can't run once (tfl)",
         sets(
@@ -588,11 +724,16 @@ def check_modes(helm: str) -> list[str]:
             failures.extend(
                 f"{w.label} mode {mode}: {p}" for p in mode_problems(helm, w, mode)
             )
+    for mode in ("deployment", "cronjob"):
+        failures.extend(
+            f"schedule-reference mode {mode}: {p}"
+            for p in reference_mode_problems(helm, mode)
+        )
     for label, flags in REFUSED:
         _, error = render(helm, flags)
         if "cronjob" not in error and "deployment or cronjob" not in error:
             failures.append(f"{label} must refuse to render (got {error!r})")
-    print(f"modes: {len(WORKLOADS)} workloads, {len(failures)} problems")
+    print(f"modes: {len(WORKLOADS) + 1} workloads, {len(failures)} problems")
     return failures
 
 

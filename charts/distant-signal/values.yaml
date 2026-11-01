@@ -5289,6 +5289,61 @@ scheduleFeed:
       digest: ""
       pullPolicy: IfNotPresent
     pollIntervalSecs: 1800
+    # -- How it runs (docs/scheduled-jobs.md, "schedule-reference"):
+    # `deployment` (the `reference` container of the schedulefeed pod,
+    # polling every pollIntervalSecs) or `cronjob` (its own CronJob,
+    # `cron` below, whose run publishes a new delivery if there is one and
+    # exits). Exactly one renders. As a CronJob it serves no /metrics: its
+    # alerts read the ingest-writer's gauges of its database rows
+    # (`ingestWriter.enabled` is required), and the scheduled-job alerts
+    # cover its runs. Both modes take the same run lock, so a run and a
+    # Deployment cycle never publish at once while the mode switches.
+    mode: deployment
+    # -- The CronJob, while `mode: cronjob`.
+    cron:
+      # -- Every 30 minutes, the Deployment's poll interval, so a delivery
+      # is picked up as soon as before. A run with no new delivery reads
+      # its marker and a directory listing and exits 0 in seconds. Europe/
+      # London: on the spring DST night its 01:00 and 01:30 runs don't
+      # exist (a delivery waits up to an hour more, once a year); on the
+      # autumn night they may run twice, and the second finds the delivery
+      # published (or the run lock held) and does nothing.
+      schedule: "*/30 * * * *"
+      # -- Required (CI checks every CronJob has one).
+      timeZone: Europe/London
+      suspend: false
+      # -- A start missed by more than this is skipped; the next run is
+      # 30 minutes later.
+      startingDeadlineSeconds: 600
+      # -- Kill a run (or one still Pending) after this long. A full
+      # publish took 18-38 minutes from extraction in production
+      # (2026-10-20 to 10-31); 90 minutes leaves room for the in-cycle
+      # retries through a database restart.
+      activeDeadlineSeconds: 5400
+      # -- Retries of a run that failed transiently (exit 1), each a full
+      # republish. Exit 3 (a product refused as bad data, or input it
+      # can't publish) and 137 (OOMKilled) fail the Job at once.
+      backoffLimit: 2
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      # -- A finished Job and its pod are deleted this long after (the
+      # history limits usually remove them first).
+      ttlSecondsAfterFinished: 86400
+      # -- The run's container resources. Requests are held only while a
+      # run is going: the nightly publish peaked at 1429Mi working set
+      # (20 days to 2026-10-21), so 1536Mi requests the peak and the 4Gi
+      # limit keeps the Deployment's production headroom. The memory the
+      # Deployment requested all day (1792Mi in production) is left
+      # unclaimed on the node as this Job's budget (docs/scheduled-jobs.md,
+      # "Capacity").
+      resources:
+        requests:
+          cpu: 250m
+          memory: 1536Mi
+          ephemeral-storage: 64Mi
+        limits:
+          memory: 4Gi
+          ephemeral-storage: 512Mi
     # -- How many days beyond today each delivery publishes the per-date
     # timetable products for (`SCHEDULE_FORWARD_PUBLISH_DAYS`): train search,
     # `/Train/by-uid` stops, service modes and `/Trips/plan` reach this far
@@ -6567,9 +6622,17 @@ metrics:
     # DistantSignalLinePopulationMissing: past 06:00 London, some line still
     # has no schedule population for today's rail day (full-coverage-consumer
     # metric) for `populationMissingFor`.
+    # With scheduleFeed.reference.mode: cronjob, the four schedule-reference
+    # alerts (NotSeeded, PublishStale, PublishStagedMismatch, PublishRejected)
+    # read the ingest-writer's gauges of its database rows instead of its
+    # own /metrics (a run exits before a scrape; docs/scheduled-jobs.md), with
+    # the same windows. NotSeeded then fires when no run has read its marker
+    # for `cronNotSeededAfter`: the schedule's 30-minute interval plus
+    # `notSeededFor`, and never while the CronJob is suspended.
     schedulePipeline:
       enabled: true
       notSeededFor: 30m
+      cronNotSeededAfter: 1h
       zipRejectedWindow: 6h
       staleAfterHours: 30
       corpusStaleWarningDays: 35

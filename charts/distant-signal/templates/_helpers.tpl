@@ -1518,7 +1518,8 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 {{- else if eq .service "schedule_ingest" -}}
 {{- int $root.Values.scheduleFeed.ingest.database.maxConnections -}}
 {{- else if eq .service "schedule_reference" -}}
-{{- int $root.Values.scheduleFeed.reference.ingest.database.maxConnections -}}
+{{- /* Its pool plus the run-lock session (DS-241), in either mode. */ -}}
+{{- add1 (int $root.Values.scheduleFeed.reference.ingest.database.maxConnections) -}}
 {{- else if has .service (list "full_coverage_ro" "ldbws_ro") -}}
 {{- /* A phase 4 reader: <component>.internalReads.database. */ -}}
 {{- $values := ternary $root.Values.pollers.ldbws $root.Values.fullCoverageConsumer (eq .service "ldbws_ro") -}}
@@ -1772,12 +1773,12 @@ true
 {{- end }}
 
 {{/*
-schedule-reference's connections when the schedulefeed Deployment renders,
-else 0. Takes root.
+schedule-reference's connections when scheduleFeed renders it (either
+mode), else 0: its pool plus the run-lock session (DS-241). Takes root.
 */}}
 {{- define "distant-signal.scheduleReferencePool" -}}
 {{- if include "distant-signal.scheduleReferenceDbSink" . -}}
-{{- int .Values.scheduleFeed.reference.ingest.database.maxConnections -}}
+{{- add1 (int .Values.scheduleFeed.reference.ingest.database.maxConnections) -}}
 {{- else -}}
 0
 {{- end -}}
@@ -1865,8 +1866,9 @@ a moment. Takes (dict "root" $ "service" ...).
 {{- $pool := int $cfg.maxConnections -}}
 {{- add (mul (add (int $root.Values.api.replicaCount) 1) $pool) 2 (include "distant-signal.apiMaintenancePool" $root) -}}
 {{- else -}}
-{{- /* The writer's servicePool already counts its lock session, so it too
-gets the +1 every role has for a probe or brief overlap: pool + lock + 1. */ -}}
+{{- /* The writer's and schedule-reference's servicePool already count
+their lock sessions, so they too get the +1 every role has for a probe or
+brief overlap: pool + lock + 1. */ -}}
 {{- add (include "distant-signal.servicePool" .) 1 -}}
 {{- end -}}
 {{- end }}
@@ -2192,7 +2194,25 @@ their own failure and staleness alerts. Takes root.
 {{- $names = append $names (include "distant-signal.cronWorkerFullname" (dict "root" $root "component" (printf "poller-transit-schedule-%s" $network))) -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.scheduleFeed.enabled (eq (.Values.scheduleFeed.reference.mode | default "deployment") "cronjob") -}}
+{{- $names = append $names (include "distant-signal.cronWorkerFullname" (dict "root" $root "component" "schedule-reference")) -}}
+{{- end -}}
 {{- join "|" $names -}}
+{{- end }}
+
+{{/*
+schedule-reference's mode (scheduleFeed.reference.mode; docs/scheduled-jobs.md):
+"deployment" (the `reference` container of the schedulefeed pod) or
+"cronjob" (schedule-reference-cronjob.yaml). Fails on anything else, and on
+"cronjob" without the ingest-writer, which exports the database rows its
+alerts read in that mode. Takes root.
+*/}}
+{{- define "distant-signal.scheduleReferenceMode" -}}
+{{- $mode := include "distant-signal.workloadMode" (dict "what" "scheduleFeed.reference.mode" "mode" .Values.scheduleFeed.reference.mode "cronCapable" true) -}}
+{{- if and (eq $mode "cronjob") (not .Values.ingestWriter.enabled) -}}
+{{- fail "scheduleFeed.reference.mode: cronjob needs ingestWriter.enabled: the writer exports the database rows its alerts read (docs/scheduled-jobs.md)." -}}
+{{- end -}}
+{{- $mode -}}
 {{- end }}
 
 {{/*

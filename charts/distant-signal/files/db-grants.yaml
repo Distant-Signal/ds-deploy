@@ -483,6 +483,11 @@ tables:
   # ON CONFLICT (delivery) DO UPDATE SET completed_at, which Postgres checks
   # UPDATE for even when nothing conflicts.
   schedule_reference_publishes: {class: reference, grants: {api: S, schedule_reference: SIU}}
+  # DS-241: schedule-reference's run signals (seeded, rejected,
+  # staged_mismatch, settled), upserted ON CONFLICT (kind, product) DO
+  # UPDATE, hence SIU; the always-on writer exports them as gauges
+  # (docs/scheduled-jobs.md).
+  schedule_reference_signals: {class: internal, grants: {schedule_reference: SIU, writer: S}}
   # schedule_ingest: SELECT only on its ON CONFLICT (delivered_at) target
   # (security review L3), which Postgres checks even for DO NOTHING.
   schedule_feed_ingests: {class: reference, grants: {api: S, schedule_ingest: [I, {privileges: S, columns: [delivered_at]}]}}

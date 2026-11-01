@@ -28,6 +28,11 @@ rendered groups and `promtool test rules` on scripts/alert-rules-tests/*.yaml.
 Those tests name the rendered file `rules.yaml`, rendered as release
 `distant-signal` in namespace `distant-signal`.
 
+Rules that render only with another value (a workload's `cronjob` mode)
+come from a VARIANTS render: its alerts are checked the same way, and the
+tests in scripts/alert-rules-tests/<variant>/ run against it as their
+`rules.yaml`.
+
 Needs helm on PATH (or --helm) and PyYAML (pinned in pyproject.toml's `lint`
 dependency group).
 """
@@ -44,7 +49,7 @@ import tarfile
 import tempfile
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -158,6 +163,15 @@ RENDER_FLAGS = [
     "apiMaintenance.enabled=true",
 ]
 
+# Renders beside the RENDER_FLAGS one, for rules that replace others under
+# a value: each name's flags are added to RENDER_FLAGS, and
+# TESTS/<name>/*.yaml are its promtool tests.
+VARIANTS: dict[str, list[str]] = {
+    # schedule-reference as a CronJob (CronJob phase 4): its alerts read the
+    # ingest-writer's gauges of its database rows instead of its own.
+    "schedule-reference-cronjob": ["scheduleFeed.reference.mode=cronjob"],
+}
+
 # What a template expression in an annotation expands to, for the size
 # estimate: a typical label value, or a formatted $value.
 SAMPLE_LABEL = "x" * 24
@@ -186,7 +200,7 @@ class Alert:
     annotations: Mapping[str, str]
 
 
-def render(helm: str) -> list[dict[str, object]]:
+def render(helm: str, extra: Sequence[str] = ()) -> list[dict[str, object]]:
     """Render the chart with every alert on; return the PrometheusRule documents."""
     # Every producer is on its db or stream sink (since release A; the only
     # sink since release B) with the prerequisites it needs.
@@ -201,7 +215,7 @@ def render(helm: str) -> list[dict[str, object]]:
         "-f",
         prereqs,
     ]
-    for flag in RENDER_FLAGS:
+    for flag in [*RENDER_FLAGS, *extra]:
         cmd += ["--set", flag]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout  # noqa: S603  # fixed argv, no shell
     docs = [d for d in yaml.safe_load_all(out) if isinstance(d, dict)]
@@ -400,15 +414,19 @@ def download_promtool(directory: pathlib.Path) -> pathlib.Path:
     return target
 
 
-def run_promtool(promtool: pathlib.Path, groups: Sequence[Mapping[str, object]]) -> int:
-    """`promtool check rules` on the rendered groups, then `test rules` on TESTS."""
+def run_promtool(
+    promtool: pathlib.Path,
+    groups: Sequence[Mapping[str, object]],
+    tests_dir: pathlib.Path = TESTS,
+) -> int:
+    """`promtool check rules` on the groups, then `test rules` on `tests_dir`."""
     status = 0
     with tempfile.TemporaryDirectory() as tmp:
         work = pathlib.Path(tmp)
         (work / "rules.yaml").write_text(
             yaml.safe_dump({"groups": list(groups)}, sort_keys=False)
         )
-        tests = sorted(TESTS.glob("*.yaml"))
+        tests = sorted(tests_dir.glob("*.yaml"))
         for test in tests:
             shutil.copy(test, work / test.name)
         commands = [[str(promtool), "check", "rules", "rules.yaml"]]
@@ -422,6 +440,19 @@ def run_promtool(promtool: pathlib.Path, groups: Sequence[Mapping[str, object]])
             print(result.stdout + result.stderr, end="")
             status |= result.returncode != 0
     return status
+
+
+def with_variants(
+    alerts: list[Alert], variants: Iterable[Sequence[Mapping[str, object]]]
+) -> list[Alert]:
+    """`alerts` plus each variant render's alerts that differ from them."""
+    seen = {(a.name, a.expr) for a in alerts}
+    for groups in variants:
+        for alert in alerts_of(groups):
+            if (alert.name, alert.expr) not in seen:
+                seen.add((alert.name, alert.expr))
+                alerts.append(alert)
+    return alerts
 
 
 def main(argv: Sequence[str]) -> int:
@@ -450,7 +481,10 @@ def main(argv: Sequence[str]) -> int:
     args = parser.parse_args(argv)
 
     groups = groups_of(render(args.helm))
-    alerts = list(alerts_of(groups))
+    variants = {
+        name: groups_of(render(args.helm, flags)) for name, flags in VARIANTS.items()
+    }
+    alerts = with_variants(list(alerts_of(groups)), variants.values())
     if not alerts:
         print("no alerts rendered", file=sys.stderr)
         return 1
@@ -467,6 +501,9 @@ def main(argv: Sequence[str]) -> int:
         promtool = download_promtool(args.download_promtool)
     if promtool is not None:
         status |= run_promtool(promtool, groups)
+        for name, variant_groups in variants.items():
+            print(f"== variant {name}")
+            status |= run_promtool(promtool, variant_groups, TESTS / name)
     return status
 
 

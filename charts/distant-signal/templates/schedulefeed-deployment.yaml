@@ -13,8 +13,14 @@ its volumes), mounting the same PVC, so app deploys that recreate this pod
 no longer drop DTD's SFTP push. This pod then runs `ingest` and
 `reference` only. With it false, the `sftp` container is rendered here, as
 before.
+
+With scheduleFeed.reference.mode: cronjob the `reference` container is not
+rendered here: schedule-reference runs as its own CronJob instead
+(schedule-reference-cronjob.yaml), mounting the same PVC read-only.
 */}}
 {{- if .Values.scheduleFeed.enabled }}
+{{- /* The `reference` container is in THIS pod (not its own CronJob). */}}
+{{- $reference := eq (include "distant-signal.scheduleReferenceMode" .) "deployment" }}
 {{- /* The `sftp` container is in THIS pod: SFTP on, not split out. */}}
 {{- $sftp := and .Values.scheduleFeed.sftp.enabled (not (include "distant-signal.scheduleFeedSftpSeparate" .)) }}
 {{- if not (or .Values.scheduleFeed.sftp.enabled (.Values.scheduleFeed.bucket).enabled) }}
@@ -184,6 +190,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+        {{- if $reference }}
         - name: reference
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.scheduleFeed.reference.image) | quote }}
           imagePullPolicy: {{ .Values.scheduleFeed.reference.image.pullPolicy }}
@@ -252,6 +259,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+        {{- end }}
       {{- with .Values.scheduleFeed.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
