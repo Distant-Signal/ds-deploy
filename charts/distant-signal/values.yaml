@@ -1902,6 +1902,12 @@ api:
     dates: 2
     maxAgeSecs: 21600
     prewarmIntervalSecs: 60
+    # -- DS-235: build one timetable snapshot per schedule publish (or
+    # transit feed) in the prewarm loop, store it in `planner_snapshots`
+    # and build every date's graph from it instead of a per-date read
+    # (TRIP_PLAN_SNAPSHOT_ENABLED). Needs prewarmIntervalSecs above 0. Off:
+    # graphs are read from Postgres per date, as before.
+    snapshot: false
   # -- Most `?waypoints=` one /Trips/plan request may name (1-20; values
   # outside are clamped). Waypoints are searched as one journey whose cost
   # grows with their number; 20 measured under ~0.35 s (fastest) and ~2 s

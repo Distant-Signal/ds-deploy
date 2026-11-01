@@ -231,7 +231,12 @@ the database (or Redis, or the IdP), see the 2026-10-06 entry in
   (`absent`, `marker`, `expired`) and `trigger` (`request`, `prewarm`),
   beside `api_trip_plan_graph_build_seconds{phase}` (`read`, `cpu`,
   `total`). A healthy api builds mostly with `trigger="prewarm"`: a steady
-  `trigger="request"` rate means plans are paying the build. Without that, a series appeared at 1 on its first request and
+  `trigger="request"` rate means plans are paying the build. With the
+  timetable snapshot on (`api.tripPlanGraphCache.snapshot`, DS-235),
+  `api_trip_plan_snapshot_total{outcome}` (`current`, `loaded`, `built`,
+  `busy`, `failed`) is registered too: `failed` should stay flat (graphs
+  then come from Postgres), and `built` should move about once per
+  publish. Without that, a series appeared at 1 on its first request and
   `increase()`/`rate()` never counted that request, so a rare route like
   `/Trips/plan` read as zero across api's frequent restarts.
 - For any other route or status code the first request after a restart is

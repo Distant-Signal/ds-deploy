@@ -346,6 +346,9 @@ tables:
   # upserts them (POST /public/events) and its retention sweep deletes days
   # older than 13 months.
   usage_daily: {class: internal, grants: {api: SIUD}}
+  # The trip planner's timetable snapshot (DS-235): the api builds, stores,
+  # prunes and reads it.
+  planner_snapshots: {class: internal, grants: {api: SIUD}}
   # The publish staging keys (UNLOGGED). Only schedule-reference's publish
   # uses them, as schedule_reference; the app role lost them in release B
   # (app_revokes below), with the api's /private publish routes.
