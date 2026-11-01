@@ -1512,7 +1512,15 @@ The stored routes stay; Tube access legs keep measuring along them. A
 route timetable that fails to fetch (DS-206,
 `tfl_route_timetables_failed_total`, log "no running times from this TfL
 timetable") does not fail the cycle: the steps it alone would time fall
-back to the distance estimate.
+back to the distance estimate. A 429 is retried after at least the wait
+TfL asks for (`Retry-After`, or the body's "Try again in N seconds"),
+jittered, up to six attempts for the daily jobs and three for the status
+poll (`tfl_fetch_retries_total{what, status}`;
+`tfl_fetch_total{outcome="retried_429"}`). So a failed timetable after
+that is a sustained rate limit or outage. A 404 is TfL publishing no
+timetable for that route (trams: only from Wimbledon). It is not a failure:
+it counts `tfl_route_timetables_unpublished_total` and logs once a process
+("TfL publishes no timetable for this route").
 
 ### DistantSignalLdbwsStationStale
 
