@@ -1142,6 +1142,53 @@ jobs:
           fi
           uv run --locked --no-default-groups scripts/check-migration-order.py "${base}"
 
+  # Commit identity (repo split spec §5.10): no commit in the PR or push
+  # may use a retired author/committer address or carry AI attribution
+  # (a Co-authored-by trailer with an @anthropic.com address, a
+  # Claude-Session trailer, a "Generated with Claude Code" footer). Other
+  # identities pass, outside contributors included. Moves to the `ci`
+  # repository's reusable identity.yml in phase 3.
+  commit-identity:
+    name: commits use the current identity, without AI attribution
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The script is stdlib-only; uv provides .python-version's interpreter.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # renovate: datasource=pypi depName=uv
+          version: "0.13.6"
+          # Nothing to cache: no dependencies are installed.
+          enable-cache: false
+
+      # A PR checks its own commits (merge base to the PR's head, not the
+      # synthetic merge commit); a push checks what it added.
+      - name: Check commit identities
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" = "pull_request" ]]; then
+            base="$(git merge-base "origin/${BASE_REF}" "${PR_HEAD}")"
+            head="${PR_HEAD}"
+          elif [[ -n "${BEFORE}" ]] && [[ "${BEFORE}" != "0000000000000000000000000000000000000000" ]] \
+              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            base="${BEFORE}"
+            head=HEAD
+          else
+            echo "no usable base commit (new branch or force push); skipping"
+            exit 0
+          fi
+          uv run --locked --no-default-groups scripts/check-commit-identity.py "${base}" "${head}"
+
   # Lint, format-check and type-check the repo's scripts, strict by default:
   #   - every tracked *.sh: shellcheck with every optional check at style
   #     severity (.shellcheckrc) and shfmt (style from .editorconfig);
