@@ -217,8 +217,6 @@ spec:
               value: /data/schedule-feed
             - name: POLL_INTERVAL_SECS
               value: {{ .Values.scheduleFeed.reference.pollIntervalSecs | quote }}
-            - name: LINES_DIR
-              value: /app/lines
             # Days beyond today the per-date products are published for.
             - name: SCHEDULE_FORWARD_PUBLISH_DAYS
               value: {{ .Values.scheduleFeed.reference.forwardPublishDays | int | quote }}

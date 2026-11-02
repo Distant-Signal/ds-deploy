@@ -27,7 +27,7 @@ alerts cover its runs.
 {{- if .Values.scheduleFeed.enabled }}
 {{- if eq (include "distant-signal.scheduleReferenceMode" .) "cronjob" }}
 {{- $ref := .Values.scheduleFeed.reference }}
-{{- $env := list (dict "name" "STORAGE_DIR" "value" "/data/schedule-feed") (dict "name" "LINES_DIR" "value" "/app/lines") (dict "name" "SCHEDULE_FORWARD_PUBLISH_DAYS" "value" ($ref.forwardPublishDays | int | toString)) }}
+{{- $env := list (dict "name" "STORAGE_DIR" "value" "/data/schedule-feed") (dict "name" "SCHEDULE_FORWARD_PUBLISH_DAYS" "value" ($ref.forwardPublishDays | int | toString)) }}
 {{- if include "distant-signal.scheduleReferenceDbSink" . }}
 {{- $env = concat $env (include "distant-signal.databaseEnvFor" (dict "root" . "service" "schedule_reference") | fromYamlArray) }}
 {{- $env = concat $env (list (dict "name" "DATABASE_MAX_CONNECTIONS" "value" ($ref.ingest.database.maxConnections | int | toString)) (dict "name" "CORPUS_FALLBACK_ENABLED" "value" (.Values.api.corpusFallback.enabled | toString))) }}

@@ -94,10 +94,8 @@ with aggregator.extraEnv, which replaces an entry of the same name.
             - name: METRICS_PORT
               value: {{ .Values.metrics.port | quote }}
             {{- end }}
-            # Matches the binary's own default (crates/aggregator/src/config.rs)
-            # and where docker/aggregator.Dockerfile bakes the catalogue in.
-            - name: LINES_DIR
-              value: /app/lines
+            # LINES_DIR is not set: the binary loads the line catalogue it
+            # was built with (crates/ds-lines).
             - name: POLL_INTERVAL_SECS
               value: {{ .Values.aggregator.pollIntervalSecs | quote }}
             - name: HISTORY_RETENTION_DAYS

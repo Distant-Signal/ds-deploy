@@ -652,9 +652,8 @@ with api.extraEnv, which replaces an entry of the same name.
             # crates/api/src/data/config.rs's half_hourly_stats_retention_hours doc.
             - name: HALF_HOURLY_STATS_RETENTION_HOURS
               value: {{ .Values.aggregator.halfHourlyStatsRetentionHours | quote }}
-            # LINES_DIR is deliberately NOT set: crates/api/src/data/config.rs
-            # already defaults it to /app/lines, which is exactly where
-            # docker/api.Dockerfile bakes the line catalogue.
+            # LINES_DIR is deliberately NOT set: the binary loads the line
+            # catalogue it was built with (crates/ds-lines).
             # VAPID public key (crates/api/src/data/config.rs: ServiceArguments)
             # -- served unauthenticated via GET /public/notifications/vapid-public-key
             # (crates/api/src/routes/notifications.rs) for the browser's
