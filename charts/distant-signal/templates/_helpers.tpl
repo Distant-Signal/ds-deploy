@@ -219,7 +219,8 @@ wins on pull anyway, so rendering a tag alongside it would just be
 misleading. Only this chart's first-party, CI-built images (api,
 aggregator, notifier, enricher, frontend, the pollers, trustConsumer,
 fullCoverageConsumer, trustBacklogConsumer, movementRelay,
-pollerIrishRailGtfs/Live, pollerNirStations, scheduleFeed.ingest/reference)
+pollerIrishRailGtfs/Live, pollerNirStations, scheduleFeed.ingest/reference,
+migrate)
 carry a `digest` field at all -- see each's own `image.digest` values.yaml
 comment (canonical copy: `api.image.digest`) and
 `.github/workflows/containers.yml`'s `push-helm-chart` job for how it gets

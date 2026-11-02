@@ -118,6 +118,9 @@ jobs:
           - service: api
             dockerfile: docker/api.Dockerfile
             target: ""
+          - service: ds-migrate
+            dockerfile: docker/ds-migrate.Dockerfile
+            target: ""
           - service: aggregator
             dockerfile: docker/aggregator.Dockerfile
             target: ""
@@ -487,6 +490,7 @@ jobs:
           set -euo pipefail
           declare -A SERVICE_TO_PATH=(
             [api]=".api"
+            [ds-migrate]=".migrate"
             [aggregator]=".aggregator"
             [enricher]=".enricher"
             [notifier]=".notifier"
@@ -560,6 +564,7 @@ jobs:
           set -euo pipefail
           declare -A SERVICE_TO_PATH=(
             [api]=".api"
+            [ds-migrate]=".migrate"
             [aggregator]=".aggregator"
             [enricher]=".enricher"
             [notifier]=".notifier"

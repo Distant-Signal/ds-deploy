@@ -1902,6 +1902,16 @@ jobs:
               '- /usr/local/bin/ds-migrate' '- run'; do
             grep -q -F -- "${want}" <<<"${job}" || fail "migrate Job lacks: ${want}"
           done
+          # Its own image (repo split spec §5.1), not the api's.
+          grep -q 'image: "ghcr.io/distant-signal/images/ds-migrate:' <<<"${job}" \
+            || fail "the migrate Job must run the ds-migrate image (migrate.image)"
+          if grep -q 'images/api[:@]' <<<"${job}"; then
+            fail "the migrate Job must not run the api image"
+          fi
+          pinned=$(render --set migrate.job.enabled=true --set "migrate.image.digest=sha256:$(printf '0%.0s' {1..64})" \
+            --show-only templates/migrate-job.yaml)
+          grep -q "image: \"ghcr.io/distant-signal/images/ds-migrate@sha256:0\{64\}\"" <<<"${pinned}" \
+            || fail "migrate.image.digest must pin the migrate Job's image"
           # The bounded connect retry (2026-10-08: a saturated node, a late NetworkPolicy).
           grep -A1 'name: MIGRATION_CONNECT_DEADLINE_SECS$' <<<"${job}" | grep -q 'value: "120"' \
             || fail "the migrate Job must set MIGRATION_CONNECT_DEADLINE_SECS=120 by default"

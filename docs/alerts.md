@@ -139,7 +139,7 @@ lacks, as `PRIVILEGE on table[.column]`).
    postgres-setup Job applies `files/postgres-grants.sql`; check it ran
    for this release, and that `db-grants.yaml` lists the table for this
    service (a new table needs a grant there, `scripts/gen-db-grants.py`).
-3. `ds-migrate wait --role <role>` (in the api image), run with that
+3. `ds-migrate wait --role <role>` (in the ds-migrate image, and still in the api image), run with that
    service's `DATABASE_URL`, makes the same check from outside the service
    and exits once it passes.
 
