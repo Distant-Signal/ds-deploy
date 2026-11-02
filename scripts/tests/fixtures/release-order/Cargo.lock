@@ -1,0 +1,11 @@
+# The monorepo's shape: every core crate is a workspace member.
+version = 4
+
+[[package]]
+name = "api"
+version = "0.1.0"
+dependencies = ["ds-store"]
+
+[[package]]
+name = "ds-store"
+version = "0.1.0"

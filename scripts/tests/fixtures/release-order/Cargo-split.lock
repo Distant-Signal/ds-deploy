@@ -1,0 +1,13 @@
+# After the split: a service repository's lock, the core crates from
+# ds-core at a tag. No api crate, so no api-build.
+version = 4
+
+[[package]]
+name = "ds-store"
+version = "1.4.2"
+source = "git+https://github.com/Distant-Signal/ds-core?tag=v1.4.2#89abcdef0123456789abcdef0123456789abcdef"
+
+[[package]]
+name = "poller-tfl"
+version = "0.1.0"
+dependencies = ["ds-store"]

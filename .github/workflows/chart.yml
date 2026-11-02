@@ -97,8 +97,28 @@ env:
   SOURCE_DATE_EPOCH: "0"
 
 jobs:
+  # Each image's version labels, org.distant-signal.core-version and
+  # org.distant-signal.api-build (repo split spec §5.1, §5.3), from
+  # Cargo.lock: a JSON map of service -> `key=value` lines, the shape
+  # image.yml's `labels` input takes. Static until a version changes, so
+  # they don't cost an unchanged image its digest. scripts/release-order.py
+  # documents the values; push-helm-chart checks them before the chart ships.
+  image-labels:
+    name: image labels
+    runs-on: ubuntu-26.04
+    outputs:
+      labels: ${{ steps.labels.outputs.labels }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Each image's version labels
+        id: labels
+        run: python3 scripts/release-order.py labels --github-output
+
   build-and-push:
     name: ${{ matrix.service }}
+    needs: image-labels
     permissions:
       contents: read
       packages: write
@@ -205,7 +225,7 @@ jobs:
     # signatures' certificate identity is Distant-Signal/ci's image.yml,
     # not this file. Only the chart's signature is verified (by Flux); the
     # chart is still signed here, in push-helm-chart.
-    uses: Distant-Signal/ci/.github/workflows/image.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    uses: Distant-Signal/ci/.github/workflows/image.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
     with:
       service: ${{ matrix.service }}
       dockerfile: ${{ matrix.dockerfile }}
@@ -218,6 +238,7 @@ jobs:
       publish: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
       rebuild-runtime: ${{ github.event_name == 'schedule' || inputs.no-cache == true }}
       build-args: DS_PROJECT_URL=${{ github.server_url }}/${{ github.repository }}
+      labels: ${{ fromJSON(needs.image-labels.outputs.labels)[matrix.service] }}
       extra-cache-from: type=registry,ref=ghcr.io/fasterspeeding/distant-signal/buildcache:${{ matrix.service }}
 
   # Package and push the Helm chart to ghcr.io, once every image in the
@@ -614,6 +635,23 @@ jobs:
           set -euo pipefail
           yq -i '.sourceCode.url = strenv(SOURCE_URL) | .sourceCode.revision = strenv(GITHUB_SHA)' charts/distant-signal/values.yaml
 
+      # The release-ordering checks (repo split spec §5.1, §5.3), against
+      # the labels of the images this chart now pins, read anonymously from
+      # the registry as the cluster pulls them: every image's core-version at
+      # most ds-migrate's, the frontend's api-build at most the api's, and
+      # every image at least the `safe after core` of any versioned contract
+      # migration. Everything here builds from one commit, so they hold by
+      # construction; a failure (or an image the registry won't serve
+      # anonymously, e.g. a new package still private) stops the chart push.
+      - name: Release ordering checks (the pinned images' labels)
+        env:
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          yq -o=json charts/distant-signal/values.yaml > "${RUNNER_TEMP}/values.json"
+          python3 scripts/release-order.py check --values "${RUNNER_TEMP}/values.json" \
+            --registry --app-version "${APP_VERSION}"
+
       - name: helm package
         id: package
         run: |
@@ -664,7 +702,7 @@ jobs:
       # action runs in this job, so the certificate identity stays this
       # workflow's, which Flux's matchOIDCIdentity pins.
       - name: Sign and verify the pushed chart
-        uses: Distant-Signal/ci/actions/cosign-sign@eb5552be3a85b5aa333879202b50941f5af878be # main
+        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
         with:
           ref: ${{ env.CHART_BASE }}/distant-signal@${{ steps.push.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
@@ -702,7 +740,7 @@ jobs:
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Sign and verify the pushed chart (ds-ingest-bucket)
-        uses: Distant-Signal/ci/actions/cosign-sign@eb5552be3a85b5aa333879202b50941f5af878be # main
+        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
         with:
           ref: ${{ env.CHART_BASE }}/ds-ingest-bucket@${{ steps.push-ingest-bucket.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
