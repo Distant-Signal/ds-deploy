@@ -508,6 +508,12 @@ jobs:
       - name: chart copies of the grants and Redis ACL match their sources
         run: uv run --no-sync scripts/sync-chart-core-files.py --check
 
+      # frontend/lib/api-types.ts is a copy of the api's generated
+      # api-types/api.ts (repo split spec §5.3); `cargo test`'s
+      # api_types_are_current checks that one against the Rust types.
+      - name: frontend's api types match api-types/api.ts
+        run: uv run --no-sync scripts/sync-api-types.py check
+
       # Every chart values.yaml key needs a row in the chart README's "Values
       # reference" tables, and every row must name a real key.
       # `scripts/chart-values-doc.py table <section>` drafts missing rows.
