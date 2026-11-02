@@ -53,7 +53,7 @@ jobs:
   # build --workspace`. Its live counterpart is validate-line-catalogue.yml
   # (disabled pending credentials).
   rust:
-    uses: Distant-Signal/ci/.github/workflows/rust-ci.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    uses: Distant-Signal/ci/.github/workflows/rust-ci.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
     with:
       toolchain: 1.88.0
       msrv: 1.88.0
@@ -76,7 +76,7 @@ jobs:
   # chart's: `postgresql.image` and `redis.image` (Valkey; its `redis-cli`
   # symlink serves the health check).
   rust-db-tests:
-    uses: Distant-Signal/ci/.github/workflows/rust-db-tests.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    uses: Distant-Signal/ci/.github/workflows/rust-db-tests.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
     with:
       toolchain: 1.88.0
       # renovate: datasource=docker depName=postgres
@@ -119,7 +119,7 @@ jobs:
   # The Playwright e2e tests need a live api, Postgres and Redis: see
   # frontend-e2e.
   frontend:
-    uses: Distant-Signal/ci/.github/workflows/node-ci.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    uses: Distant-Signal/ci/.github/workflows/node-ci.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
     with:
       working-directory: frontend
       repo-check-name: Copy guardrails (scripts/check-copy.py)
@@ -361,7 +361,7 @@ jobs:
       # push, an unfetchable base), so the check is never skipped wrongly.
       - name: Did this change touch frontend/?
         id: frontend-paths
-        uses: Distant-Signal/ci/actions/paths-changed@eb5552be3a85b5aa333879202b50941f5af878be # main
+        uses: Distant-Signal/ci/actions/paths-changed@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
         with:
           base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           paths: frontend/
@@ -433,13 +433,13 @@ jobs:
   # "Generated with Claude Code" footer). Other identities pass, outside
   # contributors included.
   commit-identity:
-    uses: Distant-Signal/ci/.github/workflows/identity.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    uses: Distant-Signal/ci/.github/workflows/identity.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
 
   # Every LICENSE (the root one and both charts') is the canonical GNU AGPL
   # v3 text, byte for byte: the licence text is never distributed modified.
   # Distant-Signal/ci's licence.yml compares against a pinned SHA-256.
   licence:
-    uses: Distant-Signal/ci/.github/workflows/licence.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    uses: Distant-Signal/ci/.github/workflows/licence.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
 
   # Distant-Signal/ci's scripts-lint.yml, strict by default:
   #   - every tracked *.sh: shellcheck with every optional check at style
@@ -464,7 +464,7 @@ jobs:
   # from the repository root, with a checkout of Distant-Signal/ci:
   #   uv run python <ci>/scripts/lint-scripts.py
   scripts-lint:
-    uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
     with:
       check-bench-gates: true
 
@@ -520,6 +520,14 @@ jobs:
       # Here rather than in helm-lint: it needs the pinned PyYAML.
       - name: chart values reference is complete
         run: uv run --no-sync scripts/chart-values-doc.py check
+
+      # Repo split spec §5.1, §5.3: the labels this checkout's images get
+      # (scripts/release-order.py labels) against the chart's ordering rules.
+      # One commit builds every image, so this passes by construction; the
+      # real check runs on the pushed images in containers.yml's
+      # push-helm-chart, before the chart ships.
+      - name: release ordering (this checkout's image labels)
+        run: uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --source
 
       # Every alert's summary, description, expr and estimated 3-alert
       # webhook JSON stay under ntfy's 4,096-byte limit (the 2026-10-01
