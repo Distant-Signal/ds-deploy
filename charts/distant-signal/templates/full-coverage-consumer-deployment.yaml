@@ -118,14 +118,8 @@ with fullCoverageConsumer.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.fullCoverageConsumer.statsWriteIntervalSecs | quote }}
             - name: SHADOW_LINES
               value: {{ .Values.fullCoverageConsumer.shadowLines | quote }}
-            # Matches the binary's own default (crates/full-coverage-consumer/src/config.rs)
-            # and where docker/full-coverage-consumer.Dockerfile bakes the
-            # catalogue in -- same pattern as aggregator/api/schedule-reference,
-            # no volume mount needed (confirmed against those Deployments:
-            # none of them mount a lines/ volume either, it's baked into
-            # the image at build time).
-            - name: LINES_DIR
-              value: /app/lines
+            # LINES_DIR is not set: the binary loads the line catalogue it
+            # was built with (crates/ds-lines), as every other service does.
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.fullCoverageConsumer.healthPort) | quote }}
             - name: PROGRESS_STALL_SECS
