@@ -2914,7 +2914,7 @@ protectedPrefixes.
 {{/*
 Background-worker health (SVC-08/INF-9, INF-5): the `health` container port,
 the HEALTH_BIND_URL/PROGRESS_STALL_SECS env vars are written out literally
-in each template (the crates' chart_env_wiring_tests grep the template text),
+in each template (scripts/check-config-defaults-chart.py checks the rendered env),
 and the probes come from here. Every worker serves both paths on
 `port` (crates/health-http::spawn_worker):
   /livez   -- 503 only once one loop iteration has run longer than

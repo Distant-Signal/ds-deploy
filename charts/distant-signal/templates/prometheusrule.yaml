@@ -237,8 +237,8 @@ spec:
         (db_write, db_write_reasons; ingest plan 3b.2) -- not data
         rejections --
         registered at 0 at startup; each crate's
-        API_CALL_OPERATIONS lists the same operations, and its tests check
-        this list. Summed per consumer (not per operation), so an api outage
+        API_CALL_OPERATIONS lists the same operations, which
+        scripts/check-config-defaults-chart.py checks against this list. Summed per consumer (not per operation), so an api outage
         is at most three alerts in one notification.
         */}}
         {{- $consumers := list

@@ -606,8 +606,8 @@ with api.extraEnv, which replaces an entry of the same name.
             # Four sweep-cadence tunables, all declared in
             # crates/api/src/data/config.rs with a working default but
             # never wired into this template until the 2026-09-25 Signal
-            # Box Audit Low pass (see chart_env_wiring_tests's own doc
-            # comment). An unwired sweep interval doesn't fail anything -- it just
+            # Box Audit Low pass (scripts/check-config-defaults-chart.py
+            # now fails on any such gap). An unwired sweep interval doesn't fail anything -- it just
             # means an operator can't tune the cadence without a redeploy,
             # since the code-level default (matching the value below) still
             # applies. schedule_match_interval_secs is the one sibling

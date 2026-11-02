@@ -622,6 +622,75 @@ jobs:
       - name: ds-store and ds-migrate dependency boundary
         run: uv run --no-sync scripts/check-crate-deps.py
 
+  # The chart against what each service says it reads (repo split spec §9
+  # phase 3 item 7). Every service binary prints the env vars it reads,
+  # their defaults and the constants the chart must match when run as
+  # `<service> --print-config-defaults` (ds_runtime::service_args), without
+  # connecting to anything. scripts/check-config-defaults-chart.py compares
+  # that with the chart rendered several ways: no env var a service doesn't
+  # read, none it reads left unwired (bar the listed ones), values.yaml
+  # defaults equal to the code's unless recorded, and the alert operations,
+  # stream caps, Postgres roles and probe paths. It replaced the crate tests
+  # that read chart files.
+  #
+  # Here it runs the binaries built from this commit (a debug build without
+  # debug info, the cheapest that runs them). Once the services leave this
+  # repository, ds-deploy runs the same script with `--images` instead,
+  # which runs `docker run --rm <image> --print-config-defaults` on the
+  # images the chart pins in values.yaml.
+  chart-config-contract:
+    name: chart config contract (--print-config-defaults)
+    runs-on: ubuntu-26.04
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # renovate: datasource=pypi depName=uv
+          version: "0.13.6"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install the pinned script tools
+        run: uv sync --locked --group lint
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+
+      # rdkafka's vendored librdkafka: the rust job's apt-packages.
+      - name: Install the rdkafka build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.88.0
+
+      # See rust-test's cache step for save-if.
+      - name: Cache cargo registry/target
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build every service binary
+        run: |
+          set -euo pipefail
+          packages=()
+          while read -r service; do packages+=(-p "${service}"); done \
+            < <(uv run --no-sync scripts/check-config-defaults-chart.py --list-services)
+          cargo build --locked --bins "${packages[@]}"
+
+      - name: The chart matches every service's --print-config-defaults
+        run: uv run --no-sync scripts/check-config-defaults-chart.py --bin-dir target/debug
+
   # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
   # `helm lint` + `helm template` against both the chart's own defaults and
   # values-example.yaml (which turns on the optional pollers/devAuthentik
