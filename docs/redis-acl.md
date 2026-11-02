@@ -15,8 +15,10 @@ commands it needs on its own keys, and `default` is turned off.
 
 ## The users
 
-Defined in `charts/distant-signal/files/redis-users.acl.tpl` (its header
-explains the format). The kinds:
+Defined in `access/redis-users.acl.tpl` (its header explains the format).
+The chart reads a generated copy, `charts/distant-signal/files/redis-users.acl.tpl`:
+after editing the source, run `uv run scripts/sync-chart-core-files.py` and
+commit both (CI fails when the copy differs). The kinds:
 
 - **client**: an existing client. Stage `open`: `~* &* +@all`, today's
   rights. Stage `narrow`: its own rights.
