@@ -95,7 +95,7 @@ refused. Edit the template and that test together.
 - **Clients.** `redis.acl.clients.<client>: true` gives that Deployment
   `REDIS_USERNAME` and `REDIS_PASSWORD` from `<user>-password`. The
   services combine them with `REDIS_URL` in
-  `common::redis_auth::redis_url_with_credentials`
+  `ds_runtime::redis_auth::redis_url_with_credentials`
   (`redis://<user>:<password>@host`). Without `REDIS_USERNAME` nothing
   changes.
 - `scripts/render-redis-acl.py` renders the same file outside Helm, for a

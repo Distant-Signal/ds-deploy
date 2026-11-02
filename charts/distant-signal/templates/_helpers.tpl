@@ -366,7 +366,7 @@ supplying one aborts the render rather than silently pointing both
 workloads at a Service that was never created. The URL itself never
 carries a credential from this chart: with `redis.auth.enabled` the
 password travels separately as REDIS_PASSWORD (distant-signal.redisPasswordEnv
-below), and the services combine the two (crates/common/src/redis_auth.rs).
+below), and the services combine the two (crates/ds-runtime/src/redis_auth.rs).
 An operator can still put inline auth in `redis.externalUrl`, accepting
 that it is visible in the rendered Deployment.
 */}}
@@ -941,7 +941,7 @@ distant-signal.databaseEnv.
 {{- else -}}
 {{- fail "postgresql.enabled is false but no external database is configured. Set externalDatabase.existingSecret (preferred) together with externalDatabase.existingSecretUrlKey, or set externalDatabase.url, or re-enable the bundled database with postgresql.enabled=true." -}}
 {{- end }}
-{{- /* Pool session settings, read by crates/common/src/pg.rs. */}}
+{{- /* Pool session settings, read by crates/ds-runtime/src/pg.rs. */}}
 - name: DATABASE_STATEMENT_TIMEOUT_SECS
   value: {{ .Values.databasePool.statementTimeoutSecs | int | quote }}
 - name: DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_SECS
@@ -1500,7 +1500,7 @@ The role name from files/db-grants.yaml. Takes (dict "root" $ "service" ...).
 
 {{/*
 A service's Postgres pool as the chart runs it: the api's DATABASE_MAX_CONNECTIONS
-times its replicas, the workers' crate defaults (common::pg), the
+times its replicas, the workers' crate defaults (ds_runtime::pg), the
 aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnections
 (whether or not it is enabled; see distant-signal.ingestWriterPool). Takes
 (dict "root" $ "service" ...).
@@ -1852,7 +1852,7 @@ worker's replicas plus its updateStrategy's surge (distant-signal.workerPods;
 none under the default Recreate). A limit sized for one pod while two run
 deadlocks a rollout (2026-10-10): the surge pod cannot connect, so it never
 becomes Ready and the old pod is never stopped. The +1 covers the startup
-probe connection (common::startup), whose backend can outlive its close by
+probe connection (ds_runtime::startup), whose backend can outlive its close by
 a moment. Takes (dict "root" $ "service" ...).
 */}}
 {{- define "distant-signal.perServiceConnectionLimit" -}}

@@ -194,7 +194,7 @@ jobs:
     # image-digest-<service> artifact for push-helm-chart. Its header
     # comment has the tagging, cache and reproducibility details this file
     # used to carry. The project URL in every Rust binary's outbound
-    # User-Agent (crates/common's user_agent!) is this repository's, so it
+    # User-Agent (crates/ds-runtime's user_agent!) is this repository's, so it
     # follows the owner too; the frontend's Dockerfile doesn't declare it.
     # The second cache source is the cache from before the repository moved
     # to the organisation (repo split §5.9); a missing ref is skipped.
