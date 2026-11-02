@@ -14,10 +14,18 @@ Decisions (2026-10-26):
 - **`pg_upgrade --copy`**, not `--link`: the 16 data directory is left
   untouched, so a rollback is a directory rename. It needs free disk for a
   second copy of the data (not of `pg_wal`).
-- **Data checksums stay off**, as on the 16 cluster: the new cluster is
-  initialised with `initdb --no-data-checksums`. 18's initdb turns them on
-  by default, and `pg_upgrade --check` refuses to upgrade a cluster without
-  checksums into one with them.
+- **Data checksums come on in the window (decided 2026-11-02).** Production
+  runs with `data_checksums=off` and `wal_log_hints=off`, so nothing
+  detects a page that the disk or filesystem silently corrupted;
+  `pgbackrest verify` only proves the repository's files match what was
+  backed up. The new cluster is still initialised with
+  `initdb --no-data-checksums` (18's initdb turns them on by default, and
+  `pg_upgrade` refuses to upgrade a cluster without checksums into one
+  with them). After `pg_upgrade --copy`, while the new 18 cluster is
+  still cleanly shut down and has never started, the Job runs
+  `pg_checksums --enable` on it. That rewrites every relation block in
+  place, inside the existing downtime. See
+  [Data checksums](#data-checksums) for why this ordering.
 - **pgBackRest moves to 2.59.3** (still the 2.59 line, which supports 18;
   pgdg's trixie repo dropped 2.59.1, so every 0.2.0 image, the rebuilt
   pg16 one included, ships 2.59.3, which reads the existing 2.59.1 repo).
@@ -38,6 +46,7 @@ Decisions (2026-10-26):
 | Chart default `postgresql.image.tag` (used only with pgBackRest off) | `16.15-trixie` | `18.6-trixie` (this repo, already on `main`) |
 | Nightly `pg_dump` CronJob `distant-signal-postgres-backup` (Ranma-Config `clusters/mine-bringer/apps/distant-signal.yaml`) | `postgres:16@sha256:1a6ab3f5…` | `postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6`. A 16 `pg_dump` refuses an 18 server ("server version mismatch"), so this moves in the same change. |
 | pgBackRest repository | stanza `ds`, archive id `16-1` | same stanza, plus db 2 / archive id `18-2` after `stanza-upgrade`. The 16 backups and WAL stay until retention expires them. |
+| Data checksums (`SHOW data_checksums`) | `off` | `on` (enabled on the new 18 cluster by `pg_checksums --enable` before its first start; the 16 directory stays `off`) |
 | Data directory | `/var/lib/postgresql/data/pgdata` (16) | `/var/lib/postgresql/data/pgdata` (18); the 16 one kept as `/var/lib/postgresql/data/pgdata16-old` for 7 days |
 | Grafana, Ranma-Config `monitoring-dashboards.yaml` lines 692-696 | `pg_stat_bgwriter_buffers_backend_total`, `…_buffers_backend_fsync_total` | Those columns were removed in Postgres 17 (moved to `pg_stat_io`); the panel goes blank. Fix in Ranma-Config separately. |
 
@@ -81,12 +90,20 @@ Results: Postgres 18.6, `data_checksums` off, the same row count in all
 104 tables, every btree index passes amcheck. The node was heavily loaded
 (load average 60 to 90 on 6 cores), so `--copy` ran at about 17 MB/s.
 
+The rehearsal predates the checksums decision: it ran without the
+`pg_checksums --enable` step, hence `data_checksums` off. Rehearse the
+amended Job once more before the window (see Before the window).
+
 **Production estimate.** About 11 to 13 GB to copy (PGDATA is 15 GB,
 less `pg_wal`). At the rehearsal's rate that is 11 to 13 minutes; budget
-20. The manual full backups to S3 (Thoth) take as long as a Sunday
-`distant-signal-pgbackrest-full` run: check the last one's duration
+20. `pg_checksums --enable` then reads and rewrites the same 11 to 13 GB
+of relation files in place and fsyncs them, about the same I/O as the
+copy: expect 10 to 15 minutes, budget 20. The manual full backups to S3
+(Thoth) take as long as a Sunday `distant-signal-pgbackrest-full` run:
+check the last one's duration
 (`kubectl -n distant-signal get jobs -l app.kubernetes.io/component=pgbackrest`)
-before picking the window. Expect 60 to 90 minutes with the app down.
+before picking the window. Expect 75 to 110 minutes with the app down
+(60 to 90 without checksums).
 
 Findings that shaped this runbook:
 
@@ -133,7 +150,14 @@ Days before:
 3. **Pull access.** The upgrade Job pulls from Forgejo with the
    `forgejo-distant-signal-pull` Secret, which the Postgres pod already
    uses.
-4. **Window.** Avoid 19:30 to 01:30 UTC (the evening rail peak and the
+4. **Rehearse the checksums step.** Run the amended Job script (with
+   the `pg_checksums --enable` step) once on a local 16 cluster, as in the
+   rehearsal above, and note the `pg_checksums` time and rate next to the
+   copy's. Expect `data_checksums` on after the start, the same row
+   counts, and a clean `pgbackrest check` and full backup. The
+   `lucy/postgres-pgbackrest` upgrade image's CI still runs the old
+   commands (see Follow-ups).
+5. **Window.** Avoid 19:30 to 01:30 UTC (the evening rail peak and the
    schedule delivery and publish) and 03:00 to 05:30 UTC (the `pg_dump`
    at 03:00 and pgBackRest backups at 05:00). Prefer a weekday mid-morning
    or early afternoon (e.g. 10:00 UTC Tuesday to Thursday), after the
@@ -154,6 +178,7 @@ kubectl -n $ns exec $pg -c postgres -- sh -c \
   'du -sh --exclude=pg_wal /var/lib/postgresql/data/pgdata; du -sh /var/lib/postgresql/data/pgdata/pg_wal; df -h /var/lib/postgresql/data'
 # Free space must exceed the first figure plus 2 GiB, with room left for
 # the node (local-path doesn't enforce the PVC size: this is the node's disk).
+# pg_checksums rewrites blocks in place and needs no extra space.
 kubectl -n $ns exec $pg -c postgres -- pgbackrest --log-level-console=info check
 kubectl -n $ns exec $pg -c postgres -- pgbackrest info
 kubectl -n $ns get deploy,statefulset,cronjob -o wide > ds-before-pg18.txt
@@ -209,10 +234,21 @@ HelmRelease.
 ### 4. Run the upgrade Job
 
 Fill in the upgrade image's digest, then `kubectl apply -f` it. The
-script is exactly the one rehearsed. It refuses to start unless the 16
+script is the one rehearsed plus the "enable data checksums" step (rehearse
+that once more before the window). It refuses to start unless the 16
 cluster was shut down cleanly, has no data checksums, nothing is running
 on it, no earlier attempt left `pgdata18` or `pgdata16-old`, and the
 volume has room for the copy.
+
+The checksums step runs on `pgdata18` after `pg_upgrade` and before the
+directory swap. pg_upgrade leaves the new cluster cleanly shut down, which
+`pg_checksums` requires, and nothing starts it until step 5. If
+`pg_checksums` is interrupted, the cluster's checksum setting is left
+unchanged, the swap hasn't happened, and the "fails before swap" path
+below applies. The step checks that the system identifier is the same
+before and after (pg_checksums only rewrites blocks and the control
+file's checksum version), so the `stanza-upgrade` in step 6 records the
+identifier the cluster keeps.
 
 ```yaml
 apiVersion: batch/v1
@@ -288,6 +324,19 @@ spec:
               cp -p "${OLD}/postgresql.auto.conf" "${NEW}/postgresql.auto.conf"
               diff <(grep -Ev '^[[:space:]]*(#|$)' "${OLD}/postgresql.conf") <(grep -Ev '^[[:space:]]*(#|$)' "${NEW}/postgresql.conf") || true
 
+              step "enable data checksums on the new 18 cluster (never started yet)"
+              "${PG_NEW_BINDIR}/pg_controldata" "${NEW}" >"${DATA}/pg_controldata-18-before-checksums.txt"
+              grep -Eq '^Database cluster state: +shut down$' "${DATA}/pg_controldata-18-before-checksums.txt"
+              grep -Eq '^Data page checksum version: +0$' "${DATA}/pg_controldata-18-before-checksums.txt"
+              "${PG_NEW_BINDIR}/pg_checksums" --enable --progress -D "${NEW}"
+              "${PG_NEW_BINDIR}/pg_controldata" "${NEW}" >"${DATA}/pg_controldata-18.txt"
+              grep -E '^(Database system identifier|Database cluster state|Data page checksum version):' "${DATA}/pg_controldata-18.txt"
+              grep -Eq '^Database cluster state: +shut down$' "${DATA}/pg_controldata-18.txt"
+              grep -Eq '^Data page checksum version: +1$' "${DATA}/pg_controldata-18.txt"
+              # pgBackRest's stanza-upgrade (step 6) records this identifier: it must not move.
+              test "$(grep '^Database system identifier:' "${DATA}/pg_controldata-18-before-checksums.txt")" = \
+                "$(grep '^Database system identifier:' "${DATA}/pg_controldata-18.txt")"
+
               step "swap directories: ${OLD} becomes the 18 cluster, the 16 one is kept as ${KEEP}"
               mv "${OLD}" "${KEEP}"
               mv "${NEW}" "${OLD}"
@@ -335,13 +384,16 @@ spec:
 
 ```sh
 kubectl -n $ns logs -f job/distant-signal-postgres-upgrade-18
-kubectl -n $ns wait --for=condition=complete job/distant-signal-postgres-upgrade-18 --timeout=60m
+kubectl -n $ns wait --for=condition=complete job/distant-signal-postgres-upgrade-18 --timeout=90m
 ```
 
 The log prints the 16 cluster's control data, the free space, both
 `pg_upgrade` reports, a diff of the non-comment `postgresql.conf` lines
-(expected: only `autovacuum_worker_slots`, new in 18), and the directory
-listing with `pgdata` (18) and `pgdata16-old` (16). If it fails before
+(expected: only `autovacuum_worker_slots`, new in 18), `pg_checksums`
+progress and its summary (`Checksums enabled in cluster`), the 18
+cluster's control data with `Data page checksum version: 1`, and the
+directory listing with `pgdata` (18) and `pgdata16-old` (16). The copy
+and the checksums pass each take about 10 to 20 minutes on production. If it fails before
 "swap directories", nothing was renamed: fix the cause, delete
 `pgdata18` (a throwaway pod on the PVC, or `rm -rf` from a debug
 container), and run it again. The PV's node affinity puts the Job on the
@@ -361,7 +413,12 @@ kubectl -n $ns exec $pg -c postgres -- psql -U distant_signal -d distant_signal 
   "select version(); show data_checksums;"
 ```
 
-Expect 18.6 and `off`. Archive-push fails until the next step (`archive
+Expect 18.6 and `on`. If it says `off`, the Job's checksums step didn't
+run (the Job asserts it, so this means an edited script). The app is
+still down, so fix it now: scale the StatefulSet to 0 (a clean
+shutdown), run `pg_checksums --enable --progress -D
+/var/lib/postgresql/data/pgdata` as uid 999 in a pod on the PVC with the
+upgrade image, and start it again. Archive-push fails until the next step (`archive
 command failed` in the log; WAL waits in `pg_wal`).
 
 ### 6. pgBackRest: stanza-upgrade, check, full backup
@@ -377,6 +434,15 @@ kubectl -n $ns exec $pg -c postgres -- pgbackrest-daily-check --no-verify
 
 `pgbackrest info` lists db 1 (16) and db 2 (18) and the new full backup.
 The daily check must end with "no WAL gap".
+
+With checksums on, pgBackRest turns `checksum-page` on by itself and
+validates every data page's checksum as it backs it up, so this full
+backup is the first whole-cluster checksum check. A bad page doesn't fail
+the backup: pgBackRest logs a warning (`invalid page checksum`, with the
+file and block) and records the page in the backup manifest. Read the
+backup's console output for such warnings; there should be none. Every
+later backup, full or incremental, repeats the check on the files it
+copies.
 
 ### 7. Post-upgrade steps, then the app
 
@@ -416,7 +482,12 @@ fixed. Nothing is lost, but the app stays down.
 
 - Same day: the api, writers and pollers log no database errors; the
   status page and a train lookup work; `pg_stat_archiver.failed_count`
-  stops rising; the next 03:00 `pg_dump` succeeds with the 18 client.
+  stops rising; the next 03:00 `pg_dump` succeeds with the 18 client;
+  `pg_stat_database.checksum_failures` stays 0 (see Verification). WAL
+  volume is somewhat higher than before: with checksums on, the first
+  hint-bit change to a page after each checkpoint writes a full-page image,
+  as `wal_log_hints=on` would. Watch `pg_wal` and the archive rate for the
+  first day.
 - Next morning: the 07:00 `distant-signal-pgbackrest-check` passes.
 - After 7 days, delete the 16 directory by name (never with
   `delete_old_cluster.sh`, which the Job removed):
@@ -430,11 +501,21 @@ fixed. Nothing is lost, but the app stays down.
 ```sh
 kubectl -n $ns exec $pg -c postgres -- psql -U distant_signal -d distant_signal -Atc "
   select version();
-  show data_checksums;
+  show data_checksums;                                               -- on
   select extname, extversion from pg_extension order by 1;           -- pg_stat_statements 1.12
   select count(*) from pg_index where not indisvalid;                -- 0
-  select last_archived_wal, failed_count from pg_stat_archiver;"
+  select last_archived_wal, failed_count from pg_stat_archiver;
+  select coalesce(datname, '<shared>'), checksum_failures, checksum_last_failure
+    from pg_stat_database;                                           -- all 0, no timestamps"
 ```
+
+`checksum_failures` counts pages that failed verification when a backend
+or a backup read them, per database (the `<shared>` row is the shared
+catalogs). It is only non-null with checksums on. Recent postgres_exporter
+releases export it through the `stat_database` collector (on by default)
+as `pg_stat_database_checksum_failures`; confirm Ranma-Config's exporter
+shows the series once 18 is up. Nothing alerts on it yet (see
+Follow-ups).
 
 Row counts: before step 3, save `select relname, n_live_tup from
 pg_stat_user_tables order by 1` (an estimate, fine for a sanity check),
@@ -445,6 +526,11 @@ per index; drop the extension afterwards); on production that reads every
 index once, so run it only if something looks wrong.
 
 ## Rollback
+
+Enabling checksums doesn't change any of this. `--copy` leaves the 16
+directory untouched, and `pg_checksums` runs only on the new 18 directory,
+so `pgdata16-old` is the 16 cluster exactly as it stopped, checksums still
+off. 16 starts on it as before; nothing has to be turned back off.
 
 **Before 18 has started** (the Job failed, or you stop after step 4): the
 16 directory is untouched (`--copy`). If the Job got as far as the swap,
@@ -468,6 +554,81 @@ stanza as db 1 (`pgbackrest restore --set=<label>` into an empty 16 data
 directory, with the 16 image; docs/postgres-pitr.md, "Point-in-time
 restore"), or the step 1 `pg_dump` into a fresh 16 cluster. After 7 days,
 once `pgdata16-old` is deleted, these are the only way back to 16.
+A restore of the db 1 backup gives a 16 cluster without checksums, as
+before the window.
+
+## Data checksums
+
+Why enable them here, and why on the new 18 cluster rather than on 16
+first.
+
+**What they catch.** With checksums on, Postgres writes a checksum into
+every data page and checks it on every read from disk; a mismatch is an
+error (`invalid page in block`) and bumps
+`pg_stat_database.checksum_failures`. Without them a page the storage
+mangled is read as if valid. pgBackRest also validates page checksums on
+every backup once the cluster has them. `pgbackrest verify` doesn't cover
+this: it checks that repository files match what was backed up, which
+includes a corrupt page faithfully copied.
+
+**`wal_log_hints`.** It stays `off` and becomes moot: with checksums on,
+Postgres WAL-logs hint-bit changes (a full-page image on the first change
+after a checkpoint) whatever `wal_log_hints` says, because a torn
+hint-bit write would otherwise break the page's checksum. That is also
+the small extra WAL volume to expect afterwards. Leave the setting alone.
+
+**Ordering: chosen, on the new 18 cluster after `pg_upgrade`.** The
+alternative was to run `pg_checksums --enable` on the stopped 16 cluster
+first, then initdb 18 with its default (checksums on) and drop
+`--no-data-checksums`. Rejected:
+
+- Rollback. It rewrites the 16 directory in place, so the cluster a
+  rollback starts is no longer the one that ran production that morning,
+  and an interrupted run leaves 16 itself half-rewritten (pg_checksums
+  can be re-run, but that is fixing the rollback target in the middle of
+  an outage). Enabling on 18 never touches 16: `pgdata16-old` stays
+  exactly as stopped.
+- Downtime. The same 11 to 13 GB is rewritten either way, so neither
+  order is shorter. Doing it on 16 in an earlier, separate window would
+  take a second outage, and 16 would then run with checksums (and their
+  WAL cost) on the image being retired.
+- Simplicity. Both orders need `initdb` to match: with the chosen one the
+  rehearsed `initdb --no-data-checksums` and `pg_upgrade` steps don't
+  change, and the new step sits after them, before the swap, where a
+  failure is the existing "delete `pgdata18` and run again" case.
+
+**Disk.** `pg_checksums` rewrites blocks in place: no headroom beyond what
+`--copy` already needs (the Job's free-space check). WAL afterwards grows
+somewhat (above), well inside the `pg_wal` room the volume already has.
+
+**pgBackRest.** The stanza `ds` and `stanza-upgrade` are unchanged.
+`pg_checksums` doesn't change the cluster's system identifier (the Job
+compares it before and after), and it runs before the 18 cluster first
+starts and before `stanza-upgrade`, so the stanza's db 2 records the
+cluster as it will run. The post-upgrade full backup (step 6) is the first
+to validate page checksums (`checksum-page`, on automatically). A failure
+there is a warning in the backup log and the manifest, not a failed
+backup, which is why the alert below matters.
+
+## Follow-ups
+
+- **Alert on checksum failures** (not implemented; nothing in
+  `charts/distant-signal` or `docs/alerts.md` watches checksums today). Add
+  `DistantSignalPostgresChecksumFailures` to the chart's PrometheusRule:
+  `increase(pg_stat_database_checksum_failures{namespace="<release namespace>"}[1h]) > 0`,
+  critical, with a `docs/alerts.md` entry (CI requires one per alert):
+  which database, `checksum_last_failure`, the Postgres log's
+  `invalid page in block` lines for the relation, then restore the page
+  from backup or reindex/rebuild the relation. Check the exporter's
+  `/metrics` for the exact series name first. pgBackRest's
+  `invalid page checksum` backup warnings could feed the same alert
+  through the backup Job's logs or the daily check.
+- **Upgrade image CI.** `lucy/postgres-pgbackrest`'s upgrade-image CI runs
+  the old commands; add the `pg_checksums --enable` step and a
+  `SHOW data_checksums` = `on` check after starting 18.
+- **Grafana.** Add `pg_stat_database_checksum_failures` to the Postgres
+  dashboard (Ranma-Config `monitoring-dashboards.yaml`), next to the
+  `pg_stat_bgwriter` panel fix above.
 
 ## Local development
 
