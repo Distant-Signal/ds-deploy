@@ -49,7 +49,7 @@ instance of it.
 ## Building and pushing the images (manual)
 
 `.github/workflows/containers.yml` builds and publishes every image below to
-`ghcr.io/fasterspeeding/distant-signal/<service>` automatically (build-only
+`ghcr.io/distant-signal/images/<service>` automatically (build-only
 sanity check on PRs; build + push + cosign-sign on push to main/master) — you
 do not need to do this by hand for a normal install, and every `*.image.repository`
 below already defaults to that exact path. The table and commands below are
@@ -60,13 +60,13 @@ once, or point each `*.image.repository` you're replacing at your own
 `$REG/...` directly.
 
 The same workflow packages this chart and pushes it to
-`oci://ghcr.io/fasterspeeding/charts/distant-signal`, cosign-signed keylessly
+`oci://ghcr.io/distant-signal/charts/distant-signal`, cosign-signed keylessly
 like the images (INF-12). Verify a pulled chart with:
 
 ```bash
-cosign verify ghcr.io/fasterspeeding/charts/distant-signal@sha256:<digest> \
+cosign verify ghcr.io/distant-signal/charts/distant-signal@sha256:<digest> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/FasterSpeeding/Distant-Signal/.github/workflows/containers.yml@refs/heads/main
+  --certificate-identity https://github.com/Distant-Signal/distant-signal/.github/workflows/containers.yml@refs/heads/main
 ```
 
 In Flux, set `verify.provider: cosign` with a `matchOIDCIdentity` entry for
@@ -86,25 +86,25 @@ push.
 
 | Dockerfile | Default image repository |
 |---|---|
-| `docker/api.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/api` |
-| `docker/aggregator.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/aggregator` |
-| `docker/enricher.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/enricher` |
-| `docker/notifier.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/notifier` |
-| `docker/poller-incidents.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-incidents` |
-| `docker/poller-stations.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-stations` |
-| `docker/poller-tocs.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-tocs` |
-| `docker/poller-ldbws.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-ldbws` |
-| `docker/poller-tfl.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-tfl` |
-| `docker/poller-irish-rail-gtfs.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-gtfs` |
-| `docker/poller-irish-rail-live.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-live` |
-| `docker/poller-nir-stations.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/poller-nir-stations` |
-| `docker/trust-consumer.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/trust-consumer` |
-| `docker/full-coverage-consumer.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/full-coverage-consumer` |
-| `docker/trust-backlog-consumer.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/trust-backlog-consumer` |
-| `docker/movement-relay.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/movement-relay` |
-| `docker/schedule-ingest.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-ingest` |
-| `docker/schedule-reference.Dockerfile` | `ghcr.io/fasterspeeding/distant-signal/schedule-reference` |
-| `frontend/Dockerfile` (target `runtime-prod`) | `ghcr.io/fasterspeeding/distant-signal/frontend` |
+| `docker/api.Dockerfile` | `ghcr.io/distant-signal/images/api` |
+| `docker/aggregator.Dockerfile` | `ghcr.io/distant-signal/images/aggregator` |
+| `docker/enricher.Dockerfile` | `ghcr.io/distant-signal/images/enricher` |
+| `docker/notifier.Dockerfile` | `ghcr.io/distant-signal/images/notifier` |
+| `docker/poller-incidents.Dockerfile` | `ghcr.io/distant-signal/images/poller-incidents` |
+| `docker/poller-stations.Dockerfile` | `ghcr.io/distant-signal/images/poller-stations` |
+| `docker/poller-tocs.Dockerfile` | `ghcr.io/distant-signal/images/poller-tocs` |
+| `docker/poller-ldbws.Dockerfile` | `ghcr.io/distant-signal/images/poller-ldbws` |
+| `docker/poller-tfl.Dockerfile` | `ghcr.io/distant-signal/images/poller-tfl` |
+| `docker/poller-irish-rail-gtfs.Dockerfile` | `ghcr.io/distant-signal/images/poller-irish-rail-gtfs` |
+| `docker/poller-irish-rail-live.Dockerfile` | `ghcr.io/distant-signal/images/poller-irish-rail-live` |
+| `docker/poller-nir-stations.Dockerfile` | `ghcr.io/distant-signal/images/poller-nir-stations` |
+| `docker/trust-consumer.Dockerfile` | `ghcr.io/distant-signal/images/trust-consumer` |
+| `docker/full-coverage-consumer.Dockerfile` | `ghcr.io/distant-signal/images/full-coverage-consumer` |
+| `docker/trust-backlog-consumer.Dockerfile` | `ghcr.io/distant-signal/images/trust-backlog-consumer` |
+| `docker/movement-relay.Dockerfile` | `ghcr.io/distant-signal/images/movement-relay` |
+| `docker/schedule-ingest.Dockerfile` | `ghcr.io/distant-signal/images/schedule-ingest` |
+| `docker/schedule-reference.Dockerfile` | `ghcr.io/distant-signal/images/schedule-reference` |
+| `frontend/Dockerfile` (target `runtime-prod`) | `ghcr.io/distant-signal/images/frontend` |
 
 ```bash
 REG=registry.example.com/distant-signal
@@ -537,7 +537,7 @@ solved:**
   against a real kind/minikube/k3d cluster as of this writing — see
   `docs/superpowers/plans/2026-08-29-dev-oidc-server.md`'s Task 13 for
   what was and wasn't actually verified (that plan was pruned from the tree
-  in commit `b7f71a8a`; read it from git history).
+  in commit `156cf838`; read it from git history).
 
 See `docs/superpowers/specs/2026-08-29-dev-oidc-server-design.md` for the
 full design, including why `AUTHENTIK_BOOTSTRAP_*` is deliberately never
@@ -1511,7 +1511,7 @@ applies these defaults restarts Postgres (StatefulSet) and Redis
 | `imagePullSecrets` | `[]` | Image pull secrets applied to every pod in the chart. |
 | `revisionHistoryLimit` | `3` | Old ReplicaSets and StatefulSet ControllerRevisions kept, on every Deployment and StatefulSet (Kubernetes' default is 10). A whole number >= 0; `helm rollback` does not need them. |
 | `global.imageRegistry` | `""` | Registry (and optional path prefix) put in front of every image in place of the registry its `image.repository` carries, e.g. `registry.example.com/myfork`. Empty keeps each repository as written. |
-| `sourceCode.url` | `"https://github.com/FasterSpeeding/Distant-Signal"` | Repository the images were built from, listed by the api's `/public/version` (AGPL-3.0 §13). CI sets it at package time. |
+| `sourceCode.url` | `"https://github.com/Distant-Signal/distant-signal"` | Repository the images were built from, listed by the api's `/public/version` (AGPL-3.0 §13). CI sets it at package time. |
 | `sourceCode.revision` | `""` | Commit the images were built from, listed by `/public/version`. CI sets it to the packaged commit; empty outside CI. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount for the chart's workloads. |
 | `serviceAccount.name` | `""` | Name to use. Empty + `create` uses the fullname. |
@@ -1884,7 +1884,7 @@ Used only when `postgresql.enabled` is `false`.
 
 | Key | Default | Description |
 |---|---|---|
-| `api.image.repository` | `ghcr.io/fasterspeeding/distant-signal/api` | api image repository. |
+| `api.image.repository` | `ghcr.io/distant-signal/images/api` | api image repository. |
 | `api.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `api.image.digest` | `""` | Exact content digest (`sha256:...`). When set, takes priority over `tag`/appVersion -- see "Pinning by content digest instead of tag" above. CI populates this automatically for images it builds and pushes. |
 | `api.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2048,7 +2048,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | Key | Default | Description |
 |---|---|---|
 | `ingestWriter.enabled` | `false` | Deploy the ingest-writer (one replica, `Recreate`). Needs its image (plan 1B.6). |
-| `ingestWriter.image` | `ghcr.io/fasterspeeding/distant-signal/ingest-writer`, tag `""` (appVersion), digest `""`, `IfNotPresent` | Image; same shape as `api.image`. |
+| `ingestWriter.image` | `ghcr.io/distant-signal/images/ingest-writer`, tag `""` (appVersion), digest `""`, `IfNotPresent` | Image; same shape as `api.image`. |
 | `ingestWriter.loops.enabled` | `false` | Run the train-domain loops (`INGEST_WRITER_LOOPS`) with the api's intervals. |
 | `ingestWriter.streams.station-samples` | `apply` | Mode of `ds:ingest:station-samples` (`INGEST_WRITER_STREAMS`): `off` (not read) or `apply` (release B removed `shadow`; the render refuses it). Any stream not `off` gives the writer `REDIS_URL`, its Redis user (`redis.acl.clients.ingestWriter`) and the NetworkPolicy paths to Redis. The writer refuses a stream it has no handlers for yet (plan 3a.6). An enabled producer of the stream needs it on `apply` (the render fails otherwise); any stream not `off` needs the Redis ACL (stage `narrow`, `defaultUser: "on-unshared"` or `"off"` for `apply`). |
 | `ingestWriter.streams.full-coverage` | `apply` | Mode of `ds:ingest:full-coverage`, as `station-samples` (handlers: plan 3a.6). Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), as `station-samples`. |
@@ -2108,7 +2108,7 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 
 | Key | Default | Description |
 |---|---|---|
-| `aggregator.image.repository` | `ghcr.io/fasterspeeding/distant-signal/aggregator` | aggregator image repository. |
+| `aggregator.image.repository` | `ghcr.io/distant-signal/images/aggregator` | aggregator image repository. |
 | `aggregator.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `aggregator.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `aggregator.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2173,7 +2173,7 @@ twice.
 
 | Key | Default | Description |
 |---|---|---|
-| `notifier.image.repository` | `ghcr.io/fasterspeeding/distant-signal/notifier` | notifier image repository. |
+| `notifier.image.repository` | `ghcr.io/distant-signal/images/notifier` | notifier image repository. |
 | `notifier.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `notifier.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `notifier.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2291,7 +2291,7 @@ they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 
 | Key | Default | Description |
 |---|---|---|
-| `enricher.image.repository` | `ghcr.io/fasterspeeding/distant-signal/enricher` | enricher image repository. |
+| `enricher.image.repository` | `ghcr.io/distant-signal/images/enricher` | enricher image repository. |
 | `enricher.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `enricher.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `enricher.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2464,7 +2464,7 @@ falls back to (see `movementRelay`).
 
 | Key | Default | Description |
 |---|---|---|
-| `trustConsumer.image.repository` | `ghcr.io/fasterspeeding/distant-signal/trust-consumer` | trust-consumer image repository. |
+| `trustConsumer.image.repository` | `ghcr.io/distant-signal/images/trust-consumer` | trust-consumer image repository. |
 | `trustConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `trustConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `trustConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2508,7 +2508,7 @@ its own.
 
 | Key | Default | Description |
 |---|---|---|
-| `fullCoverageConsumer.image.repository` | `ghcr.io/fasterspeeding/distant-signal/full-coverage-consumer` | full-coverage-consumer image repository. |
+| `fullCoverageConsumer.image.repository` | `ghcr.io/distant-signal/images/full-coverage-consumer` | full-coverage-consumer image repository. |
 | `fullCoverageConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `fullCoverageConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `fullCoverageConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2547,7 +2547,7 @@ Always reads movement-relay's stream (there is no Kafka mode).
 
 | Key | Default | Description |
 |---|---|---|
-| `trustBacklogConsumer.image.repository` | `ghcr.io/fasterspeeding/distant-signal/trust-backlog-consumer` | trust-backlog-consumer image repository. |
+| `trustBacklogConsumer.image.repository` | `ghcr.io/distant-signal/images/trust-backlog-consumer` | trust-backlog-consumer image repository. |
 | `trustBacklogConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `trustBacklogConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `trustBacklogConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2581,7 +2581,7 @@ credential of its own it uses trust-consumer's; see "Install" above.
 | Key | Default | Description |
 |---|---|---|
 | `movementRelay.enabled` | `true` | Deploy movement-relay. Set `false` only for an install that does not ingest TRUST movements. |
-| `movementRelay.image.repository` | `ghcr.io/fasterspeeding/distant-signal/movement-relay` | movement-relay image repository. |
+| `movementRelay.image.repository` | `ghcr.io/distant-signal/images/movement-relay` | movement-relay image repository. |
 | `movementRelay.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `movementRelay.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `movementRelay.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2624,7 +2624,7 @@ the render fails otherwise. Every Kafka setting comes from the Secret
 | Key | Default | Description |
 |---|---|---|
 | `darwinRelay.enabled` | `false` | Deploy darwin-relay. |
-| `darwinRelay.image.repository` | `ghcr.io/fasterspeeding/distant-signal/darwin-relay` | darwin-relay image repository. |
+| `darwinRelay.image.repository` | `ghcr.io/distant-signal/images/darwin-relay` | darwin-relay image repository. |
 | `darwinRelay.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `darwinRelay.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `darwinRelay.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2651,7 +2651,7 @@ the render fails otherwise. Every Kafka setting comes from the Secret
 
 | Key | Default | Description |
 |---|---|---|
-| `frontend.image.repository` | `ghcr.io/fasterspeeding/distant-signal/frontend` | frontend image repository. |
+| `frontend.image.repository` | `ghcr.io/distant-signal/images/frontend` | frontend image repository. |
 | `frontend.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `frontend.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `frontend.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2718,7 +2718,7 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | Key | Default | Description |
 |---|---|---|
 | `pollers.<name>.enabled` | `false` | Deploy this poller. All five are off by default. |
-| `pollers.<name>.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-<name>` | Poller image repository. |
+| `pollers.<name>.image.repository` | `ghcr.io/distant-signal/images/poller-<name>` | Poller image repository. |
 | `pollers.<name>.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollers.<name>.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollers.<name>.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2802,7 +2802,7 @@ Irish Rail GTFS zip. Off by default; no API key needed.
 | Key | Default | Description |
 |---|---|---|
 | `pollerIrishRailGtfs.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-gtfs` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailGtfs`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-gtfs: apply` with it. |
-| `pollerIrishRailGtfs.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-gtfs` | Image repository. |
+| `pollerIrishRailGtfs.image.repository` | `ghcr.io/distant-signal/images/poller-irish-rail-gtfs` | Image repository. |
 | `pollerIrishRailGtfs.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailGtfs.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollerIrishRailGtfs.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2828,7 +2828,7 @@ default; no API key needed.
 | Key | Default | Description |
 |---|---|---|
 | `pollerIrishRailLive.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-live` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailLive`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-live: apply` with it. |
-| `pollerIrishRailLive.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-irish-rail-live` | Image repository. |
+| `pollerIrishRailLive.image.repository` | `ghcr.io/distant-signal/images/poller-irish-rail-live` | Image repository. |
 | `pollerIrishRailLive.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailLive.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollerIrishRailLive.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2854,7 +2854,7 @@ Off by default; no API key needed.
 | Key | Default | Description |
 |---|---|---|
 | `pollerNirStations.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-nir` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerNirStations`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-nir: apply` with it. |
-| `pollerNirStations.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-nir-stations` | Image repository. |
+| `pollerNirStations.image.repository` | `ghcr.io/distant-signal/images/poller-nir-stations` | Image repository. |
 | `pollerNirStations.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerNirStations.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollerNirStations.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -2884,7 +2884,7 @@ spec's §15.1.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerTransitSchedule.image.repository` | `ghcr.io/fasterspeeding/distant-signal/poller-transit-schedule` | Image repository. |
+| `pollerTransitSchedule.image.repository` | `ghcr.io/distant-signal/images/poller-transit-schedule` | Image repository. |
 | `pollerTransitSchedule.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerTransitSchedule.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollerTransitSchedule.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -3066,7 +3066,7 @@ one-pod layout.
 | `scheduleFeed.sftp.destinationFolder` | `incoming` | Folder on the PVC the push account is chrooted to; also schedule-ingest's `WATCH_DIR`. |
 | `scheduleFeed.sftp.folderPath` | `""` | Optional subfolder within `destinationFolder`. |
 | `scheduleFeed.sftp.resources` | requests `25m`/`64Mi`, limit `128Mi` | SFTP container resource requests/limits. |
-| `scheduleFeed.ingest.image.repository` | `ghcr.io/fasterspeeding/distant-signal/schedule-ingest` | schedule-ingest image repository. |
+| `scheduleFeed.ingest.image.repository` | `ghcr.io/distant-signal/images/schedule-ingest` | schedule-ingest image repository. |
 | `scheduleFeed.ingest.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `scheduleFeed.ingest.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `scheduleFeed.ingest.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -3078,7 +3078,7 @@ one-pod layout.
 | `scheduleFeed.ingest.extraEnv` | `[]` | Extra env entries for the schedule-ingest container. One named like a chart-set var (say `RUST_LOG`) replaces it, so each name is rendered once; the rest follow the chart's own. |
 | `scheduleFeed.ingest.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`) for one scan cycle, including posting a delivery to api. |
 | `scheduleFeed.ingest.resources` | requests `50m`/`128Mi`, limit `256Mi` | schedule-ingest container resource requests/limits. |
-| `scheduleFeed.reference.image.repository` | `ghcr.io/fasterspeeding/distant-signal/schedule-reference` | schedule-reference image repository. |
+| `scheduleFeed.reference.image.repository` | `ghcr.io/distant-signal/images/schedule-reference` | schedule-reference image repository. |
 | `scheduleFeed.reference.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `scheduleFeed.reference.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `scheduleFeed.reference.image.pullPolicy` | `IfNotPresent` | Image pull policy. |

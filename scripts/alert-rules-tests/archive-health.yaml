@@ -22,7 +22,7 @@ tests:
             exp_annotations:
               summary: no successful cold archive cycle for 6h 20m 0s
               description: "None in 21600s: it errors, fails uploads or has stopped, and trains stops pruning under retain."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalarchivestale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalarchivestale
 
   # A healthy archive, succeeding every minute, stays quiet.
   - interval: 1m
@@ -48,7 +48,7 @@ tests:
             exp_annotations:
               summary: 24 cold archive batches changed before delete in 6h
               description: "Each is re-exported next run instead of pruned. Something keeps writing to old trains rows."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalarchivebatchchurn
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalarchivebatchchurn
   - interval: 1h
     input_series:
       - series: 'distant_signal_aggregator_archive_batches_changed_total{namespace="distant-signal", pod="a"}'

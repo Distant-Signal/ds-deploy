@@ -21,7 +21,7 @@ tests:
             exp_annotations:
               summary: the Distant Signal database is down
               description: "pg_up is 0, or the bundled Postgres has no ready replica. api, the consumers and the aggregator cannot read or write."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpostgresdown
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalpostgresdown
   # The bundled StatefulSet loses its ready replica while the exporter is
   # gone too (no pg_up at all); another namespace's pg_up is ignored.
   - interval: 1m
@@ -43,7 +43,7 @@ tests:
             exp_annotations:
               summary: the Distant Signal database is down
               description: "pg_up is 0, or the bundled Postgres has no ready replica. api, the consumers and the aggregator cannot read or write."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpostgresdown
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalpostgresdown
   # api's probe: one replica failing for 2m fires; a single failed probe
   # (back at 1 within the `for`) does not.
   - interval: 15s
@@ -63,7 +63,7 @@ tests:
             exp_annotations:
               summary: api cannot query its database
               description: "api's SELECT 1 probe has failed for 2m: most pages fail. See DistantSignalPostgresDown and api's log."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalapidatabasedown
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalapidatabasedown
   # trust-consumer's tracked-trains reload fails once a minute from 5m
   # (fires after 10m of it); trust-backlog-consumer's STANOX/CRS reload
   # fails for only 4 minutes (a database restart); a data rejection
@@ -89,7 +89,7 @@ tests:
             exp_annotations:
               summary: trust-consumer keeps failing its reads or writes
               description: "5 failed reads or writes in 5m, for 10m: its data is not landing. Check Postgres and the consumer's log."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
   # Ingest plan 3b.2: the direct writes count too.
   # trust-backlog-consumer's db_write fails once a minute from 5m (fires
   # after 10m of it); trust-consumer's db_write fails for only 4 minutes.
@@ -110,7 +110,7 @@ tests:
             exp_annotations:
               summary: trust-backlog-consumer keeps failing its reads or writes
               description: "5 failed reads or writes in 5m, for 10m: its data is not landing. Check Postgres and the consumer's log."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
   # The aggregator's last success stops at 600s (10m); 15m later it fires.
   # The notifier's line_status loop is healthy; its hourly template_sweep
   # is old but left out; its skip_check loop never succeeded after a start
@@ -136,7 +136,7 @@ tests:
             exp_annotations:
               summary: no successful aggregator cycle for 16m 0s
               description: "Line statuses and stats are going stale. Check the aggregator's log, Postgres and DistantSignalApiDatabaseDown."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalaggregatorcyclefailing
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalaggregatorcyclefailing
       - eval_time: 16m
         alertname: DistantSignalNotifierCycleFailing
         exp_alerts:
@@ -144,4 +144,4 @@ tests:
             exp_annotations:
               summary: no successful notifier skip_check cycle for 16m 0s
               description: "Push notifications for this loop are not being decided or sent. Check the notifier's log and Postgres."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalnotifiercyclefailing
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalnotifiercyclefailing

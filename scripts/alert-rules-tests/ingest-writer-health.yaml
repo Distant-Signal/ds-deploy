@@ -47,7 +47,7 @@ tests:
             exp_annotations:
               summary: "loop schedule_match: no successful run for 45m 0s"
               description: "Over 1800s: its body fails every tick, or no process runs it. Check the ingest-writer's log for the loop."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalwriterloopstale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalwriterloopstale
 
   # The hourly prune, last run 2h 45m before the start: over its own 9000s.
   - interval: 1m
@@ -62,7 +62,7 @@ tests:
             exp_annotations:
               summary: "loop ingest_dedup_prune: no successful run for 3h 0m 0s"
               description: "Over 9000s: its body fails every tick, or no process runs it. Check the ingest-writer's log for the loop."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalwriterloopstale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalwriterloopstale
 
   # Loop unowned. reconciliation: w1 held it until 5m, then nobody: fires
   # 15m later. schedule_match: held by w2 (w1 standby). The prune unowned
@@ -90,7 +90,7 @@ tests:
             exp_annotations:
               summary: "no process holds loop reconciliation's lock"
               description: "For 15m: the loop runs nowhere. Check the ingest-writer's lock session (pg_locks) and its log."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalwriterloopunowned
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalwriterloopunowned
 
   # Apply writes nothing. station-samples: applied every minute, rows
   # written until 10m, then none: 0 written over 15m from 25m, firing from
@@ -121,7 +121,7 @@ tests:
             exp_annotations:
               summary: "ds:ingest:station-samples: entries applied, no row written"
               description: "For 15m: every row unchanged or refused as older than the stored one. Check the producers' clocks."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestapplywritesnothing
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestapplywritesnothing
 
   # Source stale. incidents last landed at 0: over 900s from 16m, firing
   # from 26m. tfl lands every minute. station-samples (stream-only) last
@@ -156,7 +156,7 @@ tests:
             exp_annotations:
               summary: "incidents data last landed 45m 0s ago"
               description: "Its ingest_freshness row is over 900s old: its producer is down or failing, or writes nowhere."
-              runbook_url: &source_runbook https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingestsourcestale
+              runbook_url: &source_runbook https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestsourcestale
           - exp_labels: {severity: warning, namespace: distant-signal, source: station-samples}
             exp_annotations:
               summary: "station-samples data last landed 45m 0s ago"
@@ -211,7 +211,7 @@ tests:
             exp_annotations:
               summary: ds:ingest:station-samples is backing up in front of the ingest-writer
               description: "An entry pending over 600s, or unread plus un-ACKed entries over 0.5 of MAXLEN. At the cap they are trimmed unapplied."
-              runbook_url: &backlog_runbook https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalingeststreambacklog
+              runbook_url: &backlog_runbook https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingeststreambacklog
       - eval_time: 30m
         alertname: DistantSignalIngestStreamBacklog
         exp_alerts:

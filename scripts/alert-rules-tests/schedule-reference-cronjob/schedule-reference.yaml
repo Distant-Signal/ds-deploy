@@ -31,7 +31,7 @@ tests:
             exp_annotations:
               summary: schedule-reference runs not seeded for 1h
               description: "No run could read its last publish from Postgres, so none publishes. Check the run logs and Postgres."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulereferencenotseeded
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulereferencenotseeded
   # A run seeds every 30 minutes: never fires.
   - interval: 1m
     input_series:
@@ -77,7 +77,7 @@ tests:
             exp_annotations:
               summary: no CIF delivery fully published for 30h
               description: "No new delivery arrived, or one keeps failing to publish. Check schedule-ingest, the SFTP upload and the reference log."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulereferencepublishstale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulereferencepublishstale
   # A delivery published at 29h resets it.
   - interval: 1m
     input_series:
@@ -104,7 +104,7 @@ tests:
             exp_annotations:
               summary: schedule_destination_departures publish kept stale rows
               description: "Its staged key count did not match the publisher's total, so rows it left out stay until the next complete publish."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
       - eval_time: 371m
         alertname: DistantSignalSchedulePublishStagedMismatch
         exp_alerts: []
@@ -129,7 +129,7 @@ tests:
             exp_annotations:
               summary: schedule-reference's stanox_crs publish was rejected
               description: "Refused as bad data: not retried for this delivery, and the product keeps its previous rows. Usually schema skew."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalschedulereferencepublishrejected
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulereferencepublishrejected
       - eval_time: 371m
         alertname: DistantSignalScheduleReferencePublishRejected
         exp_alerts: []

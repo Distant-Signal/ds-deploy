@@ -24,7 +24,7 @@ tests:
             exp_annotations:
               summary: Tube rides on northern planned without its routes
               description: "In the last 1h. Rides are straight-line estimates until poller-tfl's routes job loads the line."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaltflroutesmissing
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignaltflroutesmissing
       - eval_time: 80m
         alertname: DistantSignalTflRoutesMissing
         exp_alerts: []
