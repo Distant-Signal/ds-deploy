@@ -112,7 +112,7 @@ postgresql:
     # collation changes can silently corrupt text indexes, so never change
     # the `-trixie` suffix without a REINDEX plan. With pgBackRest on, the
     # postgres-pgbackrest image must be built on this exact base and digest.
-    tag: "18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6"
+    tag: "18.6-trixie@sha256:3a4264520e121176619f54ff867d12774bc81e95e7b84db58d63bccdb6144b81"
     pullPolicy: IfNotPresent
   service:
     # -- Port the headless Service and the container listen on.
@@ -999,7 +999,7 @@ postgresql:
       # cluster.
       image:
         repository: registry.k8s.io/kubectl
-        tag: "v1.37.1@sha256:b7cab618e281b1ee7484e7b706a96e2135fbb6e072c2a573a7dab4e87d7f2385"
+        tag: "v1.37.2@sha256:fe049faa65ae483ac200009a949a68fa4c9985daea12c9cb1195c9c7965301fc"
         pullPolicy: IfNotPresent
       # -- CronJob pod resources. kubectl only streams pgBackRest's output;
       # the work happens in the Postgres container. The kubectl process's
@@ -2608,7 +2608,7 @@ devAuthentik:
   # throwaway dev-only database with no production posture to accommodate.
   postgresql:
     # Digest-pinned (INF-11); Renovate proposes bumps.
-    image: postgres:16.15-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+    image: postgres:16.15-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
     persistence:
       enabled: true
       size: 1Gi
@@ -3226,7 +3226,7 @@ redis:
     # Renovate (helm-values manager) proposes minor and patch bumps, digest
     # included. Majors are disabled in renovate.json5: Valkey 9 writes RDB 80,
     # which redis:7.4.11 (the rollback) cannot read.
-    tag: "8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2"
+    tag: "8.1.11-trixie@sha256:8f836008e0986c36adf50da714c7060cf689dbb335f61fe077939d90fa650809"
     pullPolicy: IfNotPresent
   service:
     port: 6379
