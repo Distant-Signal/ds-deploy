@@ -583,6 +583,10 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ $postLoginRedirectUrl | quote }}
             - name: SESSION_TTL_DAYS
               value: {{ .Values.api.sessionTtlDays | quote }}
+            - name: SESSION_MAX_AGE_DAYS
+              value: {{ .Values.api.sessionMaxAgeDays | quote }}
+            - name: SESSION_EXTEND_THROTTLE_HOURS
+              value: {{ .Values.api.sessionExtendThrottleHours | quote }}
             # Four sweep-cadence tunables, all declared in
             # crates/api/src/data/config.rs with a working default but
             # never wired into this template until the 2026-09-25 Signal

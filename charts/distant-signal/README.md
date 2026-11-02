@@ -1883,7 +1883,9 @@ Used only when `postgresql.enabled` is `false`.
 | `api.sso.existingSecretClientSecretKey` | `sso-client-secret` | Key within `api.sso.existingSecret`. |
 | `api.sso.redirectUrl` | `""` | **Required.** Callback URI registered with the SSO server — the *frontend's* origin plus `/api/auth/callback`, not the api's. |
 | `api.sso.postLoginRedirectUrl` | `""` | **Required.** Where sign-in and sign-out send the browser afterwards — the frontend's root URL. |
-| `api.sessionTtlDays` | `14` | Session lifetime in days. A fixed expiry stamped at sign-in, not a sliding window. |
+| `api.sessionTtlDays` | `14` | Session idle timeout in days. The expiry slides: an authenticated request moves it to now + this (at most once per `api.sessionExtendThrottleHours`), never past `api.sessionMaxAgeDays` after sign-in. |
+| `api.sessionMaxAgeDays` | `90` | Absolute session lifetime in days from sign-in, however active the session; also the session cookie's `Max-Age`. At least `api.sessionTtlDays`. |
+| `api.sessionExtendThrottleHours` | `24` | Hours after a session's expiry last moved before a request moves it again: at most one `sessions` write per session per interval. Less than `api.sessionTtlDays` in hours. |
 | `api.internalOauth.issuerUrl` | `""` | **Required.** OIDC issuer base URL for the internal-service OAuth2 provider (may be the same Authentik instance as `api.sso.*`, a different Application/Provider). |
 | `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token (the internal provider's client id; must differ from `api.sso.clientId`). |
 | `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account, the only internal-token use left since release B removed `/private`: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. See "Distant-Signal-MCP as a service caller" below. |

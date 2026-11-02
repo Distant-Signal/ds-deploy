@@ -1716,10 +1716,22 @@ api:
     # https://status.example.com/. One fixed target, not a round-tripped
     # "return to the page you were on". Required.
     postLoginRedirectUrl: ""
-  # -- How long a session stays valid after sign-in, in days. A fixed
-  # expiry stamped at login, not a sliding window refreshed by activity.
-  # Matches the binary's own default.
+  # -- Session idle timeout, in days: a sliding expiry. A session ends after
+  # this many days without an authenticated request; each request that comes
+  # more than sessionExtendThrottleHours after the expiry last moved moves
+  # it to now + this, never past sessionMaxAgeDays after sign-in. Matches the
+  # binary's own default.
   sessionTtlDays: 14
+  # -- Absolute session lifetime, in days from sign-in: even a session used
+  # every day ends here (the next sign-in is a silent SSO redirect while the
+  # IdP session lasts). Also the session cookie's Max-Age. At least
+  # sessionTtlDays. Matches the binary's own default.
+  sessionMaxAgeDays: 90
+  # -- How long after a session's expiry last moved before a request moves
+  # it again, in hours: at most one sessions-table write per session per
+  # interval. Less than sessionTtlDays in hours. Matches the binary's own
+  # default.
+  sessionExtendThrottleHours: 24
   # -- How often the reconciliation sweep re-attempts fixing a stuck
   # tracked-train row -- see crates/api/src/data/config.rs's
   # reconciliation_sweep_interval_secs doc. 2026-09-25 Signal Box Audit Low

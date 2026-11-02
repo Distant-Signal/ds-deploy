@@ -38,6 +38,8 @@ api:
     redirectUrl: https://status.example.com/api/auth/callback
     postLoginRedirectUrl: https://status.example.com/
   sessionTtlDays: 14
+  sessionMaxAgeDays: 90
+  sessionExtendThrottleHours: 24
   # Internal-service OAuth2 (machine-to-machine, distinct from sso above):
   # only the Distant-Signal-MCP's token is verified, to give it its own
   # rate-limit budget (api.internalOauth.groups.mcp). Release B (ingest
