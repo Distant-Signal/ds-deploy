@@ -29,7 +29,7 @@ tests:
             exp_annotations:
               summary: no successful ldbws poll for 41m 0s
               description: "None in 1800s: its cycles fail, or it is not polling at all. Check its log, its upstream and api."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpollerstale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalpollerstale
 
   # A daily poller fires only after two days without a success.
   - interval: 1m
@@ -47,4 +47,4 @@ tests:
             exp_annotations:
               summary: no successful stations poll for 2d 1h 0m 0s
               description: "None in 172800s: its cycles fail, or it is not polling at all. Check its log, its upstream and api."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalpollerstale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalpollerstale

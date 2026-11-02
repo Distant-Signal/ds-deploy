@@ -32,7 +32,7 @@ tests:
             exp_annotations:
               summary: api answers 20% of public requests with 5xx
               description: "Users, the frontend and the MCP get errors (503: a dependency is down). Check DistantSignalApiDatabaseDown and api's log."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalapipublic5xx
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalapipublic5xx
   # A single public 500 is a high ratio of very little traffic, below
   # minErrors, and fires nothing; scanner 404s on unmatched paths (a
   # retired /private/* route included) are not counted either.

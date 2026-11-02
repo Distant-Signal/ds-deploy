@@ -3321,7 +3321,7 @@ jobs:
           [[ -n "${dep}" ]] || fail "no ingest-writer Deployment rendered"
           grep -q '^  replicas: 1$' <<<"${dep}" || fail "the ingest-writer must run one replica"
           grep -q '^    type: Recreate$' <<<"${dep}" || fail "the ingest-writer must roll with Recreate"
-          grep -q 'image: "ghcr.io/fasterspeeding/distant-signal/ingest-writer:test"' <<<"${dep}" \
+          grep -q 'image: "ghcr.io/distant-signal/images/ingest-writer:test"' <<<"${dep}" \
             || fail "ingestWriter.image must set the image"
           grep -q 'path: /livez' <<<"${dep}" || fail "the ingest-writer needs the worker liveness probe"
           env_is "${dep}" INGEST_WRITER_LOOPS true
@@ -3848,7 +3848,7 @@ jobs:
           cj=$(doc CronJob distant-signal-api-maintenance <<<"${out}")
           [[ -n "${cj}" ]] || fail "no api-maintenance CronJob rendered"
           for want in 'schedule: "17 * * * *"' 'timeZone: "Etc/UTC"' 'concurrencyPolicy: Forbid' \
-              '- /usr/local/bin/maintenance' 'image: "ghcr.io/fasterspeeding/distant-signal/api:' \
+              '- /usr/local/bin/maintenance' 'image: "ghcr.io/distant-signal/images/api:' \
               'backoffLimit: 3'; do
             grep -q -F -- "${want}" <<<"${cj}" || fail "api-maintenance CronJob lacks: ${want}"
           done

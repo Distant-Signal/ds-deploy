@@ -22,7 +22,10 @@ type: application
 # 0.4.0: scheduleFeed.sftp.enabled and the GCS bucket source (scheduleFeed.bucket), both opt-in.
 # 0.4.1: pod templates carry only release-stable labels (distant-signal.podLabels).
 # 0.4.2: AGPL-3.0-or-later (LICENSE, annotation) and sourceCode, the api's /public/version.
-version: 0.4.2
+# 0.5.0: images at ghcr.io/distant-signal/images/<service>; the chart moves to
+#   ghcr.io/distant-signal/charts after the repository transfer (repo split
+#   phase 1). A new base so builds order above the old run counter.
+version: 0.5.0
 
 # Local-dev fallback ONLY. CI unconditionally overrides this at package
 # time (`helm package --app-version`, see `push-helm-chart`'s own comment
@@ -57,9 +60,9 @@ kubeVersion: ">=1.23.0-0"
 annotations:
   artifacthub.io/license: AGPL-3.0-or-later
 
-home: https://github.com/FasterSpeeding/Distant-Signal
+home: https://github.com/Distant-Signal/distant-signal
 sources:
-  - https://github.com/FasterSpeeding/Distant-Signal
+  - https://github.com/Distant-Signal/distant-signal
 
 # Deliberately no `dependencies:` — the chart bundles its own PostgreSQL
 # StatefulSet rather than pulling a subchart, so `helm dependency update` is

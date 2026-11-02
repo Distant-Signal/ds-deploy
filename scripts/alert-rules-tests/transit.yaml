@@ -24,7 +24,7 @@ tests:
             exp_annotations:
               summary: metrolink timetable refused (sharp_drop)
               description: "In the last 26h. The previous timetable stays active. Check the producer's log."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaltransitfeedrefused
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignaltransitfeedrefused
   # An unmapped ref seen at minute 5 alerts until it leaves the 1h window.
   - interval: 1m
     input_series:
@@ -38,7 +38,7 @@ tests:
             exp_annotations:
               summary: "metrolink unknown disruption line ORANGE"
               description: "In the last 1h. Its disruptions show on no line until the network file has the alias."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaltransitunmappedlineref
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignaltransitunmappedlineref
       - eval_time: 110m
         alertname: DistantSignalTransitUnmappedLineRef
         exp_alerts: []

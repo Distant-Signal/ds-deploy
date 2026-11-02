@@ -62,24 +62,20 @@ name: Containers
 # over a matrix of all 10 images instead of one. Reinhard does not call
 # Piped's build-container.yml either, for what it's worth.
 #
-# Registry & naming: ghcr.io/<owner>/distant-signal/<service>, where
-# <owner> is this repository's owner, lowercased (the `Derive this
-# repository's GHCR paths` step in each job; today ghcr.io/fasterspeeding).
-# Nothing here names the owner, so the workflow keeps working unedited when
-# the repository changes hands (docs/specs/repo-split.md, phase 0); the
-# path's shape itself changes later, in phase 1 (§5.9).
-# ghcr.io matches both Piped's own default registry and Reinhard's
-# hand-rolled default. `distant-signal/<service>` (rather than
-# `network-rail-status/<service>`) matches this repo's OWN existing
-# convention: charts/distant-signal/values.yaml already sets every
-# workload's `image.repository` to `distant-signal/<service>` (see e.g.
-# `api.image.repository: distant-signal/api`), and the chart's README
-# ("Building and pushing the images (manual)") documents the exact same
-# per-Dockerfile -> `distant-signal/<service>` mapping used in this
-# file's matrix. Publishing under that path means someone can point the
-# chart at the published images with nothing more than
-# `--set global.imageRegistry=ghcr.io/<owner>` (or per-service
-# `image.repository` overrides prefixed with the registry).
+# Registry & naming: ghcr.io/<owner>/images/<service>, where <owner> is
+# this repository's owner, lowercased (the `Derive this repository's GHCR
+# paths` step in each job; today ghcr.io/distant-signal). Nothing here
+# names the owner, so the workflow keeps working unedited if the
+# repository changes hands. The `images/<service>` shape is the
+# organisation-wide one (docs/specs/repo-split.md §5.9): every repository
+# that builds a DS image pushes it there, so moving a service between
+# repositories changes nothing in the chart. The chart README's
+# "Building and pushing the images (manual)" table documents the same
+# per-Dockerfile -> `images/<service>` mapping as this file's matrix.
+# `images/<service>` is also the two segments `global.imageRegistry`
+# keeps, so `--set global.imageRegistry=ghcr.io/<owner>` (or per-service
+# `image.repository` overrides prefixed with the registry) points the
+# chart at the published images.
 #
 # Tagging: docker/metadata-action's own bare defaults are actually just
 # `type=schedule` + `type=ref,event={branch,tag,pr}` -- confirmed against
@@ -153,7 +149,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # IMAGE_BASE (ghcr.io/<owner>/distant-signal) and CHART_BASE
+  # IMAGE_BASE (ghcr.io/<owner>/images) and CHART_BASE
   # (ghcr.io/<owner>/charts) are not set here: GitHub's expressions can't
   # lowercase `github.repository_owner`, and GHCR paths must be lowercase,
   # so each job's `Derive this repository's GHCR paths` step writes them to
@@ -273,14 +269,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # GHCR paths from this repository's owner, lowercased (ghcr.io refuses
-      # upper case): FasterSpeeding gives ghcr.io/fasterspeeding/..., the
-      # paths production pulls today. See the workflow `env:` comment.
+      # upper case): Distant-Signal gives ghcr.io/distant-signal/images and
+      # ghcr.io/distant-signal/charts. See the workflow `env:` comment.
       - name: Derive this repository's GHCR paths
         run: |
           set -euo pipefail
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           {
-            echo "IMAGE_BASE=${REGISTRY}/${owner}/distant-signal"
+            echo "IMAGE_BASE=${REGISTRY}/${owner}/images"
             echo "CHART_BASE=${REGISTRY}/${owner}/charts"
           } >> "${GITHUB_ENV}"
 
@@ -398,7 +394,13 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=AGPL-3.0-or-later
-          cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/buildcache:${{ matrix.service }}
+          # The second source is the cache from before the repository moved
+          # to the organisation (repo split §5.9): it keeps the first builds
+          # from ghcr.io/distant-signal warm. A missing ref is skipped, not
+          # an error. Drop it once the new cache has been written (a week).
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/buildcache:${{ matrix.service }}
+            type=registry,ref=ghcr.io/fasterspeeding/distant-signal/buildcache:${{ matrix.service }}
           cache-to: ${{ env.PUBLISH == 'true' && format('type=registry,ref={0}/buildcache:{1},mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_BASE, matrix.service) || '' }}
           # The weekly/no-cache rebuild: the runtime stage only (`runtime`
           # in every Rust Dockerfile, scripts/gen-rust-dockerfiles.py checks
@@ -515,10 +517,9 @@ jobs:
   # Path: pushed under ${CHART_BASE}/distant-signal, i.e.
   # ghcr.io/<owner>/charts/distant-signal (`helm push ... oci://${CHART_BASE}`,
   # which appends the chart's own name from Chart.yaml) -- a `charts/`
-  # sibling of IMAGE_BASE's own `distant-signal/<service>` image paths under
-  # the same owner, rather than nested inside `distant-signal/`
-  # itself, so the packaged chart doesn't read as one more "service"
-  # alongside api/aggregator/frontend/etc.
+  # sibling of IMAGE_BASE's `images/<service>` paths under the same owner
+  # (repo split §5.9), so the packaged chart doesn't read as one more
+  # image alongside api/aggregator/frontend/etc.
   #
   # Versioning -- rewritten from this job's original version, which just
   # pushed whatever `version:`/`appVersion:` were statically set in
@@ -654,14 +655,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # GHCR paths from this repository's owner, lowercased (ghcr.io refuses
-      # upper case): FasterSpeeding gives ghcr.io/fasterspeeding/..., the
-      # paths production pulls today. See the workflow `env:` comment.
+      # upper case): Distant-Signal gives ghcr.io/distant-signal/images and
+      # ghcr.io/distant-signal/charts. See the workflow `env:` comment.
       - name: Derive this repository's GHCR paths
         run: |
           set -euo pipefail
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           {
-            echo "IMAGE_BASE=${REGISTRY}/${owner}/distant-signal"
+            echo "IMAGE_BASE=${REGISTRY}/${owner}/images"
             echo "CHART_BASE=${REGISTRY}/${owner}/charts"
           } >> "${GITHUB_ENV}"
 
@@ -815,13 +816,13 @@ jobs:
       # runbook base URL, Chart.yaml's home/sources). Point the packaged
       # copies at where this run actually pushed and at this repository, so
       # nothing needs hand-editing when the repository changes hands. For
-      # FasterSpeeding/Distant-Signal every value below equals the
-      # checked-in one, so today's packaged chart is unchanged.
+      # Distant-Signal/distant-signal every value below equals the
+      # checked-in one, so the packaged chart is unchanged.
       #
       # Every first-party image is re-pointed, digest pinned or not: this
       # job runs only after every matrix leg pushed to IMAGE_BASE. Each
       # service's checked-in repository must already end in
-      # `distant-signal/<service>` (the two segments global.imageRegistry
+      # `images/<service>` (the two segments global.imageRegistry
       # keeps), so a SERVICE_TO_PATH mistake fails here instead of shipping
       # a wrong image. Same map as the pin step above.
       - name: Point the packaged charts at this repository
@@ -857,8 +858,8 @@ jobs:
           for service in "${!SERVICE_TO_PATH[@]}"; do
             path="${SERVICE_TO_PATH[${service}]}"
             current="$(yq "${path}.image.repository" "${values}")"
-            if [[ "${current}" != */distant-signal/"${service}" ]]; then
-              echo "::error::${values} ${path}.image.repository is '${current}', expected */distant-signal/${service}" >&2
+            if [[ "${current}" != */images/"${service}" ]]; then
+              echo "::error::${values} ${path}.image.repository is '${current}', expected */images/${service}" >&2
               exit 1
             fi
             repo="${IMAGE_BASE}/${service}" yq -i "${path}.image.repository = strenv(repo)" "${values}"

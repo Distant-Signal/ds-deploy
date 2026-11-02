@@ -227,7 +227,7 @@ populated in CI.
 
 When `.Values.global.imageRegistry` is set, it replaces whatever comes
 before the last two `/`-separated segments of `.image.repository` (e.g.
-`ghcr.io/fasterspeeding/distant-signal/api` -> keep `distant-signal/api`,
+`ghcr.io/distant-signal/images/api` -> keep `images/api`,
 prepend the override), so a single
 `--set global.imageRegistry=registry.example.com/myfork` re-points every
 image this chart renders -- including postgres/redis/devAuthentik/

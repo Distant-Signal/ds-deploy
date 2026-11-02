@@ -22,7 +22,7 @@ tests:
             exp_annotations:
               summary: No new Darwin Push Port message for over 600s
               description: "No relayed Darwin message newer than 600s, or no relay: Push Port platforms and associations are going stale."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaldarwinpushportstale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignaldarwinpushportstale
 
   # A relay that never reported anything fires on absent() after `for`.
   - interval: 1m
@@ -35,7 +35,7 @@ tests:
             exp_annotations:
               summary: No new Darwin Push Port message for over 600s
               description: "No relayed Darwin message newer than 600s, or no relay: Push Port platforms and associations are going stale."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaldarwinpushportstale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignaldarwinpushportstale
 
   # Lag on one partition passes 50,000 at 10m and stays there; another
   # stays low. It fires 15m later.
@@ -56,4 +56,4 @@ tests:
             exp_annotations:
               summary: darwin-relay is 60000 messages behind the Push Port topic
               description: "Over 50000 messages behind for 15m: the relay, Redis or the ingest-writer cannot keep up."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignaldarwinconsumerlaghigh
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignaldarwinconsumerlaghigh

@@ -17,7 +17,9 @@ type: application
 # 0.2.0: the move from AWS S3 (ACK) to Google Cloud Storage (Crossplane).
 # 0.2.1: AlertPolicy documentation is an object, as the CRD requires.
 # 0.2.2: AGPL-3.0-or-later (LICENSE, annotation).
-version: 0.2.2
+# 0.3.0: published at ghcr.io/distant-signal/charts after the repository
+#   transfer (repo split phase 1).
+version: 0.3.0
 
 # Not an application image: the chart deploys no workload. Kept at the
 # version of the design it implements.
@@ -30,9 +32,9 @@ kubeVersion: ">=1.23.0-0"
 annotations:
   artifacthub.io/license: AGPL-3.0-or-later
 
-home: https://github.com/FasterSpeeding/Distant-Signal
+home: https://github.com/Distant-Signal/distant-signal
 sources:
-  - https://github.com/FasterSpeeding/Distant-Signal
+  - https://github.com/Distant-Signal/distant-signal
 
 # No dependencies: Crossplane and its GCP providers are cluster components
 # owned by Ranma-Config, not subcharts of this chart.

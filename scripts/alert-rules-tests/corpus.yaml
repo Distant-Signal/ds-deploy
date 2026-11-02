@@ -54,7 +54,7 @@ tests:
             exp_annotations:
               summary: no CORPUS delivery loaded for 35 days
               description: "Over a month is unusual for CORPUS: RDM stopped pushing it, or schedule-ingest cannot load it. The old extract stays in use."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusstale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalcorpusstale
 
   # 50 days: the critical only (corpusStaleCriticalDays 45); the warning
   # stops where the critical starts.
@@ -70,7 +70,7 @@ tests:
             exp_annotations:
               summary: no CORPUS delivery loaded for 45 days
               description: "At least one monthly CORPUS missed: RDM stopped pushing it, or schedule-ingest cannot load it. The old extract stays in use."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusstale
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalcorpusstale
 
   # A load failing every 2-minute poll from minute 10 fires within minutes,
   # whatever the delivery's age; a single read failure and the idle scan
@@ -96,7 +96,7 @@ tests:
             exp_annotations:
               summary: CORPUS load keeps failing in schedule-ingest
               description: "Retried every poll; the previous extract stays in use. The ingest container's error log names the cause."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusloadfailing
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalcorpusloadfailing
       - eval_time: 20m
         alertname: DistantSignalCorpusStale
         exp_alerts: []
@@ -122,7 +122,7 @@ tests:
             exp_annotations:
               summary: a CORPUS file has an unexpected format
               description: "An NLC* file in the landing folder is not .xml.gz, so it is ignored. The ingest container's warning names it."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusformatdrift
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalcorpusformatdrift
       - eval_time: 20m
         alertname: DistantSignalCorpusLoadFailing
         exp_alerts: []
@@ -159,4 +159,4 @@ tests:
             exp_annotations:
               summary: schedule-ingest rejected a CORPUS extract
               description: "Moved to corpus/rejected/; the previous extract stays in use. The ingest container's error log names the reason."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalcorpusrejected
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalcorpusrejected

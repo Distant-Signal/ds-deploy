@@ -64,7 +64,7 @@ delete and carry `helm.sh/resource-policy: keep`.
 
 In production, Ranma-Config's Flux HelmRelease sets the values. CI
 publishes every push to main as
-`oci://ghcr.io/fasterspeeding/charts/ds-ingest-bucket`, signed with cosign
+`oci://ghcr.io/distant-signal/charts/ds-ingest-bucket`, signed with cosign
 like the distant-signal chart, at `<Chart.yaml version>+build.<run>.sha.<sha>`
 (OCI tags show the `+` as `_`). By hand, from a checkout (placeholders):
 

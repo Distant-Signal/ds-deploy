@@ -23,4 +23,4 @@ tests:
             exp_annotations:
               summary: no full-coverage window rows written
               description: "None over 10m for 15m: a stuck replay, a population that never loaded, or failing stream writes."
-              runbook_url: https://github.com/FasterSpeeding/Distant-Signal/blob/main/docs/alerts.md#distantsignalfullcoveragewindowstatsstalled
+              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalfullcoveragewindowstatsstalled
