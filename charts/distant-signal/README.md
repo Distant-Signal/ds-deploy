@@ -537,7 +537,7 @@ solved:**
   against a real kind/minikube/k3d cluster as of this writing — see
   `docs/superpowers/plans/2026-08-29-dev-oidc-server.md`'s Task 13 for
   what was and wasn't actually verified (that plan was pruned from the tree
-  in commit `b7f71a8a`; read it from git history).
+  in commit `156cf838`; read it from git history).
 
 See `docs/superpowers/specs/2026-08-29-dev-oidc-server-design.md` for the
 full design, including why `AUTHENTIK_BOOTSTRAP_*` is deliberately never

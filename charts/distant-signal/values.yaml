@@ -4841,7 +4841,7 @@ pollerTransitSchedule:
 # that app deploys stop restarting it, which on one node (the PVC is RWO
 # per node) changes nothing about the shared volume. Off by default: enabling this without a real DTD push
 # account configured (see docs/superpowers/plans/2026-09-01-schedule-feed-push-ingestion.md
-# Task 1; pruned from the tree in b7f71a8a, read it from the repo history) stands up infrastructure nothing can reach yet, which is a
+# Task 1; pruned from the tree in 156cf838, read it from the repo history) stands up infrastructure nothing can reach yet, which is a
 # legitimate thing to do ahead of time but not silently assumed to be "done."
 scheduleFeed:
   enabled: false
