@@ -238,7 +238,7 @@ held) and exits.
 **A run** (`RUN_ONCE=true`, `crates/schedule-reference`'s `run_once`):
 
 1. Takes the run lock, `pg_try_advisory_lock` on a fixed key
-   (`common::advisory_locks::SCHEDULE_REFERENCE_RUN_KEY`, ASCII
+   (`ds_runtime::advisory_locks::SCHEDULE_REFERENCE_RUN_KEY`, ASCII
    `dsschref`), on a connection of its own, held for the whole run. If
    another run holds it (a doubled Job, a manual run) it exits 0. The
    Deployment takes the same lock for each cycle, so while the mode

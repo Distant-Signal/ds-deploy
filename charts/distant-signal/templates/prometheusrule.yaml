@@ -315,7 +315,7 @@ spec:
         hours and nothing alerted (aggregator_cycle_duration_seconds_count
         rises either way). <service>_last_success_timestamp_seconds{cycle}
         is the last successful cycle, or the process start until one
-        succeeds (common::metrics::register_cycle), so a process that never
+        succeeds (ds_runtime::metrics::register_cycle), so a process that never
         succeeds still ages. The notifier's hourly template_sweep is left
         out.
         */}}
@@ -1660,7 +1660,7 @@ spec:
         {{- /*
         Renders only with archive.enabled. The gauge and the counter exist
         only when archive.tables includes trains; the gauge is seeded to
-        the aggregator's start time (common::metrics::register_cycle).
+        the aggregator's start time (ds_runtime::metrics::register_cycle).
         */}}
         {{- with $rule.archiveStale }}
         {{- if .enabled }}
@@ -2416,7 +2416,7 @@ spec:
         {{- /*
         No successful cycle for intervalMultiple x the poller's own interval
         (at least minAgeSeconds). The gauge is the process start until a
-        cycle succeeds (common::metrics::register_cycle), so a poller that
+        cycle succeeds (ds_runtime::metrics::register_cycle), so a poller that
         never completes a cycle still ages; DistantSignalPollerFailing needs
         a failed cycle to fire. One rule per poller: each has its own
         interval.
