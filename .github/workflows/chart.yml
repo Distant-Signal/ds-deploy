@@ -62,7 +62,12 @@ name: Containers
 # over a matrix of all 10 images instead of one. Reinhard does not call
 # Piped's build-container.yml either, for what it's worth.
 #
-# Registry & naming: ghcr.io/fasterspeeding/distant-signal/<service>.
+# Registry & naming: ghcr.io/<owner>/distant-signal/<service>, where
+# <owner> is this repository's owner, lowercased (the `Derive this
+# repository's GHCR paths` step in each job; today ghcr.io/fasterspeeding).
+# Nothing here names the owner, so the workflow keeps working unedited when
+# the repository changes hands (docs/specs/repo-split.md, phase 0); the
+# path's shape itself changes later, in phase 1 (§5.9).
 # ghcr.io matches both Piped's own default registry and Reinhard's
 # hand-rolled default. `distant-signal/<service>` (rather than
 # `network-rail-status/<service>`) matches this repo's OWN existing
@@ -73,7 +78,7 @@ name: Containers
 # per-Dockerfile -> `distant-signal/<service>` mapping used in this
 # file's matrix. Publishing under that path means someone can point the
 # chart at the published images with nothing more than
-# `--set global.imageRegistry=ghcr.io/fasterspeeding` (or per-service
+# `--set global.imageRegistry=ghcr.io/<owner>` (or per-service
 # `image.repository` overrides prefixed with the registry).
 #
 # Tagging: docker/metadata-action's own bare defaults are actually just
@@ -148,7 +153,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_BASE: ghcr.io/fasterspeeding/distant-signal
+  # IMAGE_BASE (ghcr.io/<owner>/distant-signal) and CHART_BASE
+  # (ghcr.io/<owner>/charts) are not set here: GitHub's expressions can't
+  # lowercase `github.repository_owner`, and GHCR paths must be lowercase,
+  # so each job's `Derive this repository's GHCR paths` step writes them to
+  # $GITHUB_ENV.
   # Reproducible images: BuildKit (via buildx, which passes this env var on
   # as the SOURCE_DATE_EPOCH build arg) stamps the image config's `created`
   # and its history entries with this time instead of the build's, and
@@ -263,6 +272,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # GHCR paths from this repository's owner, lowercased (ghcr.io refuses
+      # upper case): FasterSpeeding gives ghcr.io/fasterspeeding/..., the
+      # paths production pulls today. See the workflow `env:` comment.
+      - name: Derive this repository's GHCR paths
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          {
+            echo "IMAGE_BASE=${REGISTRY}/${owner}/distant-signal"
+            echo "CHART_BASE=${REGISTRY}/${owner}/charts"
+          } >> "${GITHUB_ENV}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -367,6 +388,10 @@ jobs:
           target: ${{ matrix.target }}
           outputs: type=image,push=${{ env.PUBLISH }},rewrite-timestamp=true
           provenance: false
+          # The project URL in every Rust binary's outbound User-Agent
+          # (crates/common's user_agent!): this repository's, so it follows
+          # the owner too. The frontend's Dockerfile doesn't declare it.
+          build-args: DS_PROJECT_URL=${{ github.server_url }}/${{ github.repository }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: |
             org.opencontainers.image.title=distant-signal/${{ matrix.service }}
@@ -385,7 +410,7 @@ jobs:
       # in GitHub's attestation API and, as an OCI referrer, next to the
       # image in ghcr.io; neither changes the image's own digest. Verify
       # with `gh attestation verify oci://<image>@<digest> --repo
-      # FasterSpeeding/Distant-Signal`. No storage record: those are for
+      # <owner>/<repo>`. No storage record: those are for
       # organization-owned repositories only.
       - name: Attest build provenance
         if: env.PUBLISH == 'true'
@@ -487,11 +512,11 @@ jobs:
   # `helm registry login` here is the standard GHCR-via-GitHub-Actions
   # pattern.
   #
-  # Path: pushed under ghcr.io/fasterspeeding/charts/distant-signal (i.e.
-  # `helm push ... oci://ghcr.io/fasterspeeding/charts`, which appends the
-  # chart's own name from Chart.yaml) -- a `charts/` sibling of
-  # IMAGE_BASE's own `distant-signal/<service>` image paths under the same
-  # `fasterspeeding` org, rather than nested inside `distant-signal/`
+  # Path: pushed under ${CHART_BASE}/distant-signal, i.e.
+  # ghcr.io/<owner>/charts/distant-signal (`helm push ... oci://${CHART_BASE}`,
+  # which appends the chart's own name from Chart.yaml) -- a `charts/`
+  # sibling of IMAGE_BASE's own `distant-signal/<service>` image paths under
+  # the same owner, rather than nested inside `distant-signal/`
   # itself, so the packaged chart doesn't read as one more "service"
   # alongside api/aggregator/frontend/etc.
   #
@@ -612,7 +637,7 @@ jobs:
   # so a consumer can verify it before installing (Flux: an
   # OCIRepository/HelmRepository `verify.provider: cosign` with
   # `matchOIDCIdentity` issuer `https://token.actions.githubusercontent.com`
-  # and subject `https://github.com/FasterSpeeding/Distant-Signal/.github/workflows/containers.yml@refs/heads/main`).
+  # and subject `https://github.com/<owner>/<repo>/.github/workflows/containers.yml@refs/heads/main`).
   push-helm-chart:
     name: Package and push Helm chart
     needs: build-and-push
@@ -627,6 +652,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # GHCR paths from this repository's owner, lowercased (ghcr.io refuses
+      # upper case): FasterSpeeding gives ghcr.io/fasterspeeding/..., the
+      # paths production pulls today. See the workflow `env:` comment.
+      - name: Derive this repository's GHCR paths
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          {
+            echo "IMAGE_BASE=${REGISTRY}/${owner}/distant-signal"
+            echo "CHART_BASE=${REGISTRY}/${owner}/charts"
+          } >> "${GITHUB_ENV}"
 
       # Same action and pinned Helm version as ci.yml's `helm-lint` job,
       # for consistency rather than introducing a second Helm setup/
@@ -773,6 +810,65 @@ jobs:
           done
           echo "Pinned ${pinned} first-party image digest(s) into charts/distant-signal/values.yaml."
 
+      # The checked-out charts name this repository's owner as it was when
+      # they were written (values.yaml's `image.repository` defaults, the
+      # runbook base URL, Chart.yaml's home/sources). Point the packaged
+      # copies at where this run actually pushed and at this repository, so
+      # nothing needs hand-editing when the repository changes hands. For
+      # FasterSpeeding/Distant-Signal every value below equals the
+      # checked-in one, so today's packaged chart is unchanged.
+      #
+      # Every first-party image is re-pointed, digest pinned or not: this
+      # job runs only after every matrix leg pushed to IMAGE_BASE. Each
+      # service's checked-in repository must already end in
+      # `distant-signal/<service>` (the two segments global.imageRegistry
+      # keeps), so a SERVICE_TO_PATH mistake fails here instead of shipping
+      # a wrong image. Same map as the pin step above.
+      - name: Point the packaged charts at this repository
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          declare -A SERVICE_TO_PATH=(
+            [api]=".api"
+            [aggregator]=".aggregator"
+            [enricher]=".enricher"
+            [notifier]=".notifier"
+            [poller-incidents]=".pollers.incidents"
+            [poller-stations]=".pollers.stations"
+            [poller-tocs]=".pollers.tocs"
+            [poller-ldbws]=".pollers.ldbws"
+            [poller-tfl]=".pollers.tfl"
+            [poller-irish-rail-gtfs]=".pollerIrishRailGtfs"
+            [poller-irish-rail-live]=".pollerIrishRailLive"
+            [poller-nir-stations]=".pollerNirStations"
+            [poller-transit-schedule]=".pollerTransitSchedule"
+            [trust-consumer]=".trustConsumer"
+            [full-coverage-consumer]=".fullCoverageConsumer"
+            [trust-backlog-consumer]=".trustBacklogConsumer"
+            [movement-relay]=".movementRelay"
+            [darwin-relay]=".darwinRelay"
+            [schedule-ingest]=".scheduleFeed.ingest"
+            [schedule-reference]=".scheduleFeed.reference"
+            [ingest-writer]=".ingestWriter"
+            [frontend]=".frontend"
+          )
+          values=charts/distant-signal/values.yaml
+          for service in "${!SERVICE_TO_PATH[@]}"; do
+            path="${SERVICE_TO_PATH[${service}]}"
+            current="$(yq "${path}.image.repository" "${values}")"
+            if [[ "${current}" != */distant-signal/"${service}" ]]; then
+              echo "::error::${values} ${path}.image.repository is '${current}', expected */distant-signal/${service}" >&2
+              exit 1
+            fi
+            repo="${IMAGE_BASE}/${service}" yq -i "${path}.image.repository = strenv(repo)" "${values}"
+          done
+          yq -i '.metrics.prometheusRule.runbookBaseUrl = strenv(REPO_URL) + "/blob/main"' "${values}"
+          for chart in charts/distant-signal/Chart.yaml charts/ds-ingest-bucket/Chart.yaml; do
+            yq -i '.home = strenv(REPO_URL) | .sources = [strenv(REPO_URL)]' "${chart}"
+          done
+          echo "Pointed ${#SERVICE_TO_PATH[@]} image repositories at ${IMAGE_BASE}, and the runbook and chart URLs at ${REPO_URL}."
+
       # AGPL §13 (repo split spec §6): the api's /public/version lists each
       # image with the source it was built from. Every image above is built
       # from this commit (an unchanged one keeps its digest because its
@@ -799,7 +895,7 @@ jobs:
         id: push
         env:
           CHART_TGZ: ${{ steps.package.outputs.chart_tgz }}
-          DEST: oci://${{ env.REGISTRY }}/fasterspeeding/charts
+          DEST: oci://${{ env.CHART_BASE }}
         run: |
           set -euo pipefail
           helm push "${CHART_TGZ}" "${DEST}" 2>&1 | tee /tmp/helm-push.log
@@ -828,7 +924,7 @@ jobs:
 
       - name: Sign and verify the pushed chart
         env:
-          CHART_REF: ${{ env.REGISTRY }}/fasterspeeding/charts/distant-signal@${{ steps.push.outputs.digest }}
+          CHART_REF: ${{ env.CHART_BASE }}/distant-signal@${{ steps.push.outputs.digest }}
           IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
         run: |
           set -euo pipefail
@@ -852,7 +948,7 @@ jobs:
 
       # charts/ds-ingest-bucket: the schedule feed's GCS landing bucket
       # (Crossplane managed resources, no workload), pushed beside
-      # distant-signal as oci://ghcr.io/fasterspeeding/charts/ds-ingest-bucket.
+      # distant-signal as oci://${CHART_BASE}/ds-ingest-bucket.
       # It has no images, so no digest pinning and no --app-version (its
       # appVersion is the design version in its Chart.yaml). Same version
       # scheme as distant-signal above: Chart.yaml's hand-bumped `version:`
@@ -861,7 +957,7 @@ jobs:
       - name: helm package and push (ds-ingest-bucket)
         id: push-ingest-bucket
         env:
-          DEST: oci://${{ env.REGISTRY }}/fasterspeeding/charts
+          DEST: oci://${{ env.CHART_BASE }}
         run: |
           set -euo pipefail
           short_sha="${GITHUB_SHA:0:7}"
@@ -884,7 +980,7 @@ jobs:
 
       - name: Sign and verify the pushed chart (ds-ingest-bucket)
         env:
-          CHART_REF: ${{ env.REGISTRY }}/fasterspeeding/charts/ds-ingest-bucket@${{ steps.push-ingest-bucket.outputs.digest }}
+          CHART_REF: ${{ env.CHART_BASE }}/ds-ingest-bucket@${{ steps.push-ingest-bucket.outputs.digest }}
           IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
         run: |
           set -euo pipefail
