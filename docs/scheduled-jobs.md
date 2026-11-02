@@ -53,6 +53,12 @@ The Jobs of this chart's own binaries also set (`distant-signal.scheduledJobFail
   A failed Job is not retried until the next scheduled run.
 - **Resources**, requests and limits, ephemeral storage included. A pod with
   none is BestEffort: the first the kubelet evicts and earlyoom kills.
+- **`wait-for-postgres` / `wait-for-redis` init containers** when the
+  container's env has `DATABASE_URL` / `REDIS_URL`. A new pod's connects
+  are refused for 2 to 5 seconds while its NetworkPolicy rules are added;
+  the wait takes that instead of the app's 5 s pool acquire
+  (`PoolTimedOut`, or a slow-acquire warning). Chart README, "Waiting for
+  Postgres and Redis".
 
 **Runs must be idempotent.** Kubernetes creates a CronJob's Job "about once"
 per schedule: rarely twice, rarely not at all. `api-maintenance`'s steps are

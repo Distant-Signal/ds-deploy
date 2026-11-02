@@ -12,10 +12,17 @@ ones) and checks each CronJob (docs/scheduled-jobs.md):
   - `concurrencyPolicy: Forbid` and a `startingDeadlineSeconds`;
   - its Job sets `backoffLimit`, `activeDeadlineSeconds` and
     `ttlSecondsAfterFinished`, and its pod `restartPolicy: Never`;
-  - every container has CPU and memory requests and a memory limit (a pod
-    without is BestEffort: the first the kubelet evicts, the first the
-    host's earlyoom kills), and ephemeral-storage requests and limits where
-    the CronJob runs one of this chart's own binaries;
+  - every container, init containers included, has CPU and memory requests
+    and a memory limit (a pod without is BestEffort: the first the kubelet
+    evicts, the first the host's earlyoom kills), and ephemeral-storage
+    requests and limits where the CronJob runs one of this chart's own
+    binaries (its app container);
+  - a CronJob running this chart's own binaries waits for what its
+    container connects to: a `wait-for-postgres` init container exactly
+    when its env has DATABASE_URL, `wait-for-redis` exactly when it has
+    REDIS_URL, each given the same URL (a new pod's connects are refused
+    until its NetworkPolicy rules exist; chart README, "Waiting for
+    Postgres and Redis");
   - a CronJob running this chart's own binaries also has
     `podReplacementPolicy: Failed` and the shared pod failure policy (exit
     137 and 3 fail the Job; a DisruptionTarget pod is ignored) for its
@@ -96,6 +103,8 @@ EXPECTED = (
     "distant-signal-schedule-reference",
 )
 FAIL_JOB_EXIT_CODES = [3, 137]
+# The init container each URL in a CronJob container's env needs.
+WAIT_FOR = {"DATABASE_URL": "wait-for-postgres", "REDIS_URL": "wait-for-redis"}
 
 
 def sets(*pairs: str) -> tuple[str, ...]:
@@ -357,6 +366,46 @@ def failure_policy_problems(
     return problems
 
 
+def wait_problems(pod_spec: Mapping[str, object]) -> list[str]:
+    """Return how a pod's wait-for init containers miss its app's URLs."""
+    containers = [as_map(c) for c in as_list(pod_spec.get("containers"))]
+    if not containers:
+        return []
+    inits = {
+        str(c.get("name")): c
+        for c in (as_map(x) for x in as_list(pod_spec.get("initContainers")))
+    }
+
+    def entries(container: Mapping[str, object]) -> dict[str, object]:
+        return {
+            str(e.get("name")): e
+            for e in (as_map(x) for x in as_list(container.get("env")))
+        }
+
+    app = entries(containers[0])
+    problems: list[str] = []
+    for var, init in WAIT_FOR.items():
+        if var in app and init not in inits:
+            problems.append(f"its container has {var} but no {init} init container")
+        elif init in inits and var not in app:
+            problems.append(f"{init} init container but its container has no {var}")
+        elif init in inits and entries(inits[init]).get(var) != app[var]:
+            problems.append(f"{init} is not given its container's {var}")
+    return problems
+
+
+def container_problems(pod_spec: Mapping[str, object], *, own: bool) -> list[str]:
+    """Return what a CronJob pod's containers and init containers lack."""
+    problems: list[str] = []
+    for container in (as_map(c) for c in as_list(pod_spec.get("containers"))):
+        problems.extend(resource_problems(container, ephemeral=own))
+    for container in (as_map(c) for c in as_list(pod_spec.get("initContainers"))):
+        problems.extend(resource_problems(container, ephemeral=False))
+    if own:
+        problems.extend(wait_problems(pod_spec))
+    return problems
+
+
 def cronjob_problems(doc: Mapping[str, object]) -> list[str]:
     """Return what is wrong with one rendered CronJob."""
     name = str(as_map(doc.get("metadata")).get("name"))
@@ -386,8 +435,7 @@ def cronjob_problems(doc: Mapping[str, object]) -> list[str]:
     containers = [as_map(c) for c in as_list(pod_spec.get("containers"))]
     if not containers:
         problems.append("its pod has no containers")
-    for container in containers:
-        problems.extend(resource_problems(container, ephemeral=own))
+    problems.extend(container_problems(pod_spec, own=own))
     if own and containers:
         problems.extend(
             failure_policy_problems(job_spec, str(containers[0].get("name")))

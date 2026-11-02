@@ -948,6 +948,8 @@ distant-signal.databaseEnv.
   value: {{ .Values.databasePool.idleInTransactionTimeoutSecs | int | quote }}
 - name: DATABASE_ACQUIRE_TIMEOUT_SECS
   value: {{ .Values.databasePool.acquireTimeoutSecs | int | quote }}
+- name: DATABASE_STARTUP_CONNECT_TIMEOUT_SECS
+  value: {{ .Values.databasePool.startupConnectTimeoutSecs | int | quote }}
 {{- end -}}
 {{- end }}
 
@@ -2229,7 +2231,9 @@ A worker run on a schedule instead of as an always-on Deployment
   - its pod: restartPolicy Never, the component's own pod labels (so the
     component's NetworkPolicies, Redis ACL user and Secrets apply exactly as
     to its Deployment), no probes, ports or scrape annotations (a run is
-    gone before Prometheus would scrape it).
+    gone before Prometheus would scrape it);
+  - wait-for-postgres / wait-for-redis init containers when its env has
+    DATABASE_URL / REDIS_URL (distant-signal.waitForDependencyContainers).
 
 Takes dict:
   "root"       the chart root;
@@ -2307,6 +2311,12 @@ spec:
           {{- end }}
           securityContext:
             {{- include "distant-signal.podSecurityContext" (dict "override" $w.podSecurityContext) | nindent 12 }}
+          {{- with include "distant-signal.waitForDependencyContainers" (dict "root" $root "env" .env) | trim }}
+          # A new pod's connects are refused until its NetworkPolicy rules
+          # exist; wait here, not in the app (distant-signal.waitForPostgresContainer).
+          initContainers:
+            {{- . | nindent 12 }}
+          {{- end }}
           containers:
             - name: {{ $component }}
               image: {{ include "distant-signal.image" (dict "root" $root "image" .image) | quote }}
@@ -2337,6 +2347,103 @@ spec:
           affinity:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+{{- end }}
+
+{{/*
+Init containers that hold a pod's app container back until the network
+lets it reach Postgres or Redis. A new pod's first connections are refused
+for 2 to 5 seconds while the k3s network-policy controller adds its IP to
+the NetworkPolicy rules (docs/specs/postgres-connection-pooling.md §1);
+init containers share the pod's IP, so once one of these has connected the
+app's first connect goes straight through. Each only connects: pg_isready
+does not log in, and redis-cli's PING sends no credentials (a NOAUTH reply
+still means the server answered, and exits 0; a refused or unresolvable
+connect exits 1). Each loops until it connects, bounded by the Job's
+activeDeadlineSeconds. Both images run as root with no USER, so these pin
+uid/gid 999 (each image's postgres or valkey user) for runAsNonRoot.
+
+distant-signal.waitForPostgresContainer takes (dict "root" $ "var" <the env
+var holding the URL> "env" <the env entries the URL needs, the URL and any
+$(VAR) it refers to, as a YAML list string>). The migrate Job and the
+CronJobs below use it.
+*/}}
+{{- define "distant-signal.waitForPostgresContainer" -}}
+- name: wait-for-postgres
+  image: {{ include "distant-signal.postgresImage" .root | quote }}
+  imagePullPolicy: {{ include "distant-signal.postgresImagePullPolicy" .root }}
+  command:
+    - sh
+    - -c
+    - {{ printf "until pg_isready --quiet --dbname=\"${%s:?}\"; do sleep 1; done" .var }}
+  env:
+    {{- .env | trim | nindent 4 }}
+  securityContext:
+    # The image's postgres user; its default user is root.
+    runAsUser: 999
+    runAsGroup: 999
+    {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 4 }}
+  # pg_isready in a shell loop: a 7Mi working set in production.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 64Mi
+{{- end }}
+
+{{/*
+distant-signal.waitForRedisContainer: the same for Redis, with the bundled
+Redis's image (redis-cli), whatever redis.enabled says. Takes (dict "root"
+$ "env" <the REDIS_URL entry, as a YAML list string>). See distant-signal.waitForPostgresContainer.
+*/}}
+{{- define "distant-signal.waitForRedisContainer" -}}
+- name: wait-for-redis
+  image: {{ include "distant-signal.image" (dict "root" .root "image" .root.Values.redis.image) | quote }}
+  imagePullPolicy: {{ .root.Values.redis.image.pullPolicy }}
+  command:
+    - sh
+    - -c
+    - until redis-cli -u "${REDIS_URL:?}" PING >/dev/null 2>&1; do sleep 1; done
+  env:
+    {{- .env | trim | nindent 4 }}
+  securityContext:
+    # The image's valkey user; its default user is root.
+    runAsUser: 999
+    runAsGroup: 999
+    {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 4 }}
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 64Mi
+{{- end }}
+
+{{/*
+distant-signal.waitForDependencyContainers: the init containers a CronJob
+pod needs, from its app container's env (a list of env entries):
+wait-for-postgres when it has DATABASE_URL (with PGPASSWORD, which the
+bundled database's URL refers to), wait-for-redis when it has REDIS_URL.
+Renders nothing for neither. Takes (dict "root" $ "env" <env list>).
+*/}}
+{{- define "distant-signal.waitForDependencyContainers" -}}
+{{- $pg := list -}}
+{{- $hasPg := false -}}
+{{- $redis := list -}}
+{{- range .env -}}
+{{- if has .name (list "DATABASE_URL" "PGPASSWORD") -}}
+{{- $pg = append $pg . -}}
+{{- if eq .name "DATABASE_URL" }}{{ $hasPg = true }}{{ end -}}
+{{- else if eq .name "REDIS_URL" -}}
+{{- $redis = append $redis . -}}
+{{- end -}}
+{{- end -}}
+{{- if $hasPg }}
+{{ include "distant-signal.waitForPostgresContainer" (dict "root" .root "var" "DATABASE_URL" "env" (toYaml $pg)) }}
+{{- end }}
+{{- if $redis }}
+{{ include "distant-signal.waitForRedisContainer" (dict "root" .root "env" (toYaml $redis)) }}
+{{- end }}
 {{- end }}
 
 {{/*

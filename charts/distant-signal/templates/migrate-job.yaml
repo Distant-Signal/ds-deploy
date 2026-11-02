@@ -91,27 +91,7 @@ spec:
         # fresh install it may still be starting) uses the Postgres image,
         # as the role setup Job does. pg_isready only connects; it does not
         # log in.
-        - name: wait-for-postgres
-          image: {{ include "distant-signal.postgresImage" . | quote }}
-          imagePullPolicy: {{ include "distant-signal.postgresImagePullPolicy" . }}
-          command:
-            - sh
-            - -c
-            - until pg_isready --quiet --dbname="${MIGRATION_DATABASE_URL:?}"; do sleep 2; done
-          env:
-            {{- include "distant-signal.migrateJobDatabaseEnv" . | nindent 12 }}
-          securityContext:
-            # The image's postgres user; its default user is root.
-            runAsUser: 999
-            runAsGroup: 999
-            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          # pg_isready in a shell loop: a 7Mi working set in production.
-          resources:
-            requests:
-              cpu: 10m
-              memory: 16Mi
-            limits:
-              memory: 64Mi
+        {{- include "distant-signal.waitForPostgresContainer" (dict "root" . "var" "MIGRATION_DATABASE_URL" "env" (include "distant-signal.migrateJobDatabaseEnv" .)) | nindent 8 }}
       containers:
         - name: migrate
           image: {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) | quote }}

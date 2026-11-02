@@ -1051,6 +1051,31 @@ clear of that window in both GMT and BST. See
 [the backup design](../../docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md),
 item 2.
 
+### Waiting for Postgres and Redis
+
+A new pod's first connections are refused for about 2 to 5 seconds while
+the cluster's network-policy controller adds the pod's IP to the
+NetworkPolicy rules
+([the investigation](../../docs/specs/postgres-connection-pooling.md)). A
+long-running service pays that once per rollout; a CronJob pays it on every
+run. So each CronJob that runs one of this chart's own binaries gets init
+containers that wait first, chosen from its container's env:
+
+| Env | Init container | Image | Check |
+|---|---|---|---|
+| `DATABASE_URL` | `wait-for-postgres` | the Postgres image | `pg_isready` every second; it connects but does not log in |
+| `REDIS_URL` | `wait-for-redis` | `redis.image` | `redis-cli PING` every second, without credentials; any reply (even `NOAUTH`) counts |
+
+Init containers share the pod's IP, so by the time the app starts its
+rules exist and its first connect goes straight through. Today that is
+api-maintenance, schedule-reference and poller-stations (Postgres) and
+poller-tocs, poller-tfl-daily and the transit timetable CronJobs (Redis).
+The migrate hook Job has the same `wait-for-postgres`. Each runs as uid
+999, read-only, with requests `10m`/`16Mi` and a `64Mi` limit, and waits
+until it connects; the Job's `activeDeadlineSeconds` bounds it. The
+services themselves also give their first connect a startup budget
+(`databasePool.startupConnectTimeoutSecs`), which covers the Deployments.
+
 ## Point-in-time recovery (optional)
 
 Off by default (`postgresql.pgbackrest.enabled: false`), and while off the
@@ -1717,7 +1742,17 @@ Every pool (api, aggregator, notifier, enricher) sets these at connect time
 - `idle_in_transaction_session_timeout`, from
   `databasePool.idleInTransactionTimeoutSecs` (30).
 
-A pool acquire fails after `databasePool.acquireTimeoutSecs` (5).
+A pool acquire fails after `databasePool.acquireTimeoutSecs` (5). A
+service's first connect at startup has a budget of its own,
+`databasePool.startupConnectTimeoutSecs` (15): a new pod's connects are
+refused for 2 to 5 seconds while the network-policy controller adds its IP,
+so connects that never reach Postgres are retried quietly (DEBUG, 100 to 500 ms
+apart) within it, and the success is logged at INFO. A failure past it,
+or one Postgres answers (a wrong password), is a WARN on the usual backoff.
+Redis connects made through `common::redis_conn::connect_until_ready` have
+the same budget, `REDIS_STARTUP_CONNECT_TIMEOUT_SECS` (15; set it with a
+workload's `extraEnv`). The chart's own CronJobs also wait in an init
+container (see [Waiting for Postgres and Redis](#waiting-for-postgres-and-redis)).
 
 Some work is expected to run longer and raises `statement_timeout` for its
 own transaction with `SET LOCAL`:
@@ -1740,6 +1775,7 @@ budget). Before it migrates, it drops any INVALID index that a failed
 | `databasePool.statementTimeoutSecs` | `60` | `statement_timeout` for every pooled connection. `0` disables it. |
 | `databasePool.idleInTransactionTimeoutSecs` | `30` | `idle_in_transaction_session_timeout`. `0` disables it. |
 | `databasePool.acquireTimeoutSecs` | `5` | How long to wait for a free pool connection. |
+| `databasePool.startupConnectTimeoutSecs` | `15` | `DATABASE_STARTUP_CONNECT_TIMEOUT_SECS`: the first connect's budget for connects that never reach Postgres (a new pod's NetworkPolicy lag), retried quietly before they warn. `acquireTimeoutSecs` is unchanged. `0` turns it off. |
 | `api.database.maxConnections` | `50` | api pool size per replica. Pools total api 50 per replica + aggregator 10 + notifier 5 + enricher 5 = 70 at one api replica, plus every poller and consumer pool, against the chart's `postgresql.config.max_connections` of 200. Each extra api replica (and a RollingUpdate surge pod) adds 50; the render fails when the total no longer fits, so raise `postgresql.config.max_connections` (restart; check memory) or lower this. |
 | `api.migrations.lockTimeoutSecs` | `10` | `lock_timeout` for startup migrations. |
 | `api.migrations.statementTimeoutSecs` | `240` | `statement_timeout` for each startup migration statement. Keep it below the startup probe budget. |

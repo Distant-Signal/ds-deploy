@@ -1050,6 +1050,12 @@ databasePool:
   # -- How long a request waits for a free pool connection before failing
   # (sqlx's own default is 30s).
   acquireTimeoutSecs: 5
+  # -- The process's first connect only: how long connects that never reach
+  # Postgres (refused, timed out) are retried quietly, 100 to 500 ms apart,
+  # before each one logs a warning. A new pod's connects are refused for 2
+  # to 5s while its NetworkPolicy rules are added. acquireTimeoutSecs is
+  # unchanged. 0 turns it off.
+  startupConnectTimeoutSecs: 15
 
 # ---------------------------------------------------------------------------
 # Rail Data Marketplace pollers

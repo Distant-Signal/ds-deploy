@@ -61,6 +61,10 @@ spec:
           {{- end }}
           securityContext:
             {{- include "distant-signal.podSecurityContext" (dict "override" $m.podSecurityContext) | nindent 12 }}
+          # A new pod's connects are refused until its NetworkPolicy rules
+          # exist; wait here, not in the app (distant-signal.waitForPostgresContainer).
+          initContainers:
+            {{- include "distant-signal.waitForDependencyContainers" (dict "root" . "env" (include "distant-signal.databaseEnvFor" (dict "root" . "service" "api") | fromYamlArray)) | trim | nindent 12 }}
           containers:
             - name: api-maintenance
               image: {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) | quote }}
