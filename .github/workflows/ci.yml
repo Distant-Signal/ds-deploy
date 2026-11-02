@@ -9,23 +9,13 @@ name: CI
 # warrant skipping on push (the container build/publish pipeline, which IS
 # expensive, lives in containers.yml instead).
 #
-# `actionlint` calls FasterSpeeding/Piped's own reusable `workflow_call`
-# workflow directly (see the comment on that job). `clippy` originally did
-# too, but Piped's clippy.yml passes a broken `args: --all-features` to
-# auguwu/clippy-action (lands after cargo's `--` separator, so it reaches
-# clippy-driver/rustc, not cargo), so it's now a custom job running plain
-# `cargo clippy ... -- -D warnings` (see that job's comment). Piped's
-# remaining workflows (rustfmt.yml,
-# lint.yml, type-check.yml, py-test.yml, verify-types.yml,
-# freeze-for-pr.yml, ...) are not used here: they are either Python/nox-
-# oriented (this repo's only Python is a standalone script under scripts/,
-# with no package or nox sessions; the `scripts-lint` job below checks it)
-# or depend on a `justfile` +
-# `mise.toml` vendored from the `piped` git submodule via the
-# `just-jobs`/`handle-diff-file` composite actions in Piped-actions, which
-# this repo does not have and this change does not introduce. See the PR
-# description this workflow shipped with for the fuller "what was checked
-# and why" writeup, including upstream-gap notes for Piped/Piped-actions.
+# Most jobs call Distant-Signal/ci's reusable workflows (repo split spec
+# §5.5 and §8.3), pinned by SHA; Renovate bumps the pins. Each of their
+# checks shows as `<job> / <job inside the reusable workflow>`. What stays
+# here is Distant Signal's own: the DB test passes (.github/db-tests.toml),
+# the Playwright e2e job, the migration order check, the chart and
+# repository checks and the Helm chart renders. `actionlint` calls
+# FasterSpeeding/Piped's reusable lint-actions.yml.
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -41,144 +31,35 @@ permissions:
   contents: read
 
 jobs:
-  # Custom: NOT using FasterSpeeding/Piped's clippy.yml reusable workflow.
-  # It calls auguwu/clippy-action with `args: --all-features`, which the
-  # action puts AFTER cargo's `--` separator, so `--all-features` reaches
-  # clippy-driver and fails with "Unrecognized option: 'all-features'"
-  # (an upstream Piped bug; the reusable workflow takes no inputs). This job
-  # used to call the action directly with `check-args`, but the action had
-  # no deny level set, so warnings never failed it.
+  # Distant-Signal/ci's rust-ci.yml: clippy in both feature sets
+  # (-D warnings), the MSRV check (Cargo.toml's rust-version = "1.88" is a
+  # promise, checked with exactly that toolchain), cargo-deny (bans,
+  # licences and sources block; advisories only warn, since
+  # dependency-scan.yml's OSV scan blocks on critical + fixable ones; see
+  # deny.toml), rustfmt, and cargo build & test (the tests that need no
+  # database). Every job but rustfmt and cargo-deny installs the system
+  # packages docker/trust-consumer.Dockerfile documents for rdkafka's
+  # `cmake-build`/`ssl`/`sasl` features: cmake, libssl-dev and pkg-config to
+  # build vendored librdkafka, libsasl2-dev for the `sasl2-sys` build script
+  # (dynamically linked against a real libsasl2, matching production: this
+  # app does real SASL/SCRAM against a live Kafka broker, see
+  # trustConsumer.kafka.saslMechanism), and libcurl4-openssl-dev because
+  # librdkafka's vendored C source `#include`s <curl/curl.h>.
   #
-  # Now plain cargo, per the "Strict Config Starting Points" guide: cargo
-  # flags before `--`, clippy-driver flags after it. `-D warnings` makes the
-  # [workspace.lints] in Cargo.toml (all + pedantic + a few restriction
-  # lints, kept at "warn" there so a newer local toolchain doesn't break
-  # builds) a hard gate. `--all-targets` lints tests, benches and examples
-  # too. Both feature sets run so code behind a feature flag
-  # (`line-catalogue-validator`'s `db`, `common`'s `postgres`/`redis`, and
-  # the code compiled only without them) is linted. Findings show in the
-  # job log rather than as PR annotations.
-  #
-  # Also installs the same system packages docker/trust-consumer.Dockerfile
-  # documents needing for rdkafka's `cmake-build`/`ssl`/`sasl` features
-  # (trust-consumer is part of this workspace, so `--workspace` compiles it
-  # too): cmake + libssl-dev + pkg-config to build vendored librdkafka,
-  # libsasl2-dev for the `sasl2-sys` crate's build script (dynamic linking
-  # against a real libsasl2, matching production -- see the `rust-test` job
-  # below for the fuller rationale), and libcurl4-openssl-dev because
-  # librdkafka's vendored C source unconditionally `#include`s
-  # <curl/curl.h>.
-  clippy:
-    name: cargo clippy -D warnings
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: 1.88.0
-          components: clippy
-
-      - name: Install rdkafka build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
-
-      # Shared with the msrv job (same toolchain, same dependency builds:
-      # clippy-driver only wraps the workspace crates). See rust-test's
-      # cache step for why only main saves.
-      - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: check-all-features
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: cargo clippy (all features)
-        run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
-
-      - name: cargo clippy (no default features)
-        run: cargo clippy --workspace --locked --all-targets --no-default-features -- -D warnings
-
-  # MSRV: `rust-version = "1.88"` in Cargo.toml's [workspace.package] is a
-  # promise, so check it explicitly with exactly that toolchain, separately
-  # from whichever toolchain the other jobs pin. Today every job (and every
-  # Dockerfile) uses 1.88.0 too, so this mostly guards the day those move
-  # forward: it then keeps the workspace building on the MSRV until
-  # rust-version is bumped on purpose.
-  msrv:
-    name: cargo +1.88.0 check (MSRV)
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: 1.88.0
-
-      - name: Install rdkafka build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
-
-      # Shared with the clippy job; see there.
-      - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: check-all-features
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: cargo +1.88.0 check
-        run: cargo +1.88.0 check --workspace --locked --all-features --all-targets
-
-  # cargo-deny with deny.toml: licences, bans (wildcards; duplicate versions
-  # are warnings), sources (crates.io only) and advisories (RustSec, plus
-  # yanked crates). bans/licenses/sources and the advisory-DB fetch block;
-  # the advisories check only warns (see its step). Advisories overlap
-  # dependency-scan.yml's OSV scan on purpose -- see deny.toml. The binary comes from taiki-e/install-action,
-  # which verifies the release checksum; the version is pinned exactly.
-  cargo-deny:
-    name: cargo deny check
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: 1.88.0
-
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
-        with:
-          tool: cargo-deny@0.20.2
-
-      - name: cargo deny check (bans, licenses, sources)
-        run: cargo deny --locked check bans licenses sources
-
-      # Advisories are split out: a crate advisory is a security finding,
-      # not a build break. Fetching the advisory DB is still a hard error
-      # (CI couldn't check); the check itself only warns, because
-      # dependency-scan.yml's OSV scan already blocks on critical + fixable
-      # RustSec advisories, and cargo-deny 0.20 (advisories v2) has no
-      # severity threshold to block on. On GitHub a continue-on-error step
-      # that fails still looks green, so the ::warning:: annotation below
-      # (shown on the run summary) is the visible signal.
-      - name: Fetch the RustSec advisory DB
-        run: cargo deny --locked fetch
-
-      - name: cargo deny check advisories (non-blocking)
-        id: advisories
-        continue-on-error: true
-        run: cargo deny --frozen check advisories
-
-      - name: Report advisory findings
-        if: steps.advisories.outcome == 'failure'
-        run: echo "::warning title=cargo deny advisories (non-blocking)::cargo deny found advisories or yanked crates; see the 'cargo deny check advisories' step."
+  # The extra test step is the fast, no-secrets tier of the lines/*.toml
+  # external-identifier validator (crates/line-catalogue-validator): every
+  # `crs`, `tiploc` and `operators` value against the vendored snapshots in
+  # reference-data/, deterministic and offline, built by the same `cargo
+  # build --workspace`. Its live counterpart is validate-line-catalogue.yml
+  # (disabled pending credentials).
+  rust:
+    uses: Distant-Signal/ci/.github/workflows/rust-ci.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    with:
+      toolchain: 1.88.0
+      msrv: 1.88.0
+      apt-packages: cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
+      extra-test-name: Validate lines/*.toml external identifiers (fast tier)
+      extra-test-command: cargo run -p line-catalogue-validator
 
   # Reusable workflow_call from FasterSpeeding/Piped: runs actionlint over
   # this repo's own .github/workflows/*.yml via reviewdog. Self-contained
@@ -187,571 +68,28 @@ jobs:
   actionlint:
     uses: FasterSpeeding/Piped/.github/workflows/lint-actions.yml@5bbddb5d32d5bde939b18f6c6bcfa0e36779412f # master @ 2026-09-01
 
-  # Custom step: Piped's rustfmt.yml exists but pipes its diff through the
-  # `handle-diff-file` composite action, which shells out to `just
-  # check-diff-file` -- i.e. it assumes the `piped` submodule's justfile is
-  # vendored into the repo. This repo has no justfile/mise.toml and this
-  # change deliberately does not add the Piped submodule just to satisfy
-  # one check, so a plain `cargo fmt --check` step is used instead.
-  #
-  # Hard gate: `cargo fmt --all` has been run across the whole workspace, so
-  # `cargo fmt --all --check` is clean on `main` and any drift from here on
-  # is a real regression a PR introduced.
-  rustfmt:
-    name: cargo fmt --check
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: 1.88.0
-          components: rustfmt
-
-      - name: cargo fmt --check
-        run: cargo fmt --all --check
-
-  # Custom: cargo build/test across the whole workspace (the tests that need
-  # no database). The DATABASE_URL/REDIS_URL-gated `#[ignore]`d tests run in
-  # `rust-db-test` below, in parallel: they are serial (--test-threads=1)
-  # and took ~10 of this job's ~19-23 minutes when both lived here.
-  rust-test:
-    name: cargo build & test
-    runs-on: ubuntu-26.04
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: 1.88.0
-
-      # trust-consumer's `rdkafka` dependency needs a real, dynamically
-      # linked libsasl2 to build+run (see docker/trust-consumer.Dockerfile,
-      # which installs the same packages for the same reason): its `sasl`
-      # feature pulls in the `sasl2-sys` crate, whose build script panics
-      # with "Unable to find libsasl2 on your system" without
-      # libsasl2-dev. `rdkafka` was deliberately left on dynamic linking
-      # (no `vendored`/`gssapi-vendored` feature enabled in
-      # crates/trust-consumer/Cargo.toml) rather than switched to a
-      # vendored/bundled libsasl2, so this needs to match the Dockerfile's
-      # system-package approach rather than diverge from it: this app does
-      # real SASL/SCRAM auth against a live Kafka broker in production (see
-      # charts/distant-signal's trustConsumer.kafka.saslMechanism), so CI
-      # should build against the same kind of libsasl2 production actually
-      # links, not a bundled stand-in that could behave differently.
-      # cmake/libssl-dev/pkg-config are for rdkafka's `cmake-build`/`ssl`
-      # features (vendored librdkafka C library), libcurl4-openssl-dev
-      # because librdkafka's vendored C source unconditionally `#include`s
-      # <curl/curl.h> at build time (not linked at runtime).
-      - name: Install rdkafka build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
-
-      # save-if: only main writes caches (every job's rust-cache step does
-      # the same). A PR's save could only ever be restored by later runs
-      # of that same PR, and the repo's 10 GB Actions cache was over its
-      # cap and evicting main's entries for them. PRs still restore main's.
-      - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: cargo build --workspace
-        run: cargo build --workspace
-
-      - name: cargo test --workspace (ignored tests skipped)
-        run: cargo test --workspace
-
-      # Fast, no-secrets tier of the lines/*.toml external-identifier
-      # validator (crates/line-catalogue-validator): checks every `crs`,
-      # `tiploc` and `operators` value against the vendored snapshot in
-      # reference-data/crs-tiploc.csv and reference-data/toc-codes.csv --
-      # deterministic, no network access, no rate limits, runs in well
-      # under a second. Added as a step here rather than a separate job:
-      # it's already covered by this job's own `cargo build --workspace`
-      # above (no extra toolchain/deps needed) and is fast enough that a
-      # dedicated job with its own checkout/toolchain-install overhead
-      # would cost more than it saves. See
-      # crates/line-catalogue-validator/src/main.rs's module doc for the
-      # thorough, live-external-source counterpart to this check, which
-      # runs on its own weekly schedule instead (see
-      # .github/workflows/validate-line-catalogue.yml, currently disabled
-      # pending credentials).
-      - name: Validate lines/*.toml external identifiers (fast tier)
-        run: cargo run -p line-catalogue-validator
-
-  # Custom: the DATABASE_URL/REDIS_URL-gated `#[ignore]`d integration tests
-  # (every `#[ignore = "..."]` reason in the workspace needs only a live
-  # Postgres, Redis or fake-gcs-server, except the enricher's LLM-gated
-  # live evals and replay harness, which stay excluded: there is no
-  # LLM_BASE_URL or REPLAY_HISTORY_JSONL in CI). Split out of `rust-test`
-  # so the two run in parallel.
-  #
-  # Build once, run many (2026-10-27): the suites run several times, as
-  # the superuser and as the role split's roles, and each `cargo test -p`
-  # selection used to unify features differently and recompile `common`,
-  # `ds-store`, the api and the rest. Now `rust-db-build` builds every test
-  # binary once into a cargo-nextest archive (scripts/db-tests.py holds the
-  # package list and every pass's steps, each a former `cargo test`
-  # invocation with the same libtest arguments), and three jobs run the
-  # passes from it in parallel, each against its own Postgres and Redis:
-  # the superuser pass, the app-role passes, and the per-service passes.
-  # Each pass already made its own fresh database, so splitting them
-  # changes nothing they see. The test jobs need no Rust toolchain, cargo
-  # cache or apt packages. `rust-db-test` keeps the old check name and
-  # fails unless all four succeeded.
-  rust-db-build:
-    name: DB tests (build the test archive)
-    runs-on: ubuntu-26.04
-    env:
-      # No debuginfo: a failing test's panic message still names its
-      # file:line (the panic location is compiled in); only a backtrace
-      # loses them. Full debuginfo made the cargo cache 4.7 GB (1-4 minutes
-      # to restore), and half of each test binary is line tables alone, so
-      # the archive the test jobs download halves too. Only this job's
-      # builds; rust-test and the rest keep the default.
-      CARGO_PROFILE_DEV_DEBUG: "0"
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: 1.88.0
-
-      # None of the tested packages links rdkafka (only movement-relay and
-      # darwin-relay do), so this job needs only openssl-sys's libssl-dev
-      # and pkg-config, not rust-test's cmake, libsasl2-dev and
-      # libcurl4-openssl-dev. The runner image usually has both, so apt is
-      # skipped then; when it is needed, a stalled mirror times out and
-      # retries instead of hanging (it stalled 4-9 minutes on ~5% of runs).
-      - name: Install openssl build dependencies
-        run: |
-          installed="$(dpkg-query -W -f='${db:Status-Status}\n' libssl-dev pkg-config 2>/dev/null | grep -cx installed || true)"
-          if [[ "${installed}" == 2 ]]; then
-            echo "libssl-dev and pkg-config are already installed"
-            exit 0
-          fi
-          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
-          # shellcheck disable=SC2086 # word-split on purpose
-          sudo apt-get ${apt_opts} update
-          # shellcheck disable=SC2086 # word-split on purpose
-          sudo apt-get ${apt_opts} install -y --no-install-recommends libssl-dev pkg-config
-
-      # See rust-test's cache step for save-if. The shared key keeps the
-      # entry stable across job renames. Only third-party crates are cached
-      # (the default; spelled out): one feature resolution now, so one
-      # copy of each.
-      - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: rust-db-tests
-          cache-all-crates: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      # rust-cache keeps ~/.cargo/bin, so on a warm cache this is a no-op.
-      - name: Install sqlx-cli
-        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
-        with:
-          tool: cargo-nextest@0.9.148
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          # renovate: datasource=pypi depName=uv
-          version: "0.13.6"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Build the DB test archive (scripts/db-tests.py archive)
-        run: |
-          mkdir -p "${RUNNER_TEMP}/db-tests"
-          uv run --locked --no-default-groups scripts/db-tests.py archive --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst"
-          sqlx_bin="$(command -v sqlx)"
-          cp "${sqlx_bin}" "${RUNNER_TEMP}/db-tests/sqlx"
-          ls -l "${RUNNER_TEMP}/db-tests"
-          du -sh target
-
-      - name: Upload the DB test archive
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: db-tests
-          path: ${{ runner.temp }}/db-tests/
-          # Already zstd-compressed.
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-  # The superuser pass on the `postgres` database the migrations ran on,
-  # plus the Redis-only and fake-gcs-server suites. Its steps (the
-  # #[sqlx::test] modules run only here) are scripts/db-tests.py's
-  # `superuser` pass. Every pass extracts the archive into the checkout
-  # (--extract-to), where rust-db-build's target/ was: build-time paths
-  # such as `env!("CARGO_BIN_EXE_api")` (the ticket-parse child's tests)
-  # then still point at the binaries.
-  rust-db-test-superuser:
-    name: DB tests as the superuser (+ Redis, fake-gcs-server)
-    needs: rust-db-build
-    runs-on: ubuntu-26.04
-    services:
-      postgres:
-        image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      # The same Valkey image as the chart's `redis.image` (its
-      # `redis-cli` symlink serves the health check).
-      redis:
-        image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      REDIS_URL: redis://localhost:6379
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Download the DB test archive
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: db-tests
-          path: ${{ runner.temp }}/db-tests
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
-        with:
-          tool: cargo-nextest@0.9.148
-
-      # sqlx-cli, built (and cached) by rust-db-build.
-      - name: Put sqlx-cli on PATH
-        run: |
-          chmod +x "${RUNNER_TEMP}/db-tests/sqlx"
-          echo "${RUNNER_TEMP}/db-tests" >> "${GITHUB_PATH}"
-
-      # A throwaway server: no durability. A service container takes no
-      # command line, so the settings go in with ALTER SYSTEM (all three
-      # take effect on reload).
-      - name: Tune Postgres for tests (fsync, full_page_writes, synchronous_commit off)
-        run: >-
-          psql "${DATABASE_URL}" -X -q -v ON_ERROR_STOP=1
-          -c "ALTER SYSTEM SET fsync = off"
-          -c "ALTER SYSTEM SET full_page_writes = off"
-          -c "ALTER SYSTEM SET synchronous_commit = off"
-          -c "SELECT pg_reload_conf()"
-          -c "SHOW fsync"
-
-      - name: Run the migrations (crates/ds-store/migrations)
-        working-directory: crates/ds-store
-        run: sqlx migrate run
-
-      # The Python tooling below (gen-db-grants.py) needs the pinned PyYAML:
-      # same uv setup as the scripts-lint job.
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          # renovate: datasource=pypi depName=uv
-          version: "0.13.6"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Install the pinned script tools
-        run: uv sync --locked --group lint
-
-      # Ingest architecture phase 0b: every table, view, sequence and
-      # function the migrations create must be classified in
-      # charts/distant-signal/files/db-grants.yaml (a new table without a
-      # classification fails here, not in production), and
-      # postgres-grants.sql must be what that file renders to.
-      - name: every public table, view and sequence is classified (db-grants.yaml)
-        run: uv run --no-sync scripts/gen-db-grants.py check --database-url "${DATABASE_URL}"
-
-      # The GCS bucket source end to end against fake-gcs-server (DS-92,
-      # crates/schedule-ingest/src/bucket_e2e_tests.rs). A `docker run`
-      # rather than a `services:` entry: the emulator needs command-line
-      # flags (`-scheme http`), which a service container cannot be given.
-      # Pinned by digest. No Google credentials: the reader signs in with a
-      # throwaway key the emulator ignores.
-      - name: Start fake-gcs-server
-        run: |
-          docker run -d --name fake-gcs -p 127.0.0.1:4443:4443 \
-            docker.io/fsouza/fake-gcs-server:1.55@sha256:91afded49de804aa61b5f3eb6c7cd65205acf9e5c5e047cf0ba7d9507af806c8 \
-            -scheme http -port 4443 -backend memory
-          for _ in $(seq 30); do
-            curl -sf http://127.0.0.1:4443/storage/v1/b >/dev/null && exit 0
-            sleep 1
-          done
-          docker logs fake-gcs
-          exit 1
-
-      # ds-store: the api's data access (ingest plan 1A); ds-migrate (1B.1)
-      # `run` against the migrated database; schedule-reference (2a.2), its
-      # db sink's protocol and parity tests; poller-stations (2b.1) and
-      # poller-incidents (2c.2), their sinks and schema gates; common::pg's
-      # pool settings; the enricher (minus the LLM-gated evals); the Redis
-      # stream and ACL suites (phases 0c and 3a); the ingest-writer's loop
-      # runner (1B.6); the phase 4 readers' db sources; schedule-ingest's
-      # direct sink (2d) and its bucket source against fake-gcs-server; the
-      # TRUST consumers' direct sinks (3b).
-      - name: DB/Redis-backed tests as the superuser (scripts/db-tests.py run superuser)
-        env:
-          FAKE_GCS_URL: http://127.0.0.1:4443
-        run: uv run --no-sync scripts/db-tests.py run superuser --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
-
-  # The Postgres role split (docs/postgres-app-role.md): proves no runtime
-  # path needs a superuser. scripts/test-postgres-roles.py makes a fresh
-  # database and roles with the chart's own setup script
-  # (charts/distant-signal/files/postgres-roles.sql), then runs the
-  # DB-backed suites with DATABASE_URL as the DML-only app role and
-  # MIGRATION_DATABASE_URL as the schema owner, as the chart wires them.
-  # `existing` converts a database migrated as the superuser (today's
-  # production); `new` creates the roles first and migrates as the owner
-  # (a new cluster). The #[sqlx::test] modules are skipped: they create a
-  # throwaway database per test, which needs CREATEDB, a test-harness
-  # right, not a runtime one; their DML runs in the superuser job.
-  # --check-setup-job: the setup scripts run once more, through the
-  # setup Job's entrypoint, behind a reader holding ACCESS SHARE on
-  # every table, with lock_timeout=2s: a steady-state release takes no
-  # ACCESS EXCLUSIVE lock (2026-10-14, Helm v252).
-  rust-db-test-app-role:
-    name: DB tests as the app role (existing and new cluster)
-    needs: rust-db-build
-    runs-on: ubuntu-26.04
-    services:
-      postgres:
-        image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      REDIS_URL: redis://localhost:6379
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Download the DB test archive
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: db-tests
-          path: ${{ runner.temp }}/db-tests
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
-        with:
-          tool: cargo-nextest@0.9.148
-
-      - name: Put sqlx-cli on PATH
-        run: |
-          chmod +x "${RUNNER_TEMP}/db-tests/sqlx"
-          echo "${RUNNER_TEMP}/db-tests" >> "${GITHUB_PATH}"
-
-      # See rust-db-test-superuser.
-      - name: Tune Postgres for tests (fsync, full_page_writes, synchronous_commit off)
-        run: >-
-          psql "${DATABASE_URL}" -X -q -v ON_ERROR_STOP=1
-          -c "ALTER SYSTEM SET fsync = off"
-          -c "ALTER SYSTEM SET full_page_writes = off"
-          -c "ALTER SYSTEM SET synchronous_commit = off"
-          -c "SELECT pg_reload_conf()"
-          -c "SHOW fsync"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          # renovate: datasource=pypi depName=uv
-          version: "0.13.6"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Install the pinned script tools
-        run: uv sync --locked --group lint
-
-      - name: DB-backed tests as the non-superuser app role (existing cluster)
-        run: >-
-          uv run --no-sync scripts/test-postgres-roles.py --mode existing --check-setup-job --
-          uv run --no-sync scripts/db-tests.py run existing --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
-
-      - name: DB-backed tests as the non-superuser app role (new cluster)
-        run: >-
-          uv run --no-sync scripts/test-postgres-roles.py --mode new --
-          uv run --no-sync scripts/db-tests.py run new --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
-
-  # Stage 0b (postgresql.roles.perService): the same suites, each as its
-  # own service's role from files/postgres-grants.sql. The roles are
-  # still members of the app role, so this passes today; it is the
-  # harness each later narrowing (phases 2-5) runs against. ds-store's
-  # tests run as the api role: in phase 1A they are the api's moved
-  # tests; spec §6.5 runs them per narrowed role later. Each DB service's
-  # tests/schema_gate.rs (plan 1B.2) checks its own role's grants, so
-  # every service with one runs as its own role, the writer included.
-  # schedule-reference's role is narrow (plan 2a.6): its db sink's
-  # parity and protocol tests prove exactly its db-grants.yaml grants.
-  # poller-stations runs last, as its narrow role (plan 2b.3), which
-  # cannot DELETE the test stations it leaves behind. poller-incidents
-  # runs as its narrow role (plan 2c.3) too, cleaning up through
-  # MIGRATION_DATABASE_URL (the owner) since the role has no DELETE.
-  # The TRUST consumers (plan 3b) run as their narrow roles; their
-  # fixtures (users, subscriptions) go through DATABASE_URL_API, and
-  # their tests delete nothing they need. trust-consumer skips its
-  # reads:: tests here (#[sqlx::test]: they create databases, which no
-  # narrow role may). The phase 4 readers' read-only roles
-  # (full_coverage_ro, ldbws_ro; plan 4.7) run each crate's role_reads
-  # test: the schema gate and every db-source query as the role.
-  # ingest-writer's line_status_rls test (plan 3c.3) runs as the writer,
-  # reading DATABASE_URL_WRITER/_AGGREGATOR/_API itself.
-  # ds-store's schedule::publish tests run as schedule_reference (the
-  # other suites seed schedule products as the owner,
-  # MIGRATION_DATABASE_URL; ds_store::test_support::schedule_fixture_pool):
-  # since release B the app role (and so the api role) no longer holds
-  # the *_publish_keys tables or analyze_publish_keys (db-grants.yaml
-  # app_revokes). writer-maintenance's backfill-incident-lines preflight
-  # runs as the incidents role, the role that subcommand is run as
-  # (ingest phase 5, 5.4b; the writer run checks the refusal).
-  #
-  # Ingest phase 5 release D (docs/ingest-phase5-runbook.md §5.5, DS-118)
-  # narrows the api, aggregator, enricher and notifier roles: no longer
-  # members of the app role, exactly their own db-grants.yaml grants.
-  # db-grants.yaml says so since 2026-10-28; --narrow keeps the narrowed
-  # step narrowing them whatever the Stage 0b pass observes. Those tests run
-  # each narrowed role's runtime writes that reach outside its own
-  # tables, with their fixtures written as the owner: the api's track
-  # routes queue their backlog replay in train_event_outbox and the
-  # writer applies and completes it (a direct replay is refused); the
-  # aggregator's archive takes its FOR UPDATE row lock on trains (which
-  # needs UPDATE, not just DELETE). The full suites still seed most
-  # fixtures through the role's own pool, so the Stage 0b pass runs the four
-  # `--observe`d (members of app again) until those fixtures move to the
-  # owner pool (scripts/tests/test_postgres_roles_narrow.py pins both lists).
-  rust-db-test-per-service:
-    name: DB tests as each service's role (Stage 0b, release D)
-    needs: rust-db-build
-    runs-on: ubuntu-26.04
-    services:
-      postgres:
-        image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      REDIS_URL: redis://localhost:6379
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Download the DB test archive
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: db-tests
-          path: ${{ runner.temp }}/db-tests
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
-        with:
-          tool: cargo-nextest@0.9.148
-
-      - name: Put sqlx-cli on PATH
-        run: |
-          chmod +x "${RUNNER_TEMP}/db-tests/sqlx"
-          echo "${RUNNER_TEMP}/db-tests" >> "${GITHUB_PATH}"
-
-      # See rust-db-test-superuser.
-      - name: Tune Postgres for tests (fsync, full_page_writes, synchronous_commit off)
-        run: >-
-          psql "${DATABASE_URL}" -X -q -v ON_ERROR_STOP=1
-          -c "ALTER SYSTEM SET fsync = off"
-          -c "ALTER SYSTEM SET full_page_writes = off"
-          -c "ALTER SYSTEM SET synchronous_commit = off"
-          -c "SELECT pg_reload_conf()"
-          -c "SHOW fsync"
-
-      # test-postgres-roles.py --mode per-service reads db-grants.yaml
-      # (PyYAML).
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          # renovate: datasource=pypi depName=uv
-          version: "0.13.6"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Install the pinned script tools
-        run: uv sync --locked --group lint
-
-      - name: DB-backed tests as each service's own role (Stage 0b)
-        run: >-
-          uv run --no-sync scripts/test-postgres-roles.py --mode per-service --check-setup-job --observe api,aggregator,enricher,notifier --
-          uv run --no-sync scripts/db-tests.py run per-service --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
-
-      - name: Release D's narrowed roles (api, aggregator, enricher, notifier)
-        run: >-
-          uv run --no-sync scripts/test-postgres-roles.py --mode per-service --narrow api,aggregator,enricher,notifier --
-          uv run --no-sync scripts/db-tests.py run narrow --archive-file "${RUNNER_TEMP}/db-tests/db-tests.tar.zst" --extract-to "${GITHUB_WORKSPACE}"
+  # Distant-Signal/ci's rust-db-tests.yml: the DATABASE_URL/REDIS_URL-gated
+  # `#[ignore]`d tests, built once into an archive and run as parallel
+  # passes, each against its own Postgres and Redis. The archive command and
+  # the passes (the superuser, the app role, and each service's role) are in
+  # .github/db-tests.toml, which says what each covers. The images are the
+  # chart's: `postgresql.image` and `redis.image` (Valkey; its `redis-cli`
+  # symlink serves the health check).
+  rust-db-tests:
+    uses: Distant-Signal/ci/.github/workflows/rust-db-tests.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    with:
+      toolchain: 1.88.0
+      # renovate: datasource=docker depName=postgres
+      postgres-image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+      # renovate: datasource=docker depName=valkey/valkey
+      redis-image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
 
   # The old single job's check name, for anything that waits on it: green
   # only when the archive built and every pass passed.
   rust-db-test:
     name: cargo test -- --ignored (DB/Redis-backed)
     if: ${{ always() }}
-    needs: [rust-db-build, rust-db-test-superuser, rust-db-test-app-role, rust-db-test-per-service]
+    needs: [rust-db-tests]
     runs-on: ubuntu-26.04
     steps:
       - name: Every DB test job succeeded
@@ -763,84 +101,30 @@ jobs:
             [[ "${result}" == success ]] || exit 1
           done
 
-  # Custom: no reusable Piped workflow covers Node/npm at all (its
-  # ecosystem coverage is Python + Rust). frontend/package.json now has a
-  # `lint` script (`eslint .`, flat config in frontend/eslint.config.mjs
-  # built on eslint-config-next's `core-web-vitals`/`typescript` configs --
-  # Next.js 16 removed the `next lint` CLI in favor of running ESLint
-  # directly). `npx tsc --noEmit` remains a separate step alongside it:
-  # ESLint's typescript-eslint rules are style/correctness lint, not a
-  # substitute for a full type-check.
+  # Distant-Signal/ci's node-ci.yml on frontend/: npm ci, ESLint (flat
+  # config on eslint-config-next), the copy guardrails, the npm licence gate
+  # (every production dependency AGPL-compatible, repo split spec §6),
+  # Prettier (all but frontend/.prettierignore), `tsc --noEmit` (ESLint's
+  # typescript-eslint rules are lint, not a type-check), the plain-JS files
+  # tsconfig.json leaves out (`typecheck:scripts`: the service worker and
+  # the Node-run scripts and configs, checkJs + strict), vitest and
+  # `next build`.
   #
-  # `npm run test:e2e` (Playwright, testDir: ./e2e) is deliberately NOT run
-  # here -- it needs a live `api` + Postgres + Redis + seeded fixtures and a
-  # built/started frontend, none of which this job stands up. See the
-  # `frontend-e2e` job below for that.
+  # The copy guardrails are docs/style-guide.md's Writing rules: banned
+  # phrases, Title Case h1/h2, meta descriptions over 160 characters and
+  # pages without metadata. scripts/check-copy.py is stdlib-only; it runs
+  # frontend/scripts/extract-copy.mjs, which needs node_modules, so it runs
+  # here rather than in scripts-lint (which lints and unit-tests it).
+  #
+  # The Playwright e2e tests need a live api, Postgres and Redis: see
+  # frontend-e2e.
   frontend:
-    runs-on: ubuntu-26.04
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: npm ci
-        run: npm ci
-
-      - name: Lint (eslint)
-        run: npm run lint
-
-      # docs/style-guide.md's Writing rules: banned phrases, Title Case
-      # h1/h2, meta descriptions over 160 characters and pages without
-      # metadata. The script is stdlib-only; it runs
-      # frontend/scripts/extract-copy.mjs, which needs the node_modules
-      # `npm ci` installed above, so it lives here rather than in
-      # scripts-lint (which lints and unit-tests the script itself).
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          # renovate: datasource=pypi depName=uv
-          version: "0.13.6"
-          # Nothing to cache: no dependencies are installed.
-          enable-cache: false
-
-      - name: Copy guardrails (scripts/check-copy.py)
-        working-directory: .
-        run: uv run --locked --no-default-groups scripts/check-copy.py
-
-      # Every production dependency's licence is AGPL-compatible (repo split
-      # spec §6). Reads frontend/package-lock.json only; stdlib-only.
-      - name: npm licences (scripts/check-npm-licences.py)
-        working-directory: .
-        run: uv run --locked --no-default-groups scripts/check-npm-licences.py
-
-      # Covers the whole frontend except what frontend/.prettierignore
-      # lists (build output, generated files, minified test fixtures).
-      - name: Format check (prettier)
-        run: npm run format:check
-
-      - name: Typecheck (tsc --noEmit)
-        run: npx tsc --noEmit
-
-      # The plain-JS files tsconfig.json leaves out (allowJs: false): the
-      # service worker (tsconfig.sw.json, WebWorker lib) and the Node-run
-      # scripts and configs (tsconfig.scripts.json), both checkJs + strict.
-      - name: Typecheck JS scripts (tsc, checkJs)
-        run: npm run typecheck:scripts
-
-      - name: npm test (vitest)
-        run: npm test
-
-      - name: npm run build (next build)
-        run: npm run build
+    uses: Distant-Signal/ci/.github/workflows/node-ci.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    with:
+      working-directory: frontend
+      repo-check-name: Copy guardrails (scripts/check-copy.py)
+      repo-check-command: uv run --locked --no-default-groups scripts/check-copy.py
+      extra-npm-scripts: typecheck:scripts
 
   # Custom: Playwright e2e + full-default-ruleset axe-core accessibility
   # sweep (frontend/e2e/, 7 spec files -- accessibility.spec.ts is the axe
@@ -849,7 +133,7 @@ jobs:
   # say was deliberately deferred until e2e specs existed; they now do.
   #
   # Needs a real, reachable `api` (Postgres + Redis behind it) to render
-  # anything beyond a skeleton/error state -- extends `rust-db-test`'s own
+  # anything beyond a skeleton/error state -- uses the DB test passes'
   # `services:` pattern (same images, same health-check options) rather
   # than `docker-compose.yml`: that file needs dummy values for ~20+
   # unrelated service credentials (Kafka, RDM/TfL/LDBWS pollers, five
@@ -858,7 +142,7 @@ jobs:
   # cache reuse, unlike this job's `Swatinem/rust-cache` and
   # `actions/setup-node`'s npm cache. (That rust-cache entry is this job's
   # own: rust-cache's default key includes the job id, so it is not shared
-  # with `rust-test`'s, and it only holds `cargo build -p api`'s debug
+  # with `rust / cargo build & test`'s, and it only holds `cargo build -p api`'s debug
   # artifacts.)
   #
   # The `INTERNAL_OAUTH_*`/`SSO_*` values below are dummy-but-syntactically-
@@ -871,10 +155,9 @@ jobs:
     name: Playwright e2e + accessibility
     runs-on: ubuntu-26.04
 
-    # Same two services, same images, same health-check options as
-    # `rust-db-test` above -- copied rather than factored out into a
-    # reusable block, matching this file's existing per-job `services:`
-    # duplication.
+    # The same two images and health-check options as the DB test passes
+    # (`rust-db-tests` above passes them to Distant-Signal/ci's
+    # rust-db-tests.yml): keep the two in step.
     services:
       postgres:
         image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
@@ -1078,9 +361,10 @@ jobs:
       # push, an unfetchable base), so the check is never skipped wrongly.
       - name: Did this change touch frontend/?
         id: frontend-paths
-        env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-        run: uv run --locked --no-default-groups scripts/paths-changed.py --base "${BASE_SHA}" frontend/
+        uses: Distant-Signal/ci/actions/paths-changed@eb5552be3a85b5aa333879202b50941f5af878be # main
+        with:
+          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          paths: frontend/
 
       - name: Visual regression screenshots
         if: steps.frontend-paths.outputs.changed == 'true'
@@ -1101,7 +385,7 @@ jobs:
   # missing lower version late and silently, out of order. INF-16/DB2-35:
   # the same script fails when a migration the base already had is
   # modified, deleted or renamed, so it needs no lock-file upkeep;
-  # crates/api/tests/migration_checksums.rs is the second line of defence.
+  # crates/ds-store/tests/migration_checksums.rs is the second line of defence.
   # Ingest plan 1B.5: it also fails on destructive DDL (DROP, RENAME, a
   # column type change, SET NOT NULL) without a `-- contract: ...` header,
   # in migrations added since the base or newer than its cutoff.
@@ -1142,77 +426,57 @@ jobs:
           fi
           uv run --locked --no-default-groups scripts/check-migration-order.py "${base}"
 
-  # Commit identity (repo split spec §5.10): no commit in the PR or push
-  # may use a retired author/committer address or carry AI attribution
-  # (a Co-authored-by trailer with an @anthropic.com address, a
-  # Claude-Session trailer, a "Generated with Claude Code" footer). Other
-  # identities pass, outside contributors included. Moves to the `ci`
-  # repository's reusable identity.yml in phase 3.
+  # Commit identity (repo split spec §5.10), Distant-Signal/ci's
+  # identity.yml: no commit in the PR or push may use a retired
+  # author/committer address or carry AI attribution (a Co-authored-by
+  # trailer with an @anthropic.com address, a Claude-Session trailer, a
+  # "Generated with Claude Code" footer). Other identities pass, outside
+  # contributors included.
   commit-identity:
-    name: commits use the current identity, without AI attribution
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
+    uses: Distant-Signal/ci/.github/workflows/identity.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
 
-      # The script is stdlib-only; uv provides .python-version's interpreter.
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          # renovate: datasource=pypi depName=uv
-          version: "0.13.6"
-          # Nothing to cache: no dependencies are installed.
-          enable-cache: false
+  # Every LICENSE (the root one and both charts') is the canonical GNU AGPL
+  # v3 text, byte for byte: the licence text is never distributed modified.
+  # Distant-Signal/ci's licence.yml compares against a pinned SHA-256.
+  licence:
+    uses: Distant-Signal/ci/.github/workflows/licence.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
 
-      # A PR checks its own commits (merge base to the PR's head, not the
-      # synthetic merge commit); a push checks what it added.
-      - name: Check commit identities
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          if [[ "${EVENT_NAME}" = "pull_request" ]]; then
-            base="$(git merge-base "origin/${BASE_REF}" "${PR_HEAD}")"
-            head="${PR_HEAD}"
-          elif [[ -n "${BEFORE}" ]] && [[ "${BEFORE}" != "0000000000000000000000000000000000000000" ]] \
-              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            base="${BEFORE}"
-            head=HEAD
-          else
-            echo "no usable base commit (new branch or force push); skipping"
-            exit 0
-          fi
-          uv run --locked --no-default-groups scripts/check-commit-identity.py "${base}" "${head}"
-
-  # Lint, format-check and type-check the repo's scripts, strict by default:
+  # Distant-Signal/ci's scripts-lint.yml, strict by default:
   #   - every tracked *.sh: shellcheck with every optional check at style
   #     severity (.shellcheckrc) and shfmt (style from .editorconfig);
   #   - scripts/*.py: ruff check (select ALL), ruff format --check and mypy
   #     --strict (pyproject.toml);
   #   - the workflow run: blocks: actionlint with SHELLCHECK_OPTS
-  #     '--enable=all --severity=style'. The `actionlint` job above uses
+  #     '--enable=all --severity=style' (the `actionlint` job above uses
   #     Piped's reviewdog wrapper, which runs shellcheck with its default
-  #     checks only;
+  #     checks only);
   #   - every tracked Dockerfile: hadolint, every rule, failing down to
   #     style level, trusted registry docker.io only (.hadolint.yaml);
-  #   - scripts/lint-containers.py: shellcheck, as for *.sh, over every
-  #     Dockerfile RUN body (hadolint's embedded shellcheck runs default
-  #     checks only) and the docker-compose*.yml inline shell (CMD-SHELL
-  #     healthchecks, `sh -c` commands); and every image a Dockerfile or
-  #     compose file pulls (`# syntax=`, FROM, COPY --from, `image:`) must
-  #     be pinned by @sha256 digest.
-  # Every tool is pinned in pyproject.toml's `lint` dependency group and,
-  # with the rest of the tree and its hashes, in uv.lock; `uv sync --locked`
-  # fails if uv.lock is stale. The interpreter is .python-version's (3.14),
-  # which uv installs on this GitHub-hosted runner. scripts/lint-scripts.py
-  # runs the same checks locally (`uv run scripts/lint-scripts.py`).
+  #   - lint-containers.py: shellcheck, as for *.sh, over every Dockerfile
+  #     RUN body and the docker-compose*.yml inline shell, and every image a
+  #     Dockerfile or compose file pulls pinned by @sha256 digest;
+  # then scripts/tests (stdlib unittest) and the ignored-benchmark gate (the
+  # DB passes run every `#[ignore]`d test of their packages, in a debug
+  # build: an ignored benchmark must do nothing unless its env var is set;
+  # transit_planning_budget's took the DB job from ~30 to ~78 minutes on
+  # 2026-10-27). Every tool is pinned in pyproject.toml's `lint` dependency
+  # group and, with the rest of the tree and its hashes, in uv.lock. Locally,
+  # from the repository root, with a checkout of Distant-Signal/ci:
+  #   uv run python <ci>/scripts/lint-scripts.py
   scripts-lint:
-    name: scripts lint (shellcheck, shfmt, ruff, mypy, actionlint, hadolint)
+    uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    with:
+      check-bench-gates: true
+
+  # Distant Signal's own repository and chart checks, run with the pinned
+  # script tools (pyproject.toml's `lint` group): the Rust Dockerfiles'
+  # generated builder stages and build-context allowlists, the chart values
+  # reference, the alert rules, the chart policy scripts and the crate
+  # dependency boundary. They were steps of scripts-lint until it moved to
+  # Distant-Signal/ci; they move with the chart to ds-deploy (repo split
+  # spec §8.3).
+  repo-checks:
+    name: repo checks (Dockerfile generator, chart policies, alerts, crate deps)
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
@@ -1221,37 +485,39 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          # uv itself, pinned (Ranma-Config new-service guidance 3.3a); the
-          # annotation is for renovate.json5's customManagers.
           # renovate: datasource=pypi depName=uv
           version: "0.13.6"
           # Caches uv's download/wheel cache, keyed on uv.lock.
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - name: Install the pinned lint tools
+      - name: Install the pinned script tools
         run: uv sync --locked --group lint
 
-      - name: Lint scripts
-        run: uv run --no-sync scripts/lint-scripts.py
+      # The Rust Dockerfiles' cargo-chef builder stages and every image's
+      # build-context allowlist (*.Dockerfile.dockerignore) are generated:
+      # an edit inside the markers, a Dockerfile without a SERVICES entry or
+      # a crate input outside the allowlist fails here.
+      - name: Rust Dockerfiles match scripts/gen-rust-dockerfiles.py
+        run: uv run --no-sync scripts/gen-rust-dockerfiles.py --check
 
-      # scripts/tests: stdlib unittest, e.g. check-migration-order.py's
-      # behaviour against throwaway git repos and the schedulefeed sftp
-      # entrypoint's account policy.
-      - name: Test scripts
-        run: uv run --no-sync python -m unittest discover -s scripts/tests -v
+      # The chart's files/db-grants.yaml and files/redis-users.acl.tpl are
+      # generated copies of crates/ds-store/db-grants.yaml and
+      # access/redis-users.acl.tpl (repo split spec §5.1): fail when either
+      # copy differs from its source.
+      - name: chart copies of the grants and Redis ACL match their sources
+        run: uv run --no-sync scripts/sync-chart-core-files.py --check
 
-      # The DB jobs run every `#[ignore]`d test of their packages, in a
-      # debug build: an ignored benchmark must do nothing unless its env
-      # var is set (transit_planning_budget's took the DB job from ~30 to
-      # ~78 minutes on 2026-10-27).
-      - name: ignored benchmarks are env-gated
-        run: uv run --no-sync scripts/check-bench-gates.py
+      # frontend/lib/api-types.ts is a copy of the api's generated
+      # api-types/api.ts (repo split spec §5.3); `cargo test`'s
+      # api_types_are_current checks that one against the Rust types.
+      - name: frontend's api types match api-types/api.ts
+        run: uv run --no-sync scripts/sync-api-types.py check
 
       # Every chart values.yaml key needs a row in the chart README's "Values
       # reference" tables, and every row must name a real key.
       # `scripts/chart-values-doc.py table <section>` drafts missing rows.
-      # Here rather than in helm-lint: it needs the pinned PyYAML above.
+      # Here rather than in helm-lint: it needs the pinned PyYAML.
       - name: chart values reference is complete
         run: uv run --no-sync scripts/chart-values-doc.py check
 
@@ -1260,7 +526,7 @@ jobs:
       # outage's undelivered alerts), every alert has its docs/alerts.md
       # runbook section, and the rendered rules pass `promtool check rules`
       # and the unit tests in scripts/alert-rules-tests/. Here rather than
-      # in helm-lint: it needs the pinned PyYAML above. The script downloads
+      # in helm-lint: it needs the pinned PyYAML. The script downloads
       # promtool and verifies its checksum.
       - name: Install Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -1279,7 +545,7 @@ jobs:
       # public members, admin roles) refuse to render, and every resource
       # validates against provider-upjet-gcp's CRD schemas (downloaded and
       # checksum-verified by the script). Here rather than in helm-lint:
-      # it needs the pinned PyYAML above.
+      # it needs the pinned PyYAML.
       - name: ds-ingest-bucket chart policies
         run: uv run --no-sync scripts/check-ingest-bucket-chart.py --download-crds "${RUNNER_TEMP}/crossplane-crds"
 
