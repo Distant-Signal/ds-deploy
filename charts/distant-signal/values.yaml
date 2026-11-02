@@ -2294,9 +2294,9 @@ api:
 # `activeDeadlineSeconds` (Ranma: 20 minutes). It is the only pod with the
 # schema owner's credentials (MIGRATION_DATABASE_URL: the owner role with
 # `postgresql.roles.enabled`, else `postgresql.auth.username`, or the
-# external database's URL). It waits for Postgres with `pg_isready` in an
-# init container from the Postgres image (the api image has no libpq
-# tools). With `networkPolicy.enabled`, hook NetworkPolicies (created
+# external database's URL). It waits for Postgres in an init container
+# from the Postgres image (the api image has no libpq tools): `pg_isready`,
+# then `SELECT pg_is_in_recovery()` until Postgres can take writes. With `networkPolicy.enabled`, hook NetworkPolicies (created
 # before the Job, weight -10) admit it to Postgres and, with egress
 # policies on, let it reach Postgres and DNS.
 migrate:
@@ -2316,8 +2316,9 @@ migrate:
     backoffLimit: 1
     # -- Seconds `ds-migrate run` keeps retrying its first connection
     # (MIGRATION_CONNECT_DEADLINE_SECS; at least 1) before it fails: the
-    # pg_isready wait only shows the server answers, and on a saturated
-    # node or with a late NetworkPolicy the connect itself can still fail.
+    # init container's wait only shows the server answered once, and on a
+    # saturated node or with a late NetworkPolicy the connect itself can
+    # still fail.
     connectDeadlineSecs: 120
     # -- Deadline for the whole Job, the Postgres wait included (spec: 900).
     # Keep `api.migrations.statementTimeoutSecs` well below it.

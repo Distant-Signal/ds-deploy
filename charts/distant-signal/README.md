@@ -852,8 +852,10 @@ runs `ds-migrate run` (plan 1B.1) from the api image as a
 `pre-upgrade,post-install` hook (weight -5, `before-hook-creation`,
 `backoffLimit: 1`, `activeDeadlineSeconds: 900`). On an upgrade it migrates
 before any new pod starts; a failed migration fails the release and the old
-pods keep serving. It waits for Postgres with `pg_isready` (an init container
-from the Postgres image) and is the only pod with the schema owner's
+pods keep serving. It waits for a writable Postgres (`wait-for-postgres`, an
+init container from the Postgres image: see
+[Waiting for Postgres and Redis](#waiting-for-postgres-and-redis)) and is the
+only pod with the schema owner's
 `MIGRATION_DATABASE_URL`. With `networkPolicy.enabled`, two hook
 NetworkPolicies (weight -10) admit it to Postgres and, with egress policies
 on, let it out to Postgres and DNS; the role setup Job gets an egress policy
@@ -1063,7 +1065,7 @@ containers that wait first, chosen from its container's env:
 
 | Env | Init container | Image | Check |
 |---|---|---|---|
-| `DATABASE_URL` | `wait-for-postgres` | the Postgres image | `pg_isready` every second; it connects but does not log in |
+| `DATABASE_URL` | `wait-for-postgres` | the Postgres image | `pg_isready` every second, then, with the container's own `DATABASE_URL` and password, `psql -tAc 'SELECT pg_is_in_recovery()'` until it is `f` |
 | `REDIS_URL` | `wait-for-redis` | `redis.image` | `redis-cli PING` every second, without credentials; any reply (even `NOAUTH`) counts |
 
 Init containers share the pod's IP, so by the time the app starts its
@@ -1075,6 +1077,24 @@ The migrate hook Job has the same `wait-for-postgres`. Each runs as uid
 until it connects; the Job's `activeDeadlineSeconds` bounds it. The
 services themselves also give their first connect a startup budget
 (`databasePool.startupConnectTimeoutSecs`), which covers the Deployments.
+
+**Recovery.** `wait-for-postgres` waits for a Postgres that can take
+writes, not just one that answers. A Postgres replaying WAL (after a
+pgBackRest restore) passes `pg_isready` and its readiness probe but is
+read-only, and on 2 Nov 2026 the migrate hook failed on one with "cannot
+execute CREATE TABLE in a read-only transaction"
+([Known traps](../../docs/postgres-18-upgrade.md)). So once `pg_isready`
+passes it logs in with the app container's own URL (the schema owner for
+migrate, the app or per-service role for a CronJob; `pg_is_in_recovery()`
+is executable by every role) and polls `SELECT pg_is_in_recovery()` every
+second until it is `f`, logging `Postgres is up but still in recovery`
+every 10 s meanwhile. If that SELECT fails 30 times in a row while
+`pg_isready` passes (a wrong password, no `CONNECT`), it stops waiting and
+lets the app start and report the error itself. The role setup Job's own
+wait (`files/postgres-roles-setup.sh wait`) checks recovery the same way,
+within its 180 s, and the services' startup connect
+(`ds_store::pool::PoolSettings::connect_until_ready`) retries a Postgres in
+recovery too, with a warning each try.
 
 ## Point-in-time recovery (optional)
 

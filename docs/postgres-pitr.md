@@ -357,7 +357,31 @@ without `--target`/`--target-action`.
    kubectl -n distant-signal logs -f distant-signal-postgres-0 -c postgres
    ```
 
-   Wait for `database system is ready to accept connections`.
+   **Then wait until recovery has ended**, before step 6 and before anything
+   resumes Flux or reconciles the release. Replay can take an hour. During
+   it Postgres is read-only, but it already accepts (read-only) connections,
+   logs `database system is ready to accept read-only connections`, and
+   passes `pg_isready` and its readiness probe, so none of those says it is
+   done. Only `pg_is_in_recovery()` does:
+
+   ```sh
+   until [ "$(kubectl -n distant-signal exec distant-signal-postgres-0 -c postgres -- \
+       sh -c 'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT pg_is_in_recovery()"' \
+       2>/dev/null)" = f ]; do
+     echo "$(date -u +%H:%M:%S) Postgres is still in recovery (or not up yet)"
+     sleep 15
+   done
+   ```
+
+   It ends with `database system is ready to accept connections` (no
+   "read-only") in the log. If it never does, read the log: a target past
+   the newest archived commit fails recovery (above). On 2 Nov 2026 a
+   release reconciled during replay and the migrate hook failed with
+   "cannot execute CREATE TABLE in a read-only transaction"
+   (docs/postgres-18-upgrade.md, "Known traps"). The chart's
+   `wait-for-postgres` init containers now wait out recovery too (chart
+   README, "Waiting for Postgres and Redis"), but a hook Job still fails at
+   its deadline if replay outlasts it, so wait here first.
 
 6. **Check the app role's password.** A physical restore brings back
    `pg_authid` as of the target. If the password in the Secret changed
@@ -369,8 +393,9 @@ without `--target`/`--target-action`.
    `roles.setupJob.enabled`, the next `helm upgrade` (or Flux resume) resets
    all five from their Secrets.
 
-7. **Run the verification queries** (below), then scale the workloads back
-   up and resume Flux:
+7. **Run the verification queries** (below), only once step 5's wait has
+   printed nothing more (`pg_is_in_recovery()` is `f`), then scale the
+   workloads back up and resume Flux:
    `flux resume helmrelease distant-signal -n distant-signal`. Migrations are
    a no-op: the schema is at the target point, and the api applies anything
    newer on start.
@@ -443,8 +468,16 @@ new timeline into the production repository.
    ```sh
    kubectl -n distant-signal exec pgbackrest-drill -- sh -c '
      date -u && pg_ctl -D "$PGDATA" -l /tmp/drill.log -w -t 3600 \
-       -o "-c archive_mode=off -c listen_addresses= -c shared_buffers=256MB" start && date -u'
+       -o "-c archive_mode=off -c listen_addresses= -c shared_buffers=256MB" start &&
+     until [ "$(psql -X -U distant_signal -d distant_signal -tAc "SELECT pg_is_in_recovery()")" = f ]; do
+       sleep 10
+     done && date -u'
    ```
+
+   `pg_ctl -w` returns once Postgres accepts read-only connections, part of
+   the way through the replay, so the loop waits for `pg_is_in_recovery()`
+   to turn `f`: the replay is done only then, and the last `date` is the
+   one to record. The real restore (step 5 above) waits the same way.
 
 4. Run the verification queries:
    `kubectl -n distant-signal exec -it pgbackrest-drill -- psql -U distant_signal -d distant_signal`.

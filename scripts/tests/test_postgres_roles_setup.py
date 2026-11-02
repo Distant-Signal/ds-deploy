@@ -1,10 +1,13 @@
 """Tests for charts/distant-signal/files/postgres-roles-setup.sh.
 
-The role setup Job's entrypoint: `wait` polls pg_isready, `run` runs one
-setup script with psql and retries it after a lock timeout and the like.
-Each test runs it under /bin/sh with stub `psql` and `pg_isready` first on
-PATH. The psql stub plays the outcomes listed in STUB_OUT/plan, one per
-try, and answers the blockers query (`--expanded`) with a fixed row, so the
+The role setup Job's entrypoint: `wait` polls pg_isready and then
+pg_is_in_recovery(), `run` runs one setup script with psql and retries it
+after a lock timeout and the like. Each test runs it under /bin/sh with
+stub `psql` and `pg_isready` first on PATH. The psql stub plays the
+outcomes listed in STUB_OUT/plan, one per try, answers the blockers query
+(`--expanded`) with a fixed row and the recovery check with `t` for the
+first STUB_RECOVERY_POLLS checks, then `f` (or fails with
+STUB_RECOVERY_STATUS), so the
 retry policy, the exit codes and the redaction are checked without
 Postgres. scripts/test-postgres-roles.py --check-setup-job runs it against
 a real one.
@@ -22,6 +25,21 @@ SCRIPT = REPO / "charts/distant-signal/files/postgres-roles-setup.sh"
 PSQL_STUB = """#!/bin/sh
 for arg; do
     case ${arg} in
+        *pg_is_in_recovery*)
+            if [ "${STUB_RECOVERY_STATUS:-0}" -ne 0 ]; then
+                echo 'psql: error: FATAL:  password authentication failed' >&2
+                exit "${STUB_RECOVERY_STATUS}"
+            fi
+            n=$(cat "${STUB_OUT}/recovery" 2>/dev/null || echo 0)
+            n=$((n + 1))
+            echo "${n}" >"${STUB_OUT}/recovery"
+            if [ "${n}" -le "${STUB_RECOVERY_POLLS:-0}" ]; then
+                echo t
+            else
+                echo f
+            fi
+            exit 0
+            ;;
         --expanded)
             echo '-[ RECORD 1 ]----+---------------------'
             echo 'pid              | 42'
@@ -214,6 +232,32 @@ class WaitTest(unittest.TestCase):
         run = Run(["wait"], [])
         self.assertEqual(run.status, 0, run.output)
         self.assertIn("Postgres is ready", run.output)
+        self.assertIn("not in recovery", run.output)
+
+    def test_it_waits_while_postgres_is_in_recovery(self) -> None:
+        """2 Nov 2026: a restored Postgres replaying WAL is read-only."""
+        run = Run(["wait"], [], {"STUB_RECOVERY_POLLS": "1"})
+        self.assertEqual(run.status, 0, run.output)
+        self.assertIn("but in recovery (read-only WAL replay", run.output)
+        self.assertIn("and not in recovery", run.output)
+
+    def test_it_gives_up_when_recovery_does_not_end(self) -> None:
+        """EX_UNAVAILABLE (69), saying it was recovery, not pg_isready."""
+        run = Run(
+            ["wait"],
+            [],
+            {"STUB_RECOVERY_POLLS": "1000", "DS_SETUP_WAIT_SECONDS": "0"},
+        )
+        self.assertEqual(run.status, 69, run.output)
+        self.assertIn("giving up", run.output)
+        self.assertIn("but in recovery", run.output)
+
+    def test_a_failed_recovery_check_is_left_to_run(self) -> None:
+        """A login failure ends the wait; `run` reports and retries it."""
+        run = Run(["wait"], [], {"STUB_RECOVERY_STATUS": "2"})
+        self.assertEqual(run.status, 0, run.output)
+        self.assertIn("could not check whether it is in recovery", run.output)
+        self.assertIn("password authentication failed", run.output)
 
     def test_it_gives_up_when_postgres_never_answers(self) -> None:
         """EX_UNAVAILABLE (69) after DS_SETUP_WAIT_SECONDS."""

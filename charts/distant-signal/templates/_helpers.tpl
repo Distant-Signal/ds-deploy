@@ -2355,12 +2355,25 @@ lets it reach Postgres or Redis. A new pod's first connections are refused
 for 2 to 5 seconds while the k3s network-policy controller adds its IP to
 the NetworkPolicy rules (docs/specs/postgres-connection-pooling.md §1);
 init containers share the pod's IP, so once one of these has connected the
-app's first connect goes straight through. Each only connects: pg_isready
-does not log in, and redis-cli's PING sends no credentials (a NOAUTH reply
-still means the server answered, and exits 0; a refused or unresolvable
-connect exits 1). Each loops until it connects, bounded by the Job's
-activeDeadlineSeconds. Both images run as root with no USER, so these pin
-uid/gid 999 (each image's postgres or valkey user) for runAsNonRoot.
+app's first connect goes straight through. redis-cli's PING sends no
+credentials (a NOAUTH reply still means the server answered, and exits 0;
+a refused or unresolvable connect exits 1). Each loops, bounded by the
+Job's activeDeadlineSeconds. Both images run as root with no USER, so
+these pin uid/gid 999 (each image's postgres or valkey user) for
+runAsNonRoot.
+
+wait-for-postgres waits for a Postgres that can take writes, not just one
+that answers: pg_isready first (no login), then, with the app's own URL
+and credentials, `SELECT pg_is_in_recovery()` until it is `f`. A Postgres
+replaying WAL (after a pgBackRest restore, or a standby) passes pg_isready
+and the readiness probe but is read-only, and the migrate hook failed on it
+with "cannot execute CREATE TABLE in a read-only transaction" (2 Nov 2026,
+docs/postgres-18-upgrade.md "Known traps"). It logs that it is waiting on
+recovery every 10 s. pg_is_in_recovery() is EXECUTE for PUBLIC, so any
+role that may log in to the database can run it. When the SELECT itself
+fails (a wrong password, no CONNECT) 30 times in a row while pg_isready
+passes, it gives up waiting and starts the app, which fails with that
+error itself instead of hanging until the Job's deadline.
 
 distant-signal.waitForPostgresContainer takes (dict "root" $ "var" <the env
 var holding the URL> "env" <the env entries the URL needs, the URL and any
@@ -2374,7 +2387,36 @@ CronJobs below use it.
   command:
     - sh
     - -c
-    - {{ printf "until pg_isready --quiet --dbname=\"${%s:?}\"; do sleep 1; done" .var }}
+    - |
+      {{- printf "url=\"${%s:?}\"" .var | nindent 6 }}
+      recovering=0
+      failures=0
+      while :; do
+          if pg_isready --quiet --dbname="${url}"; then
+              if said=$(psql --no-psqlrc --no-password --quiet --tuples-only --no-align \
+                  --dbname="${url}" --command='SELECT pg_is_in_recovery()' 2>&1); then
+                  failures=0
+                  if [ "${said}" = f ]; then
+                      echo "wait-for-postgres: Postgres is up and out of recovery"
+                      exit 0
+                  fi
+                  if [ $((recovering % 10)) -eq 0 ]; then
+                      echo "wait-for-postgres: Postgres is up but still in recovery" \
+                          "(read-only WAL replay, e.g. after a restore); waiting"
+                  fi
+                  recovering=$((recovering + 1))
+              else
+                  failures=$((failures + 1))
+                  echo "wait-for-postgres: Postgres answers but SELECT pg_is_in_recovery()" \
+                      "failed (${failures} of 30): ${said}"
+                  if [ "${failures}" -ge 30 ]; then
+                      echo "wait-for-postgres: starting the app, which reports the error itself"
+                      exit 0
+                  fi
+              fi
+          fi
+          sleep 1
+      done
   env:
     {{- .env | trim | nindent 4 }}
   securityContext:
@@ -2382,7 +2424,8 @@ CronJobs below use it.
     runAsUser: 999
     runAsGroup: 999
     {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 4 }}
-  # pg_isready in a shell loop: a 7Mi working set in production.
+  # pg_isready and psql in a shell loop: a 7Mi working set in production
+  # with pg_isready alone, and psql exits after each poll.
   resources:
     requests:
       cpu: 10m

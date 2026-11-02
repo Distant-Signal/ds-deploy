@@ -22,7 +22,9 @@ ones) and checks each CronJob (docs/scheduled-jobs.md):
     when its env has DATABASE_URL, `wait-for-redis` exactly when it has
     REDIS_URL, each given the same URL (a new pod's connects are refused
     until its NetworkPolicy rules exist; chart README, "Waiting for
-    Postgres and Redis");
+    Postgres and Redis"), and `wait-for-postgres` also waits until
+    `pg_is_in_recovery()` is false (a restored Postgres replaying WAL
+    answers but is read-only);
   - a CronJob running this chart's own binaries also has
     `podReplacementPolicy: Failed` and the shared pod failure policy (exit
     137 and 3 fail the Job; a DisruptionTarget pod is ignored) for its
@@ -105,6 +107,9 @@ EXPECTED = (
 FAIL_JOB_EXIT_CODES = [3, 137]
 # The init container each URL in a CronJob container's env needs.
 WAIT_FOR = {"DATABASE_URL": "wait-for-postgres", "REDIS_URL": "wait-for-redis"}
+# What wait-for-postgres runs once Postgres answers: pg_isready passes
+# while a restored Postgres replays WAL, read-only.
+RECOVERY_CHECK = "SELECT pg_is_in_recovery()"
 
 
 def sets(*pairs: str) -> tuple[str, ...]:
@@ -391,6 +396,13 @@ def wait_problems(pod_spec: Mapping[str, object]) -> list[str]:
             problems.append(f"{init} init container but its container has no {var}")
         elif init in inits and entries(inits[init]).get(var) != app[var]:
             problems.append(f"{init} is not given its container's {var}")
+    postgres = inits.get(WAIT_FOR["DATABASE_URL"])
+    if postgres is not None and not any(
+        RECOVERY_CHECK in str(part) for part in as_list(postgres.get("command"))
+    ):
+        problems.append(
+            f"{WAIT_FOR['DATABASE_URL']} does not wait out recovery ({RECOVERY_CHECK})"
+        )
     return problems
 
 

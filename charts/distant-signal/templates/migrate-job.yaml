@@ -89,8 +89,9 @@ spec:
       initContainers:
         # The api image has no libpq tools, so the wait for Postgres (on a
         # fresh install it may still be starting) uses the Postgres image,
-        # as the role setup Job does. pg_isready only connects; it does not
-        # log in.
+        # as the role setup Job does. It waits until Postgres answers and
+        # is out of recovery (a restored Postgres replaying WAL is
+        # read-only), logging in as the schema owner for that check.
         {{- include "distant-signal.waitForPostgresContainer" (dict "root" . "var" "MIGRATION_DATABASE_URL" "env" (include "distant-signal.migrateJobDatabaseEnv" .)) | nindent 8 }}
       containers:
         - name: migrate

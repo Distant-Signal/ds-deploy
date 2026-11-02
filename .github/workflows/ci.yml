@@ -2585,7 +2585,8 @@ jobs:
           [[ -n "${job}" ]] || fail "no migrate Job rendered"
           for want in 'helm.sh/hook: pre-upgrade,post-install' 'helm.sh/hook-weight: "-5"' \
               'helm.sh/hook-delete-policy: before-hook-creation' 'backoffLimit: 1' \
-              'activeDeadlineSeconds: 900' 'until pg_isready' '- /usr/local/bin/ds-migrate' '- run'; do
+              'activeDeadlineSeconds: 900' 'pg_isready --quiet' 'SELECT pg_is_in_recovery()' \
+              '- /usr/local/bin/ds-migrate' '- run'; do
             grep -q -F -- "${want}" <<<"${job}" || fail "migrate Job lacks: ${want}"
           done
           # The bounded connect retry (2026-10-08: a saturated node, a late NetworkPolicy).

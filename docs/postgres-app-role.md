@@ -421,7 +421,7 @@ ConfigMap):
 
 | Step | Bound |
 |---|---|
-| wait for Postgres (`pg_isready --timeout=5`, every 2 s) | 180 s, then exit 69 |
+| wait for Postgres (`pg_isready --timeout=5`, then `SELECT pg_is_in_recovery()` until `f`, every 2 s) | 180 s, then exit 69 |
 | connect | `PGCONNECT_TIMEOUT=10` |
 | each lock wait | `lockTimeout` (10 s): SQLSTATE 55P03 |
 | each statement (a section of the script is one) | `statementTimeout` (120 s): 57014 |
@@ -459,7 +459,7 @@ flux -n distant-signal resume helmrelease distant-signal
 | 0 | done |
 | 3 | an SQL error that a retry would not fix: read the `ERROR:` line and its `CONTEXT` |
 | 64 | bad usage or setting (a chart bug) |
-| 69 | Postgres did not answer `pg_isready` within 180 s |
+| 69 | Postgres did not answer `pg_isready`, or was still in recovery (read-only WAL replay after a restore), after 180 s: its `giving up` line says which. For recovery, wait until `SELECT pg_is_in_recovery()` is `f` (docs/postgres-pitr.md) and reconcile again |
 | 75 | every try failed for a retriable reason, or the deadline left no room: the log names the reason and the sessions in the way |
 | 137 / no pod | killed at the Job deadline anyway (the pod was slow to start) |
 

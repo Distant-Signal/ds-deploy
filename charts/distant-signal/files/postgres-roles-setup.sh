@@ -5,7 +5,11 @@
 #   postgres-roles-setup.sh wait
 #   postgres-roles-setup.sh run PSQL_ARG... --file=SCRIPT.sql
 #
-# `wait` polls pg_isready until Postgres accepts connections. `run` runs
+# `wait` polls pg_isready until Postgres accepts connections, then
+# `SELECT pg_is_in_recovery()` until it can take writes: a Postgres
+# replaying WAL (after a backup restore) passes pg_isready but is
+# read-only, and every setup statement would fail (2 Nov 2026,
+# docs/postgres-18-upgrade.md "Known traps"). `run` runs
 # one idempotent setup script with psql (ON_ERROR_STOP, verbose errors with
 # the SQLSTATE, the failed statement echoed, per-statement timing) and runs
 # it again, after a backoff, when it failed for a reason that a later try
@@ -90,19 +94,34 @@ wait_for_postgres() {
     while :; do
         status=0
         said=$(pg_isready --timeout=5 2>&1) || status=$?
+        why="pg_isready exit ${status}: ${said}"
         if [ "${status}" -eq 0 ]; then
-            log "Postgres is ready: ${said}"
-            return 0
+            # Logs in, unlike pg_isready. A failure here (a wrong password)
+            # is left to `run`, which reports and retries it as before.
+            recovery=0
+            # shellcheck disable=SC2310 # its status is kept, not fatal
+            in_recovery=$(run_limited 20 psql -X --no-password --quiet \
+                --tuples-only --no-align \
+                --command='SELECT pg_is_in_recovery()' 2>&1) || recovery=$?
+            if [ "${recovery}" -ne 0 ]; then
+                log "Postgres is ready: ${said}; could not check whether it is" \
+                    "in recovery (psql exit ${recovery}: ${in_recovery})"
+                return 0
+            fi
+            if [ "${in_recovery}" = f ]; then
+                log "Postgres is ready: ${said}, and not in recovery"
+                return 0
+            fi
+            why="${said}, but in recovery (read-only WAL replay, e.g. after a restore)"
         fi
         t=$(now)
         if [ "${t}" -ge "${give_up}" ]; then
-            log "giving up: Postgres was not ready after $((t - started))s" \
-                "(pg_isready exit ${status}: ${said})"
+            log "giving up: Postgres was not ready after $((t - started))s (${why})"
             exit "${EX_UNAVAILABLE}"
         fi
         # Every 30 s or so, not every poll.
         if [ $((polls % 15)) -eq 0 ]; then
-            log "waiting for Postgres (pg_isready exit ${status}: ${said})"
+            log "waiting for Postgres (${why})"
         fi
         polls=$((polls + 1))
         sleep 2
