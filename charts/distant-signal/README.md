@@ -1511,6 +1511,8 @@ applies these defaults restarts Postgres (StatefulSet) and Redis
 | `imagePullSecrets` | `[]` | Image pull secrets applied to every pod in the chart. |
 | `revisionHistoryLimit` | `3` | Old ReplicaSets and StatefulSet ControllerRevisions kept, on every Deployment and StatefulSet (Kubernetes' default is 10). A whole number >= 0; `helm rollback` does not need them. |
 | `global.imageRegistry` | `""` | Registry (and optional path prefix) put in front of every image in place of the registry its `image.repository` carries, e.g. `registry.example.com/myfork`. Empty keeps each repository as written. |
+| `sourceCode.url` | `"https://github.com/FasterSpeeding/Distant-Signal"` | Repository the images were built from, listed by the api's `/public/version` (AGPL-3.0 §13). CI sets it at package time. |
+| `sourceCode.revision` | `""` | Commit the images were built from, listed by `/public/version`. CI sets it to the packaged commit; empty outside CI. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount for the chart's workloads. |
 | `serviceAccount.name` | `""` | Name to use. Empty + `create` uses the fullname. |
 | `serviceAccount.annotations` | `{}` | Annotations for the ServiceAccount (e.g. workload identity). |

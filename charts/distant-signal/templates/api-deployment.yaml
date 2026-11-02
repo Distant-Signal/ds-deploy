@@ -299,6 +299,14 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          volumeMounts:
+            - name: source-images
+              mountPath: /etc/distant-signal/source
+              readOnly: true
+      volumes:
+        - name: source-images
+          configMap:
+            name: {{ printf "%s-source-images" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
       {{- with .Values.api.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -366,6 +374,14 @@ with api.extraEnv, which replaces an entry of the same name.
             # route 404s and the frontend hides the pages).
             - name: API_TRANSIT_NETWORKS
               value: {{ join "," .Values.api.transitNetworks | quote }}
+            # AGPL-3.0 §13: the images this release runs and the source
+            # each was built from, served by /public/version (sourceCode
+            # in values.yaml). A mounted ConfigMap, read per request, not an
+            # env value: the revision changes with every chart build, and in
+            # the pod template it would restart the api even when its own
+            # image is unchanged.
+            - name: API_SOURCE_IMAGES_FILE
+              value: "/etc/distant-signal/source/images.json"
             # Authentik/SSO end-user group allowed to revoke other users'
             # sessions -- see api.adminGroup in values.yaml. Empty = off.
             - name: ADMIN_GROUP

@@ -1,0 +1,14 @@
+{{- /*
+The api's /public/version list (AGPL-3.0 §13, repo split spec §6): every
+first-party image this release runs and the source it was built from
+(distant-signal.sourceImagesJson). Mounted into the api, which reads it per
+request, so a new revision updates it without restarting the api.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-source-images" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "api") | nindent 4 }}
+data:
+  images.json: {{ include "distant-signal.sourceImagesJson" . | quote }}

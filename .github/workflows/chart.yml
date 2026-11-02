@@ -372,6 +372,7 @@ jobs:
             org.opencontainers.image.title=distant-signal/${{ matrix.service }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
           cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/buildcache:${{ matrix.service }}
           cache-to: ${{ env.PUBLISH == 'true' && format('type=registry,ref={0}/buildcache:{1},mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_BASE, matrix.service) || '' }}
           # The weekly/no-cache rebuild: the runtime stage only (`runtime`
@@ -771,6 +772,17 @@ jobs:
             pinned=$((pinned + 1))
           done
           echo "Pinned ${pinned} first-party image digest(s) into charts/distant-signal/values.yaml."
+
+      # AGPL §13 (repo split spec §6): the api's /public/version lists each
+      # image with the source it was built from. Every image above is built
+      # from this commit (an unchanged one keeps its digest because its
+      # inputs are byte-identical), so one source and revision covers all.
+      - name: Record the source revision in values.yaml
+        env:
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          yq -i '.sourceCode.url = strenv(SOURCE_URL) | .sourceCode.revision = strenv(GITHUB_SHA)' charts/distant-signal/values.yaml
 
       - name: helm package
         id: package

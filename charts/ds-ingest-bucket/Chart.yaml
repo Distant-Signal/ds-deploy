@@ -16,13 +16,19 @@ type: application
 # Bump by hand for any template/values change, as charts/distant-signal does.
 # 0.2.0: the move from AWS S3 (ACK) to Google Cloud Storage (Crossplane).
 # 0.2.1: AlertPolicy documentation is an object, as the CRD requires.
-version: 0.2.1
+# 0.2.2: AGPL-3.0-or-later (LICENSE, annotation).
+version: 0.2.2
 
 # Not an application image: the chart deploys no workload. Kept at the
 # version of the design it implements.
 appVersion: "0.2.0"
 
 kubeVersion: ">=1.23.0-0"
+
+# Helm's Chart.yaml has no licence field. LICENSE, next to this file, is
+# the AGPL text and ships in the packaged chart.
+annotations:
+  artifacthub.io/license: AGPL-3.0-or-later
 
 home: https://github.com/FasterSpeeding/Distant-Signal
 sources:

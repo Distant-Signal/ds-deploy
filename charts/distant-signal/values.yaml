@@ -37,6 +37,19 @@ global:
   # needed for a plain `helm install` to work.
   imageRegistry: ""
 
+# The source the images were built from, for the api's `/public/version`
+# (AGPL-3.0 §13: users reach the source of what is deployed over the
+# network). The api lists every first-party image this release runs with
+# this url and revision, from a ConfigMap it reads per request, so a new
+# revision doesn't restart it (`distant-signal.sourceImagesJson`).
+sourceCode:
+  # -- Repository the images were built from. containers.yml's
+  # push-helm-chart sets it to the building repository at package time.
+  url: "https://github.com/FasterSpeeding/Distant-Signal"
+  # -- Commit the images were built from. Empty outside CI;
+  # push-helm-chart sets it to the packaged commit.
+  revision: ""
+
 serviceAccount:
   # -- Create a ServiceAccount for the chart's workloads.
   create: true

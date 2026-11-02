@@ -3617,3 +3617,57 @@ ConfigMap, a dedicated ServiceAccount, and no key anywhere. */ -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+The api's `/public/version` list, rendered into the source-images ConfigMap
+(api-source-images-configmap.yaml; AGPL-3.0 §13, repo split spec §6): a JSON
+array with one `{service, image, source, revision}` per first-party image
+this release runs. `image` is the reference the pods pull
+(`distant-signal.image`, so the pinned digest when CI set one); `source` and
+`revision` are `sourceCode.url` and `.revision`, which push-helm-chart sets
+to the commit every image was built from. A workload whose values carry
+`enabled: false` is left out, as is scheduleFeed's pair while
+`scheduleFeed.enabled` is off and pollerTransitSchedule with no network on.
+The service names are containers.yml's matrix names. Takes root.
+*/}}
+{{- define "distant-signal.sourceImagesJson" -}}
+{{- $v := .Values -}}
+{{- $transitOn := false -}}
+{{- range $_, $n := ($v.pollerTransitSchedule.networks | default dict) -}}
+{{- if $n.enabled -}}{{- $transitOn = true -}}{{- end -}}
+{{- end -}}
+{{- $workloads := list
+  (list "api" $v.api true)
+  (list "aggregator" $v.aggregator true)
+  (list "enricher" $v.enricher true)
+  (list "notifier" $v.notifier true)
+  (list "frontend" $v.frontend true)
+  (list "poller-incidents" $v.pollers.incidents true)
+  (list "poller-stations" $v.pollers.stations true)
+  (list "poller-tocs" $v.pollers.tocs true)
+  (list "poller-ldbws" $v.pollers.ldbws true)
+  (list "poller-tfl" $v.pollers.tfl true)
+  (list "poller-irish-rail-gtfs" $v.pollerIrishRailGtfs true)
+  (list "poller-irish-rail-live" $v.pollerIrishRailLive true)
+  (list "poller-nir-stations" $v.pollerNirStations true)
+  (list "poller-transit-schedule" $v.pollerTransitSchedule $transitOn)
+  (list "trust-consumer" $v.trustConsumer true)
+  (list "full-coverage-consumer" $v.fullCoverageConsumer true)
+  (list "trust-backlog-consumer" $v.trustBacklogConsumer true)
+  (list "movement-relay" $v.movementRelay true)
+  (list "darwin-relay" $v.darwinRelay true)
+  (list "ingest-writer" $v.ingestWriter true)
+  (list "schedule-ingest" $v.scheduleFeed.ingest $v.scheduleFeed.enabled)
+  (list "schedule-reference" $v.scheduleFeed.reference $v.scheduleFeed.enabled)
+-}}
+{{- $images := list -}}
+{{- range $workloads -}}
+{{- $values := index . 1 -}}
+{{- $on := and (index . 2) (or (not (hasKey $values "enabled")) $values.enabled) -}}
+{{- if $on -}}
+{{- $image := include "distant-signal.image" (dict "root" $ "image" $values.image) -}}
+{{- $images = append $images (dict "service" (index . 0) "image" $image "source" $v.sourceCode.url "revision" $v.sourceCode.revision) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $images -}}
+{{- end }}

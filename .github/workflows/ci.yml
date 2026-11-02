@@ -816,6 +816,12 @@ jobs:
         working-directory: .
         run: uv run --locked --no-default-groups scripts/check-copy.py
 
+      # Every production dependency's licence is AGPL-compatible (repo split
+      # spec §6). Reads frontend/package-lock.json only; stdlib-only.
+      - name: npm licences (scripts/check-npm-licences.py)
+        working-directory: .
+        run: uv run --locked --no-default-groups scripts/check-npm-licences.py
+
       # Covers the whole frontend except what frontend/.prettierignore
       # lists (build output, generated files, minified test fixtures).
       - name: Format check (prettier)
