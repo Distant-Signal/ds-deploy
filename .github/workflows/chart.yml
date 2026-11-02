@@ -7,64 +7,19 @@ name: Containers
 # is no longer built here: the chart takes it from
 # postgresql.pgbackrest.image, see docs/postgres-pitr.md.)
 #
-# Why this is a hand-rolled matrix job rather than a call into
-# FasterSpeeding/Piped's own `build-container.yml` reusable workflow --
-# read before changing this file:
-#
-# Piped's build-container.yml (buildah/podman, multi-arch via a job
-# matrix, cosign-signs on push, defaults to ghcr.io) is a genuine, clean,
-# self-contained `workflow_call` workflow -- it doesn't depend on the
-# justfile/mise submodule convention the way rustfmt.yml/lint.yml do. It
-# was seriously considered and is a good fit for a *single-image* repo.
-# It does not cleanly fit *this* repo's shape, for two concrete reasons
-# confirmed by reading its source (raw.githubusercontent.com/.../
-# build-container.yml, and redhat-actions/buildah-build's action.yml):
-#
-#   1. No build-stage `target` input. buildah-build (which it wraps) has
-#      no `target` field at all, and build-container.yml doesn't expose
-#      one either. frontend/Dockerfile's *last* stage is `runtime-dev`
-#      (ships full source + `next dev`) -- the real image this repo wants
-#      is the earlier `runtime-prod` stage, which is unreachable without a
-#      `--target` flag. Building frontend/Dockerfile through this
-#      reusable workflow as-is would silently publish the dev image.
-#
-#   2. Artifact-name collision under multi-image reuse. The `build` job
-#      uploads each per-architecture image as artifact
-#      `container-build-<arch>-<uuid>`, and the `push` job downloads by
-#      the *unscoped* glob pattern `container-build-*` (not namespaced by
-#      image-name/inputs). Artifacts are scoped to the whole workflow
-#      *run*, not to one reusable-workflow invocation, so calling this
-#      workflow N times in one run (e.g. from a matrix of 9-10 services)
-#      would have every service's `push` job also pick up every other
-#      service's in-flight artifacts and merge them into its own
-#      manifest. Confirmed by reading the workflow's own artifact
-#      upload/download steps; not something that shows up for Piped's own
-#      (single-image) consumers, which is presumably why it hasn't come
-#      up before. Splitting into one caller workflow file per service
-#      would dodge this (separate runs -> separate artifact scopes) but
-#      trades one file for ten near-duplicates.
-#
-# UPSTREAM SUGGESTION (for FasterSpeeding/Piped, which the repo owner also
-# owns): build-container.yml would become usable for monorepos like this
-# one with two changes -- (a) an optional `target` input threaded into the
-# buildah-build step (or documented as unsupported upstream in
-# buildah-build itself), and (b) namespacing the upload/download artifact
-# name and pattern with the resolved `image-name` (or a new `artifact-key`
-# input) so parallel/matrixed calls in one run don't collide. Until that
-# lands, this repo uses its own matrix job below.
-#
-# This job is instead modelled closely on how FasterSpeeding's own
-# Cursed-Solutions/Reinhard repo hand-rolls its container publish
-# (.github/workflows/docker-publish.yml there): docker/setup-buildx-action
-# + docker/login-action + docker/metadata-action + docker/build-push-action
-# + sigstore/cosign-installer, gated the same way (build on every PR as a
-# sanity check, push+sign only outside pull_request) -- just parameterised
-# over a matrix of all 10 images instead of one. Reinhard does not call
-# Piped's build-container.yml either, for what it's worth.
+# Each image is built by Distant-Signal/ci's reusable image.yml, called
+# once per leg of the `build-and-push` matrix (repo split spec §8.3); its
+# header comment documents the build, cache, signing and reproducibility
+# details. Not FasterSpeeding/Piped's build-container.yml: it has no
+# build-stage `target` input (frontend/Dockerfile's last stage is
+# `runtime-dev`; the published image is `runtime-prod`), and its artifact
+# names aren't namespaced per image, so matrixed calls in one run would
+# merge each other's builds.
 #
 # Registry & naming: ghcr.io/<owner>/images/<service>, where <owner> is
-# this repository's owner, lowercased (the `Derive this repository's GHCR
-# paths` step in each job; today ghcr.io/distant-signal). Nothing here
+# this repository's owner, lowercased (image.yml derives it, as does
+# push-helm-chart's `Derive this repository's GHCR paths` step; today
+# ghcr.io/distant-signal). Nothing here
 # names the owner, so the workflow keeps working unedited if the
 # repository changes hands. The `images/<service>` shape is the
 # organisation-wide one (docs/specs/repo-split.md §5.9): every repository
@@ -77,29 +32,12 @@ name: Containers
 # `image.repository` overrides prefixed with the registry) points the
 # chart at the published images.
 #
-# Tagging: docker/metadata-action's own bare defaults are actually just
-# `type=schedule` + `type=ref,event={branch,tag,pr}` -- confirmed against
-# the action's README, and against this registry's own real package
-# history (`gh api /users/fasterspeeding/packages/container/distant-signal
-# %2Fapi/versions`), which before this change showed every build landing
-# on a *single* mutable tag equal to the branch name (`main`), silently
-# overwritten on every push, and nothing else -- no sha tag, no `latest`
-# (that needs an explicit `flavor`/`type=raw` rule or a tag/semver event,
-# neither of which this repo has). An older version of this comment
-# claimed a `sha` tag was already part of the defaults; it wasn't -- that
-# was wrong, which is exactly why `push-helm-chart` below (see its own
-# comment) had nothing reliable to pin the chart's default image tag to.
-#
-# `type=sha` is now added explicitly (below, in the `meta` step) on top
-# of that same default set, purely so every image also gets a second,
-# immutable `sha-<short-sha>` tag alongside the existing mutable branch
-# tag -- this is the one piece `push-helm-chart` needs to make the
-# chart's packaged `appVersion` (and therefore every workload's default
-# `image.tag`) point at the *exact* images this run just built, not
-# whatever `main` happens to resolve to by the time someone installs the
-# chart. `git tag` shows no tags exist in this repo yet, so no semver
-# pattern is configured; add `type=semver,pattern={{version}}` here
-# if/when release tags start.
+# Tagging (image.yml): the branch, tag and pull request tags, plus
+# `type=sha`, an immutable `sha-<short-sha>` tag on every image. That is
+# what lets `push-helm-chart` point the chart's packaged `appVersion` (and
+# so every workload's default `image.tag`) at the exact images this run
+# built, not whatever `main` resolves to later; it pins their digests on
+# top. No release tags exist, so no semver pattern.
 #
 # The `push-helm-chart` job below packages and pushes
 # charts/distant-signal to this same ghcr.io org's OCI registry (as an
@@ -152,35 +90,20 @@ env:
   # IMAGE_BASE (ghcr.io/<owner>/images) and CHART_BASE
   # (ghcr.io/<owner>/charts) are not set here: GitHub's expressions can't
   # lowercase `github.repository_owner`, and GHCR paths must be lowercase,
-  # so each job's `Derive this repository's GHCR paths` step writes them to
-  # $GITHUB_ENV.
-  # Reproducible images: BuildKit (via buildx, which passes this env var on
-  # as the SOURCE_DATE_EPOCH build arg) stamps the image config's `created`
-  # and its history entries with this time instead of the build's, and
-  # `rewrite-timestamp=true` on the build's output (below) clamps every
-  # layer file's mtime to it. A constant, not the commit time: with a
-  # per-commit value every push would mint a new config, so a new digest,
-  # for byte-identical layers. With it, an image whose inputs didn't change
-  # gets the same digest as last time, and the chart's pinned digest (so
-  # the Deployment) doesn't change. 0 is the Unix epoch, which is what
-  # `docker inspect` shows as Created.
+  # so push-helm-chart's `Derive this repository's GHCR paths` step writes
+  # them to $GITHUB_ENV (image.yml derives its own).
+  # Reproducible output: a constant, not the commit time (image.yml sets
+  # the same for the images; see its header comment).
   SOURCE_DATE_EPOCH: "0"
-  # "true" when this run publishes (pushes images and cache, signs, attests,
-  # pushes the chart): a push to main/master, the weekly rebuild, or a
-  # manual run from main/master. Never a pull request.
-  PUBLISH: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
-  # "true" for the weekly rebuild and a manual `no-cache` run.
-  REBUILD_RUNTIME: ${{ github.event_name == 'schedule' || inputs.no-cache == true }}
 
 jobs:
   build-and-push:
     name: ${{ matrix.service }}
-    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: write
       id-token: write # cosign's keyless/OIDC signing, and the attestation's
-      attestations: write # the build provenance attestation (see its step)
+      attestations: write # the build provenance attestation
 
     strategy:
       fail-fast: false
@@ -264,230 +187,35 @@ jobs:
             dockerfile: frontend/Dockerfile
             target: runtime-prod
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # GHCR paths from this repository's owner, lowercased (ghcr.io refuses
-      # upper case): Distant-Signal gives ghcr.io/distant-signal/images and
-      # ghcr.io/distant-signal/charts. See the workflow `env:` comment.
-      - name: Derive this repository's GHCR paths
-        run: |
-          set -euo pipefail
-          owner="${GITHUB_REPOSITORY_OWNER,,}"
-          {
-            echo "IMAGE_BASE=${REGISTRY}/${owner}/images"
-            echo "CHART_BASE=${REGISTRY}/${owner}/charts"
-          } >> "${GITHUB_ENV}"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      # The build's `rewrite-timestamp=true` output option needs BuildKit
-      # v0.13+; an older daemon ignores it silently and the digests stop
-      # being reproducible. setup-buildx-action runs the current stable
-      # moby/buildkit (v0.2x as of 2026-10), so this only fails if that
-      # ever stops being true.
-      - name: Check BuildKit supports rewrite-timestamp
-        run: |
-          set -euo pipefail
-          version="$(docker buildx inspect | sed -n 's/^BuildKit version: *v//p' | head -n 1)"
-          oldest="$(printf '%s\n' 0.13.0 "${version}" | sort -V | head -n 1)"
-          echo "BuildKit ${version}"
-          if [[ -z "${version}" || "${oldest}" != "0.13.0" ]]; then
-            echo "::error::BuildKit '${version}' is older than v0.13 (or unknown); rewrite-timestamp needs v0.13+" >&2
-            exit 1
-          fi
-
-      # On every event, PRs included: the build reads its layer cache from
-      # ${IMAGE_BASE}/buildcache (see the build step). A PR's token can
-      # still only read (a fork's gets no packages:write), and only pushes
-      # write the cache or images. The buildcache package must be public
-      # (set once after its first push) so fork PRs, whose GITHUB_TOKEN
-      # can't read this repo's private packages, still get cache hits;
-      # while it is private they build uncached, which is slower, not
-      # broken.
-      - name: Log into ${{ env.REGISTRY }}
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Explicit `tags:` here reproduces the action's own bare defaults
-      # (schedule/branch/tag/pr -- see this file's top-of-file "Tagging"
-      # comment) and adds `type=sha` on top, so every image also gets an
-      # immutable `sha-<short-sha>` tag that `push-helm-chart` can pin the
-      # chart's default `appVersion`/image references to. Only its tags are
-      # used: its labels include `org.opencontainers.image.created` (the
-      # build time) and `.revision` (the commit), which made every push a
-      # new image config and so a new digest even for byte-identical
-      # layers. The build step sets static labels instead; the commit is in
-      # the `sha-<short>` tag and the provenance attestation.
-      #
-      # No `type=schedule`: on the weekly rebuild (a `schedule` event) it
-      # would add a `nightly` tag. That run gets the same `main` and
-      # `sha-<short>` tags as a push of the same commit (the rebuilt image
-      # replaces the earlier one under both; the chart pins the digest).
-      - name: Extract metadata (tags)
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.IMAGE_BASE }}/${{ matrix.service }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=ref,event=pr
-            type=sha
-
-      # Build on every trigger (including PRs, as a build-sanity check);
-      # push only when env.PUBLISH. Mirrors Piped's own
-      # build-container.yml push gating and Reinhard's hand-rolled
-      # docker-publish.yml.
-      #
-      # Layer cache: a registry cache per service,
-      # ${IMAGE_BASE}/buildcache:<service>, not `type=gha`. The GHA cache
-      # is 10 GB per repo and these images' mode=max layers alone
-      # overflowed it (evicting rust-cache's entries too), and restoring
-      # them took longer than the build saved. Every run reads it; only
-      # publishing runs (env.PUBLISH: pushes to main/master, the weekly
-      # rebuild, a manual run from main/master) write it (`cache-to` is
-      # empty otherwise), so a PR can never poison the cache main builds
-      # from. The weekly rebuild must write it: otherwise the next push
-      # would import the old runtime layer again and undo the update. The
-      # Rust Dockerfiles' cargo-chef stages (scripts/gen-rust-dockerfiles.py)
-      # make the dependency build one layer, so a source-only change
-      # imports it and compiles only the workspace crates; a Cargo.lock
-      # change rebuilds it. image-manifest=true + oci-mediatypes=true store
-      # the cache as an OCI image manifest rather than BuildKit's default
-      # cache index, which some registries refuse. Each write untags the
-      # previous cache manifest; prune-buildcache.yml deletes those weekly.
-      #
-      # Reproducible digests (an unchanged image keeps its digest, so its
-      # Deployment doesn't restart):
-      #   - static `labels:` only, none per build (see the meta step);
-      #   - `provenance: false`: build-push-action's default provenance
-      #     attestation is part of the pushed image index and records the
-      #     build's time and run, so it changed the index digest on every
-      #     push. Provenance is published as a separate attestation instead
-      #     (the next step), which leaves the image digest alone;
-      #   - `outputs:` with `rewrite-timestamp=true`, and SOURCE_DATE_EPOCH
-      #     (workflow env), so even a cold-cache rebuild of the same inputs
-      #     produces the same layers and config. `push=` in the output
-      #     replaces the action's `push:` input (which only adds an output).
-      - name: Build${{ env.PUBLISH == 'true' && ' and push' || '' }} image
-        id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          target: ${{ matrix.target }}
-          outputs: type=image,push=${{ env.PUBLISH }},rewrite-timestamp=true
-          provenance: false
-          # The project URL in every Rust binary's outbound User-Agent
-          # (crates/common's user_agent!): this repository's, so it follows
-          # the owner too. The frontend's Dockerfile doesn't declare it.
-          build-args: DS_PROJECT_URL=${{ github.server_url }}/${{ github.repository }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: |
-            org.opencontainers.image.title=distant-signal/${{ matrix.service }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.licenses=AGPL-3.0-or-later
-          # The second source is the cache from before the repository moved
-          # to the organisation (repo split §5.9): it keeps the first builds
-          # from ghcr.io/distant-signal warm. A missing ref is skipped, not
-          # an error. Drop it once the new cache has been written (a week).
-          cache-from: |
-            type=registry,ref=${{ env.IMAGE_BASE }}/buildcache:${{ matrix.service }}
-            type=registry,ref=ghcr.io/fasterspeeding/distant-signal/buildcache:${{ matrix.service }}
-          cache-to: ${{ env.PUBLISH == 'true' && format('type=registry,ref={0}/buildcache:{1},mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_BASE, matrix.service) || '' }}
-          # The weekly/no-cache rebuild: the runtime stage only (`runtime`
-          # in every Rust Dockerfile, scripts/gen-rust-dockerfiles.py checks
-          # the name; frontend's is its target), so its apt layer is fresh.
-          no-cache-filters: ${{ env.REBUILD_RUNTIME == 'true' && (matrix.target || 'runtime') || '' }}
-
-      # SLSA build provenance for the pushed digest, signed keylessly
-      # (sigstore's public-good instance, the repo being public) and stored
-      # in GitHub's attestation API and, as an OCI referrer, next to the
-      # image in ghcr.io; neither changes the image's own digest. Verify
-      # with `gh attestation verify oci://<image>@<digest> --repo
-      # <owner>/<repo>`. No storage record: those are for
-      # organization-owned repositories only.
-      - name: Attest build provenance
-        if: env.PUBLISH == 'true'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ${{ env.IMAGE_BASE }}/${{ matrix.service }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-          create-storage-record: false
-
-      - name: Install cosign
-        if: env.PUBLISH == 'true'
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      # Keyless/OIDC signing via sigstore's public Fulcio/Rekor instances,
-      # same approach Piped's build-container.yml and Reinhard's
-      # docker-publish.yml both use.
-      #
-      # Signed once, by digest: a signature attaches to the digest, not a
-      # tag, so signing once per tag only re-signed the same image. Retried
-      # because cosign retries a Rekor upload that times out, and when the
-      # first attempt had in fact landed the retry fails with 409
-      # createLogEntryConflict (seen on main, 2026-10-30). A fresh `cosign
-      # sign` makes new ephemeral keys, so its entry can't conflict.
-      - name: Sign the published image
-        if: env.PUBLISH == 'true'
-        env:
-          IMAGE: ${{ env.IMAGE_BASE }}/${{ matrix.service }}
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if cosign sign --yes "${IMAGE}@${DIGEST}"; then
-              exit 0
-            fi
-            echo "::warning::cosign sign attempt ${attempt} failed"
-            sleep $((attempt * 10))
-          done
-          exit 1
-
-      # Matrix job outputs don't natively aggregate to a downstream job --
-      # `push-helm-chart` below needs every one of these 19 legs' own real
-      # `steps.build.outputs.digest` (the exact content digest of the image
-      # THIS leg just pushed) to pin the packaged chart's default image
-      # references to, not just the shared `sha-<short_sha>` tag string. The
-      # established pattern for getting a per-matrix-leg value to a
-      # `needs:`-dependent job is a per-leg artifact: write `service=digest`
-      # to a small file and upload it under a name namespaced by
-      # `matrix.service` (`image-digest-<service>`), so the 19 legs' uploads
-      # don't collide -- `push-helm-chart` downloads them all with a
-      # `pattern:`/`merge-multiple: true` glob. The FILE inside each
-      # artifact is also named `digest-<service>.txt`, not a fixed
-      # `digest.txt` -- `merge-multiple: true` flattens every downloaded
-      # artifact's contents into one shared directory, so 19 identically
-      # named files would silently overwrite each other down to just one
-      # surviving service; a unique filename per leg avoids that. Skipped on
-      # `pull_request` (no `id: build` push happened, so
-      # `steps.build.outputs.digest` is still a real digest of what was
-      # built locally, but there is nothing for a chart to pin to from an
-      # unpublished PR build, and PRs don't get a `packages:write` token
-      # anyway) -- same gate as the push/sign steps above.
-      - name: Record image digest
-        if: env.PUBLISH == 'true'
-        env:
-          SERVICE: ${{ matrix.service }}
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: echo "${SERVICE}=${DIGEST}" > "digest-${SERVICE}.txt"
-
-      - name: Upload image digest artifact
-        if: env.PUBLISH == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: image-digest-${{ matrix.service }}
-          path: digest-${{ matrix.service }}.txt
-          retention-days: 1
+    # Distant-Signal/ci's image.yml, once per matrix leg: build; when
+    # publishing, push to ghcr.io/<owner>/images/<service>, attest the
+    # build provenance, sign the digest (keyless cosign, retried after a
+    # Rekor conflict) and upload `<service>=<digest>` as the
+    # image-digest-<service> artifact for push-helm-chart. Its header
+    # comment has the tagging, cache and reproducibility details this file
+    # used to carry. The project URL in every Rust binary's outbound
+    # User-Agent (crates/ds-runtime's user_agent!) is this repository's, so it
+    # follows the owner too; the frontend's Dockerfile doesn't declare it.
+    # The second cache source is the cache from before the repository moved
+    # to the organisation (repo split §5.9); a missing ref is skipped.
+    # Signing identity: image.yml signs inside its own job, so the image
+    # signatures' certificate identity is Distant-Signal/ci's image.yml,
+    # not this file. Only the chart's signature is verified (by Flux); the
+    # chart is still signed here, in push-helm-chart.
+    uses: Distant-Signal/ci/.github/workflows/image.yml@eb5552be3a85b5aa333879202b50941f5af878be # main
+    with:
+      service: ${{ matrix.service }}
+      dockerfile: ${{ matrix.dockerfile }}
+      target: ${{ matrix.target }}
+      # Publish (push images and cache, attest, sign) on a push to
+      # main/master, the weekly rebuild, or a manual run from main/master;
+      # never on a pull request. Rebuild the runtime stage uncached on the
+      # weekly rebuild and a manual `no-cache` run. Spelled out here: a
+      # reusable workflow's `with:` can't read `env`.
+      publish: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
+      rebuild-runtime: ${{ github.event_name == 'schedule' || inputs.no-cache == true }}
+      build-args: DS_PROJECT_URL=${{ github.server_url }}/${{ github.repository }}
+      extra-cache-from: type=registry,ref=ghcr.io/fasterspeeding/distant-signal/buildcache:${{ matrix.service }}
 
   # Package and push the Helm chart to ghcr.io, once every image in the
   # matrix above has built and pushed successfully.
@@ -642,7 +370,7 @@ jobs:
   push-helm-chart:
     name: Package and push Helm chart
     needs: build-and-push
-    # env.PUBLISH's condition (env isn't available in a job's `if`).
+    # build-and-push's `publish` condition.
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     runs-on: ubuntu-26.04
     permissions:
@@ -923,29 +651,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Distant-Signal/ci's cosign-sign composite action: sign by digest,
+      # retried (a Rekor upload that times out and is retried by cosign can
+      # fail with 409 createLogEntryConflict though the first attempt
+      # landed; a fresh `cosign sign` has new ephemeral keys and can't
+      # conflict), then verify against this workflow's identity. A composite
+      # action runs in this job, so the certificate identity stays this
+      # workflow's, which Flux's matchOIDCIdentity pins.
       - name: Sign and verify the pushed chart
-        env:
-          CHART_REF: ${{ env.CHART_BASE }}/distant-signal@${{ steps.push.outputs.digest }}
-          IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
-        run: |
-          set -euo pipefail
-          # Retried like the image signing above: a Rekor upload that times
-          # out and is retried by cosign can fail with 409
-          # createLogEntryConflict though the first attempt landed; a fresh
-          # `cosign sign` has new ephemeral keys and can't conflict.
-          for attempt in 1 2 3; do
-            if cosign sign --yes "${CHART_REF}"; then
-              break
-            fi
-            if [[ "${attempt}" -eq 3 ]]; then
-              exit 1
-            fi
-            echo "::warning::cosign sign attempt ${attempt} failed"
-            sleep $((attempt * 10))
-          done
-          cosign verify "${CHART_REF}" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity "${IDENTITY}" > /dev/null
+        uses: Distant-Signal/ci/actions/cosign-sign@eb5552be3a85b5aa333879202b50941f5af878be # main
+        with:
+          ref: ${{ env.CHART_BASE }}/distant-signal@${{ steps.push.outputs.digest }}
+          verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
 
       # charts/ds-ingest-bucket: the schedule feed's GCS landing bucket
       # (Crossplane managed resources, no workload), pushed beside
@@ -980,25 +697,7 @@ jobs:
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Sign and verify the pushed chart (ds-ingest-bucket)
-        env:
-          CHART_REF: ${{ env.CHART_BASE }}/ds-ingest-bucket@${{ steps.push-ingest-bucket.outputs.digest }}
-          IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
-        run: |
-          set -euo pipefail
-          # Retried like the image signing above: a Rekor upload that times
-          # out and is retried by cosign can fail with 409
-          # createLogEntryConflict though the first attempt landed; a fresh
-          # `cosign sign` has new ephemeral keys and can't conflict.
-          for attempt in 1 2 3; do
-            if cosign sign --yes "${CHART_REF}"; then
-              break
-            fi
-            if [[ "${attempt}" -eq 3 ]]; then
-              exit 1
-            fi
-            echo "::warning::cosign sign attempt ${attempt} failed"
-            sleep $((attempt * 10))
-          done
-          cosign verify "${CHART_REF}" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity "${IDENTITY}" > /dev/null
+        uses: Distant-Signal/ci/actions/cosign-sign@eb5552be3a85b5aa333879202b50941f5af878be # main
+        with:
+          ref: ${{ env.CHART_BASE }}/ds-ingest-bucket@${{ steps.push-ingest-bucket.outputs.digest }}
+          verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
