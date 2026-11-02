@@ -683,9 +683,10 @@ jobs:
       - name: Build every service binary
         run: |
           set -euo pipefail
+          services="${RUNNER_TEMP}/services"
+          uv run --no-sync scripts/check-config-defaults-chart.py --list-services >"${services}"
           packages=()
-          while read -r service; do packages+=(-p "${service}"); done \
-            < <(uv run --no-sync scripts/check-config-defaults-chart.py --list-services)
+          while read -r service; do packages+=(-p "${service}"); done <"${services}"
           cargo build --locked --bins "${packages[@]}"
 
       - name: The chart matches every service's --print-config-defaults
