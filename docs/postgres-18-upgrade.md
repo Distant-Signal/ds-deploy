@@ -182,6 +182,10 @@ kubectl -n $ns exec $pg -c postgres -- sh -c \
 kubectl -n $ns exec $pg -c postgres -- pgbackrest --log-level-console=info check
 kubectl -n $ns exec $pg -c postgres -- pgbackrest info
 kubectl -n $ns get deploy,statefulset,cronjob -o wide > ds-before-pg18.txt
+# The Postgres StatefulSet as Helm made it, Helm's labels and annotations
+# included. Nothing below deletes it; this is for the unstick procedure in
+# Known traps, should it ever go missing.
+kubectl -n $ns get statefulset distant-signal-postgres -o yaml > ds-postgres-sts-before-pg18.yaml
 ```
 
 ## The window
@@ -464,9 +468,26 @@ Then make the change durable and bring the app back:
    `postgres:18.6-trixie` `pg_dump` CronJob); approve its deploy with the
    passkey. The StatefulSet already runs that image, so the HelmRelease's
    upgrade doesn't restart Postgres.
-2. `flux -n $ns resume helmrelease distant-signal`. Helm restores the
-   Deployments' replicas; check against `ds-replicas.txt` and
-   `kubectl -n $ns scale` any that didn't come back.
+2. Check Postgres is up and read-write, then resume. The resume runs a
+   Helm upgrade (step 1 changed the values), and its pre-upgrade hooks,
+   the `migrate` Job and the role setup Job, run against Postgres
+   **before** Helm touches the StatefulSet (see
+   [Known traps](#known-traps-lessons-from-the-32gi-resize)):
+
+   ```sh
+   kubectl -n $ns get statefulset distant-signal-postgres   # READY 1/1
+   kubectl -n $ns exec $pg -c postgres -- psql -U distant_signal -d distant_signal -Atc \
+     "select pg_is_in_recovery()"                           # f
+   flux -n $ns resume helmrelease distant-signal
+   kubectl -n $ns get jobs -l app.kubernetes.io/component=migrate   # Complete 1/1
+   flux -n $ns get helmrelease distant-signal                       # READY True, "upgrade succeeded"
+   ```
+
+   Here the 18 cluster started from pg_upgrade's clean shutdown, with no
+   WAL to replay, and has run through step 6, so `f` is expected; the
+   check costs a second. Helm restores the Deployments' replicas; check
+   against `ds-replicas.txt` and `kubectl -n $ns scale` any that didn't
+   come back.
 3. Resume the CronJobs:
    `for cj in $(kubectl -n $ns get cronjob -o name); do kubectl -n $ns patch "$cj" --type merge -p '{"spec":{"suspend":false}}'; done`
 4. Once the app is up: `kubectl -n $ns exec $pg -c postgres -- vacuumdb -U distant_signal --all --analyze-only`
@@ -476,7 +497,16 @@ Then make the change durable and bring the app back:
 Don't resume the HelmRelease before step 1 lands: it would roll the
 StatefulSet back to the 16 image, which can't open the 18 directory
 (`database files are incompatible with server`) and crash-loops until
-fixed. Nothing is lost, but the app stays down.
+fixed. Nothing is lost, but the app stays down. (The HelmRelease has no
+drift detection, so a resume upgrades only if the chart or values changed
+while it was suspended, e.g. a Renovate chart bump merged in the window.
+Assume one did.) Worse, it sets up the hook deadlock: the upgrade that
+step 1 then triggers runs its `migrate` hook against the crash-looping 16
+pod, which never becomes ready, so that upgrade fails too and Flux retries
+it every 15 minutes. Fix it by hand: `kubectl set image` the StatefulSet
+back to the pg18 image as in step 5, wait for `pg_is_in_recovery()` = `f`,
+then `flux -n $ns reconcile helmrelease distant-signal --force` (see
+[Known traps](#known-traps-lessons-from-the-32gi-resize)).
 
 ### 8. Afterwards
 
@@ -536,9 +566,23 @@ off. 16 starts on it as before; nothing has to be turned back off.
 16 directory is untouched (`--copy`). If the Job got as far as the swap,
 rename back: `pgdata` to `pgdata18-failed`, `pgdata16-old` to `pgdata`
 (a pod on the PVC as uid 999, or a debug container). Start the
-StatefulSet on the 16 image (still in the suspended HelmRelease's values),
-resume the HelmRelease, CronJobs and Deployments. The stanza was never
-upgraded, so archiving and backups carry on.
+StatefulSet on the 16 image (still in the suspended HelmRelease's values)
+**by hand**, and resume only once it is read-write:
+
+```sh
+kubectl -n $ns scale statefulset distant-signal-postgres --replicas=1
+kubectl -n $ns wait --for=condition=ready pod/$pg --timeout=600s
+kubectl -n $ns exec $pg -c postgres -- psql -U distant_signal -d distant_signal -Atc \
+  "select version(), pg_is_in_recovery()"   # 16.15, f
+flux -n $ns resume helmrelease distant-signal
+```
+
+Don't leave the StatefulSet at 0 replicas for the resume to scale up: if
+anything changed while the HelmRelease was suspended, the resume runs an
+upgrade whose `migrate` hook waits for the Postgres that only the same
+upgrade would start (Known traps). Then resume the CronJobs and check the
+Deployments against `ds-replicas.txt`. The stanza was never upgraded, so
+archiving and backups carry on.
 
 **After 18 has started**: everything written on 18 is lost by going back.
 Rename as above and start 16. The stanza now belongs to the 18 cluster:
@@ -548,6 +592,13 @@ repository path before starting it (Ranma-Config ConfigMap,
 `postgresql.pgbackrest.repo.path`, e.g. `…/distant-signal-rollback`), then
 `pgbackrest stanza-create` and a full backup. Rehearsed: works at once.
 The old path keeps both 16 and 18 backups until retention expires them.
+Step 5 set the StatefulSet's image to pg18 by hand, and step 7 may have
+put it in the values too: set the 16 image by hand
+(`kubectl -n $ns set image statefulset/distant-signal-postgres postgres=<16 image>`),
+revert the image in the same Ranma-Config change as the repository path,
+and start Postgres and check `pg_is_in_recovery()` = `f` as above
+before resuming. That change is a values change, so the resume always
+runs an upgrade and its hooks here.
 
 **Last resort**: a restore. The pre-window full backup is in the old
 stanza as db 1 (`pgbackrest restore --set=<label>` into an empty 16 data
@@ -555,7 +606,120 @@ directory, with the 16 image; docs/postgres-pitr.md, "Point-in-time
 restore"), or the step 1 `pg_dump` into a fresh 16 cluster. After 7 days,
 once `pgdata16-old` is deleted, these are the only way back to 16.
 A restore of the db 1 backup gives a 16 cluster without checksums, as
-before the window.
+before the window. A restored cluster starts in archive recovery,
+replaying WAL from the repository, and is read-only until that ends. Its
+readiness probe (`pg_isready`) passes during recovery, so `kubectl wait`
+returning means nothing here: poll `select pg_is_in_recovery()` until it
+returns `f` before resuming the HelmRelease. This is the window in which
+the 32Gi resize's `migrate` hook failed (Known traps).
+
+## Known traps (lessons from the 32Gi resize)
+
+On 2 Nov 2026 the Postgres PVC was resized to 32Gi. That meant stopping
+Postgres and removing its StatefulSet (to change `volumeClaimTemplates`),
+then a pgBackRest restore. Two things went wrong between Postgres and the
+chart's hooks, and both can recur whenever Postgres is down while Flux
+can run a Helm upgrade.
+
+**1. The pre-upgrade hook deadlock.** The `migrate` Job is a Helm
+`pre-upgrade` hook (weight -5; the role setup Job follows at weight 0).
+Its `wait-for-postgres` init container loops on `pg_isready`. Helm runs
+pre-upgrade hooks before it applies any of the release's own resources.
+So with the StatefulSet gone (or at 0 replicas, or crash-looping on the
+wrong image), an upgrade whose manifests would bring Postgres back first
+waits for that Postgres. The Job hits its `activeDeadlineSeconds` (900 s)
+and fails. The upgrade ends `UpgradeFailed` ("pre-upgrade hooks failed:
+… Job/distant-signal/distant-signal-migrate status: 'Failed'"), and
+helm-controller retries every 15 minutes
+(`spec.upgrade.strategy: RetryOnFailure`, `retryInterval: 15m`).
+Every retry fails the same way.
+
+**2. The recovery window.** After the restore, Postgres came up in
+archive recovery: WAL replay, read-only. `pg_isready` (the hook's wait
+and the pod's readiness probe alike) reports ready during recovery, so
+`migrate` ran at once and failed with `cannot execute CREATE TABLE in a
+read-only transaction` until recovery finished.
+
+**Where this flow is exposed.** It never deletes the StatefulSet: step 3
+scales it to 0, and step 5 starts it by hand. Every stop and start
+happens with the HelmRelease suspended (step 2), and a suspended
+HelmRelease runs no upgrades and no hooks. The HelmRelease has no drift
+detection, so a resume upgrades only if the chart or values changed in
+the meantime. That makes the resumes the only exposure:
+
+| Point | Exposed? | Why |
+| --- | --- | --- |
+| Steps 2 to 6 | No | HelmRelease suspended; the upgrade Job (step 4) is a plain `kubectl apply`, not a hook. |
+| Step 7, resume after the Ranma-Config change | Gated | Always an upgrade (values changed). Postgres 18 is up and has run through step 6. It started from a clean shutdown with no WAL to replay, so it is not in recovery. Step 7.2 checks both before resuming. |
+| Resume before step 7.1 lands | Yes, trap 1 | Only if something changed while suspended (a Renovate chart bump). That upgrade's hooks pass, then Helm puts the StatefulSet back on 16, which crash-loops. The next upgrade (step 7.1) then deadlocks. See the note under step 7. |
+| Rollback, before 18 started | Yes, trap 1, if Postgres is left at 0 replicas for the resume to start | Start it by hand first (Rollback). |
+| Rollback, after 18 started | Yes, trap 1, same | Its Ranma-Config change makes the resume an upgrade every time. |
+| Last resort, restore | Yes, trap 2 | A restore replays WAL; wait for `pg_is_in_recovery()` = `f`. |
+
+**Mitigation, chosen: keep Postgres up, by hand, before any resume or
+reconcile (option A).** Before every `flux resume` or `flux reconcile` of
+this HelmRelease while Postgres has been down:
+
+```sh
+kubectl -n $ns get statefulset distant-signal-postgres   # exists, READY 1/1
+kubectl -n $ns exec $pg -c postgres -- psql -U distant_signal -d distant_signal -Atc \
+  "select pg_is_in_recovery()"                           # f, or wait and repeat
+```
+
+If the StatefulSet is missing, recreate it from the saved manifest (see
+Unstick, below) rather than waiting for Helm to. This needs no change to
+the HelmRelease. The hooks still run, so migrations from any chart bump
+that landed in the window run in the normal order, before the new pods.
+The cost is a manual StatefulSet change that Helm then adopts on the
+next upgrade.
+
+**Option B, not chosen: turn the hooks off for the window.** Set
+`spec.upgrade.disableHooks: true` on the HelmRelease in Ranma-Config
+(`clusters/base/apps/distant-signal.yaml`); a `kubectl patch` would be
+reverted by Flux's Kustomization. Then the upgrade can recreate the
+StatefulSet itself. Afterwards, remove the setting and run the hooks
+deliberately with `flux -n $ns reconcile helmrelease distant-signal --force`
+once Postgres is read-write. Rejected for this flow. It is two extra
+Ranma-Config changes (each a passkey-approved deploy). It skips the role
+setup Job and the hook NetworkPolicies as well as `migrate`. And if a chart
+bump landed in the window, its new pods start against a schema that
+hasn't been migrated. Keep it for a case where Postgres has to come back
+through Helm, e.g. a StatefulSet change that can't be applied by hand.
+
+**Detecting the retry loop.**
+
+```sh
+flux -n $ns get helmrelease distant-signal        # READY False, "pre-upgrade hooks failed"
+kubectl -n $ns get events --field-selector involvedObject.kind=HelmRelease --sort-by=.lastTimestamp | tail
+kubectl -n $ns get jobs -l app.kubernetes.io/component=migrate   # Failed, or Running for minutes
+kubectl -n $ns logs job/distant-signal-migrate -c wait-for-postgres --tail=5   # still looping: trap 1
+kubectl -n $ns logs job/distant-signal-migrate -c migrate --tail=20            # "read-only transaction": trap 2
+kubectl -n $ns get statefulset distant-signal-postgres
+```
+
+**Unstick (the procedure used on 2 Nov).**
+
+1. Bring Postgres back without Helm. If the StatefulSet exists, fix it by
+   hand (`kubectl set image` to the image the data directory needs,
+   `kubectl scale --replicas=1`). If it is gone, recreate it from the
+   saved manifest (`ds-postgres-sts-before-pg18.yaml` in this runbook).
+   Strip `status`, `metadata.uid`, `resourceVersion`,
+   `creationTimestamp`, `generation` and `managedFields`, but keep Helm's
+   ownership metadata, so the next upgrade adopts it rather than refusing
+   it as not owned by the release: the labels
+   `app.kubernetes.io/managed-by: Helm`, `helm.toolkit.fluxcd.io/name` and
+   `helm.toolkit.fluxcd.io/namespace`, and the annotations
+   `meta.helm.sh/release-name: distant-signal` and
+   `meta.helm.sh/release-namespace: distant-signal`. Then
+   `kubectl apply -f` it. The PVC `data-distant-signal-postgres-0` is
+   picked up by name.
+2. Wait for the pod to be ready and for `select pg_is_in_recovery()` to
+   return `f`.
+3. `flux -n $ns reconcile helmrelease distant-signal --force`, which runs
+   the upgrade now rather than at the next 15-minute retry. The `migrate`
+   hook is recreated (`before-hook-creation`) and passes against a
+   read-write Postgres. Check `flux -n $ns get helmrelease distant-signal`
+   shows the upgrade succeeded.
 
 ## Data checksums
 
@@ -626,6 +790,16 @@ backup, which is why the alert below matters.
 - **Upgrade image CI.** `lucy/postgres-pgbackrest`'s upgrade-image CI runs
   the old commands; add the `pg_checksums --enable` step and a
   `SHOW data_checksums` = `on` check after starting 18.
+- **`wait-for-postgres` should wait out recovery** (not implemented here;
+  another change touches the same init container). In
+  `charts/distant-signal/templates/migrate-job.yaml` the `migrate` hook
+  waits only for `pg_isready`, which passes during WAL replay. Have it
+  also wait until `select pg_is_in_recovery()` returns `f` (it needs a
+  login then, with the migrate Job's credentials, which the init container
+  already has in `MIGRATION_DATABASE_URL`). Then the hook can't race a
+  restore's recovery (Known traps, trap 2). The role setup Job's wait
+  should get the same check. This doesn't fix trap 1, which is about
+  ordering, not readiness.
 - **Grafana.** Add `pg_stat_database_checksum_failures` to the Postgres
   dashboard (Ranma-Config `monitoring-dashboards.yaml`), next to the
   `pg_stat_bgwriter` panel fix above.
