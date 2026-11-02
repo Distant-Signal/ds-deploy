@@ -2297,9 +2297,12 @@ api:
 # migrate -- the schema migrations as a Helm hook Job (ingest spec §12.1,
 # plan 1B.4), instead of in the api's startup. Off by default.
 # ---------------------------------------------------------------------------
-# NEEDS the `ds-migrate` binary (plan 1B.1) in the api image: until that
-# image is deployed, enabling the Job fails the release (the command does
-# not exist). Rollout (spec §13): enable the Job, then set
+# The Job runs `migrate.image`, the ds-migrate image (repo split spec
+# §5.1, phase 3 item 3), built from the same commit as the api image. Until
+# the chart that introduced it, the Job ran the api image, which still
+# carries the same binary: pointing `migrate.image.repository` and
+# `migrate.image.digest` at the api image (`api.image`) goes back to that.
+# Rollout (spec §13): enable the Job, then set
 # `api.migrateOnStartup: false` in the same release (the hook runs first).
 # Rollback: `api.migrateOnStartup: true`, then the Job off.
 #
@@ -2311,15 +2314,27 @@ api:
 # schema owner's credentials (MIGRATION_DATABASE_URL: the owner role with
 # `postgresql.roles.enabled`, else `postgresql.auth.username`, or the
 # external database's URL). It waits for Postgres in an init container
-# from the Postgres image (the api image has no libpq tools): `pg_isready`,
+# from the Postgres image (the ds-migrate image has no libpq tools): `pg_isready`,
 # then `SELECT pg_is_in_recovery()` until Postgres can take writes. With `networkPolicy.enabled`, hook NetworkPolicies (created
 # before the Job, weight -10) admit it to Postgres and, with egress
 # policies on, let it reach Postgres and DNS.
 migrate:
+  # The ds-migrate image (docker/ds-migrate.Dockerfile): only `ds-migrate`,
+  # the schema migrator. The migrate hook Job runs it, and so do the
+  # schema-owner backfills (`ds-migrate backfill-trains`,
+  # `backfill-line-train-summaries`; docs/shared-train-identity-backfill.md).
+  image:
+    repository: ghcr.io/distant-signal/images/ds-migrate
+    # -- Empty means "use the chart's appVersion".
+    tag: ""
+    # -- Content digest override. See api.image.digest's own comment for
+    # the full rationale; same shape here (containers.yml pins it).
+    digest: ""
+    pullPolicy: IfNotPresent
   job:
     # -- Run the migrations in a hook Job.
     enabled: false
-    # -- Command, in the api image (`api.image`). The default is
+    # -- Command, in `migrate.image`. The default is
     # `ds-migrate run` (plan 1B.1). It reads MIGRATION_DATABASE_URL,
     # MIGRATION_LOCK_TIMEOUT_SECS and MIGRATION_STATEMENT_TIMEOUT_SECS
     # (`api.migrations`) and RUST_LOG.

@@ -87,6 +87,7 @@ push.
 | Dockerfile | Default image repository |
 |---|---|
 | `docker/api.Dockerfile` | `ghcr.io/distant-signal/images/api` |
+| `docker/ds-migrate.Dockerfile` | `ghcr.io/distant-signal/images/ds-migrate` |
 | `docker/aggregator.Dockerfile` | `ghcr.io/distant-signal/images/aggregator` |
 | `docker/enricher.Dockerfile` | `ghcr.io/distant-signal/images/enricher` |
 | `docker/notifier.Dockerfile` | `ghcr.io/distant-signal/images/notifier` |
@@ -110,6 +111,7 @@ push.
 REG=registry.example.com/distant-signal
 TAG=0.1.0
 docker build -f docker/api.Dockerfile                     -t $REG/api:$TAG .
+docker build -f docker/ds-migrate.Dockerfile              -t $REG/ds-migrate:$TAG .
 docker build -f docker/aggregator.Dockerfile              -t $REG/aggregator:$TAG .
 docker build -f docker/enricher.Dockerfile                -t $REG/enricher:$TAG .
 docker build -f docker/notifier.Dockerfile                -t $REG/notifier:$TAG .
@@ -851,7 +853,7 @@ that is already migrated (every deploy today, where the api migrates first)
 the gate passes at its first check.
 
 **The migrate hook Job** (`migrate.job.enabled`, `templates/migrate-job.yaml`)
-runs `ds-migrate run` (plan 1B.1) from the api image as a
+runs `ds-migrate run` (plan 1B.1) from the ds-migrate image (`migrate.image`) as a
 `pre-upgrade,post-install` hook (weight -5, `before-hook-creation`,
 `backoffLimit: 1`, `activeDeadlineSeconds: 900`). On an upgrade it migrates
 before any new pod starts; a failed migration fails the release and the old
@@ -2007,8 +2009,9 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 
 | Key | Default | Description |
 |---|---|---|
-| `migrate.job.enabled` | `false` | Run the migrations in a `pre-upgrade,post-install` hook Job (weight -5). Needs `ds-migrate` (plan 1B.1) in the api image. |
-| `migrate.job.command` | `["/usr/local/bin/ds-migrate"]` | Command, in the api image. |
+| `migrate.image` | `ghcr.io/distant-signal/images/ds-migrate`, tag `""` (appVersion), digest `""`, `IfNotPresent` | The ds-migrate image the Job runs; same shape as `api.image`. CI pins its digest. The api image carries the same binary: point `repository` and `digest` at it to run the Job from there instead. |
+| `migrate.job.enabled` | `false` | Run the migrations in a `pre-upgrade,post-install` hook Job (weight -5). |
+| `migrate.job.command` | `["/usr/local/bin/ds-migrate"]` | Command, in `migrate.image`. |
 | `migrate.job.args` | `["run"]` | Arguments to `command`. |
 | `migrate.job.backoffLimit` | `1` | Retries after a failed run. |
 | `migrate.job.connectDeadlineSecs` | `120` | `MIGRATION_CONNECT_DEADLINE_SECS`: how long `ds-migrate run` retries its first connection (a saturated node, a late NetworkPolicy) before failing. At least 1. |

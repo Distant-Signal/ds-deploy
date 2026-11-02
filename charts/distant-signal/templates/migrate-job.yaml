@@ -2,10 +2,10 @@
 The schema migrations as a Helm hook Job (ingest spec §12.1, plan 1B.4;
 migrate.job in values.yaml). Renders nothing unless migrate.job.enabled.
 
-`ds-migrate run` (plan 1B.1, in the api image) is the api's startup
-migration (ds_store::migrate): the contract-migration check, the advisory
-lock, lock_timeout and statement_timeout (api.migrations), the
-INVALID-index heal, then every pending migration.
+`ds-migrate run` (plan 1B.1), from migrate.image (the ds-migrate image), is
+the api's startup migration (ds_store::migrate): the contract-migration
+check, the advisory lock, lock_timeout and statement_timeout
+(api.migrations), the INVALID-index heal, then every pending migration.
 
 Hook order: on an upgrade this runs before any of the release's resources
 change (pre-upgrade), so a failure fails the release and the old pods keep
@@ -87,7 +87,7 @@ spec:
       securityContext:
         {{- include "distant-signal.podSecurityContext" (dict "override" $job.podSecurityContext) | nindent 8 }}
       initContainers:
-        # The api image has no libpq tools, so the wait for Postgres (on a
+        # The ds-migrate image has no libpq tools, so the wait for Postgres (on a
         # fresh install it may still be starting) uses the Postgres image,
         # as the role setup Job does. It waits until Postgres answers and
         # is out of recovery (a restored Postgres replaying WAL is
@@ -95,8 +95,8 @@ spec:
         {{- include "distant-signal.waitForPostgresContainer" (dict "root" . "var" "MIGRATION_DATABASE_URL" "env" (include "distant-signal.migrateJobDatabaseEnv" .)) | nindent 8 }}
       containers:
         - name: migrate
-          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) | quote }}
-          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.migrate.image) | quote }}
+          imagePullPolicy: {{ .Values.migrate.image.pullPolicy }}
           command:
             {{- toYaml $job.command | nindent 12 }}
           {{- with $job.args }}
