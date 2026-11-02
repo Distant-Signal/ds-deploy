@@ -483,7 +483,7 @@ jobs:
 
       # Ingest architecture phase 0b: every table, view, sequence and
       # function the migrations create must be classified in
-      # charts/distant-signal/files/db-grants.yaml (a new table without a
+      # crates/ds-store/db-grants.yaml (a new table without a
       # classification fails here, not in production), and
       # postgres-grants.sql must be what that file renders to.
       - name: every public table, view and sequence is classified (db-grants.yaml)
@@ -1234,6 +1234,13 @@ jobs:
 
       - name: Lint scripts
         run: uv run --no-sync scripts/lint-scripts.py
+
+      # The chart's files/db-grants.yaml and files/redis-users.acl.tpl are
+      # generated copies of crates/ds-store/db-grants.yaml and
+      # access/redis-users.acl.tpl (repo split spec §5.1): fail when either
+      # copy differs from its source.
+      - name: chart copies of the grants and Redis ACL match their sources
+        run: uv run --no-sync scripts/sync-chart-core-files.py --check
 
       # scripts/tests: stdlib unittest, e.g. check-migration-order.py's
       # behaviour against throwaway git repos and the schedulefeed sftp

@@ -690,8 +690,10 @@ Off by default (`redis.acl.enabled: false`); with it off nothing below
 renders. It builds on `redis.auth`: each client gets its own Redis user
 with only the commands and keys it needs, and the shared `default` user can
 then be turned off. The users and their rights are in
-`files/redis-users.acl.tpl`; `crates/common/tests/redis_acl.rs` checks
-them against a real Redis.
+`files/redis-users.acl.tpl`, a copy of the repository's
+`access/redis-users.acl.tpl` (edit that, then run
+`scripts/sync-chart-core-files.py`); `crates/common/tests/redis_acl.rs`
+checks them against a real Redis.
 
 With `redis.acl.enabled` (and the bundled Redis), an initContainer renders
 `users.acl` into a memory-backed emptyDir from one password per user in
@@ -734,8 +736,9 @@ Off by default (`postgresql.roles.perService.enabled: false`). Stage 0b of
 (api, aggregator, enricher, notifier) can connect as its own role, a member
 of `distant_signal_app` with no grants of its own, so `pg_stat_statements`
 and `pg_stat_activity` attribute every query to its service. The roles and
-the grants they will later be narrowed to are in `files/db-grants.yaml`;
-`scripts/gen-db-grants.py` renders them into `files/postgres-grants.sql`,
+the grants they will later be narrowed to are in `files/db-grants.yaml`, a
+copy of `crates/ds-store/db-grants.yaml` (edit that, then run
+`scripts/sync-chart-core-files.py`); `scripts/gen-db-grants.py` renders them into `files/postgres-grants.sql`,
 which the role setup Job runs. `perService.<service>.connect` moves one
 service at a time; with the api on its own role its pool is
 `perService.api.maxConnections` (16). The render fails if the connection

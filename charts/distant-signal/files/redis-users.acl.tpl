@@ -41,6 +41,11 @@
 # client's real command sequence and a set of commands it must NOT be
 # allowed: crates/common/tests/redis_acl.rs (CI's rust-test job). Edit this
 # file and that test together.
+#
+# The source is access/redis-users.acl.tpl (repo split spec §5.1).
+# charts/distant-signal/files/redis-users.acl.tpl is a generated copy: edit
+# the source, then run `uv run scripts/sync-chart-core-files.py` and commit
+# both (CI fails when the copy differs).
 
 # movement-relay: crates/movement-relay/src/{event_sink,deadletter,main}.rs.
 # XADD (NOMKSTREAM) + XTRIM MAXLEN on movement-events, XGROUP CREATE ...

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: T201  # a CLI: the rendered file goes to stdout
-r"""Render charts/distant-signal/files/redis-users.acl.tpl as a users.acl.
+r"""Render access/redis-users.acl.tpl as a users.acl.
 
   uv run scripts/render-redis-acl.py [--stage open|narrow]
       [--default-user on|off|on-unshared] [--no-default-password]
@@ -39,12 +39,10 @@ import re
 import sys
 from collections.abc import Collection, Mapping, Sequence
 
+# The source; the chart's files/redis-users.acl.tpl is a copy of it
+# (scripts/sync-chart-core-files.py).
 TEMPLATE = (
-    pathlib.Path(__file__).resolve().parent.parent
-    / "charts"
-    / "distant-signal"
-    / "files"
-    / "redis-users.acl.tpl"
+    pathlib.Path(__file__).resolve().parent.parent / "access" / "redis-users.acl.tpl"
 )
 KINDS = ("client", "final", "optional", "admin")
 OPEN_RIGHTS = "~* &* +@all"
