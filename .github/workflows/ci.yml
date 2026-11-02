@@ -369,7 +369,7 @@ jobs:
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
           cache-dependency-glob: uv.lock
 
@@ -474,7 +474,7 @@ jobs:
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
           cache-dependency-glob: uv.lock
 
@@ -600,7 +600,7 @@ jobs:
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
           cache-dependency-glob: uv.lock
 
@@ -729,7 +729,7 @@ jobs:
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
           cache-dependency-glob: uv.lock
 
@@ -808,7 +808,7 @@ jobs:
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.5"
+          version: "0.13.6"
           # Nothing to cache: no dependencies are installed.
           enable-cache: false
 
@@ -1064,7 +1064,7 @@ jobs:
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.5"
+          version: "0.13.6"
           # Nothing to cache: no dependencies are installed.
           enable-cache: false
 
@@ -1114,7 +1114,7 @@ jobs:
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # renovate: datasource=pypi depName=uv
-          version: "0.13.5"
+          version: "0.13.6"
           # Nothing to cache: no dependencies are installed.
           enable-cache: false
 
@@ -1171,7 +1171,7 @@ jobs:
           # uv itself, pinned (Ranma-Config new-service guidance 3.3a); the
           # annotation is for renovate.json5's customManagers.
           # renovate: datasource=pypi depName=uv
-          version: "0.13.5"
+          version: "0.13.6"
           # Caches uv's download/wheel cache, keyed on uv.lock.
           enable-cache: true
           cache-dependency-glob: uv.lock
