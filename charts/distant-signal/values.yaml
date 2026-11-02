@@ -720,7 +720,7 @@ postgresql:
     # pg_test_timing if in doubt.
     track_io_timing: "on"
     # --- Server-level backstops (Train Register N4, 2026-10-01). Every
-    # service pool already sets these per session (common::pg), so they only
+    # service pool already sets these per session (ds_runtime::pg), so they only
     # matter for a connection that doesn't: psql, pg_dump, exporters, a
     # future crate. A session can still override any of them. ---
     # End a session left idle inside an open transaction (a forgotten psql
@@ -1048,7 +1048,7 @@ externalDatabase:
   existingSecretUrlKey: database-url
 
 # Session settings every Postgres pool (api, aggregator, notifier, enricher)
-# sends at connect time -- see crates/common/src/pg.rs. Rendered as the
+# sends at connect time -- see crates/ds-runtime/src/pg.rs. Rendered as the
 # DATABASE_* env vars by the `distant-signal.databaseEnv` helper. Seconds;
 # 0 disables a timeout (falls back to the server's own setting, which is 0
 # on the bundled Postgres). Each connection also reports
@@ -3078,7 +3078,7 @@ redis:
   # trust-consumer, full-coverage-consumer, trust-backlog-consumer,
   # movement-relay) gets a `REDIS_PASSWORD` env from the Secret below via
   # `secretKeyRef`, next to its unchanged, credential-free `REDIS_URL`. The
-  # services combine the two at startup (crates/common/src/redis_auth.rs)
+  # services combine the two at startup (crates/ds-runtime/src/redis_auth.rs)
   # and authenticate as `AUTH default <password>`. The password never
   # appears in values, in `REDIS_URL` or in any rendered manifest. With
   # `requirePass` (and the bundled Redis) the Redis container also gets the
@@ -5516,7 +5516,7 @@ scheduleFeed:
     # Between publishes (2026-10-14). Prod ran at ~1.3GiB RSS from each
     # nightly publish until the next restart: glibc kept the freed index
     # and row pages. The binary now pins malloc's mmap threshold at startup
-    # and runs malloc_trim(0) after every publish cycle (`common::heap`), so
+    # and runs malloc_trim(0) after every publish cycle (`ds_runtime::heap`), so
     # RSS falls back to tens of MiB once the cycle ends: 1149 MiB -> 42 MiB
     # after a production-shaped synthetic publish (peak ~1.2GiB, unchanged).
     # `distant_signal_schedule_reference_post_publish_resident_memory_bytes`
@@ -5837,7 +5837,7 @@ metrics:
   # each listen on this port for their own embedded Prometheus exporter (the
   # consumers, movement-relay, the three island-of-Ireland pollers and
   # schedule-reference have their own `metricsPort` values) -- aggregator/enricher/the
-  # pollers via crates/common::metrics::install, api via its own
+  # pollers via crates/ds_runtime::metrics::install, api via its own
   # crates/api/src/main.rs::spawn_metrics_listener (see
   # docs/superpowers/specs/2026-08-29-metrics-design.md). Until 2026-09-25
   # api was the one exception, serving /metrics on its own api.service.port
@@ -6950,7 +6950,7 @@ networkPolicy:
     # loopback, link-local (cloud metadata), "this network", IETF
     # protocol assignments, benchmarking, multicast and reserved -- the same
     # ranges the notifier's outbound guard refuses
-    # (crates/common/src/outbound_endpoint_guard.rs).
+    # (crates/ds-runtime/src/outbound_endpoint_guard.rs).
     privateCidrs:
       - 0.0.0.0/8
       - 10.0.0.0/8

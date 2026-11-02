@@ -510,7 +510,7 @@ jobs:
       # ds-store: the api's data access (ingest plan 1A); ds-migrate (1B.1)
       # `run` against the migrated database; schedule-reference (2a.2), its
       # db sink's protocol and parity tests; poller-stations (2b.1) and
-      # poller-incidents (2c.2), their sinks and schema gates; common::pg's
+      # poller-incidents (2c.2), their sinks and schema gates; ds_runtime::pg's
       # pool settings; the enricher (minus the LLM-gated evals); the Redis
       # stream and ACL suites (phases 0c and 3a); the ingest-writer's loop
       # runner (1B.6); the phase 4 readers' db sources; schedule-ingest's

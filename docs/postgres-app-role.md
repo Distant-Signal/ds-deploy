@@ -85,7 +85,7 @@ cannot do:
 | `CREATE UNLOGGED TABLE` | none at runtime | n/a | The staging tables are permanent `UNLOGGED` tables created by migration `20260926183000`; the services only do DML on them. |
 | `TRUNCATE` | none | n/a | Not granted. |
 | Advisory locks (`pg_advisory_xact_lock`, `pg_try_advisory_xact_lock`) | publish, corpus load, subscriptions | Allowed for any role | None. |
-| `SET LOCAL statement_timeout`, `idle_in_transaction_session_timeout`, `enable_*`; the startup options `client_connection_check_interval`, `tcp_keepalives_*` | `common::pg`, publish, aggregator | All user-settable | None. |
+| `SET LOCAL statement_timeout`, `idle_in_transaction_session_timeout`, `enable_*`; the startup options `client_connection_check_interval`, `tcp_keepalives_*` | `ds_runtime::pg`, publish, aggregator | All user-settable | None. |
 | `pg_stat_statements` | no runtime reads | n/a | The migration `20260927070000` `CREATE EXTENSION` needs a superuser; as the owner it only warns. The setup script creates the extension, so a new cluster has it. Read it as the exporter role (`pg_monitor` sees every query). |
 | Migrations, `_sqlx_migrations` | `ds_store::migrate` (api startup, `ds-migrate run`) | n/a | The owner connection (`MIGRATION_DATABASE_URL`). |
 | Heal of INVALID indexes: `DROP INDEX CONCURRENTLY`, reading `pg_stat_progress_create_index` | `ds_store::migrate` (api startup, `ds-migrate run`) | n/a | Owner connection. The owner owns the indexes; `pg_read_all_stats` lets it see another role's in-flight build, which would otherwise show NULL `relid`s and look abandoned. |
@@ -698,7 +698,7 @@ default privileges granted when the migrator created it.
   `DATABASE_URL` as the app role and `MIGRATION_DATABASE_URL` as the owner.
   `--mode existing` migrates as the superuser and converts (this runbook);
   `--mode new` creates the roles first and migrates as the owner. The api,
-  aggregator, notifier, `common::pg` and enricher DB suites pass as the app
+  aggregator, notifier, `ds_runtime::pg` and enricher DB suites pass as the app
   role. Only the `#[sqlx::test]` modules are skipped: each test creates its
   own database, which needs `CREATEDB` (a test-harness right, not a runtime
   one).

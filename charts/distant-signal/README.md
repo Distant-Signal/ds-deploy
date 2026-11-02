@@ -646,7 +646,7 @@ exactly what it rendered before the option existed. When enabled:
 - every Redis client (api, enricher, trust-consumer, trust-backlog-consumer,
   full-coverage-consumer, movement-relay) gets `REDIS_PASSWORD` from a
   Secret via `secretKeyRef`. `REDIS_URL` stays credential-free; the services
-  combine the two at startup (`crates/common/src/redis_auth.rs`, which
+  combine the two at startup (`crates/ds-runtime/src/redis_auth.rs`, which
   percent-encodes the password, so any characters work) and authenticate as
   `AUTH default <password>`. The password is never in values, in the URL or
   in any rendered manifest, and the services never log it;
@@ -1426,7 +1426,7 @@ helm upgrade distant-signal ./charts/distant-signal -n distant-signal \
 Every Rust workload and the frontend's server side log **one JSON object
 per line** on stdout (no ANSI colour, no multi-line output), for Loki/Alloy.
 The chart sets nothing for this: `LOG_FORMAT` defaults to `json` in the
-binaries themselves (`common::logging`, `frontend/lib/logger.ts`). To get
+binaries themselves (`ds_runtime::logging`, `frontend/lib/logger.ts`). To get
 human-readable text from one workload while debugging, add
 `LOG_FORMAT=pretty` through its `extraEnv` (where it has one). Verbosity is
 unchanged: the per-component `logLevel` values (`RUST_LOG`, or the
@@ -1707,7 +1707,7 @@ override only needs to name the keys it changes:
 | `log_parameter_max_length` | `0` | `-1` | Never log bind parameters: bulk arrays of ~250k rows, user data, session tokens. |
 | `log_lock_waits` | `on` | `off` | Logs lock waits longer than `deadlock_timeout` (1s). |
 | `track_io_timing` | `on` | `off` | I/O timings in `EXPLAIN (ANALYZE, BUFFERS)`, `pg_stat_statements` and `pg_stat_database`. |
-| `idle_in_transaction_session_timeout` | `10min` | `0` | Backstop for sessions that skip `common::pg` (psql, exporters): ends one left idle inside an open transaction. The pools set 30s; pg_dump sets its own 0. |
+| `idle_in_transaction_session_timeout` | `10min` | `0` | Backstop for sessions that skip `ds_runtime::pg` (psql, exporters): ends one left idle inside an open transaction. The pools set 30s; pg_dump sets its own 0. |
 | `tcp_keepalives_idle` / `_interval` / `_count` | `60` / `10` / `6` | `0` (OS: 2h) | Detects a client that vanished without closing its socket. Same values every pool sets. |
 | `client_connection_check_interval` | `10s` | `0` | A running query checks its socket and aborts once the client is gone. |
 
@@ -1756,7 +1756,7 @@ logs a warning otherwise. In that case, run
 #### Connection pools and timeouts
 
 Every pool (api, aggregator, notifier, enricher) sets these at connect time
-(`crates/common/src/pg.rs`):
+(`crates/ds-runtime/src/pg.rs`):
 
 - `application_name`: `distant-signal-api`, `-aggregator`, `-notifier`,
   `-enricher`, or `-api-migrations`.
@@ -1771,7 +1771,7 @@ refused for 2 to 5 seconds while the network-policy controller adds its IP,
 so connects that never reach Postgres are retried quietly (DEBUG, 100 to 500 ms
 apart) within it, and the success is logged at INFO. A failure past it,
 or one Postgres answers (a wrong password), is a WARN on the usual backoff.
-Redis connects made through `common::redis_conn::connect_until_ready` have
+Redis connects made through `ds_runtime::redis_conn::connect_until_ready` have
 the same budget, `REDIS_STARTUP_CONNECT_TIMEOUT_SECS` (15; set it with a
 workload's `extraEnv`). The chart's own CronJobs also wait in an init
 container (see [Waiting for Postgres and Redis](#waiting-for-postgres-and-redis)).
