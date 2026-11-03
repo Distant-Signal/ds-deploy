@@ -1864,6 +1864,49 @@ api:
     # (DELEGATED_REVOKED_GRANT_RETENTION_DAYS, 1-36500). Read by the api and
     # the api-maintenance CronJob alike.
     revokedGrantRetentionDays: 365
+  # -- Read-only personal API tokens (docs/personal-api-tokens.md; spec
+  # docs/specs/personal-api-tokens.md). A user creates a `dsp_` token on the
+  # Connected apps page and uses it from their own device, on a separate
+  # API hostname routed by the tunnel to the <release>-api-tokens Service.
+  # OFF by default: the api binds no token listener, the chart renders no
+  # token Service and no NetworkPolicy rule for it, and the management
+  # routes answer 404. Decision D-14 as amended on 2026-11-03.
+  personalTokens:
+    # -- Master switch (PERSONAL_TOKENS_ENABLED). Also the hourly token
+    # sweep's switch, in the api and the api-maintenance CronJob.
+    enabled: false
+    # -- The token listener's container port (PERSONAL_TOKENS_LISTEN_ADDR
+    # is 0.0.0.0:<this>) and its Service's port. Must differ from
+    # api.service.port, api.delegated.port and metrics.port.
+    port: 8083
+    # -- The API hostname's base URL, shown on the Connected apps page
+    # (PERSONAL_TOKENS_PUBLIC_BASE_URL), e.g. https://ds-api.example.com.
+    publicBaseUrl: ""
+    # -- Key the failed-authentication bucket on Cloudflare's
+    # CF-Connecting-IP instead of the socket peer (the tunnel connector).
+    # Safe only while nothing but the tunnel can reach the port, so the
+    # chart refuses it unless networkPolicy.enabled and
+    # networkPolicy.tunnel.tokenApi are both true.
+    trustCfConnectingIp: false
+    # -- Working tokens one user may hold (1-100).
+    maxActivePerUser: 10
+    # -- The longest lifetime the page offers, in days (7-365).
+    maxLifetimeDays: 365
+    # -- A token unused this many days is revoked.
+    idleDays: 90
+    # -- Days an ended token's row is kept before the hourly pass deletes
+    # it (1-36500). Read by the api and the api-maintenance CronJob alike.
+    revokedRetentionDays: 365
+    # -- Rate buckets on the token listener, per pod (spec §6.1): per
+    # token; per token on the train routes (also charged to the token
+    # bucket); per user across their tokens; every token together; and
+    # failed authentication per client address.
+    rateLimit:
+      token: {perMinute: 30, burst: 10}
+      trains: {perMinute: 10, burst: 5}
+      user: {perMinute: 60, burst: 20}
+      global: {perMinute: 1200, burst: 200}
+      authFailure: {perMinute: 10, burst: 10}
   # -- Network Rail CORPUS as a FALLBACK for the timetable-derived
   # TIPLOC/STANOX->CRS lookups (CORPUS_FALLBACK_ENABLED; see
   # crates/api/src/data/corpus_crosswalk.rs). OFF by default. When on, a
@@ -6937,6 +6980,12 @@ networkPolicy:
     # therefore fails unless api.rateLimit.trustXRealIp is false; with that
     # off, requests the frontend proxies share its pod's bucket.
     api: false
+    # -- Admit the connector to the api's personal-token port only
+    # (api.personalTokens.port), for the API hostname
+    # (docs/specs/personal-api-tokens.md §10). Unlike `api`, this needs no
+    # change to api.rateLimit.trustXRealIp: the token listener never reads
+    # X-Real-IP. Rendered only while api.personalTokens.enabled.
+    tokenApi: false
   # Opt-in egress policies (INF-10, SVC-03 defence in depth) for every
   # component: api, frontend, aggregator, enricher, notifier, the
   # Kafka/Redis consumers, movement-relay, every poller, schedulefeed,

@@ -244,6 +244,15 @@ spec:
               containerPort: {{ include "distant-signal.delegatedPort" . }}
               protocol: TCP
             {{- end }}
+            {{- if include "distant-signal.personalTokensEnabled" . }}
+            # The personal-token listener (api.personalTokens): `dsp_`
+            # tokens are accepted only here. Published only by the
+            # <api>-tokens ClusterIP Service, which the tunnel routes the
+            # API hostname to.
+            - name: tokens
+              containerPort: {{ include "distant-signal.personalTokensPort" . }}
+              protocol: TCP
+            {{- end }}
             {{- if .Values.metrics.enabled }}
             # api's own internal-only /metrics listener
             # (crates/api/src/main.rs's spawn_metrics_listener) -- a
@@ -468,6 +477,45 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ dig "delegated" "dailyDeleteLimit" 20 .Values.api | quote }}
             - name: DELEGATED_REVOKED_GRANT_RETENTION_DAYS
               value: {{ dig "delegated" "revokedGrantRetentionDays" 365 .Values.api | quote }}
+            # Personal API tokens: see api.personalTokens. Off by default.
+            {{- $pt := dig "personalTokens" dict .Values.api }}
+            {{- $ptLimits := dig "rateLimit" dict $pt }}
+            - name: PERSONAL_TOKENS_ENABLED
+              value: {{ ternary "true" "false" (eq (include "distant-signal.personalTokensEnabled" .) "true") | quote }}
+            - name: PERSONAL_TOKENS_LISTEN_ADDR
+              value: {{ printf "0.0.0.0:%v" (include "distant-signal.personalTokensPort" .) | quote }}
+            - name: PERSONAL_TOKENS_PUBLIC_BASE_URL
+              value: {{ dig "publicBaseUrl" "" $pt | quote }}
+            - name: PERSONAL_TOKENS_TRUST_CF_CONNECTING_IP
+              value: {{ dig "trustCfConnectingIp" false $pt | quote }}
+            - name: PERSONAL_TOKENS_MAX_ACTIVE_PER_USER
+              value: {{ dig "maxActivePerUser" 10 $pt | quote }}
+            - name: PERSONAL_TOKENS_MAX_LIFETIME_DAYS
+              value: {{ dig "maxLifetimeDays" 365 $pt | quote }}
+            - name: PERSONAL_TOKENS_IDLE_DAYS
+              value: {{ dig "idleDays" 90 $pt | quote }}
+            - name: PERSONAL_TOKENS_REVOKED_RETENTION_DAYS
+              value: {{ dig "revokedRetentionDays" 365 $pt | quote }}
+            - name: PERSONAL_TOKENS_RATE_TOKEN_PER_MINUTE
+              value: {{ dig "token" "perMinute" 30 $ptLimits | quote }}
+            - name: PERSONAL_TOKENS_RATE_TOKEN_BURST
+              value: {{ dig "token" "burst" 10 $ptLimits | quote }}
+            - name: PERSONAL_TOKENS_RATE_TRAINS_PER_MINUTE
+              value: {{ dig "trains" "perMinute" 10 $ptLimits | quote }}
+            - name: PERSONAL_TOKENS_RATE_TRAINS_BURST
+              value: {{ dig "trains" "burst" 5 $ptLimits | quote }}
+            - name: PERSONAL_TOKENS_RATE_USER_PER_MINUTE
+              value: {{ dig "user" "perMinute" 60 $ptLimits | quote }}
+            - name: PERSONAL_TOKENS_RATE_USER_BURST
+              value: {{ dig "user" "burst" 20 $ptLimits | quote }}
+            - name: PERSONAL_TOKENS_RATE_GLOBAL_PER_MINUTE
+              value: {{ dig "global" "perMinute" 1200 $ptLimits | quote }}
+            - name: PERSONAL_TOKENS_RATE_GLOBAL_BURST
+              value: {{ dig "global" "burst" 200 $ptLimits | quote }}
+            - name: PERSONAL_TOKENS_RATE_AUTH_FAILURE_PER_MINUTE
+              value: {{ dig "authFailure" "perMinute" 10 $ptLimits | quote }}
+            - name: PERSONAL_TOKENS_RATE_AUTH_FAILURE_BURST
+              value: {{ dig "authFailure" "burst" 10 $ptLimits | quote }}
             - name: SCHEDULE_PROVISIONAL_AFTER_DAYS
               value: {{ .Values.api.scheduleProvisionalAfterDays | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_DATES
