@@ -92,6 +92,13 @@ spec:
                 # Delegated access: how long a revoked grant is kept.
                 - name: DELEGATED_REVOKED_GRANT_RETENTION_DAYS
                   value: {{ dig "delegated" "revokedGrantRetentionDays" 365 .Values.api | quote }}
+                # Personal API tokens: the sweep runs only while they are on.
+                - name: PERSONAL_TOKENS_ENABLED
+                  value: {{ ternary "true" "false" (eq (include "distant-signal.personalTokensEnabled" .) "true") | quote }}
+                - name: PERSONAL_TOKENS_IDLE_DAYS
+                  value: {{ dig "personalTokens" "idleDays" 90 .Values.api | quote }}
+                - name: PERSONAL_TOKENS_REVOKED_RETENTION_DAYS
+                  value: {{ dig "personalTokens" "revokedRetentionDays" 365 .Values.api | quote }}
                 - name: RUST_LOG
                   value: {{ $m.logLevel | quote }}
               securityContext:

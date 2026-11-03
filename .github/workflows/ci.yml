@@ -2166,6 +2166,79 @@ jobs:
           out=$(render "${client[@]}" --set 'api.delegated.clients[0].enabled=false')
           if grep -q 'distant-signal-api-delegated' <<<"${out}"; then fail "a disabled client has no Service"; fi
 
+      # Personal API tokens (docs/specs/personal-api-tokens.md, D-14 as
+      # amended): off by default; when on, a separate ClusterIP Service and a
+      # NetworkPolicy rule admitting only the tunnel connector to the token
+      # port, never the main port's peers, and the main port stays closed to
+      # the tunnel.
+      - name: helm template (personal API tokens)
+        run: |
+          set -euo pipefail
+          base=(
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set networkPolicy.enabled=true
+          )
+          on=(
+            --set api.personalTokens.enabled=true
+            --set api.personalTokens.publicBaseUrl=https://ds-api.example.com
+            --set networkPolicy.tunnel.enabled=true
+            --set networkPolicy.tunnel.tokenApi=true
+            --set api.personalTokens.trustCfConnectingIp=true
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+
+          out=$(render)
+          if grep -q 'distant-signal-api-tokens' <<<"${out}"; then fail "no token Service by default"; fi
+          if grep -q -- '- name: tokens' <<<"${out}"; then fail "no token port by default"; fi
+          grep -A1 -- '- name: PERSONAL_TOKENS_ENABLED' <<<"${out}" | grep -q 'value: "false"' \
+            || fail "PERSONAL_TOKENS_ENABLED must default to false"
+
+          svc=$(render "${on[@]}" --set api.service.type=LoadBalancer --show-only templates/api-service.yaml)
+          grep -q 'name: distant-signal-api-tokens' <<<"${svc}" || fail "the token Service must render"
+          grep -A12 'name: distant-signal-api-tokens' <<<"${svc}" | grep -q 'type: ClusterIP' \
+            || fail "the token Service stays ClusterIP whatever api.service.type is"
+          dep=$(render "${on[@]}" --show-only templates/api-deployment.yaml)
+          grep -A1 -- '- name: tokens' <<<"${dep}" | grep -q 'containerPort: 8083' || fail "the token port must render"
+          grep -A1 -- '- name: PERSONAL_TOKENS_ENABLED' <<<"${dep}" | grep -q 'value: "true"' || fail "the switch must reach the api"
+          cron=$(render "${on[@]}" --set apiMaintenance.enabled=true --show-only templates/api-maintenance-cronjob.yaml)
+          grep -A1 -- '- name: PERSONAL_TOKENS_ENABLED' <<<"${cron}" | grep -q 'value: "true"' \
+            || fail "the switch must reach the maintenance CronJob"
+
+          np=$(render "${on[@]}" --show-only templates/networkpolicy.yaml)
+          rule=$(sed -n '/# The personal-token listener/,/port: 8083/p' <<<"${np}")
+          grep -q 'kubernetes.io/metadata.name: "cloudflared"' <<<"${rule}" || fail "the token port admits the tunnel"
+          if grep -q -- '- frontend' <<<"${rule}"; then fail "the frontend must not reach the token port"; fi
+          # The main port stays closed to the tunnel: only tunnel.api opens it.
+          main=$(sed -n '/name: distant-signal-api$/,/^---/p' <<<"${np}" | sed -n '/ingress:/,/port: 8080/p')
+          if grep -q 'cloudflared' <<<"${main}"; then fail "tokenApi must not open the main api port to the tunnel"; fi
+          np=$(render --set networkPolicy.tunnel.enabled=true --set networkPolicy.tunnel.tokenApi=true \
+            --show-only templates/networkpolicy.yaml)
+          if grep -q '# The personal-token listener' <<<"${np}"; then fail "no token rule while the feature is off"; fi
+
+          # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
+          {
+            if render --set api.personalTokens.enabled=true --set api.personalTokens.trustCfConnectingIp=true >/dev/null 2>&1; then
+              fail "trustCfConnectingIp without networkPolicy.tunnel.tokenApi must fail the render"
+            fi
+            if render "${on[@]}" --set api.personalTokens.port=8080 >/dev/null 2>&1; then
+              fail "a token port equal to api.service.port must fail the render"
+            fi
+            if render "${on[@]}" --set api.personalTokens.port=8082 >/dev/null 2>&1; then
+              fail "a token port equal to api.delegated.port must fail the render"
+            fi
+          }
+
       - name: helm template (api rollout strategy)
         run: |
           set -euo pipefail

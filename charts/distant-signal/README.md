@@ -1265,6 +1265,13 @@ set `networkPolicy.tunnel.api: true`. The render then fails unless
 frontend proxies shares the frontend pod's one bucket, so the per-client
 limits become one site-wide limit.
 
+Personal API tokens use a port of their own instead
+([docs/personal-api-tokens.md](../../docs/personal-api-tokens.md)): route the
+API hostname to the `<release>-api-tokens` Service and set
+`networkPolicy.tunnel.tokenApi: true`, which admits the connector to
+`api.personalTokens.port` only. The main api port stays closed to the
+tunnel, and `api.rateLimit.trustXRealIp` stays on.
+
 NetworkPolicies are additive. A cluster-level policy that already lets the
 tunnel reach the api on `api.service.port` still does after this.
 Narrowing the chart's policies cannot remove it.
@@ -1920,6 +1927,19 @@ Used only when `postgresql.enabled` is `false`.
 | `api.delegated.port` | `8082` | The delegated listener's port, published only by the `<release>-api-delegated` ClusterIP Service and admitted by the NetworkPolicy only from `networkPolicy.apiExtraIngressNamespaces`. The only port that accepts delegated bearers. Must differ from `api.service.port` and `metrics.port`. |
 | `api.delegated.dailySaveLimit` / `.dailyDeleteLimit` | `50` / `20` | Journeys one user's client may save, and delete, per rolling 24 hours (429 `daily_limit`). |
 | `api.delegated.revokedGrantRetentionDays` | `365` | Days a revoked grant is kept, as the record of when and why an app's access ended, before the hourly maintenance pass (api loop or `api-maintenance` CronJob) deletes it. |
+| `api.personalTokens.enabled` | `false` | Read-only personal API tokens ([docs/personal-api-tokens.md](../../docs/personal-api-tokens.md)). Off: no token listener, no token Service, no NetworkPolicy rule, and the management routes answer 404. Also switches the hourly token sweep in the api and the `api-maintenance` CronJob. |
+| `api.personalTokens.port` | `8083` | The token listener's port, published only by the `<release>-api-tokens` ClusterIP Service, which the tunnel routes the API hostname to. The only port that accepts `dsp_` tokens. Must differ from `api.service.port`, `api.delegated.port` and `metrics.port`. |
+| `api.personalTokens.publicBaseUrl` | `""` | The API hostname's base URL, shown on the Connected apps page. |
+| `api.personalTokens.trustCfConnectingIp` | `false` | Key the failed-authentication bucket on `CF-Connecting-IP` instead of the socket peer. The render fails unless `networkPolicy.enabled`, `networkPolicy.tunnel.enabled` and `networkPolicy.tunnel.tokenApi` are all true. |
+| `api.personalTokens.maxActivePerUser` | `10` | Working tokens one user may hold. |
+| `api.personalTokens.maxLifetimeDays` | `365` | The longest lifetime the page offers (7, 30, 90 or 365 days, trimmed to this). |
+| `api.personalTokens.idleDays` | `90` | A token unused this many days is revoked. |
+| `api.personalTokens.revokedRetentionDays` | `365` | Days an ended token's row is kept before the hourly maintenance pass deletes it. |
+| `api.personalTokens.rateLimit.token.perMinute` / `.burst` | `30` / `10` | Per-token bucket on the token listener, per pod. |
+| `api.personalTokens.rateLimit.trains.perMinute` / `.burst` | `10` / `5` | Per-token bucket for the train and departure routes, charged as well as the token bucket. |
+| `api.personalTokens.rateLimit.user.perMinute` / `.burst` | `60` / `20` | Per-user bucket across all of a user's tokens. |
+| `api.personalTokens.rateLimit.global.perMinute` / `.burst` | `1200` / `200` | Every token together, per pod. |
+| `api.personalTokens.rateLimit.authFailure.perMinute` / `.burst` | `10` / `10` | Failed authentications per client address; over it, 429 before any lookup. |
 | `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). |
 | `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off. |
 | `api.rateLimit.login.perMinute` / `.burst` | `10` / `20` | Per client IP, `/public/auth/login` and `/public/auth/callback`. |
@@ -3326,6 +3346,7 @@ creates new per-pod series, so that clause fired on every rollout.
 | `networkPolicy.tunnel.namespace` | `cloudflared` | Namespace the connector runs in, matched by `kubernetes.io/metadata.name`. |
 | `networkPolicy.tunnel.podLabels` | `app.kubernetes.io/name: cloudflared` | Labels selecting the connector pods. Empty admits the whole namespace. |
 | `networkPolicy.tunnel.api` | `false` | Also admit the connector to `api.service.port`, for a hostname routed straight to the api. Requires `api.rateLimit.trustXRealIp: false`. |
+| `networkPolicy.tunnel.tokenApi` | `false` | Admit the connector to `api.personalTokens.port` only, for the personal-token API hostname. Rendered only while `api.personalTokens.enabled`. Needs no change to `api.rateLimit.trustXRealIp`: the token listener never reads `X-Real-IP`. |
 | `networkPolicy.monitoringNamespace` | `monitoring` | Namespace Prometheus runs in, matched by `kubernetes.io/metadata.name`. Allowed to reach each workload's metrics port. Only used when `metrics.enabled` is true. |
 | `networkPolicy.egress.enabled` | `false` | Render an egress policy for every component (see [NetworkPolicy](#networkpolicy)). |
 | `networkPolicy.egress.privateCidrs` | RFC 1918, CGNAT, loopback, link-local, reserved | IPv4 ranges excluded from the public-internet egress allow. |

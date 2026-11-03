@@ -309,6 +309,17 @@ spec:
         - protocol: TCP
           port: {{ include "distant-signal.delegatedPort" . }}
   {{- end }}
+  {{- if and (include "distant-signal.personalTokensEnabled" .) .Values.networkPolicy.tunnel.enabled (dig "tokenApi" false .Values.networkPolicy.tunnel) }}
+    # The personal-token listener (api.personalTokens; decision D-14 as
+    # amended, docs/specs/personal-api-tokens.md): only the tunnel
+    # connector, for the API hostname. Nothing else may reach it, which is
+    # what makes api.personalTokens.trustCfConnectingIp safe.
+    - from:
+        {{- include "distant-signal.tunnelPeer" . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ include "distant-signal.personalTokensPort" . }}
+  {{- end }}
   {{- if .Values.metrics.enabled }}
     # api's own internal-only /metrics listener
     # (crates/api/src/main.rs's spawn_metrics_listener) -- bound on a

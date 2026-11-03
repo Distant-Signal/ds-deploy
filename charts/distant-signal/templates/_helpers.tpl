@@ -326,6 +326,41 @@ The delegated listener's port, checked against the api's other ports.
 {{- $port -}}
 {{- end }}
 
+{{/*
+The personal-token listener's port (api.personalTokens.port), checked
+against the api's other ports.
+*/}}
+{{- define "distant-signal.personalTokensPort" -}}
+{{- $port := dig "personalTokens" "port" 8083 .Values.api | int -}}
+{{- if eq $port (.Values.api.service.port | int) -}}
+{{- fail "api.personalTokens.port must differ from api.service.port: the token listener must have its own Service" -}}
+{{- end -}}
+{{- if eq $port (dig "delegated" "port" 8082 .Values.api | int) -}}
+{{- fail "api.personalTokens.port must differ from api.delegated.port" -}}
+{{- end -}}
+{{- if and .Values.metrics.enabled (eq $port (.Values.metrics.port | int)) -}}
+{{- fail "api.personalTokens.port must differ from metrics.port" -}}
+{{- end -}}
+{{- $port -}}
+{{- end }}
+
+{{/*
+"true" while personal API tokens are on, else "". Fails on
+api.personalTokens.trustCfConnectingIp without the NetworkPolicy that makes
+CF-Connecting-IP trustworthy.
+*/}}
+{{- define "distant-signal.personalTokensEnabled" -}}
+{{- $pt := dig "personalTokens" dict .Values.api -}}
+{{- if and (dig "trustCfConnectingIp" false $pt) (not (and .Values.networkPolicy.enabled .Values.networkPolicy.tunnel.enabled (dig "tokenApi" false .Values.networkPolicy.tunnel))) -}}
+{{- fail "api.personalTokens.trustCfConnectingIp is true, but networkPolicy.enabled, networkPolicy.tunnel.enabled and networkPolicy.tunnel.tokenApi are not all true. CF-Connecting-IP can be trusted only while nothing but the tunnel connector can reach the token port." -}}
+{{- end -}}
+{{- if dig "enabled" false $pt -}}true{{- end -}}
+{{- end }}
+
+{{- define "distant-signal.apiTokensFullname" -}}
+{{- printf "%s-api-tokens" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{- define "distant-signal.apiDelegatedFullname" -}}
 {{- printf "%s-api-delegated" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
