@@ -514,6 +514,17 @@ jobs:
       - name: frontend's api types match api-types/api.ts
         run: uv run --no-sync scripts/sync-api-types.py check
 
+      # The personal-token API's OpenAPI document (api-types/openapi/v1.json,
+      # docs/specs/personal-api-tokens.md §12): `cargo test`'s
+      # openapi_document_is_current checks it against the Rust types; this
+      # fails on a breaking change since the base (oasdiff, pinned in
+      # Distant-Signal/ci). A breaking change needs a /v2 document instead.
+      - name: no breaking change to the personal-token OpenAPI document
+        uses: Distant-Signal/ci/actions/openapi-breaking@76c5c4cd3a3d38ea572c852071baf93cd4982b16 # main
+        with:
+          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          specs: api-types/openapi/v1.json
+
       # Every chart values.yaml key needs a row in the chart README's "Values
       # reference" tables, and every row must name a real key.
       # `scripts/chart-values-doc.py table <section>` drafts missing rows.
