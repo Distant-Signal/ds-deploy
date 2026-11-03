@@ -46,20 +46,16 @@ jobs:
   # trustConsumer.kafka.saslMechanism), and libcurl4-openssl-dev because
   # librdkafka's vendored C source `#include`s <curl/curl.h>.
   #
-  # The extra test step is the fast, no-secrets tier of the lines/*.toml
-  # external-identifier validator (crates/line-catalogue-validator): every
-  # `crs`, `tiploc` and `operators` value against the vendored snapshots in
-  # reference-data/, deterministic and offline, built by the same `cargo
-  # build --workspace`. Its live counterpart is validate-line-catalogue.yml
-  # (disabled pending credentials).
+  # The core crates are git dependencies on Distant-Signal/ds-core (repo
+  # split spec §5.2), whose own CI lints and tests them, and runs the line
+  # catalogue validator; cargo-deny's sources check allows exactly that git
+  # repository.
   rust:
     uses: Distant-Signal/ci/.github/workflows/rust-ci.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
     with:
       toolchain: 1.88.0
       msrv: 1.88.0
       apt-packages: cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
-      extra-test-name: Validate lines/*.toml external identifiers (fast tier)
-      extra-test-command: cargo run -p line-catalogue-validator
 
   # Reusable workflow_call from FasterSpeeding/Piped: runs actionlint over
   # this repo's own .github/workflows/*.yml via reviewdog. Self-contained
@@ -264,9 +260,15 @@ jobs:
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
 
-      - name: Run the migrations (crates/ds-store/migrations)
-        working-directory: crates/ds-store
-        run: sqlx migrate run
+      # The migrations of the ds-core release Cargo.lock pins (the api
+      # embeds the same ones): scripts/core-checkout.py clones that tag and
+      # checks the commit.
+      - name: Run the migrations (the pinned ds-core's)
+        run: |
+          set -euo pipefail
+          core="$(python3 scripts/core-checkout.py)"
+          cd "${core}/crates/ds-store"
+          sqlx migrate run
 
       - name: Seed e2e fixtures
         # ON_ERROR_STOP: plain psql reports a failing statement and carries on
@@ -390,42 +392,6 @@ jobs:
   # column type change, SET NOT NULL) without a `-- contract: ...` header,
   # in migrations added since the base or newer than its cutoff.
   # The job name is unchanged in case a branch-protection rule requires it.
-  migration-order:
-    name: migration versions are newer than the base
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      # The script is stdlib-only; uv provides .python-version's interpreter.
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          # renovate: datasource=pypi depName=uv
-          version: "0.13.6"
-          # Nothing to cache: no dependencies are installed.
-          enable-cache: false
-
-      - name: Check migration order
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          if [[ "${EVENT_NAME}" = "pull_request" ]]; then
-            base="$(git merge-base "origin/${BASE_REF}" HEAD)"
-          elif [[ -n "${BEFORE}" ]] && [[ "${BEFORE}" != "0000000000000000000000000000000000000000" ]] \
-              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            base="${BEFORE}"
-          else
-            echo "no usable base commit (new branch or force push); skipping"
-            exit 0
-          fi
-          uv run --locked --no-default-groups scripts/check-migration-order.py "${base}"
-
   # Commit identity (repo split spec §5.10), Distant-Signal/ci's
   # identity.yml: no commit in the PR or push may use a retired
   # author/committer address or carry AI attribution (a Co-authored-by
@@ -502,11 +468,17 @@ jobs:
         run: uv run --no-sync scripts/gen-rust-dockerfiles.py --check
 
       # The chart's files/db-grants.yaml, files/postgres-* and
-      # files/redis-users.acl.tpl are generated copies of
-      # crates/ds-store/db-grants.yaml and access/ (repo split spec §5.1):
-      # fail when any copy differs from its source.
-      - name: chart copies of the grants and Redis ACL match their sources
-        run: uv run --no-sync scripts/sync-chart-core-files.py --check
+      # files/redis-users.acl.tpl, and scripts/render-redis-acl.py, are the
+      # access assets of the ds-core release `core-version` pins (repo split
+      # spec §5.1), each verified against its Sigstore bundle from ds-core's
+      # release.yml at the tag. Fails when a vendored file differs from the
+      # release, or when core-version, Cargo.toml's ds-core tags and
+      # migrate.image.tag disagree.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: chart's access files are the pinned ds-core release's
+        run: uv run --no-sync scripts/sync-core.py --check
 
       # frontend/lib/api-types.ts and openapi-v1.json are copies of the api's generated
       # api-types/api.ts and openapi/v1.json (repo split spec §5.3); `cargo test`'s
@@ -539,7 +511,11 @@ jobs:
       # real check runs on the pushed images in containers.yml's
       # push-helm-chart, before the chart ships.
       - name: release ordering (this checkout's image labels)
-        run: uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --source
+        run: |
+          set -euo pipefail
+          core="$(uv run --no-sync scripts/core-checkout.py)"
+          uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --source \
+            --migrations "${core}/crates/ds-store/migrations"
 
       # Every alert's summary, description, expr and estimated 3-alert
       # webhook JSON stay under ntfy's 4,096-byte limit (the 2026-10-01
@@ -638,14 +614,15 @@ jobs:
 
       # Ingest architecture spec §5.1: ds-store's (and ds-migrate's) normal
       # dependency closure holds no axum, tower, hyper, redis, reqwest,
-      # oauth2, openidconnect or api. `cargo tree` only (no build), so no
+      # oauth2, openidconnect or api (ds-core checks it too; here it holds
+      # for the pinned release), and poller-transit-schedule's no database. `cargo tree` only (no build), so no
       # rdkafka packages.
       - name: Install Rust 1.88.0
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.88.0
 
-      - name: ds-store and ds-migrate dependency boundary
+      - name: crate dependency boundaries
         run: uv run --no-sync scripts/check-crate-deps.py
 
   # The chart against what each service says it reads (repo split spec §9
@@ -1999,7 +1976,7 @@ jobs:
             grep -q -F -- "${want}" <<<"${job}" || fail "migrate Job lacks: ${want}"
           done
           # Its own image (repo split spec §5.1), not the api's.
-          grep -q 'image: "ghcr.io/distant-signal/images/ds-migrate:' <<<"${job}" \
+          grep -q -E 'image: "ghcr.io/distant-signal/images/ds-migrate[:@]' <<<"${job}" \
             || fail "the migrate Job must run the ds-migrate image (migrate.image)"
           if grep -q 'images/api[:@]' <<<"${job}"; then
             fail "the migrate Job must not run the api image"

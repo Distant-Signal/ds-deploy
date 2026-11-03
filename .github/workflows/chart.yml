@@ -138,9 +138,9 @@ jobs:
           - service: api
             dockerfile: docker/api.Dockerfile
             target: ""
-          - service: ds-migrate
-            dockerfile: docker/ds-migrate.Dockerfile
-            target: ""
+          # No ds-migrate: Distant-Signal/ds-core's release.yml builds it
+          # (repo split spec §5.1), and values.yaml pins its release
+          # (migrate.image, bumped with core-version).
           - service: aggregator
             dockerfile: docker/aggregator.Dockerfile
             target: ""
@@ -511,7 +511,6 @@ jobs:
           set -euo pipefail
           declare -A SERVICE_TO_PATH=(
             [api]=".api"
-            [ds-migrate]=".migrate"
             [aggregator]=".aggregator"
             [enricher]=".enricher"
             [notifier]=".notifier"
@@ -585,7 +584,6 @@ jobs:
           set -euo pipefail
           declare -A SERVICE_TO_PATH=(
             [api]=".api"
-            [ds-migrate]=".migrate"
             [aggregator]=".aggregator"
             [enricher]=".enricher"
             [notifier]=".notifier"
@@ -649,8 +647,9 @@ jobs:
         run: |
           set -euo pipefail
           yq -o=json charts/distant-signal/values.yaml > "${RUNNER_TEMP}/values.json"
+          core="$(python3 scripts/core-checkout.py)"
           python3 scripts/release-order.py check --values "${RUNNER_TEMP}/values.json" \
-            --registry --app-version "${APP_VERSION}"
+            --registry --app-version "${APP_VERSION}" --migrations "${core}/crates/ds-store/migrations"
 
       - name: helm package
         id: package

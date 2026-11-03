@@ -2362,17 +2362,21 @@ api:
 # before the Job, weight -10) admit it to Postgres and, with egress
 # policies on, let it reach Postgres and DNS.
 migrate:
-  # The ds-migrate image (docker/ds-migrate.Dockerfile): only `ds-migrate`,
-  # the schema migrator. The migrate hook Job runs it, and so do the
-  # schema-owner backfills (`ds-migrate backfill-trains`,
-  # `backfill-line-train-summaries`; docs/shared-train-identity-backfill.md).
+  # The ds-migrate image: only `ds-migrate`, the schema migrator, built and
+  # released by Distant-Signal/ds-core (repo split spec §5.1). The migrate
+  # hook Job runs it, and so do the schema-owner backfills (`ds-migrate
+  # backfill-trains`, `backfill-line-train-summaries`;
+  # docs/shared-train-identity-backfill.md).
   image:
     repository: ghcr.io/distant-signal/images/ds-migrate
-    # -- Empty means "use the chart's appVersion".
-    tag: ""
-    # -- Content digest override. See api.image.digest's own comment for
-    # the full rationale; same shape here (containers.yml pins it).
-    digest: ""
+    # -- The ds-core release (`vX.Y.Z`): always the version in the
+    # repository's `core-version` file and Cargo.toml's ds-core tags, so the
+    # Job applies exactly the schema and grants the services were built
+    # against. Renovate's ds-core group bumps all three together.
+    tag: v0.1.0
+    # -- The release's digest (its release notes list it). Pinned here, not
+    # by containers.yml, which no longer builds this image.
+    digest: "sha256:8692781cb26763c3d3a3ce00e7bd8b3ead07410a24e7e04a1d04914a7d5961b2"
     pullPolicy: IfNotPresent
   job:
     # -- Run the migrations in a hook Job.
