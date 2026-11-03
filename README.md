@@ -32,6 +32,23 @@ signing identity is
 
 To hold one service back, revert its `tag` and `digest` together in a PR.
 
+## Merging
+
+Pull requests merge as merge commits, by an admin, with the bypass:
+
+```sh
+gh pr merge <number> --merge --admin
+```
+
+Two repository rulesets apply. "Protect main" stops deletion and force
+pushes to `main`. "Sync bot: Renovate branches only" restricts creating,
+updating and deleting every branch except `renovate/**`, so the
+`ds-deploy-sync` App's token can push only to Renovate's branches. That
+rule covers `main` too, so a merge is an update only the bypass list may
+make: the Repository admin role and the Renovate app (whose automerge
+needs it), not `ds-deploy-sync`. Without `--admin`, GitHub refuses the
+merge.
+
 ## Checks
 
 [`ci.yml`](.github/workflows/ci.yml) runs on every pull request:
