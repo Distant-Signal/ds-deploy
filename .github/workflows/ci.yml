@@ -501,10 +501,10 @@ jobs:
       - name: Rust Dockerfiles match scripts/gen-rust-dockerfiles.py
         run: uv run --no-sync scripts/gen-rust-dockerfiles.py --check
 
-      # The chart's files/db-grants.yaml and files/redis-users.acl.tpl are
-      # generated copies of crates/ds-store/db-grants.yaml and
-      # access/redis-users.acl.tpl (repo split spec §5.1): fail when either
-      # copy differs from its source.
+      # The chart's files/db-grants.yaml, files/postgres-* and
+      # files/redis-users.acl.tpl are generated copies of
+      # crates/ds-store/db-grants.yaml and access/ (repo split spec §5.1):
+      # fail when any copy differs from its source.
       - name: chart copies of the grants and Redis ACL match their sources
         run: uv run --no-sync scripts/sync-chart-core-files.py --check
 

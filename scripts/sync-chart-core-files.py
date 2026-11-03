@@ -4,11 +4,14 @@
 
   uv run scripts/sync-chart-core-files.py [--check]
 
-The chart reads two files that `ds-core` owns (repo split spec, section
-5.1): the Postgres grants and the Redis ACL template. Their sources are
+The chart reads files that `ds-core` owns (repo split spec, section 5.1):
+the Postgres grants and roles and the Redis ACL template. Their sources are
 
   crates/ds-store/db-grants.yaml   (ds-store's build.rs bakes it into the
                                     schema gate; gen-db-grants.py renders it)
+  access/postgres-grants.sql       (gen-db-grants.py render writes it)
+  access/postgres-roles.sql        (the roles setup Job's SQL)
+  access/postgres-roles-setup.sh   (the roles setup Job's entrypoint)
   access/redis-users.acl.tpl       (render-redis-acl.py renders it;
                                     crates/common/tests/redis_acl.rs checks it)
 
@@ -35,6 +38,9 @@ CHART_FILES = Path("charts/distant-signal/files")
 # (source, chart copy), relative to the repository root.
 COPIES = (
     (Path("crates/ds-store/db-grants.yaml"), CHART_FILES / "db-grants.yaml"),
+    (Path("access/postgres-grants.sql"), CHART_FILES / "postgres-grants.sql"),
+    (Path("access/postgres-roles.sql"), CHART_FILES / "postgres-roles.sql"),
+    (Path("access/postgres-roles-setup.sh"), CHART_FILES / "postgres-roles-setup.sh"),
     (Path("access/redis-users.acl.tpl"), CHART_FILES / "redis-users.acl.tpl"),
 )
 

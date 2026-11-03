@@ -1,4 +1,4 @@
-"""Tests for charts/distant-signal/files/postgres-roles-setup.sh.
+"""Tests for access/postgres-roles-setup.sh (the chart's setup Job entrypoint).
 
 The role setup Job's entrypoint: `wait` polls pg_isready and then
 pg_is_in_recovery(), `run` runs one setup script with psql and retries it
@@ -20,7 +20,7 @@ import time
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "charts/distant-signal/files/postgres-roles-setup.sh"
+SCRIPT = REPO / "access/postgres-roles-setup.sh"
 
 PSQL_STUB = """#!/bin/sh
 for arg; do
