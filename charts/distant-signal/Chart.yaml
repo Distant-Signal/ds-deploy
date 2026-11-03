@@ -25,7 +25,9 @@ type: application
 # 0.5.0: images at ghcr.io/distant-signal/images/<service>; the chart moves to
 #   ghcr.io/distant-signal/charts after the repository transfer (repo split
 #   phase 1). A new base so builds order above the old run counter.
-version: 0.5.0
+# 0.5.1: /public/version takes an image's commit from its build tag
+#   (build.<run>-<commit>), so ds-deploy can pin each image separately.
+version: 0.5.1
 
 # Local-dev fallback ONLY. CI unconditionally overrides this at package
 # time (`helm package --app-version`, see `push-helm-chart`'s own comment
