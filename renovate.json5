@@ -21,10 +21,9 @@
   // renovate/ds-core* branches as the ds-deploy-sync GitHub App. Without
   // this, Renovate would treat those branches as edited by someone else
   // and stop rebasing and automerging them. The number is the App bot
-  // user's id: `gh api '/users/ds-deploy-sync%5Bbot%5D' --jq .id` (runbook
-  // U1: fill it in when the App exists).
+  // user's id: `gh api '/users/ds-deploy-sync%5Bbot%5D' --jq .id`.
   "gitIgnoredAuthors": [
-    "DS_DEPLOY_SYNC_BOT_USER_ID+ds-deploy-sync[bot]@users.noreply.github.com",
+    "352187955+ds-deploy-sync[bot]@users.noreply.github.com",
   ],
 
   "customManagers": [
