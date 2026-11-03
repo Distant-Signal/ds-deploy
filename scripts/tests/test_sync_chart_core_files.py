@@ -53,7 +53,7 @@ class SyncTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.make_root(root)
-            (drifted_source, drifted), (_, missing) = sync.COPIES
+            (drifted_source, drifted), (_, missing), *_ = sync.COPIES
             # A byte of whitespace is drift too: the copy must be exact.
             (root / drifted).write_bytes((root / drifted_source).read_bytes() + b" ")
             (root / missing).unlink()
