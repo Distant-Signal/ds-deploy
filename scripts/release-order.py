@@ -48,18 +48,20 @@ PyYAML is installed), finds every first-party image (an `image` map with a
           safe after core vA.B.C)
      (one line) needs every image's core-version to be at least vA.B.C: no
      pinned image may still be built against a core whose code used what the
-     migration drops. The migrations are crates/ds-store/migrations, the
-     ones the pinned ds-migrate carries in the monorepo, which builds both
-     from one commit.
+     migration drops. The migrations are --migrations: those of the
+     ds-core release the chart pins (scripts/core-checkout.py's checkout),
+     which the pinned ds-migrate carries.
 
 Versions order within a scheme: `vX.Y.Z` by number, and `build.<run>-<sha>`
 (§5.4's image tags) by run. Two schemes don't order, which is a finding:
 the switch from one to the other has to land everywhere at once.
 
---source takes each image's labels from `labels` (this checkout): the pull
-request check. --registry reads them from the registry, from the pinned
-image config (digest, else tag, else --app-version), anonymously as the
-cluster pulls: the check before the chart is pushed. A missing label is a
+--source takes each image's labels from `labels` (this checkout), and
+ds-migrate's from its pinned tag (a ds-core release, labelled with its own
+version): the pull request check. --registry reads them from the
+registry, from the pinned image config (digest, else tag, else
+--app-version), anonymously as the cluster pulls: the check before the
+chart is pushed. A missing label is a
 finding either way.
 
 Findings are `::error::` lines; exit 1 on any, 2 on bad input (unreadable
@@ -238,8 +240,9 @@ def contract_floors(
             match = SAFE_AFTER.search(line)
             version = parse_version(match.group(1)) if match else None
             if version is None or version.scheme != "semver":
+                shown = path.relative_to(root) if path.is_relative_to(root) else path
                 problems.append(
-                    f"::error file={path.relative_to(root)}::its contract header's "
+                    f"::error file={shown}::its contract header's "
                     "`safe after core` is not a vX.Y.Z version"
                 )
                 continue
@@ -490,13 +493,19 @@ def run_check(args: argparse.Namespace, fetch: Fetch = http_fetch) -> int:
         source = image_labels(args.root)
 
         def labels_of(image: Pinned) -> Mapping[str, str]:
+            # ds-migrate isn't built here: Distant-Signal/ds-core's release
+            # vX.Y.Z builds it labelled core-version=vX.Y.Z, so its pinned
+            # tag is its label.
+            if image.service == MIGRATE and image.service not in source:
+                return {CORE: image.tag} if image.tag else {}
             return source.get(image.service, {})
     else:
 
         def labels_of(image: Pinned) -> Mapping[str, str]:
             return with_retries(image.reference(args.app_version), fetch)
 
-    floors, problems = contract_floors(args.root, args.root / MIGRATIONS)
+    migrations = args.migrations or args.root / MIGRATIONS
+    floors, problems = contract_floors(args.root, migrations)
     findings = problems + check(images, labels_of, floors)
     for finding in findings:
         print(finding)
@@ -523,6 +532,13 @@ def main(argv: Sequence[str] | None = None, fetch: Fetch = http_fetch) -> int:
     where.add_argument("--source", action="store_true")
     where.add_argument("--registry", action="store_true")
     checks.add_argument("--app-version", default="")
+    checks.add_argument(
+        "--migrations",
+        type=Path,
+        help="the migrations whose contract headers rule 3 reads (default: "
+        "crates/ds-store/migrations; with ds-core as a git dependency, the "
+        "pinned ds-core checkout's, scripts/core-checkout.py)",
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "labels":
