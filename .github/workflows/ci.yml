@@ -508,10 +508,11 @@ jobs:
       - name: chart copies of the grants and Redis ACL match their sources
         run: uv run --no-sync scripts/sync-chart-core-files.py --check
 
-      # frontend/lib/api-types.ts is a copy of the api's generated
-      # api-types/api.ts (repo split spec §5.3); `cargo test`'s
-      # api_types_are_current checks that one against the Rust types.
-      - name: frontend's api types match api-types/api.ts
+      # frontend/lib/api-types.ts and openapi-v1.json are copies of the api's generated
+      # api-types/api.ts and openapi/v1.json (repo split spec §5.3); `cargo test`'s
+      # api_types_are_current and openapi_document_is_current check those
+      # against the Rust types.
+      - name: frontend's api types and OpenAPI copy match api-types/
         run: uv run --no-sync scripts/sync-api-types.py check
 
       # The personal-token API's OpenAPI document (api-types/openapi/v1.json,
