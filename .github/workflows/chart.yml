@@ -225,7 +225,7 @@ jobs:
     # signatures' certificate identity is Distant-Signal/ci's image.yml,
     # not this file. Only the chart's signature is verified (by Flux); the
     # chart is still signed here, in push-helm-chart.
-    uses: Distant-Signal/ci/.github/workflows/image.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/image.yml@f68c7866d1119c89d4faf647a49f5c431ad63c45 # main
     with:
       service: ${{ matrix.service }}
       dockerfile: ${{ matrix.dockerfile }}
@@ -701,7 +701,7 @@ jobs:
       # action runs in this job, so the certificate identity stays this
       # workflow's, which Flux's matchOIDCIdentity pins.
       - name: Sign and verify the pushed chart
-        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+        uses: Distant-Signal/ci/actions/cosign-sign@f68c7866d1119c89d4faf647a49f5c431ad63c45 # main
         with:
           ref: ${{ env.CHART_BASE }}/distant-signal@${{ steps.push.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
@@ -739,7 +739,7 @@ jobs:
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Sign and verify the pushed chart (ds-ingest-bucket)
-        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+        uses: Distant-Signal/ci/actions/cosign-sign@f68c7866d1119c89d4faf647a49f5c431ad63c45 # main
         with:
           ref: ${{ env.CHART_BASE }}/ds-ingest-bucket@${{ steps.push-ingest-bucket.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
