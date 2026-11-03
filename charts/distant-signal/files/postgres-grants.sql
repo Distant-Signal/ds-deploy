@@ -672,6 +672,8 @@ BEGIN
         ('personal_api_tokens', 'api', 'INSERT', ''),
         ('personal_api_tokens', 'api', 'UPDATE', ''),
         ('personal_api_tokens', 'api', 'DELETE', ''),
+        ('personal_api_tokens', 'notifier', 'SELECT', 'id,user_id,name,created_at,revoked_at,push_notified_at'),
+        ('personal_api_tokens', 'notifier', 'UPDATE', 'push_notified_at'),
         ('journey_follows', 'api', 'SELECT', ''),
         ('journey_follows', 'api', 'INSERT', ''),
         ('journey_follows', 'api', 'UPDATE', ''),
