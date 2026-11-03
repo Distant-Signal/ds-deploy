@@ -203,7 +203,7 @@ minute failing for six hours.
 
 A 503 with `{"error":"service_unavailable"}` means a route could not reach
 the database (or Redis, or the IdP), see the 2026-10-06 entry in
-[the API changelog](api-changelog.md); a 500 is anything else.
+[the API changelog](https://github.com/Distant-Signal/distant-signal/blob/main/docs/api-changelog.md); a 500 is anything else.
 
 1. Check [DistantSignalApiDatabaseDown](#distantsignalapidatabasedown) and
    [DistantSignalPostgresDown](#distantsignalpostgresdown) first.
@@ -298,7 +298,7 @@ are trimmed before the group reads them (a stream gap).
 2. Check [DistantSignalDirectWritesFailing](#distantsignaldirectwritesfailing)
    and [DistantSignalPostgresDown](#distantsignalpostgresdown).
 
-Design: [movement-relay design](superpowers/specs/2026-09-04-movement-relay-design.md).
+Design: [movement-relay design](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-09-04-movement-relay-design.md).
 
 ### DistantSignalMovementLagCritical
 
@@ -332,7 +332,7 @@ usually preceded by `DistantSignalMovementLagCritical`.
 A consumer group moved records to `movement-events-deadletter`
 (`movement_feed_deadlettered_total{group,reason}`). This should stay at 0.
 Inspect the records, then re-inject or delete them:
-[movement-events-deadletter](movement-events-deadletter.md).
+[movement-events-deadletter](https://github.com/Distant-Signal/distant-signal/blob/main/docs/movement-events-deadletter.md).
 
 ### DistantSignalDeadLetterNearFull
 
@@ -340,14 +340,14 @@ The dead-letter stream holds more than `deadLetter.nearFullRatio` of its
 10,000-record cap (`movement_relay_deadletter_length`, falling back to the
 consumers' `movement_feed_deadletter_length`). It is never trimmed by count;
 once full, new poison records stay pending in their group instead. Drain it:
-[movement-events-deadletter](movement-events-deadletter.md#capacity-never-trimmed-by-count).
+[movement-events-deadletter](https://github.com/Distant-Signal/distant-signal/blob/main/docs/movement-events-deadletter.md#capacity-never-trimmed-by-count).
 
 ### DistantSignalDeadLetterFull
 
 A consumer tried to dead-letter records but the stream is at its cap
 (`movement_feed_deadletter_full_total`). Those records stay pending and are
 retried forever until the stream is drained:
-[movement-events-deadletter](movement-events-deadletter.md#deleting).
+[movement-events-deadletter](https://github.com/Distant-Signal/distant-signal/blob/main/docs/movement-events-deadletter.md#deleting).
 
 ### DistantSignalMovementRelayPublishFailing
 
@@ -364,7 +364,7 @@ restarts it. Kafka holds the backlog only for as long as the topic retains it.
 - `NOAUTH`: the Redis password changed.
 - Redis down: check its pod.
 
-Design: [Redis message queue evaluation](superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md).
+Design: [Redis message queue evaluation](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md).
 
 ### DistantSignalRedisPersistenceFailing
 
@@ -400,7 +400,7 @@ within `deadLetterExpiring.warnBeforeTrimSecs` of
 `movementRelay.deadLetterMaxAgeSecs`, after which movement-relay deletes it
 (the TRUST 1-day retention safeguard). Re-inject it, or deliberately discard
 it, before then:
-[movement-events-deadletter](movement-events-deadletter.md#retention-deleted-after-24-hours).
+[movement-events-deadletter](https://github.com/Distant-Signal/distant-signal/blob/main/docs/movement-events-deadletter.md#retention-deleted-after-24-hours).
 
 ### DistantSignalMovementFeedLongPending
 
@@ -408,7 +408,7 @@ A group re-read entries already delivered more than 240 times
 (`movement_feed_long_pending_total{group}`). They are retried forever and
 never dead-lettered: a long downstream outage, or a failure the consumer
 cannot classify as a data rejection. See
-[long-pending entries](movement-events-deadletter.md#long-pending-entries),
+[long-pending entries](https://github.com/Distant-Signal/distant-signal/blob/main/docs/movement-events-deadletter.md#long-pending-entries),
 and act before the stream cap trims them.
 
 ### DistantSignalTrustEnvelopeParseDrops
@@ -418,7 +418,7 @@ A consumer dropped TRUST envelopes whose body did not match the known shape
 `distant_signal:trust_envelope_parse_drops:increase`). A steady rate for one
 `msg_type` means the feed's schema changed, which otherwise looks like trains
 no longer moving. See
-[envelope parse drops](movement-events-deadletter.md#envelope-parse-drops).
+[envelope parse drops](https://github.com/Distant-Signal/distant-signal/blob/main/docs/movement-events-deadletter.md#envelope-parse-drops).
 
 ## enricher
 
@@ -434,7 +434,7 @@ and rate limits, and enricher's logs. The `outcome` label narrows it down:
 billing limit (top it up; no retry helps), and `refused` means the model
 declined the text on safety grounds. Failure log lines carry the
 provider's `request_id` where it sends one (OpenAI does); see
-[enricher-openai.md](enricher-openai.md). With keyless auth
+[enricher-openai.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-openai.md). With keyless auth
 (`enricher.llm.auth`), `auth_error` means no access token could be minted
 (see DistantSignalEnricherTokenExchangeFailing below) and `unauthorized`
 means OpenAI answered 401 even to a freshly exchanged token: check that the
@@ -475,14 +475,14 @@ The `outcome` label of `enricher_llm_token_exchange_total` and enricher's
   `match_subject_prefix`, `jti_reused`, `workspace_id_required`, an `iss`
   mismatch) is only on the Claude Console's Workload identity →
   authentication history page. See
-  [enricher-anthropic.md](enricher-anthropic.md#troubleshooting-keyless-auth).
+  [enricher-anthropic.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-anthropic.md#troubleshooting-keyless-auth).
   The projected token for this mode is in the `llm-identity-token` volume.
 - `timeout`, `error`, `http_error`: the endpoint is unreachable or failing
   (NetworkPolicy egress, DNS, an Authentik, OpenAI or Claude outage).
 
 The checklist and rotation runbook are in
-[enricher-openai.md](enricher-openai.md#keyless-auth-workload-identity-federation)
-(OpenAI) and [enricher-anthropic.md](enricher-anthropic.md#keyless-auth)
+[enricher-openai.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-openai.md#keyless-auth-workload-identity-federation)
+(OpenAI) and [enricher-anthropic.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-anthropic.md#keyless-auth)
 (Claude).
 To switch from Authentik to the fallback, follow "Switching to the fallback"
 there.
@@ -491,8 +491,8 @@ there.
 
 Only rendered in batch mode (`enricher.llm.batch.sweepMode: batch`, or
 `enricher.llm.batch.mode` `batch`/`batch-only`;
-[enricher-anthropic.md](enricher-anthropic.md#batch-mode) for Claude,
-[enricher-openai.md](enricher-openai.md#batch-mode) for OpenAI; the
+[enricher-anthropic.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-anthropic.md#batch-mode) for Claude,
+[enricher-openai.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-openai.md#batch-mode) for OpenAI; the
 metrics' `provider` label says which). At least
 `enricherBatches.minFailures` batches failed to submit or were
 abandoned over the window
@@ -604,7 +604,7 @@ this keeps firing even with a fresh token at submission, OpenAI's queue is
 outlasting a whole token lifetime: set `enricher.llm.batch.sweepMode: sync`
 (or `mode: normal` from `batch`/`batch-only`) until it clears, or use an API
 key (its batches don't depend on a short-lived token). See
-[enricher-openai.md](enricher-openai.md#batch-mode).
+[enricher-openai.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-openai.md#batch-mode).
 
 ### DistantSignalEnricherBatchFileCleanupFailing
 
@@ -621,7 +621,7 @@ API is failing. To delete by hand: `DELETE /v1/files/<id>`.
 
 ## full-coverage windows
 
-Design: [windowed full-coverage stats](superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md).
+Design: [windowed full-coverage stats](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md).
 
 ### DistantSignalFullCoverageWindowFeedStale
 
@@ -663,7 +663,7 @@ The notifier dropped decided notifications
   `notifier_push_send_total` by `outcome`.
 - `error`: the notifier could not load subscriptions; check the database.
 
-Design: [line-status notifications](superpowers/specs/2026-09-02-line-status-notifications-design.md#delivery-guarantee-at-most-once).
+Design: [line-status notifications](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-09-02-line-status-notifications-design.md#delivery-guarantee-at-most-once).
 
 ### DistantSignalNotifierForwardQueueRetentionOverdue
 
@@ -741,7 +741,7 @@ sweeps catch up when it is back.
    writer cannot be fixed quickly, set `API_BACKGROUND_LOOPS=true` on the
    api (the advisory locks keep the two from sweeping at once).
 
-Design: [ingest architecture](superpowers/specs/2026-10-06-ingest-architecture-design.md#10-the-ingest-writer).
+Design: [ingest architecture](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-10-06-ingest-architecture-design.md#10-the-ingest-writer).
 
 ### DistantSignalTrainEventOutboxRejected
 
@@ -931,7 +931,7 @@ the work) is not a failure. Recorded as
 
 There is no HTTP path to fall back to since release B (ingest phase 5):
 fix the write, or roll back to the previous chart release and images
-([runbook](ingest-phase5-runbook.md)).
+([runbook](https://github.com/Distant-Signal/distant-signal/blob/main/docs/ingest-phase5-runbook.md)).
 
 ## ingest streams
 
@@ -942,7 +942,7 @@ metrics are `crates/ingest-stream`'s (`src/metrics.rs`, labelled `stream`).
 These alerts render with `ingestWriter.enabled` and their
 `metrics.prometheusRule.ingest*` toggles, and stay silent until a stream is
 on: their series do not exist before. Dead letters, inspection and
-re-injection: [ingest-streams-deadletter](ingest-streams-deadletter.md).
+re-injection: [ingest-streams-deadletter](https://github.com/Distant-Signal/distant-signal/blob/main/docs/ingest-streams-deadletter.md).
 
 The usual first steps: the writer's log (`kubectl -n distant-signal logs
 deploy/distant-signal-ingest-writer`), filtered on the stream; and the
@@ -1005,7 +1005,7 @@ the whole entry: an unknown schema name, or a data error), `undecodable`
 (a broken envelope or body), `oversize` (a body over 1 MiB),
 `rejected_rows` (the entry was applied, but some rows were refused and only
 those were dead-lettered). This should stay at 0. Inspect, fix, re-inject
-or delete: [ingest-streams-deadletter](ingest-streams-deadletter.md).
+or delete: [ingest-streams-deadletter](https://github.com/Distant-Signal/distant-signal/blob/main/docs/ingest-streams-deadletter.md).
 
 ### DistantSignalIngestDeadLetterExpiring
 
@@ -1013,7 +1013,7 @@ A dead-letter stream's oldest entry (`ingest_stream_dlq_oldest_age_seconds`)
 is within `ingestDeadLetterExpiring.warnBeforeSecs` (4 h) of
 `retentionSecs` (7 days), after which the writer's hourly `MINID` trim
 deletes it. Re-inject it or decide it can go, before then:
-[ingest-streams-deadletter](ingest-streams-deadletter.md#retention).
+[ingest-streams-deadletter](https://github.com/Distant-Signal/distant-signal/blob/main/docs/ingest-streams-deadletter.md#retention).
 
 ### DistantSignalIngestUnsupportedSchema
 
@@ -1060,7 +1060,7 @@ The ingest streams and their dead-letter streams together use over
 dead-letter stream). Every stream at its cap is about 426 MB worst case, so a breach means a cap or an entry size is larger than budgeted
 (`crates/ingest-stream/src/budget.rs`). Look at the per-stream values, then
 fix the backlog or drain dead letters
-([ingest-streams-deadletter](ingest-streams-deadletter.md)). Redis's
+([ingest-streams-deadletter](https://github.com/Distant-Signal/distant-signal/blob/main/docs/ingest-streams-deadletter.md)). Redis's
 `maxmemory` is shared with movement-events: at it, every XADD fails with
 OOM.
 
@@ -1086,11 +1086,11 @@ Discord account through Authentik's Discord source), so a burst is real growth
 or scripted sign-ups (spam, abuse of `/chat` or the MCP). Look at the newest
 rows in `users` and the IdP's enrolment log. To stop it, restrict the IdP's
 enrolment (e.g. bind the application to a group), then revoke the unwanted
-sessions: [session revocation](session-revocation.md).
+sessions: [session revocation](https://github.com/Distant-Signal/distant-signal/blob/main/docs/session-revocation.md).
 
 ## cold archive
 
-Details: [cold archive](cold-archive.md).
+Details: [cold archive](https://github.com/Distant-Signal/distant-signal/blob/main/docs/cold-archive.md).
 
 ### DistantSignalArchiveUploadFailures
 
@@ -1167,7 +1167,7 @@ Cold-archive expiry hit errors (`aggregator_archive_expiry_errors_total{stage}`)
 a failed LIST or DELETE, or a key refused by the pre-delete check. Expired
 objects stay until a run succeeds. Check the object store and the
 aggregator's "archive expiry" logs. See
-[object expiry](cold-archive.md#object-expiry).
+[object expiry](https://github.com/Distant-Signal/distant-signal/blob/main/docs/cold-archive.md#object-expiry).
 
 ### DistantSignalArchiveExpiryUnmatchedKeys
 
@@ -1562,7 +1562,7 @@ listed)" inference to no incidents snapshot, and skipped at least one as
 an incident that leaves the Knowledgebase feed without RDM clearing it stays
 "active" on the archive and in line status, the bug the inference exists to
 fix. See
-[the design](superpowers/specs/2026-10-06-incident-source-removal-design.md).
+[the design](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-10-06-incident-source-removal-design.md).
 
 - `incomplete`: poller-incidents skipped malformed `<PtIncident>` elements
   (its "skipping malformed" warnings and
@@ -1633,7 +1633,7 @@ disruptions are kept but show on no line (only at network level). Add
 `crates/poller-transit-schedule/networks/<network>.toml` and release.
 
 Both transit alerts: the rollout, rollback and recovery steps are in
-[transit-networks.md](transit-networks.md).
+[transit-networks.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/transit-networks.md).
 
 ### DistantSignalTflRoutesMissing
 

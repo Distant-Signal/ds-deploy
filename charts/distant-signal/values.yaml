@@ -32,25 +32,25 @@ global:
   # `image.repository` are kept, everything before them is replaced).
   # Leave empty to use every `image.repository` exactly as written --
   # this project's own images already default to the real
-  # `ghcr.io/distant-signal/images/<service>` path
-  # `.github/workflows/containers.yml` publishes to, so no override is
-  # needed for a plain `helm install` to work. The published chart's
-  # defaults are re-pointed at packaging time to wherever that run pushed,
-  # `ghcr.io/<repository owner>/images/<service>`, so they follow
-  # the repository's owner.
+  # `ghcr.io/distant-signal/images/<service>` path every Distant Signal
+  # repository publishes to (repo split spec §5.9), so no override is
+  # needed for a plain `helm install` to work.
   imageRegistry: ""
 
 # The source the images were built from, for the api's `/public/version`
 # (AGPL-3.0 §13: users reach the source of what is deployed over the
 # network). The api lists every first-party image this release runs with
 # this url and revision, from a ConfigMap it reads per request, so a new
-# revision doesn't restart it (`distant-signal.sourceImagesJson`).
+# revision doesn't restart it (`distant-signal.sourceImagesJson`). An image
+# pinned at a build tag, `build.<run id>-<commit>` (every first-party
+# service image here), lists that tag's commit instead of `revision`.
 sourceCode:
-  # -- Repository the images were built from. containers.yml's
-  # push-helm-chart sets it to the building repository at package time.
+  # -- Repository the images are built from. Every first-party service
+  # image is built in the landing repository until its service is extracted
+  # (repo split phases 6 to 9).
   url: "https://github.com/Distant-Signal/distant-signal"
-  # -- Commit the images were built from. Empty outside CI;
-  # push-helm-chart sets it to the packaged commit.
+  # -- Commit for an image whose tag is not a build tag. Empty: every
+  # first-party service image here is pinned at a build tag.
   revision: ""
 
 serviceAccount:
@@ -1094,10 +1094,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-incidents
-      tag: ""
+      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: ""
+      digest: "sha256:f5ae8294752a2ac0e23441e4ae14bf23be43bdc23d99328c395b6e302ba8723c"
       pullPolicy: IfNotPresent
     # -- RDM Knowledgebase Incidents feed base URL. Required when enabled.
     baseUrl: ""
@@ -1153,10 +1153,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-stations
-      tag: ""
+      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: ""
+      digest: "sha256:ae4091feba7d584f5acfc33482b4bf72162173ed1d8046cdc968c82be1f0c5ee"
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_STATIONS_BASE_URL
@@ -1255,10 +1255,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-tfl
-      tag: ""
+      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: ""
+      digest: "sha256:8c70492a19fb254fe47e1c7690826170607aab211bbfc002122fb494f2e4ffc5"
       pullPolicy: IfNotPresent
     # -- TfL Unified API root. Unlike the RDM feeds this is a real, public,
     # documented endpoint, so it has a working default rather than "".
@@ -1387,10 +1387,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-tocs
-      tag: ""
+      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: ""
+      digest: "sha256:c1a7f76f23fb1ee62f6429405d8ebd5ef8b22559bd814aeac24763ff14a03d77"
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_TOCS_BASE_URL
@@ -1471,10 +1471,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-ldbws
-      tag: ""
+      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: ""
+      digest: "sha256:cfbccc2bdaf25019f60873149be621f009f2327aebbb47a063ac3c5cccec7127"
       pullPolicy: IfNotPresent
     # -- LDBWS base URL up to and including the /LDBWS/api/20220120 segment;
     # the binary appends /GetDepBoardWithDetails/{crs} itself.
@@ -1607,30 +1607,23 @@ pollers:
 api:
   image:
     repository: ghcr.io/distant-signal/images/api
-    # -- Empty means "use the chart's appVersion".
-    tag: ""
-    # -- Exact content digest (e.g. sha256:<64 hex chars>) of the image CI
-    # just built and pushed for this run, e.g.
-    # `sha256:1234...abcd`. Empty by default. When set,
-    # `distant-signal.image` (templates/_helpers.tpl) renders
+    # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
+    # Renovate's ds-images group (renovate.json5). Empty means "use the
+    # chart's appVersion".
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
+    # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
     # `repo:tag@digest` is valid OCI syntax, but the digest silently wins on
     # pull anyway, so rendering the tag alongside it would just be
     # misleading. A digest is the only fully immutable image reference (a
-    # tag, even the `sha-<short-sha>` one this chart's appVersion normally
-    # resolves to, can in principle be re-pushed to point at different
-    # content; `repo@sha256:...` cannot). `.github/workflows/containers.yml`'s
-    # `push-helm-chart` job populates this for every first-party image from
-    # that same run's own `docker/build-push-action` digest output, plumbed
-    # via per-service artifacts (see that job's own comment) -- see that
-    # job's comment for what happens when a digest is legitimately missing
-    # (e.g. a re-run of just that job without a fresh image build): it falls
-    # back cleanly to this same tag/appVersion behavior rather than baking a
-    # broken `@` reference into the packaged chart. Left empty here (and in
-    # every other first-party service's `image.digest` below) as the
-    # human-facing default -- nothing in this chart or a plain `helm
-    # install`/`helm template` run ever sets it for you.
-    digest: ""
+    # tag can in principle be re-pushed to point at different content;
+    # `repo@sha256:...` cannot). Every first-party image's tag and digest
+    # are committed here and bumped together by Renovate's grouped PRs
+    # (repo split spec §5.4): ds-images for the services, ds-core for
+    # ds-migrate. To hold one service back, revert its tag and digest in a
+    # PR. Empty falls back to tag/appVersion.
+    digest: "sha256:693795432af5ee27985ceb1faf0840fbb2e70256e1ecdc5fa132320f71830581"
     pullPolicy: IfNotPresent
   # -- Replicas. >1 does not corrupt anything: crates/api/src/main.rs runs
   # sqlx::migrate!() in process at startup, and sqlx's Migrator takes a
@@ -2370,12 +2363,13 @@ migrate:
   image:
     repository: ghcr.io/distant-signal/images/ds-migrate
     # -- The ds-core release (`vX.Y.Z`): always the version in the
-    # repository's `core-version` file and Cargo.toml's ds-core tags, so the
-    # Job applies exactly the schema and grants the services were built
-    # against. Renovate's ds-core group bumps all three together.
+    # repository's `core-version` file (scripts/sync-core.py fails when they
+    # differ), so the Job applies exactly the schema and grants the chart
+    # vendors; release-order.py checks every pinned image was built against
+    # at most this release. Renovate's ds-core group bumps both, with the
+    # digest.
     tag: v0.1.0
-    # -- The release's digest (its release notes list it). Pinned here, not
-    # by containers.yml, which no longer builds this image.
+    # -- The release's digest (its release notes list it).
     digest: "sha256:8692781cb26763c3d3a3ce00e7bd8b3ead07410a24e7e04a1d04914a7d5961b2"
     pullPolicy: IfNotPresent
   job:
@@ -2514,10 +2508,10 @@ ingestWriter:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/ingest-writer
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:0f6eb8ab9f03383981ec3b272e2200794aa8ef4f2d48775aa02d78ca9e04af74"
     pullPolicy: IfNotPresent
   loops:
     # -- Run the train-domain loops (INGEST_WRITER_LOOPS): schedule-match,
@@ -2744,10 +2738,10 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:b2f82dec00c4b1166062f3d46d8b94b1e6dff7f85a96eb3142d6f65a5aa6e5c4"
     pullPolicy: IfNotPresent
   # -- DESIGN.md section 4 targets every 30-60s; 60 is the conservative end.
   pollIntervalSecs: 60
@@ -3012,10 +3006,10 @@ notifier:
   progressStallSecs: 900
   image:
     repository: ghcr.io/distant-signal/images/notifier
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:3fcf79212772d01f19b8bbaf36c00cc7ae128f12882503ab6772243feafaaf5e"
     pullPolicy: IfNotPresent
   # -- Same "reasonable round number, not load-tested" posture as
   # aggregator.pollIntervalSecs.
@@ -3542,10 +3536,10 @@ enricher:
     type: Recreate
   image:
     repository: ghcr.io/distant-signal/images/enricher
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:e0fd4cbddaeab5da4c9b43f955d37755ebee0e866103160f71a19c81a96c7e60"
     pullPolicy: IfNotPresent
   llm:
     # -- LLM_PROVIDER: `openai` (the default) is any OpenAI-compatible Chat
@@ -3833,10 +3827,10 @@ enricher:
 trustConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-consumer
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:b33e14427e9b0f70e21fe9d21b29468bca9bbc13ceab84fb33c087da2a0e9b54"
     pullPolicy: IfNotPresent
   kafka:
     # -- RDM Train Movements broker address(es), for movement-relay.
@@ -3977,10 +3971,10 @@ trustConsumer:
 fullCoverageConsumer:
   image:
     repository: ghcr.io/distant-signal/images/full-coverage-consumer
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:e20e57c8152894adcafcdb122771302e664f3ec64cffd062335c5afd6617dfd3"
     pullPolicy: IfNotPresent
   # -- Decision 4: comma-separated line ids to shadow-compute, or "*" for
   # every catalogued line with at least one tiploc. Does NOT gate whether
@@ -4105,10 +4099,10 @@ fullCoverageConsumer:
 trustBacklogConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-backlog-consumer
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:68e485225f1a200f44d29288b6570aa570d1dfe60db2900e4846eb19e3af20cb"
     pullPolicy: IfNotPresent
   # Ingest architecture plan 3b.1 (spec R1): each batch's backlog events
   # and reason codes are written to Postgres directly, XACKing
@@ -4210,10 +4204,10 @@ movementRelay:
   enabled: true
   image:
     repository: ghcr.io/distant-signal/images/movement-relay
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:cc5260b07e448b24c4fab3b55f0f998708cebb9c4f7fa59441d2be99d94cb186"
     pullPolicy: IfNotPresent
   kafka:
     # -- Kafka broker address(es). Empty: trustConsumer.kafka.brokers.
@@ -4326,9 +4320,9 @@ darwinRelay:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/darwin-relay
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override (see api.image.digest).
-    digest: ""
+    digest: "sha256:181d41e76317c8da67bd11c5732aa18a716d1bec3c334135197121b7c597ee11"
     pullPolicy: IfNotPresent
   kafka:
     # -- The Secret with the Push Port's Kafka connection, one key per
@@ -4409,10 +4403,10 @@ pollerIrishRailGtfs:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/poller-irish-rail-gtfs
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:db3484f1b0bf55eeb0838ee2ad84ec8b9e7d2364131285d3383c14f32259ca87"
     pullPolicy: IfNotPresent
   # -- Transport for Ireland's public GTFS zip for Iarnrod Eireann -- real,
   # key-free, confirmed reachable directly
@@ -4469,10 +4463,10 @@ pollerIrishRailLive:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/poller-irish-rail-live
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:a1f5fdf073a898ddfc6420b8fd1b6b31f3491a86d6218b7a4fa5f73e631b4a13"
     pullPolicy: IfNotPresent
   # -- api.irishrail.ie's legacy realtime ASMX service root -- real,
   # key-free, confirmed reachable directly
@@ -4524,10 +4518,10 @@ pollerNirStations:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/poller-nir-stations
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:4bc4e42d0e98939ed1e33da6a6fe32d47c2a76a1a3e5aa266d3c0bcbea2a59ec"
     pullPolicy: IfNotPresent
   # -- OpenDataNI's own CKAN download URLs for Translink's "Northern
   # Ireland Railways Stations"/"...Halts" CSVs -- real, key-free, confirmed
@@ -4573,10 +4567,10 @@ pollerNirStations:
 pollerTransitSchedule:
   image:
     repository: ghcr.io/distant-signal/images/poller-transit-schedule
-    # -- Empty means "use the chart's appVersion".
-    tag: ""
+    # -- Build tag; see api.image.tag. Empty means "use the chart's appVersion".
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above.
-    digest: ""
+    digest: "sha256:399a44358c779a77caf1e9fa94dda3f330cde34d3bf3382faa628f147b01170a"
     pullPolicy: IfNotPresent
   # -- /livez stall window (see workerHealth): one GTFS download (159 MB on
   # 2026-10-14), its parse and the produce.
@@ -5185,10 +5179,10 @@ scheduleFeed:
     progressStallSecs: 1800
     image:
       repository: ghcr.io/distant-signal/images/schedule-ingest
-      tag: ""
+      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: ""
+      digest: "sha256:a33531ac69fce6d6f4feceebd4d775e820715597227f06e19e1944fc5de744cc"
       pullPolicy: IfNotPresent
     checkTimes: "22:00,22:30,23:00,23:30,00:00,00:30,01:00,01:30,16:00"
     # -- Seconds between watch_dir scans. Replaces checkTimes as the thing
@@ -5448,10 +5442,10 @@ scheduleFeed:
     progressStallSecs: 7200
     image:
       repository: ghcr.io/distant-signal/images/schedule-reference
-      tag: ""
+      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: ""
+      digest: "sha256:4f69ffae14762e25b022bde007d2c7447e61989bfc684ead3cfdefd096b6264b"
       pullPolicy: IfNotPresent
     pollIntervalSecs: 1800
     # -- How it runs (docs/scheduled-jobs.md, "schedule-reference"):
@@ -5734,10 +5728,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: ""
+    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: ""
+    digest: "sha256:c6e8de26e2c378d3fea750bf3b2fa87155291b207e5ada93759b61bd31ca495d"
     pullPolicy: IfNotPresent
   # -- Safe to raise, with one documented caveat. frontend/lib/liveDataCache.ts
   # keeps a process-local stale-data cache so a backend outage shows the
@@ -5946,9 +5940,8 @@ metrics:
     # to its `severity`.
     ruleLabels: {}
     # Prefix for each alert's runbook_url; the repo-relative doc path is
-    # appended. The published chart's default is set at packaging time to
-    # the building repository's `<url>/blob/main` (containers.yml).
-    runbookBaseUrl: https://github.com/Distant-Signal/distant-signal/blob/main
+    # appended. docs/alerts.md lives in ds-deploy, with the chart.
+    runbookBaseUrl: https://github.com/Distant-Signal/ds-deploy/blob/main
     # pgBackRest alerts, rendered as a separate `<fullname>-pgbackrest`
     # PrometheusRule and only while postgresql.pgbackrest.enabled is also
     # true. Runbook: docs/postgres-pitr.md.

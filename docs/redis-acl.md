@@ -15,10 +15,11 @@ commands it needs on its own keys, and `default` is turned off.
 
 ## The users
 
-Defined in `access/redis-users.acl.tpl` (its header explains the format).
-The chart reads a generated copy, `charts/distant-signal/files/redis-users.acl.tpl`:
-after editing the source, run `uv run scripts/sync-chart-core-files.py` and
-commit both (CI fails when the copy differs). The kinds:
+Defined in Distant-Signal/ds-core's `access/redis-users.acl.tpl` (its
+header explains the format). The chart reads a vendored copy,
+`charts/distant-signal/files/redis-users.acl.tpl`, which
+`uv run scripts/sync-core.py` writes from the ds-core release
+`core-version` names (CI fails when the copy differs). The kinds:
 
 - **client**: an existing client. Stage `open`: `~* &* +@all`, today's
   rights. Stage `narrow`: its own rights.
@@ -113,7 +114,7 @@ client is on, so merging it changes nothing that renders
 (`scripts/check-ingest-phase0-chart.py` checks this).
 
 To turn one on (the transit networks' rollout, transit spec §15.1, and
-[transit-networks.md](transit-networks.md), its runbook):
+[transit-networks.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/transit-networks.md), its runbook):
 
 1. Add `<user>-password` to the users Secret (the SealedSecret in
    Ranma-Config), letters and digits only.

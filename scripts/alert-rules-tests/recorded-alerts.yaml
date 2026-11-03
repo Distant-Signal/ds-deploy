@@ -30,12 +30,12 @@ tests:
             exp_annotations:
               summary: trust-consumer is 30% of the movement-events cap behind
               description: "Unread plus un-ACKed entries are over 0.25 of MAXLEN; at the cap they are trimmed unread. Check the consumer and api."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalmovementlaghigh
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementlaghigh
           - exp_labels: {severity: warning, namespace: distant-signal, group: trust-backlog-consumer}
             exp_annotations:
               summary: trust-backlog-consumer is 60% of the movement-events cap behind
               description: "Unread plus un-ACKed entries are over 0.25 of MAXLEN; at the cap they are trimmed unread. Check the consumer and api."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalmovementlaghigh
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementlaghigh
       - eval_time: 15m
         alertname: DistantSignalMovementLagCritical
         exp_alerts:
@@ -43,7 +43,7 @@ tests:
             exp_annotations:
               summary: trust-backlog-consumer is 60% of the movement-events cap behind
               description: "Over 0.5 of MAXLEN: a stream gap (data loss) is close. Fix the consumer, or raise streamMaxLen and Redis maxmemory."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalmovementlagcritical
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementlagcritical
 
   # Without the relay's maxlen gauge, movementRelay.streamMaxLen (1048576)
   # stands in.
@@ -59,7 +59,7 @@ tests:
             exp_annotations:
               summary: trust-consumer is 57.22% of the movement-events cap behind
               description: "Over 0.5 of MAXLEN: a stream gap (data loss) is close. Fix the consumer, or raise streamMaxLen and Redis maxmemory."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalmovementlagcritical
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementlagcritical
 
   # Lag rising 300 entries a minute: past 5000 net over 30m, then 10m `for`.
   - interval: 1m
@@ -79,7 +79,7 @@ tests:
             exp_annotations:
               summary: trust-consumer movement-events lag keeps growing
               description: "Lag rose over 5000 entries net in 30m: the group consumes slower than movement-relay publishes."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalmovementlaggrowing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementlaggrowing
 
   # A stream gap, a recreated group (consumer and relay), parse drops.
   - interval: 1m
@@ -109,7 +109,7 @@ tests:
             exp_annotations:
               summary: trust_consumer lost movement-events entries (stream gap)
               description: "Entries were trimmed before it read them in the last 1h. Treat that rail day's derived data as partial."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalstreamgap
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalstreamgap
       - eval_time: 25m
         alertname: DistantSignalMovementGroupRecreated
         exp_alerts:
@@ -117,12 +117,12 @@ tests:
             exp_annotations:
               summary: movement-events group full-coverage-consumer was recreated
               description: "Its group went missing (NOGROUP) in the last 1h: Redis lost data or it was deleted. Treat that rail day as partial."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalmovementgrouprecreated
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementgrouprecreated
           - exp_labels: {severity: warning, namespace: distant-signal, group: (all)}
             exp_annotations:
               summary: movement-events group (all) was recreated
               description: "Its group went missing (NOGROUP) in the last 1h: Redis lost data or it was deleted. Treat that rail day as partial."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalmovementgrouprecreated
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementgrouprecreated
       - eval_time: 25m
         alertname: DistantSignalTrustEnvelopeParseDrops
         exp_alerts:
@@ -130,7 +130,7 @@ tests:
             exp_annotations:
               summary: trust-consumer dropped bad TRUST 0003 envelopes
               description: "2 in 1h did not match the known shape. A steady rate means the feed's schema changed."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignaltrustenvelopeparsedrops
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignaltrustenvelopeparsedrops
 
   # movement-relay: every XADD failing and nothing published, including a
   # relay that restarted into the failure (no published series at all).
@@ -151,7 +151,7 @@ tests:
             exp_annotations:
               summary: movement-relay cannot publish to movement-events
               description: "Every XADD failed for 10m: TRUST ingestion is stopped. Check Redis (OOM, AOF, auth) and the relay's logs."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalmovementrelaypublishfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementrelaypublishfailing
   - interval: 1m
     input_series:
       - series: 'distant_signal_movement_relay_errors_total{namespace="distant-signal", pod="relay2", operation="redis_oom"}'
@@ -164,7 +164,7 @@ tests:
             exp_annotations:
               summary: movement-relay cannot publish to movement-events
               description: "Every XADD failed for 10m: TRUST ingestion is stopped. Check Redis (OOM, AOF, auth) and the relay's logs."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalmovementrelaypublishfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementrelaypublishfailing
 
   # Redis AOF: a failed rewrite fires; all-ok does not.
   - interval: 1m
@@ -186,7 +186,7 @@ tests:
             exp_annotations:
               summary: Redis AOF persistence is failing
               description: "A failed AOF write makes Redis refuse writes, a failed rewrite fills the disk, and AOF off loses the streams on restart."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalredispersistencefailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalredispersistencefailing
   - interval: 1m
     input_series:
       - series: 'distant_signal_redis_aof_last_write_ok{namespace="distant-signal", pod="relay"}'
@@ -203,7 +203,7 @@ tests:
             exp_annotations:
               summary: Redis AOF persistence is failing
               description: "A failed AOF write makes Redis refuse writes, a failed rewrite fills the disk, and AOF off loses the streams on restart."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalredispersistencefailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalredispersistencefailing
 
   # Enricher: over half failing with at least 3 failures, for 15m.
   - interval: 1m
@@ -227,7 +227,7 @@ tests:
             exp_annotations:
               summary: enricher LLM summarise calls failing (66.67%)
               description: "Over 0.5 of calls failed in 30m (at least 3). Check enricher.llm.baseUrl and enricher's logs."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalenrichererrors
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalenrichererrors
 
   # Container memory over 0.8 of its limit for 10m; pods outside this
   # release are ignored.
@@ -249,7 +249,7 @@ tests:
             exp_annotations:
               summary: distant-signal-api-7f9-x/api at 90% of memory limit
               description: "Over 0.8 of its memory limit for 10m: at risk of an OOMKill. Raise resources.limits.memory or find the growth."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalcomponentmemoryhigh
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalcomponentmemoryhigh
 
   # pgBackRest: a recent failed check Job and a failed full backup Job; an
   # old failed check Job (started over 26h ago) is ignored.
@@ -271,7 +271,7 @@ tests:
             exp_annotations:
               summary: pgBackRest check or verify failed (distant-signal-pgbackrest-check-29000000)
               description: "WAL archiving is broken, verify found a bad file, or WAL is missing (a PITR gap). The Job's log says which."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalpgbackrestcheckfailed
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpgbackrestcheckfailed
       - eval_time: 2h
         alertname: DistantSignalPgBackRestBackupFailed
         exp_alerts:
@@ -279,7 +279,7 @@ tests:
             exp_annotations:
               summary: pgBackRest backup failed (distant-signal-pgbackrest-full-29000001)
               description: "The restore window keeps growing from the last good backup. WAL archiving is separate and may still work."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalpgbackrestbackupfailed
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpgbackrestbackupfailed
       - eval_time: 26h
         alertname: DistantSignalPgBackRestCheckFailed
         exp_alerts: []

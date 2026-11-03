@@ -1,0 +1,98 @@
+name: Sync core
+
+# Re-vendor ds-core's access files on Renovate's ds-core branches (repo
+# split spec §5.1). Renovate's ds-core group bumps core-version and the
+# ds-migrate image, but the hosted Renovate app runs no postUpgradeTasks,
+# so it can't run scripts/sync-core.py itself, and ci.yml's
+# `sync-core.py --check` would keep the PR red. This workflow runs the
+# sync on every push to such a branch and, when the vendored files
+# changed, commits and pushes them back to the same branch. CI then runs
+# on that commit and the PR can automerge when green.
+#
+# The push uses an installation token of the `ds-deploy-sync` GitHub App,
+# not GITHUB_TOKEN: a GITHUB_TOKEN push starts no workflows, so the
+# checks would never run on the new commit. The App:
+#   - is installed on Distant-Signal/ds-deploy only;
+#   - has Contents: read and write and Metadata: read, nothing else;
+#   - is held to renovate/* branches by the repository ruleset "Sync bot:
+#     Renovate branches only" (every branch but renovate/**: creation,
+#     update and deletion restricted; bypass: the Repository admin role
+#     and the Renovate app, not ds-deploy-sync), on top of "Protect main";
+#   - and this job pushes only to the branch it was started on, which the
+#     trigger limits to renovate/ds-core*.
+# Its ID and private key are the repository secrets DS_DEPLOY_SYNC_APP_ID
+# and DS_DEPLOY_SYNC_PRIVATE_KEY. renovate.json5's gitIgnoredAuthors lists
+# its commit email, so Renovate keeps owning (rebasing, automerging) the
+# branch after the bot's commit.
+#
+# Loops: the bot's push starts this workflow again, which finds nothing
+# to change and stops.
+
+on:
+  push:
+    branches:
+      - "renovate/ds-core*"
+
+concurrency:
+  group: sync-core-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: re-vendor ds-core's access files
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Mint the ds-deploy-sync token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DS_DEPLOY_SYNC_APP_ID }}
+          private-key: ${{ secrets.DS_DEPLOY_SYNC_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Checkout the Renovate branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # renovate: datasource=pypi depName=uv
+          version: "0.13.6"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Re-vendor from the core-version release (verified)
+        run: uv run --locked --no-default-groups scripts/sync-core.py
+
+      - name: Commit and push the vendored files
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${BRANCH}" =~ ^renovate/ds-core ]]; then
+            echo "::error::refusing to push to ${BRANCH}" >&2
+            exit 1
+          fi
+          if git diff --quiet; then
+            echo "The vendored files already match core-version's release."
+            exit 0
+          fi
+          user_id="$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)"
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${user_id}+${SLUG}[bot]@users.noreply.github.com"
+          git add -- charts/distant-signal/files scripts/render-redis-acl.py
+          version="$(cat core-version)"
+          git commit -m "Vendor ds-core ${version}'s access files" \
+            -m "scripts/sync-core.py, from the release's signed assets."
+          git push origin "HEAD:refs/heads/${BRANCH}"

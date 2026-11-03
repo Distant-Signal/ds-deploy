@@ -11,7 +11,7 @@ It doesn't replace the nightly age-encrypted `pg_dump` (Ranma-Config's
 pgBackRest, portable across Postgres versions, and encrypted to a key that
 never touches the cluster.
 
-- Design: [the backup design](superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md), item 1.
+- Design: [the backup design](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md), item 1.
 - Chart: `postgresql.pgbackrest.*` and `metrics.prometheusRule.pgbackrest`
   in `charts/distant-signal/values.yaml`; `templates/_pgbackrest.tpl`,
   `templates/postgres-pgbackrest.yaml`,
@@ -498,7 +498,7 @@ Set `postgresql.pgbackrest.enabled: false`. Postgres restarts once, on the
 stock image with archiving off, and the CronJobs, Role and alerts are
 removed. The repository is left as it is: delete `repo.path` from the
 bucket by hand once its backups are no longer wanted. They hold personal
-data until they're deleted (see [personal-data-retention.md](personal-data-retention.md)).
+data until they're deleted (see [personal-data-retention.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/personal-data-retention.md)).
 
 ## Personal data
 
@@ -507,4 +507,4 @@ retention, a deleted row can stay in the repository for up to about 14
 days: the 7-day window, plus up to 7 days until the full backup before it
 expires. The account and privacy pages say "up to 14 days"; keep
 `repo.retentionFull` and the backup schedules within that (see
-[personal-data-retention.md](personal-data-retention.md)).
+[personal-data-retention.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/personal-data-retention.md)).

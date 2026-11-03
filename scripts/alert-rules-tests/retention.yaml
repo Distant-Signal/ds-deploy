@@ -26,7 +26,7 @@ tests:
             exp_annotations:
               summary: aggregator retention step history failing (2 in 2h)
               description: "Its rows stop being pruned (some are licensing deadlines); the other steps still run. See the aggregator's log."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalretentionstepfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalretentionstepfailing
 
   # A single failure in a long-running pod, with the window fully covered
   # by samples: quiet.
@@ -48,4 +48,4 @@ tests:
             exp_annotations:
               summary: aggregator retention step schedule_services failing (2 in 2h)
               description: "Its rows stop being pruned (some are licensing deadlines); the other steps still run. See the aggregator's log."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalretentionstepfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalretentionstepfailing

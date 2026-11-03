@@ -8,17 +8,11 @@ description: >-
   mirroring the topology of the repository's docker-compose.yml.
 type: application
 
-# Chart version BASE: still bumped by hand, still only for chart-only
-# changes (template/values/schema changes), same discipline as before --
-# see git log on this file. What changed: this is no longer necessarily
-# the literal version that ends up pushed to the OCI registry. CI (see
-# `push-helm-chart` in .github/workflows/containers.yml) appends its own
-# build-metadata suffix on every push to main -- chart files touched or
-# not -- producing e.g. `0.2.2+build.42.sha.860c190` via
-# `helm package --version`, so every push mints a genuinely new,
-# immutable, distinguishable chart tag instead of silently re-pushing
-# this same bare string. Bump this when the chart's own shape changes;
-# CI's suffix is what makes each push distinct in the registry.
+# Chart version BASE: bumped by hand, only for chart changes (templates,
+# values shape, schema); a Renovate image bump doesn't bump it. CI
+# (chart.yml, through Distant-Signal/ci's helm-chart.yml) appends build
+# metadata on every push to main, `<base>+build.<run>.sha.<short sha>`, so
+# every push is a new, immutable, ordered chart tag.
 # 0.4.0: scheduleFeed.sftp.enabled and the GCS bucket source (scheduleFeed.bucket), both opt-in.
 # 0.4.1: pod templates carry only release-stable labels (distant-signal.podLabels).
 # 0.4.2: AGPL-3.0-or-later (LICENSE, annotation) and sourceCode, the api's /public/version.
@@ -27,30 +21,16 @@ type: application
 #   phase 1). A new base so builds order above the old run counter.
 # 0.5.1: /public/version takes an image's commit from its build tag
 #   (build.<run>-<commit>), so ds-deploy can pin each image separately.
-version: 0.5.1
+# 0.6.0: packaged and pushed by Distant-Signal/ds-deploy, with every image
+#   pinned by tag and digest in values.yaml (repo split phase 5). A new
+#   base so this repository's builds, from run 1, order above the
+#   monorepo's.
+version: 0.6.0
 
-# Local-dev fallback ONLY. CI unconditionally overrides this at package
-# time (`helm package --app-version`, see `push-helm-chart`'s own comment
-# in .github/workflows/containers.yml) to `sha-<short-sha>` of whatever
-# commit that run's images were built from -- the same tag
-# docker/metadata-action's `type=sha` rule mints for every one of those
-# images, so the chart's default `image.tag` (via `_helpers.tpl`'s
-# `distant-signal.image` helper) always resolves to the exact images
-# that were just built and pushed alongside it, not stale ones from
-# whenever this field was last hand-bumped. This static value is only
-# ever seen by someone running `helm package`/`helm template`/`helm
-# install` straight from a checkout without going through CI -- keep it
-# tracking the workspace crate version (crates/api/Cargo.toml) for that
-# case, but it is NOT the source of truth for anything CI publishes.
-#
-# SUPERSEDED, for first-party images, whenever that same `push-helm-chart`
-# job also pins a per-service `*.image.digest` (values.yaml) -- see that
-# job's "Pin first-party image digests into values.yaml" step and
-# `distant-signal.image`'s own comment in templates/_helpers.tpl. A set
-# `image.digest` renders `<repo>@<digest>` and ignores `tag`/appVersion
-# entirely; appVersion (via `tag`) only remains the effective default for
-# any service whose digest wasn't populated for some reason (see that
-# step's own comment on when that happens).
+# CI sets appVersion to `sha-<short sha>` of the ds-deploy commit it packages
+# (`helm package --app-version`). No first-party image falls back to it:
+# each is pinned by digest in values.yaml. This static value is only seen
+# when packaging or templating straight from a checkout.
 appVersion: "0.1.0"
 
 # templates/networkpolicy.yaml selects the ingress-controller namespace via
@@ -62,8 +42,9 @@ kubeVersion: ">=1.23.0-0"
 annotations:
   artifacthub.io/license: AGPL-3.0-or-later
 
-home: https://github.com/Distant-Signal/distant-signal
+home: https://github.com/Distant-Signal/ds-deploy
 sources:
+  - https://github.com/Distant-Signal/ds-deploy
   - https://github.com/Distant-Signal/distant-signal
 
 # Deliberately no `dependencies:` — the chart bundles its own PostgreSQL

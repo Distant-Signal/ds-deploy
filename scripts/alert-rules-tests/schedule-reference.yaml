@@ -25,7 +25,7 @@ tests:
             exp_annotations:
               summary: schedule-reference not seeded for 30m
               description: "It cannot read its last publish from api, so it publishes nothing. Check api and the internal OAuth token endpoint."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulereferencenotseeded
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulereferencenotseeded
   # A rejected product counted in-pod fires; a recorded rejection does not.
   - interval: 1m
     input_series:
@@ -41,4 +41,4 @@ tests:
             exp_annotations:
               summary: schedule-reference's stanox_crs publish was rejected
               description: "Refused as bad data: not retried for this delivery, and the product keeps its previous rows. Usually schema skew."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulereferencepublishrejected
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulereferencepublishrejected

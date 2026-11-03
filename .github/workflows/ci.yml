@@ -1,21 +1,18 @@
 name: CI
 
-# Lint, build and test the Rust workspace, the frontend and the Helm chart.
-#
-# Runs on every pull request targeting main/dev, and on every push to
-# main/master/dev. This is a superset of the "push validation" bullet in
-# the CI design doc: pushes and PRs run the same job set, there is no
-# reduced subset, because none of these jobs are slow/expensive enough to
-# warrant skipping on push (the container build/publish pipeline, which IS
-# expensive, lives in containers.yml instead).
+# Lint and check the two Helm charts: charts/distant-signal (the umbrella
+# chart, every Distant Signal image pinned by tag and digest) and
+# charts/ds-ingest-bucket. Runs on every pull request to main and every
+# push to main. Packaging, pushing and signing is chart.yml; re-vendoring
+# ds-core's files on Renovate's ds-core branches is sync-core.yml.
 #
 # Most jobs call Distant-Signal/ci's reusable workflows (repo split spec
-# §5.5 and §8.3), pinned by SHA; Renovate bumps the pins. Each of their
-# checks shows as `<job> / <job inside the reusable workflow>`. What stays
-# here is Distant Signal's own: the DB test passes (.github/db-tests.toml),
-# the Playwright e2e job, the migration order check, the chart and
-# repository checks and the Helm chart renders. `actionlint` calls
-# FasterSpeeding/Piped's reusable lint-actions.yml.
+# §5.5 and §8.3), pinned by SHA; Renovate bumps the pins. What stays here
+# is this repository's own: the chart policy scripts, the alert rules, the
+# release ordering checks against the pinned images' labels (§5.1, §5.3),
+# the config defaults contract against the pinned images (§9 phase 3 item
+# 7), the vendored ds-core files against their release (§5.1) and the
+# render assertions.
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -23,40 +20,14 @@ concurrency:
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main]
   push:
-    branches: [main, master, dev]
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  # Distant-Signal/ci's rust-ci.yml: clippy in both feature sets
-  # (-D warnings), the MSRV check (Cargo.toml's rust-version = "1.88" is a
-  # promise, checked with exactly that toolchain), cargo-deny (bans,
-  # licences and sources block; advisories only warn, since
-  # dependency-scan.yml's OSV scan blocks on critical + fixable ones; see
-  # deny.toml), rustfmt, and cargo build & test (the tests that need no
-  # database). Every job but rustfmt and cargo-deny installs the system
-  # packages docker/trust-consumer.Dockerfile documents for rdkafka's
-  # `cmake-build`/`ssl`/`sasl` features: cmake, libssl-dev and pkg-config to
-  # build vendored librdkafka, libsasl2-dev for the `sasl2-sys` build script
-  # (dynamically linked against a real libsasl2, matching production: this
-  # app does real SASL/SCRAM against a live Kafka broker, see
-  # trustConsumer.kafka.saslMechanism), and libcurl4-openssl-dev because
-  # librdkafka's vendored C source `#include`s <curl/curl.h>.
-  #
-  # The core crates are git dependencies on Distant-Signal/ds-core (repo
-  # split spec §5.2), whose own CI lints and tests them, and runs the line
-  # catalogue validator; cargo-deny's sources check allows exactly that git
-  # repository.
-  rust:
-    uses: Distant-Signal/ci/.github/workflows/rust-ci.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
-    with:
-      toolchain: 1.88.0
-      msrv: 1.88.0
-      apt-packages: cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
-
   # Reusable workflow_call from FasterSpeeding/Piped: runs actionlint over
   # this repo's own .github/workflows/*.yml via reviewdog. Self-contained
   # (checkout + one third-party action), no justfile dependency -- a clean
@@ -64,333 +35,6 @@ jobs:
   actionlint:
     uses: FasterSpeeding/Piped/.github/workflows/lint-actions.yml@5bbddb5d32d5bde939b18f6c6bcfa0e36779412f # master @ 2026-09-01
 
-  # Distant-Signal/ci's rust-db-tests.yml: the DATABASE_URL/REDIS_URL-gated
-  # `#[ignore]`d tests, built once into an archive and run as parallel
-  # passes, each against its own Postgres and Redis. The archive command and
-  # the passes (the superuser, the app role, and each service's role) are in
-  # .github/db-tests.toml, which says what each covers. The images are the
-  # chart's: `postgresql.image` and `redis.image` (Valkey; its `redis-cli`
-  # symlink serves the health check).
-  rust-db-tests:
-    uses: Distant-Signal/ci/.github/workflows/rust-db-tests.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
-    with:
-      toolchain: 1.88.0
-      # renovate: datasource=docker depName=postgres
-      postgres-image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
-      # renovate: datasource=docker depName=valkey/valkey
-      redis-image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
-
-  # The old single job's check name, for anything that waits on it: green
-  # only when the archive built and every pass passed.
-  rust-db-test:
-    name: cargo test -- --ignored (DB/Redis-backed)
-    if: ${{ always() }}
-    needs: [rust-db-tests]
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Every DB test job succeeded
-        env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: |
-          echo "results: ${RESULTS}"
-          for result in ${RESULTS}; do
-            [[ "${result}" == success ]] || exit 1
-          done
-
-  # Distant-Signal/ci's node-ci.yml on frontend/: npm ci, ESLint (flat
-  # config on eslint-config-next), the copy guardrails, the npm licence gate
-  # (every production dependency AGPL-compatible, repo split spec §6),
-  # Prettier (all but frontend/.prettierignore), `tsc --noEmit` (ESLint's
-  # typescript-eslint rules are lint, not a type-check), the plain-JS files
-  # tsconfig.json leaves out (`typecheck:scripts`: the service worker and
-  # the Node-run scripts and configs, checkJs + strict), vitest and
-  # `next build`.
-  #
-  # The copy guardrails are docs/style-guide.md's Writing rules: banned
-  # phrases, Title Case h1/h2, meta descriptions over 160 characters and
-  # pages without metadata. scripts/check-copy.py is stdlib-only; it runs
-  # frontend/scripts/extract-copy.mjs, which needs node_modules, so it runs
-  # here rather than in scripts-lint (which lints and unit-tests it).
-  #
-  # The Playwright e2e tests need a live api, Postgres and Redis: see
-  # frontend-e2e.
-  frontend:
-    uses: Distant-Signal/ci/.github/workflows/node-ci.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
-    with:
-      working-directory: frontend
-      repo-check-name: Copy guardrails (scripts/check-copy.py)
-      repo-check-command: uv run --locked --no-default-groups scripts/check-copy.py
-      extra-npm-scripts: typecheck:scripts
-
-  # Custom: Playwright e2e + full-default-ruleset axe-core accessibility
-  # sweep (frontend/e2e/, 7 spec files -- accessibility.spec.ts is the axe
-  # sweep, the rest cover nav/layout/chat/connectivity/service-worker/push
-  # notifications). This is the job the `frontend` job's own comment used to
-  # say was deliberately deferred until e2e specs existed; they now do.
-  #
-  # Needs a real, reachable `api` (Postgres + Redis behind it) to render
-  # anything beyond a skeleton/error state -- uses the DB test passes'
-  # `services:` pattern (same images, same health-check options) rather
-  # than `docker-compose.yml`: that file needs dummy values for ~20+
-  # unrelated service credentials (Kafka, RDM/TfL/LDBWS pollers, five
-  # services' worth of internal-OAuth pairs) just to resolve config, and its
-  # `api`/`frontend` images would rebuild from scratch in-container with no
-  # cache reuse, unlike this job's `Swatinem/rust-cache` and
-  # `actions/setup-node`'s npm cache. (That rust-cache entry is this job's
-  # own: rust-cache's default key includes the job id, so it is not shared
-  # with `rust / cargo build & test`'s, and it only holds `cargo build -p api`'s debug
-  # artifacts.)
-  #
-  # The `INTERNAL_OAUTH_*`/`SSO_*` values below are dummy-but-syntactically-
-  # valid, matching local dev's own `.devdata/api.env` pattern: `api` only
-  # syntax-checks an issuer URL at startup (OIDC discovery is lazy -- see
-  # `crates/api/src/data/config.rs`'s own doc comments on `sso_issuer_url`),
-  # never actually contacting it unless a real OAuth redirect happens,
-  # which no spec here drives.
-  frontend-e2e:
-    name: Playwright e2e + accessibility
-    runs-on: ubuntu-26.04
-
-    # The same two images and health-check options as the DB test passes
-    # (`rust-db-tests` above passes them to Distant-Signal/ci's
-    # rust-db-tests.yml): keep the two in step.
-    services:
-      postgres:
-        image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: valkey/valkey:8.1.10-trixie@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      REDIS_URL: redis://localhost:6379
-      BIND_URL: 127.0.0.1:8080
-      API_BASE_URL: http://127.0.0.1:8080
-      RUST_LOG: info
-      # See this job's own top comment for why these are safe dummies.
-      INTERNAL_OAUTH_ISSUER_URL: http://internal-oauth.example.invalid
-      INTERNAL_OAUTH_CLIENT_ID: distant-signal-internal-dummy
-      SSO_ISSUER_URL: http://sso.example.invalid
-      SSO_CLIENT_ID: distant-signal-dummy
-      SSO_CLIENT_SECRET: distant-signal-dummy-secret
-      # 127.0.0.1, not localhost: the api takes the browser origin it
-      # accepts cookie-authenticated mutations from out of SSO_REDIRECT_URL
-      # (crates/api/src/auth.rs, reject_cross_origin_cookie_mutation), and
-      # the specs drive the browser at E2E_BASE_URL below. With localhost
-      # here, every logged-in PUT/POST/DELETE a page sends was a 403
-      # "cross-origin request rejected".
-      SSO_REDIRECT_URL: http://127.0.0.1:3000/api/auth/callback
-      SSO_POST_LOGIN_REDIRECT_URL: http://127.0.0.1:3000/
-      VAPID_PUBLIC_KEY: BDummyVapidPublicKeyForLocalDevOnlyNotARealKeyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-      # The railMcp public URL, read by the frontend server at REQUEST time
-      # (FE-2: frontend/lib/csp.ts's runtimeRailMcpPublicUrl, passed to the
-      # chat page as a prop), not inlined at `npm run build`; it only has
-      # to be in `next start`'s environment. chat.spec.ts's `**/mcp` mocks
-      # intercept every request this fixture host resolves to, matching by
-      # path glob rather than by host -- see that file's own comments.
-      NEXT_PUBLIC_RAILMCP_PUBLIC_URL: http://mcp.example.invalid
-      # Renders the draft legal pages (/privacy, /terms, /cookies, /contact)
-      # so accessibility.spec.ts can sweep them. Read at request time by
-      # `next start`; see frontend/lib/legal.ts. Production leaves it unset.
-      LEGAL_PAGES_PREVIEW: "true"
-      # The seed's transit networks (frontend/e2e/fixtures/seed.sql), for
-      # the /transit pages' specs and screenshots: Metrolink and a small
-      # TfL network. Off in every other setting.
-      API_TRANSIT_NETWORKS: metrolink,tfl
-      # Metrolink trams in /Trips/plan (DS-164): plan.spec.ts's rail, tram,
-      # rail route and the transit stop page's "Plan a journey from here".
-      API_TRIP_PLAN_TRANSIT_NETWORKS: metrolink
-      # The api's live TfL arrivals (/tfl/stops/{id}) come from
-      # scripts/tfl-arrivals-stub.py, started below, never from TfL: a fixed
-      # board for the seed's King's Cross St. Pancras and a 503 for every
-      # other stop (tfl-stop.spec.ts, the tfl-stop screenshot).
-      TFL_BASE_URL: http://127.0.0.1:8099
-      # frontend/e2e/fixtures/seed.sql's own fixture ids -- see that file's
-      # header comment for what each backs and why the dates are fixed.
-      E2E_REAL_LINE_ID: lner-ecml
-      E2E_CUSTOM_LINE_ID: custom-fixture-commute
-      E2E_REAL_STATION_CRS: KGX
-      E2E_REAL_INCIDENT_ID: FIXTURE-INCIDENT-1
-      E2E_TRAIN_UID: W12345
-      E2E_TRAIN_DATE: 2026-09-17
-      E2E_TRACKING_ID: "1"
-      E2E_PLANNED_TRACKING_ID: "3"
-      E2E_JOURNEY_ID: "1"
-      E2E_GROUP_ID: fixture-group-1
-      E2E_GROUP_INVITE_TOKEN: fixture-invite-token-123456789
-      E2E_SESSION_COOKIE: qhE59Tg8RipXqulYsgOav1p46-YsflwgjQxMa1K5lKY
-      E2E_BASE_URL: http://127.0.0.1:3000
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: 1.88.0
-
-      # See rust-test's cache step for save-if.
-      - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: cargo build -p api
-        run: cargo build -p api
-
-      - name: Install sqlx-cli
-        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
-
-      # The migrations of the ds-core release Cargo.lock pins (the api
-      # embeds the same ones): scripts/core-checkout.py clones that tag and
-      # checks the commit.
-      - name: Run the migrations (the pinned ds-core's)
-        run: |
-          set -euo pipefail
-          core="$(python3 scripts/core-checkout.py)"
-          cd "${core}/crates/ds-store"
-          sqlx migrate run
-
-      - name: Seed e2e fixtures
-        # ON_ERROR_STOP: plain psql reports a failing statement and carries on
-        # with exit 0, which hid a broken group_invite_links insert for days.
-        run: psql -v ON_ERROR_STOP=1 "${DATABASE_URL}" -f frontend/e2e/fixtures/seed.sql
-
-      - name: Start the TfL arrivals stub in the background
-        run: |
-          nohup python3 scripts/tfl-arrivals-stub.py --port 8099 > tfl-stub.log 2>&1 &
-          for _ in $(seq 1 10); do
-            if curl -s -o /dev/null http://127.0.0.1:8099/; then
-              echo "TfL stub is up"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "TfL stub did not start"
-          cat tfl-stub.log
-          exit 1
-
-      - name: Start api in the background
-        run: |
-          nohup ./target/debug/api > api.log 2>&1 &
-          for _ in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8080/public/health > /dev/null; then
-              echo "api is up"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "api did not become healthy in time"
-          cat api.log
-          exit 1
-
-      - name: Install Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: npm ci
-        working-directory: frontend
-        run: npm ci
-
-      - name: Install Playwright browsers (chromium, firefox)
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium firefox
-
-      - name: npm run build (next build)
-        working-directory: frontend
-        run: npm run build
-
-      - name: Start frontend in the background
-        working-directory: frontend
-        run: |
-          nohup npm run start -- -p 3000 > frontend.log 2>&1 &
-          for _ in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:3000/ > /dev/null; then
-              echo "frontend is up"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "frontend did not become ready in time"
-          cat frontend.log
-          exit 1
-
-      - name: npx playwright test
-        working-directory: frontend
-        run: npx playwright test
-
-      # Visual regression screenshots (frontend/e2e/visual.spec.ts, the
-      # `visual` Playwright project, which the step above skips): the main
-      # pages at 390 and 1366px, light and dark, compared against the
-      # committed baselines in frontend/e2e/visual-baselines/. Only when
-      # this PR or push touches frontend/**: the pages render nothing else
-      # the repo changes, apart from the api, whose own tests cover it.
-      # The comparison runs inside the pinned Playwright container
-      # (scripts/visual-tests.py), the same one used to make the baselines
-      # locally, so fonts and rendering match. docs/style-guide.md,
-      # "Visual regression", says how to update the baselines.
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          # renovate: datasource=pypi depName=uv
-          version: "0.13.6"
-          # Nothing to cache: no dependencies are installed.
-          enable-cache: false
-
-      # Answers "changed" whenever it can't tell (a new branch's first
-      # push, an unfetchable base), so the check is never skipped wrongly.
-      - name: Did this change touch frontend/?
-        id: frontend-paths
-        uses: Distant-Signal/ci/actions/paths-changed@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
-        with:
-          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          paths: frontend/
-
-      - name: Visual regression screenshots
-        if: steps.frontend-paths.outputs.changed == 'true'
-        run: uv run --locked --no-default-groups scripts/visual-tests.py
-
-      - name: Upload Playwright report + traces
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: playwright-report
-          path: |
-            frontend/e2e-report/
-            frontend/test-results/
-          retention-days: 7
-
-  # A4 (DB review 2026-09-27): a migration added by this PR/push must have a
-  # version above every migration already on the base. sqlx applies a
-  # missing lower version late and silently, out of order. INF-16/DB2-35:
-  # the same script fails when a migration the base already had is
-  # modified, deleted or renamed, so it needs no lock-file upkeep;
-  # crates/ds-store/tests/migration_checksums.rs is the second line of defence.
-  # Ingest plan 1B.5: it also fails on destructive DDL (DROP, RENAME, a
-  # column type change, SET NOT NULL) without a `-- contract: ...` header,
-  # in migrations added since the base or newer than its cutoff.
-  # The job name is unchanged in case a branch-protection rule requires it.
   # Commit identity (repo split spec §5.10), Distant-Signal/ci's
   # identity.yml: no commit in the PR or push may use a retired
   # author/committer address or carry AI attribution (a Co-authored-by
@@ -415,33 +59,20 @@ jobs:
   #     '--enable=all --severity=style' (the `actionlint` job above uses
   #     Piped's reviewdog wrapper, which runs shellcheck with its default
   #     checks only);
-  #   - every tracked Dockerfile: hadolint, every rule, failing down to
-  #     style level, trusted registry docker.io only (.hadolint.yaml);
-  #   - lint-containers.py: shellcheck, as for *.sh, over every Dockerfile
-  #     RUN body and the docker-compose*.yml inline shell, and every image a
-  #     Dockerfile or compose file pulls pinned by @sha256 digest;
-  # then scripts/tests (stdlib unittest) and the ignored-benchmark gate (the
-  # DB passes run every `#[ignore]`d test of their packages, in a debug
-  # build: an ignored benchmark must do nothing unless its env var is set;
-  # transit_planning_budget's took the DB job from ~30 to ~78 minutes on
-  # 2026-10-27). Every tool is pinned in pyproject.toml's `lint` dependency
-  # group and, with the rest of the tree and its hashes, in uv.lock. Locally,
+  #   - Dockerfiles and compose files: none here;
+  # then scripts/tests (stdlib unittest). Every tool is pinned in
+  # pyproject.toml's `lint` dependency group and, with the rest of the tree
+  # and its hashes, in uv.lock. Locally,
   # from the repository root, with a checkout of Distant-Signal/ci:
   #   uv run python <ci>/scripts/lint-scripts.py
   scripts-lint:
     uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
-    with:
-      check-bench-gates: true
 
-  # Distant Signal's own repository and chart checks, run with the pinned
-  # script tools (pyproject.toml's `lint` group): the Rust Dockerfiles'
-  # generated builder stages and build-context allowlists, the chart values
-  # reference, the alert rules, the chart policy scripts and the crate
-  # dependency boundary. They were steps of scripts-lint until it moved to
-  # Distant-Signal/ci; they move with the chart to ds-deploy (repo split
-  # spec §8.3).
-  repo-checks:
-    name: repo checks (Dockerfile generator, chart policies, alerts, crate deps)
+  # The chart checks, run with the pinned script tools (pyproject.toml's
+  # `lint` group). They came from the monorepo's repo-checks job with the
+  # chart (repo split spec §8.3).
+  chart-checks:
+    name: chart checks (policies, values reference, alerts, ordering, ds-core files)
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
@@ -459,70 +90,49 @@ jobs:
       - name: Install the pinned script tools
         run: uv sync --locked --group lint
 
-      # The Rust Dockerfiles' cargo-chef builder stages and every image's
-      # build-context allowlist (*.Dockerfile.dockerignore) are generated:
-      # an edit inside the markers, a Dockerfile without a SERVICES entry or
-      # a crate input outside the allowlist fails here.
-      - name: Rust Dockerfiles match scripts/gen-rust-dockerfiles.py
-        run: uv run --no-sync scripts/gen-rust-dockerfiles.py --check
-
-      # The chart's files/db-grants.yaml, files/postgres-* and
-      # files/redis-users.acl.tpl, and scripts/render-redis-acl.py, are the
-      # access assets of the ds-core release `core-version` pins (repo split
-      # spec §5.1), each verified against its Sigstore bundle from ds-core's
-      # release.yml at the tag. Fails when a vendored file differs from the
-      # release, or when core-version, Cargo.toml's ds-core tags and
-      # migrate.image.tag disagree.
+      # charts/distant-signal/files/ holds ds-core's access assets, vendored
+      # from the release core-version names (repo split spec §5.1), and
+      # scripts/render-redis-acl.py its renderer, each verified against its
+      # Sigstore bundle from ds-core's release.yml. Fails when a vendored file
+      # differs from the release, or when core-version and migrate.image.tag
+      # disagree. On Renovate's ds-core branches, sync-core.yml commits the
+      # re-vendored files first.
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: chart's access files are the pinned ds-core release's
+      - name: vendored ds-core files match the core-version release
         run: uv run --no-sync scripts/sync-core.py --check
-
-      # frontend/lib/api-types.ts and openapi-v1.json are copies of the api's generated
-      # api-types/api.ts and openapi/v1.json (repo split spec §5.3); `cargo test`'s
-      # api_types_are_current and openapi_document_is_current check those
-      # against the Rust types.
-      - name: frontend's api types and OpenAPI copy match api-types/
-        run: uv run --no-sync scripts/sync-api-types.py check
-
-      # The personal-token API's OpenAPI document (api-types/openapi/v1.json,
-      # docs/specs/personal-api-tokens.md §12): `cargo test`'s
-      # openapi_document_is_current checks it against the Rust types; this
-      # fails on a breaking change since the base (oasdiff, pinned in
-      # Distant-Signal/ci). A breaking change needs a /v2 document instead.
-      - name: no breaking change to the personal-token OpenAPI document
-        uses: Distant-Signal/ci/actions/openapi-breaking@76c5c4cd3a3d38ea572c852071baf93cd4982b16 # main
-        with:
-          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          specs: api-types/openapi/v1.json
 
       # Every chart values.yaml key needs a row in the chart README's "Values
       # reference" tables, and every row must name a real key.
       # `scripts/chart-values-doc.py table <section>` drafts missing rows.
-      # Here rather than in helm-lint: it needs the pinned PyYAML.
       - name: chart values reference is complete
         run: uv run --no-sync scripts/chart-values-doc.py check
 
-      # Repo split spec §5.1, §5.3: the labels this checkout's images get
-      # (scripts/release-order.py labels) against the chart's ordering rules.
-      # One commit builds every image, so this passes by construction; the
-      # real check runs on the pushed images in containers.yml's
-      # push-helm-chart, before the chart ships.
-      - name: release ordering (this checkout's image labels)
+      # Repo split spec §5.1, §5.3: the labels of the images values.yaml
+      # pins, read anonymously from the registry by digest, against the
+      # ordering rules: every image's core-version at most the pinned
+      # ds-migrate's, the frontend's api-build at most the pinned api's, and
+      # every image at least the `safe after core` of any versioned contract
+      # migration in the core-version release (a shallow clone of ds-core at
+      # that tag). A Renovate image group that would break one fails here,
+      # so it doesn't automerge. chart.yml runs it again before the push.
+      - name: release ordering (the pinned images' labels)
         run: |
           set -euo pipefail
-          core="$(uv run --no-sync scripts/core-checkout.py)"
-          uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --source \
+          core="${RUNNER_TEMP}/ds-core"
+          version="$(cat core-version)"
+          git clone --quiet --depth 1 --branch "${version}" \
+            https://github.com/Distant-Signal/ds-core "${core}"
+          uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --registry \
             --migrations "${core}/crates/ds-store/migrations"
 
       # Every alert's summary, description, expr and estimated 3-alert
       # webhook JSON stay under ntfy's 4,096-byte limit (the 2026-10-01
       # outage's undelivered alerts), every alert has its docs/alerts.md
       # runbook section, and the rendered rules pass `promtool check rules`
-      # and the unit tests in scripts/alert-rules-tests/. Here rather than
-      # in helm-lint: it needs the pinned PyYAML. The script downloads
-      # promtool and verifies its checksum.
+      # and the unit tests in scripts/alert-rules-tests/. The script
+      # downloads promtool and verifies its checksum.
       - name: Install Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
@@ -539,8 +149,7 @@ jobs:
       # and no crossplane.io/paused, bad values (no publisher members,
       # public members, admin roles) refuse to render, and every resource
       # validates against provider-upjet-gcp's CRD schemas (downloaded and
-      # checksum-verified by the script). Here rather than in helm-lint:
-      # it needs the pinned PyYAML.
+      # checksum-verified by the script).
       - name: ds-ingest-bucket chart policies
         run: uv run --no-sync scripts/check-ingest-bucket-chart.py --download-crds "${RUNNER_TEMP}/crossplane-crds"
 
@@ -611,40 +220,18 @@ jobs:
       - name: enricher LLM provider settings
         run: uv run --no-sync scripts/check-enricher-provider-chart.py
 
-      # Ingest architecture spec §5.1: ds-store's (and ds-migrate's) normal
-      # dependency closure holds no axum, tower, hyper, redis, reqwest,
-      # oauth2, openidconnect or api (ds-core checks it too; here it holds
-      # for the pinned release), and poller-transit-schedule's no database. `cargo tree` only (no build), so no
-      # rdkafka packages.
-      - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: 1.88.0
-
-      - name: crate dependency boundaries
-        run: uv run --no-sync scripts/check-crate-deps.py
-
-  # The chart against what each service says it reads (repo split spec §9
-  # phase 3 item 7). Every service binary prints the env vars it reads,
-  # their defaults and the constants the chart must match when run as
-  # `<service> --print-config-defaults` (ds_runtime::service_args), without
-  # connecting to anything. scripts/check-config-defaults-chart.py compares
-  # that with the chart rendered several ways: no env var a service doesn't
-  # read, none it reads left unwired (bar the listed ones), values.yaml
-  # defaults equal to the code's unless recorded, and the alert operations,
-  # stream caps, Postgres roles and probe paths. It replaced the crate tests
-  # that read chart files.
-  #
-  # Here it runs the binaries built from this commit (a debug build without
-  # debug info, the cheapest that runs them). Once the services leave this
-  # repository, ds-deploy runs the same script with `--images` instead,
-  # which runs `docker run --rm <image> --print-config-defaults` on the
-  # images the chart pins in values.yaml.
+  # The chart against what each pinned image says it reads (repo split
+  # spec §9 phase 3 item 7). scripts/check-config-defaults-chart.py
+  # --images runs `docker run --rm <image> --print-config-defaults` on the
+  # image the chart renders for each service (values.yaml's digest), and
+  # compares the output with the chart rendered several ways: no env var a
+  # service doesn't read, none it reads left unwired (bar the listed ones),
+  # values.yaml defaults equal to the code's unless recorded, and the alert
+  # operations, stream caps, Postgres roles and probe paths. A Renovate
+  # image group whose service changed a default fails here.
   chart-config-contract:
-    name: chart config contract (--print-config-defaults)
+    name: chart config contract (--print-config-defaults, pinned images)
     runs-on: ubuntu-26.04
-    env:
-      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -665,42 +252,29 @@ jobs:
         with:
           version: v4.3.1
 
-      # rdkafka's vendored librdkafka: the rust job's apt-packages.
-      - name: Install the rdkafka build packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libssl-dev pkg-config libsasl2-dev libcurl4-openssl-dev
+      - name: The chart matches every pinned image's --print-config-defaults
+        run: uv run --no-sync scripts/check-config-defaults-chart.py --images
 
-      - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: 1.88.0
-
-      # See rust-test's cache step for save-if.
-      - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build every service binary
-        run: |
-          set -euo pipefail
-          services="${RUNNER_TEMP}/services"
-          uv run --no-sync scripts/check-config-defaults-chart.py --list-services >"${services}"
-          packages=()
-          while read -r service; do packages+=(-p "${service}"); done <"${services}"
-          cargo build --locked --bins "${packages[@]}"
-
-      - name: The chart matches every service's --print-config-defaults
-        run: uv run --no-sync scripts/check-config-defaults-chart.py --bin-dir target/debug
-
-  # Custom: no reusable Piped/Piped-actions workflow covers Helm at all.
-  # `helm lint` + `helm template` against both the chart's own defaults and
-  # values-example.yaml (which turns on the optional pollers/devAuthentik
-  # sections) gives real template-rendering coverage without needing a
-  # cluster. `--strict` turns lint warnings into failures too; the only
-  # finding left is the [INFO] "icon is recommended", which doesn't fail.
+  # Distant-Signal/ci's helm-chart.yml, lint only (chart.yml publishes):
+  # `helm lint --strict` on each chart's defaults and its example values.
+  # The render assertions are chart-renders, below.
   helm-lint:
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    with:
+      chart: charts/distant-signal
+      lint-values: charts/distant-signal/values-example.yaml
+
+  helm-lint-ingest-bucket:
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    with:
+      chart: charts/ds-ingest-bucket
+      lint-values: charts/ds-ingest-bucket/ci/example-values.yaml
+
+  # The render assertions: `helm template` against the chart's defaults,
+  # values-example.yaml and the CI values, with what each feature must and
+  # must not render. No reusable workflow covers these; they are this
+  # chart's own. Lint is helm-lint, above.
+  chart-renders:
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
@@ -711,21 +285,13 @@ jobs:
         with:
           version: v4.3.1
 
-      - name: helm lint --strict (default values)
-        run: helm lint --strict charts/distant-signal
-
-      - name: helm lint --strict (values-example.yaml)
-        run: helm lint --strict charts/distant-signal -f charts/distant-signal/values-example.yaml
-
       # The GCS landing-zone chart: off by default (renders nothing), and
       # with its CI values plus the optional alerts and Pub/Sub (every
       # resource). It renders Crossplane managed resources, so
-      # lint/template need no CRDs; install would. The project number is a
+      # template needs no CRDs; install would. The project number is a
       # placeholder.
-      - name: helm lint --strict (ds-ingest-bucket)
+      - name: helm template (ds-ingest-bucket)
         run: |
-          helm lint --strict charts/ds-ingest-bucket
-          helm lint --strict charts/ds-ingest-bucket -f charts/ds-ingest-bucket/ci/example-values.yaml
           helm template ds-ingest-bucket charts/ds-ingest-bucket \
             -f charts/ds-ingest-bucket/ci/example-values.yaml \
             --set usageAlerts.enabled=true \
@@ -2778,7 +2344,8 @@ jobs:
             grep -qF "${off%%=*}: true" <<<"${err}" || fail "${off}: the render must name it: ${err}"
           done
 
-          on=$(render --set ingestWriter.image.tag=test)
+          # values.yaml pins a digest, which wins over the tag: clear it here.
+          on=$(render --set ingestWriter.image.tag=test --set ingestWriter.image.digest=)
           dep=$(doc Deployment distant-signal-ingest-writer <<<"${on}")
           [[ -n "${dep}" ]] || fail "no ingest-writer Deployment rendered"
           grep -q '^  replicas: 1$' <<<"${dep}" || fail "the ingest-writer must run one replica"
@@ -3310,7 +2877,7 @@ jobs:
           cj=$(doc CronJob distant-signal-api-maintenance <<<"${out}")
           [[ -n "${cj}" ]] || fail "no api-maintenance CronJob rendered"
           for want in 'schedule: "17 * * * *"' 'timeZone: "Etc/UTC"' 'concurrencyPolicy: Forbid' \
-              '- /usr/local/bin/maintenance' 'image: "ghcr.io/distant-signal/images/api:' \
+              '- /usr/local/bin/maintenance' 'image: "ghcr.io/distant-signal/images/api@sha256:' \
               'backoffLimit: 3'; do
             grep -q -F -- "${want}" <<<"${cj}" || fail "api-maintenance CronJob lacks: ${want}"
           done

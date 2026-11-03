@@ -6,9 +6,8 @@
 
 Repo split spec §5.1. Every ds-core tag vX.Y.Z publishes signed GitHub
 release assets; the chart reads five of them through `.Files.Get` (Helm
-can't read outside the chart), the phase 0 chart check renders the Redis
-ACL with ds-core's renderer, and the web app's tests check /attribution
-against the line catalogue validator's site credits:
+can't read outside the chart) and the phase 0 chart check renders the
+Redis ACL with ds-core's renderer:
 
   db-grants.yaml          -> charts/distant-signal/files/db-grants.yaml
   postgres-grants.sql     -> charts/distant-signal/files/postgres-grants.sql
@@ -16,7 +15,9 @@ against the line catalogue validator's site credits:
   postgres-roles-setup.sh -> charts/distant-signal/files/postgres-roles-setup.sh
   redis-users.acl.tpl     -> charts/distant-signal/files/redis-users.acl.tpl
   render-redis-acl.py     -> scripts/render-redis-acl.py
-  site-credits.json       -> frontend/lib/site-credits.json
+
+ds-core's seventh asset, site-credits.json, is the web app's (the landing
+repository vendors it into frontend/lib/); this repository doesn't.
 
 The roles Job's entrypoint (postgres-roles-setup.sh) is ds-core's too:
 its role tests run it (test-postgres-roles.py --check-setup-job), so the
@@ -34,7 +35,7 @@ the assets from DIR instead of downloading them (still verified).
 The pins must agree: the chart's `migrate.image.tag` (the ds-migrate
 release) is core-version, and so is every ds-core `tag =` in Cargo.toml's
 [workspace.dependencies] where there is a Cargo.toml (a repository that
-builds Rust). A disagreement is exit 1, with or without --check.
+builds Rust; not this one). A disagreement is exit 1, with or without --check.
 
 Exit 2 when an asset can't be fetched or doesn't verify. Stdlib only;
 needs cosign on PATH.
@@ -72,7 +73,6 @@ ASSETS = (
     ("postgres-roles-setup.sh", FILES / "postgres-roles-setup.sh"),
     ("redis-users.acl.tpl", FILES / "redis-users.acl.tpl"),
     ("render-redis-acl.py", Path("scripts/render-redis-acl.py")),
-    ("site-credits.json", Path("frontend/lib/site-credits.json")),
 )
 
 

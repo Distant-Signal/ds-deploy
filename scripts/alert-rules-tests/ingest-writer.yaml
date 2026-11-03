@@ -26,7 +26,7 @@ tests:
             exp_annotations:
               summary: the ingest-writer is down
               description: "Not scraped, or no available replica, for 5m: the train-domain sweeps it owns are not running."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestwriterdown
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestwriterdown
   # The pod is gone (no target at all) and the Deployment has no available
   # replica: fires from kube-state-metrics alone. A 3-minute restart does
   # not fire; another Deployment with none available is ignored.
@@ -47,4 +47,4 @@ tests:
             exp_annotations:
               summary: the ingest-writer is down
               description: "Not scraped, or no available replica, for 5m: the train-domain sweeps it owns are not running."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestwriterdown
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestwriterdown

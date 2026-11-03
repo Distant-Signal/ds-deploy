@@ -1,745 +1,160 @@
-name: Containers
+name: Chart
 
-# Build (and, on push to main/master, publish) every container image this
-# repo defines: the Rust service Dockerfiles under docker/ and
-# frontend/Dockerfile's `runtime-prod` target. This is the "main aim" CI/CD
-# job per the repo owner's request. (The bundled Postgres's pgBackRest image
-# is no longer built here: the chart takes it from
-# postgresql.pgbackrest.image, see docs/postgres-pitr.md.)
+# Package, push and sign both charts on every push to main (repo split spec
+# §5.4 step 3):
 #
-# Each image is built by Distant-Signal/ci's reusable image.yml, called
-# once per leg of the `build-and-push` matrix (repo split spec §8.3); its
-# header comment documents the build, cache, signing and reproducibility
-# details. Not FasterSpeeding/Piped's build-container.yml: it has no
-# build-stage `target` input (frontend/Dockerfile's last stage is
-# `runtime-dev`; the published image is `runtime-prod`), and its artifact
-# names aren't namespaced per image, so matrixed calls in one run would
-# merge each other's builds.
+#   oci://ghcr.io/<owner>/charts/distant-signal    (Ranma-Config deploys it)
+#   oci://ghcr.io/<owner>/charts/ds-ingest-bucket  (its Renovate rule is off)
 #
-# Registry & naming: ghcr.io/<owner>/images/<service>, where <owner> is
-# this repository's owner, lowercased (image.yml derives it, as does
-# push-helm-chart's `Derive this repository's GHCR paths` step; today
-# ghcr.io/distant-signal). Nothing here
-# names the owner, so the workflow keeps working unedited if the
-# repository changes hands. The `images/<service>` shape is the
-# organisation-wide one (docs/specs/repo-split.md §5.9): every repository
-# that builds a DS image pushes it there, so moving a service between
-# repositories changes nothing in the chart. The chart README's
-# "Building and pushing the images (manual)" table documents the same
-# per-Dockerfile -> `images/<service>` mapping as this file's matrix.
-# `images/<service>` is also the two segments `global.imageRegistry`
-# keeps, so `--set global.imageRegistry=ghcr.io/<owner>` (or per-service
-# `image.repository` overrides prefixed with the registry) points the
-# chart at the published images.
+# <owner> is this repository's owner, lowercased: ghcr.io/distant-signal,
+# the same URL the monorepo pushed to after phase 1, so Ranma-Config's
+# OCIRepository doesn't change.
 #
-# Tagging (image.yml): the branch, tag and pull request tags, plus
-# `type=sha`, an immutable `sha-<short-sha>` tag on every image. That is
-# what lets `push-helm-chart` point the chart's packaged `appVersion` (and
-# so every workload's default `image.tag`) at the exact images this run
-# built, not whatever `main` resolves to later; it pins their digests on
-# top. No release tags exist, so no semver pattern.
+# Versions: Distant-Signal/ci's helm-chart.yml packages
+# `<Chart.yaml version>+build.<run number>.sha.<short sha>`. This
+# repository's run counter started at 1, so the umbrella chart's base went
+# to 0.6.0 when it took over the push (§5.4, decision 4): semver ignores
+# build metadata, and a new base orders every build here above the
+# monorepo's 0.5.x builds.
 #
-# The `push-helm-chart` job below packages and pushes
-# charts/distant-signal to this same ghcr.io org's OCI registry (as an
-# OCI artifact, via `helm push`, not a container image) once every image
-# above has built and pushed successfully -- see that job's own comment
-# for the `needs:`/versioning rationale.
+# Images: values.yaml pins every first-party image by tag and digest,
+# committed by Renovate's grouped bump PRs (renovate.json5). Nothing is
+# injected at package time: the packaged chart is the committed chart. The
+# ordering job re-checks the pinned images' labels (scripts/release-order.py,
+# §5.1 and §5.3) before anything is pushed, as ci.yml did on the PR.
+#
+# Signing: each chart is signed by digest in its own job, in THIS workflow,
+# so the Fulcio certificate's identity is
+#   https://github.com/Distant-Signal/ds-deploy/.github/workflows/chart.yml@refs/heads/main
+# which Flux's `matchOIDCIdentity` subject regex in Ranma-Config must
+# accept (§5.9). Renaming this file, or signing from a reusable workflow's
+# job, changes that identity and breaks every chart fetch until
+# Ranma-Config follows. The push jobs (helm-chart.yml) get no id-token;
+# only the sign jobs do.
 
-# One run per ref at a time. Only pull requests cancel an older run: on
-# main/master a run that pushes must not be cancelled half way (some images
-# pushed, no chart), and a push must not cancel the weekly rebuild (its
-# fresh runtime layers would then never reach the cache, see `schedule`
-# below). A newer main run waits instead, and GitHub keeps only the newest
-# waiting one, so a burst of pushes still builds once more, not per push.
 concurrency:
-  group: containers-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One chart push at a time, in order; never cancel a push half way.
+  group: chart-${{ github.ref }}
+  cancel-in-progress: false
 
-# Read-only by default; each job below asks for packages/id-token itself.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
 permissions:
   contents: read
 
-on:
-  pull_request:
-    branches: [main, master, dev]
-  push:
-    branches: [main, master]
-  # Weekly forced rebuild (Mondays 02:41 UTC, off the hour, before
-  # prune-buildcache.yml's 04:17 run deletes the cache versions it untags).
-  # Every leg rebuilds its runtime stage with no cache, so its `apt-get
-  # upgrade` and `apt-get install` (one RUN, see gen-rust-dockerfiles.py's
-  # APT_UPGRADE) pick up Debian's security updates, for the base image's
-  # own packages (libc and the like) as well as the installed ones; a
-  # cached build would keep the old layer forever. The Rust and Next builds
-  # still come from the cache. It then pushes, signs, attests, writes the
-  # cache and packages the chart exactly like a push to main.
-  schedule:
-    - cron: "41 2 * * 1"
-  # By hand, from main/master (another ref builds without publishing, like
-  # a pull request). `no-cache` forces the same runtime-stage rebuild as the
-  # schedule; without it, it is an ordinary cached build and publish.
-  workflow_dispatch:
-    inputs:
-      no-cache:
-        description: Rebuild each image's runtime stage without the cache (Debian security updates)
-        type: boolean
-        default: false
-
-env:
-  REGISTRY: ghcr.io
-  # IMAGE_BASE (ghcr.io/<owner>/images) and CHART_BASE
-  # (ghcr.io/<owner>/charts) are not set here: GitHub's expressions can't
-  # lowercase `github.repository_owner`, and GHCR paths must be lowercase,
-  # so push-helm-chart's `Derive this repository's GHCR paths` step writes
-  # them to $GITHUB_ENV (image.yml derives its own).
-  # Reproducible output: a constant, not the commit time (image.yml sets
-  # the same for the images; see its header comment).
-  SOURCE_DATE_EPOCH: "0"
-
 jobs:
-  # Each image's version labels, org.distant-signal.core-version and
-  # org.distant-signal.api-build (repo split spec §5.1, §5.3), from
-  # Cargo.lock: a JSON map of service -> `key=value` lines, the shape
-  # image.yml's `labels` input takes. Static until a version changes, so
-  # they don't cost an unchanged image its digest. scripts/release-order.py
-  # documents the values; push-helm-chart checks them before the chart ships.
-  image-labels:
-    name: image labels
+  # The release ordering checks against the pinned images' labels, read
+  # anonymously from the registry as the cluster pulls, and the appVersion
+  # for the packaged chart (`sha-<short sha>` of this commit).
+  ordering:
+    name: release ordering (the pinned images' labels)
     runs-on: ubuntu-26.04
     outputs:
-      labels: ${{ steps.labels.outputs.labels }}
+      app-version: ${{ steps.app-version.outputs.app-version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Each image's version labels
-        id: labels
-        run: python3 scripts/release-order.py labels --github-output
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # renovate: datasource=pypi depName=uv
+          version: "0.13.6"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-  build-and-push:
-    name: ${{ matrix.service }}
-    needs: image-labels
+      - name: Install the pinned script tools
+        run: uv sync --locked --group lint
+
+      # Rule 3 (contract migrations) reads the migrations of the ds-core
+      # release core-version pins: a shallow clone of ds-core at that tag.
+      - name: Release ordering checks
+        run: |
+          set -euo pipefail
+          core="${RUNNER_TEMP}/ds-core"
+          version="$(cat core-version)"
+          git clone --quiet --depth 1 --branch "${version}" \
+            https://github.com/Distant-Signal/ds-core "${core}"
+          uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --registry \
+            --migrations "${core}/crates/ds-store/migrations"
+
+      - name: appVersion
+        id: app-version
+        run: echo "app-version=sha-${GITHUB_SHA:0:7}" >> "${GITHUB_OUTPUT}"
+
+  chart:
+    needs: ordering
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
     permissions:
       contents: read
       packages: write
-      id-token: write # cosign's keyless/OIDC signing, and the attestation's
-      attestations: write # the build provenance attestation
-
-    strategy:
-      fail-fast: false
-      # All legs at once (19 then; 20 with ingest-writer) took 19 of the
-      # account's 20 hosted runners, so CI's jobs queued behind them for
-      # 1.5-4 min on every push. 10 leaves
-      # room for ci.yml; with the registry build cache a leg is ~1-3 min,
-      # so the matrix still finishes in a few minutes.
-      max-parallel: 10
-      matrix:
-        include:
-          - service: api
-            dockerfile: docker/api.Dockerfile
-            target: ""
-          # No ds-migrate: Distant-Signal/ds-core's release.yml builds it
-          # (repo split spec §5.1), and values.yaml pins its release
-          # (migrate.image, bumped with core-version).
-          - service: aggregator
-            dockerfile: docker/aggregator.Dockerfile
-            target: ""
-          - service: enricher
-            dockerfile: docker/enricher.Dockerfile
-            target: ""
-          - service: notifier
-            dockerfile: docker/notifier.Dockerfile
-            target: ""
-          - service: poller-incidents
-            dockerfile: docker/poller-incidents.Dockerfile
-            target: ""
-          - service: poller-stations
-            dockerfile: docker/poller-stations.Dockerfile
-            target: ""
-          - service: poller-tocs
-            dockerfile: docker/poller-tocs.Dockerfile
-            target: ""
-          - service: poller-ldbws
-            dockerfile: docker/poller-ldbws.Dockerfile
-            target: ""
-          - service: poller-tfl
-            dockerfile: docker/poller-tfl.Dockerfile
-            target: ""
-          - service: poller-irish-rail-gtfs
-            dockerfile: docker/poller-irish-rail-gtfs.Dockerfile
-            target: ""
-          - service: poller-irish-rail-live
-            dockerfile: docker/poller-irish-rail-live.Dockerfile
-            target: ""
-          - service: poller-nir-stations
-            dockerfile: docker/poller-nir-stations.Dockerfile
-            target: ""
-          - service: poller-transit-schedule
-            dockerfile: docker/poller-transit-schedule.Dockerfile
-            target: ""
-          - service: trust-consumer
-            dockerfile: docker/trust-consumer.Dockerfile
-            target: ""
-          - service: full-coverage-consumer
-            dockerfile: docker/full-coverage-consumer.Dockerfile
-            target: ""
-          - service: trust-backlog-consumer
-            dockerfile: docker/trust-backlog-consumer.Dockerfile
-            target: ""
-          - service: movement-relay
-            dockerfile: docker/movement-relay.Dockerfile
-            target: ""
-          - service: darwin-relay
-            dockerfile: docker/darwin-relay.Dockerfile
-            target: ""
-          - service: schedule-ingest
-            dockerfile: docker/schedule-ingest.Dockerfile
-            target: ""
-          - service: schedule-reference
-            dockerfile: docker/schedule-reference.Dockerfile
-            target: ""
-          - service: ingest-writer
-            dockerfile: docker/ingest-writer.Dockerfile
-            target: ""
-          # The only image needing an explicit target: frontend/Dockerfile's
-          # last stage is `runtime-dev`; the image this repo wants published
-          # is the earlier `runtime-prod` stage (optimized `next build` +
-          # `next start`), same as charts/distant-signal/README.md's manual
-          # `docker build --target runtime-prod` example.
-          - service: frontend
-            dockerfile: frontend/Dockerfile
-            target: runtime-prod
-
-    # Distant-Signal/ci's image.yml, once per matrix leg: build; when
-    # publishing, push to ghcr.io/<owner>/images/<service>, attest the
-    # build provenance, sign the digest (keyless cosign, retried after a
-    # Rekor conflict) and upload `<service>=<digest>` as the
-    # image-digest-<service> artifact for push-helm-chart. Its header
-    # comment has the tagging, cache and reproducibility details this file
-    # used to carry. The project URL in every Rust binary's outbound
-    # User-Agent (crates/ds-runtime's user_agent!) is this repository's, so it
-    # follows the owner too; the frontend's Dockerfile doesn't declare it.
-    # The second cache source is the cache from before the repository moved
-    # to the organisation (repo split §5.9); a missing ref is skipped.
-    # Signing identity: image.yml signs inside its own job, so the image
-    # signatures' certificate identity is Distant-Signal/ci's image.yml,
-    # not this file. Only the chart's signature is verified (by Flux); the
-    # chart is still signed here, in push-helm-chart.
-    uses: Distant-Signal/ci/.github/workflows/image.yml@f68c7866d1119c89d4faf647a49f5c431ad63c45 # main
     with:
-      service: ${{ matrix.service }}
-      dockerfile: ${{ matrix.dockerfile }}
-      target: ${{ matrix.target }}
-      # Publish (push images and cache, attest, sign) on a push to
-      # main/master, the weekly rebuild, or a manual run from main/master;
-      # never on a pull request. Rebuild the runtime stage uncached on the
-      # weekly rebuild and a manual `no-cache` run. Spelled out here: a
-      # reusable workflow's `with:` can't read `env`.
-      publish: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
-      rebuild-runtime: ${{ github.event_name == 'schedule' || inputs.no-cache == true }}
-      build-args: DS_PROJECT_URL=${{ github.server_url }}/${{ github.repository }}
-      labels: ${{ fromJSON(needs.image-labels.outputs.labels)[matrix.service] }}
-      extra-cache-from: type=registry,ref=ghcr.io/fasterspeeding/distant-signal/buildcache:${{ matrix.service }}
+      chart: charts/distant-signal
+      lint-values: charts/distant-signal/values-example.yaml
+      app-version: ${{ needs.ordering.outputs.app-version }}
+      publish: true
 
-  # Package and push the Helm chart to ghcr.io, once every image in the
-  # matrix above has built and pushed successfully.
-  #
-  # `needs: build-and-push` on a matrix job waits for every combination in
-  # the matrix, not just one -- so this only starts after all 19 images
-  # are confirmed built (and, outside pull_request, pushed). A chart push
-  # referencing a half-finished or partially-failed image matrix would be
-  # worse than not pushing at all, so `fail-fast: false` above combined
-  # with this plain `needs:` is deliberate: if any one image fails,
-  # build-and-push's own overall conclusion is failure and this job is
-  # skipped, same as any other `needs:` dependent job.
-  #
-  # Gated by the same `github.event_name != 'pull_request'` condition as
-  # the image push itself, for the same reason: PRs (including forked
-  # ones) don't get a packages:write GITHUB_TOKEN, and there is nothing
-  # worth publishing from an unmerged PR anyway.
-  #
-  # Registry & auth: ghcr.io, the same registry (and GITHUB_TOKEN --
-  # already scoped packages:write below, no separate secret needed) the
-  # container images above already use. GHCR is a normal, properly-TLS'd
-  # public-CA registry, so unlike a self-hosted/HTTP-only registry this
-  # needs no `--insecure`/`http`-style Helm or BuildKit configuration --
-  # `helm registry login` here is the standard GHCR-via-GitHub-Actions
-  # pattern.
-  #
-  # Path: pushed under ${CHART_BASE}/distant-signal, i.e.
-  # ghcr.io/<owner>/charts/distant-signal (`helm push ... oci://${CHART_BASE}`,
-  # which appends the chart's own name from Chart.yaml) -- a `charts/`
-  # sibling of IMAGE_BASE's `images/<service>` paths under the same owner
-  # (repo split §5.9), so the packaged chart doesn't read as one more
-  # image alongside api/aggregator/frontend/etc.
-  #
-  # Versioning -- rewritten from this job's original version, which just
-  # pushed whatever `version:`/`appVersion:` were statically set in
-  # Chart.yaml. That had two real bugs, confirmed against this registry's
-  # actual package history before this change:
-  #
-  #   1. `helm push`'s destination tag is `Chart.yaml`'s `version:`
-  #      field, bumped manually and "for chart-only changes" only (see
-  #      git log on that file: 0.2.0, 0.2.2, ... one bump per chart-only
-  #      change). But this job runs on *every* push to main, chart files
-  #      touched or not. So a push that only changes application code
-  #      re-pushes the exact same version string -- `gh api .../packages/
-  #      container/charts%2Fdistant-signal/versions` showed exactly one
-  #      version (`0.2.2`) ever recorded in the registry despite many
-  #      pushes, i.e. every one of those pushes silently overwrote that
-  #      same immutable-looking OCI tag in place.
-  #   2. Worse, `appVersion:` (which `_helpers.tpl`'s `distant-signal.
-  #      image` helper uses as the DEFAULT `image.tag` for every workload)
-  #      was equally static, manually tracking crates/api/Cargo.toml's
-  #      version. So even a chart-only bump that *did* produce a new
-  #      pushed chart version still pointed every workload's default
-  #      image reference at whatever `appVersion` was last hand-set to --
-  #      not the images this run just built and pushed above.
-  #
-  # Schemes considered for fixing both:
-  #
-  #   - CalVer (e.g. `2026.9.23[+<short-sha>]`). Readable at a glance, but
-  #     this chart has already published real `0.2.x` SemVer releases
-  #     (see git log above) -- switching format now means mixing two
-  #     incompatible version eras in the same OCI tag list, and breaks
-  #     the ordering/pinning expectations of anyone who already pulled a
-  #     `0.2.x` tag. Rejected: the compatibility cost outweighs the
-  #     readability gain for a chart that isn't starting from zero.
-  #   - CI bumps Chart.yaml's `version:` itself and commits it back to
-  #     main. Gives clean, strictly-ordered SemVer with no build-metadata
-  #     ambiguity, but no workflow in this repo commits back to main
-  #     today -- this would be a first, and a real one: it needs a
-  #     `[skip ci]`-style guard or a bot identity/PAT distinct from
-  #     GITHUB_TOKEN (whose commits don't retrigger `on: push`, by GitHub
-  #     design) to avoid `push-helm-chart`'s own commit re-triggering
-  #     this same workflow in a loop. Rejected as disproportionate: it
-  #     solves problem 1 but does nothing for problem 2 (appVersion) on
-  #     its own, and the bot-commit machinery is a bigger, riskier change
-  #     than either problem actually calls for.
-  #   - Plain SemVer + build metadata, e.g. `0.2.2+sha.<short-sha>`,
-  #     replacing Chart.yaml's version wholesale at package time. Valid
-  #     SemVer 2, immutable per-commit tag, no bot-commit needed -- close
-  #     to what's chosen below, but rejected in this exact form because
-  #     build-metadata is explicitly ignored for precedence by semver-
-  #     aware tooling (two tags differing only in `+sha.*` compare as
-  #     EQUAL precedence), and a bare commit SHA has no inherent temporal
-  #     order -- given two such tags side by side, neither a human nor a
-  #     semver-sorting tool can tell which one is newer without cross-
-  #     referencing git history. That gap is exactly what the chosen
-  #     scheme below closes.
-  #
-  # Chosen: a hybrid. Chart.yaml's `version:` field keeps its existing
-  # meaning and discipline completely unchanged -- a human still bumps it
-  # manually, only for chart-schema/template/values changes, exactly as
-  # documented in that file's own comment and git history. This job reads
-  # that field as a BASE and appends CI-computed build metadata to it on
-  # every run, valid or not: `<base>+build.<run_number>.sha.<short_sha>`.
-  # `run_number` is monotonically increasing per-workflow (GitHub-assigned,
-  # never reused), so unlike a bare sha suffix, two of this chart's tags
-  # CAN be told apart at a glance or by plain string/lexicographic-ish
-  # comparison of the run-number segment -- solving the ordering gap the
-  # plain-sha scheme above had, while `sha.<short_sha>` still ties the
-  # build back to the exact commit for traceability. This is still valid
-  # SemVer 2 build metadata (dot-separated alphanumeric identifiers), so
-  # `helm package --version` happily accepts it, and it's a pure additive
-  # suffix -- Chart.yaml on its own (e.g. packaged locally, outside CI)
-  # still resolves to a perfectly valid bare version with no CI step
-  # required. Example: base `0.2.2` + this run -> `0.2.2+build.42.sha.
-  # 860c190`. This directly fixes bug 1: chart-file changes or not, every
-  # push mints a new, distinguishable, immutable OCI tag.
-  #
-  # For bug 2, `appVersion` is packaged as `sha-<short_sha>` -- the SAME
-  # short SHA, in the SAME `sha-<short>` format docker/metadata-action's
-  # own `type=sha` tag rule (added to the `meta` step above) mints for
-  # every one of the 19 images this job's `needs:` just confirmed were
-  # built and pushed from this exact commit. That means the packaged
-  # chart's default `image.tag` (via `distant-signal.image` in
-  # _helpers.tpl) resolves to a real, already-pushed, immutable tag that
-  # is guaranteed to exist, because it's the same tag every image in the
-  # matrix above was just tagged with. `short_sha` here is derived as a
-  # plain 7-character prefix of `$GITHUB_SHA` (a default Actions env var,
-  # no `${{ }}` interpolated directly into the shell script) -- the same
-  # length and derivation docker/metadata-action's `type=sha` uses by
-  # default, so the two are guaranteed to match without needing to plumb
-  # an output through the matrix job.
-  #
-  # Chart.yaml's own `appVersion:` field is left as a human-managed
-  # local-dev fallback only (see that file's own updated comment) -- it's
-  # unconditionally overridden here, so it no longer needs to track
-  # anything CI-relevant, just to remain a sane default for someone
-  # running `helm package`/`helm template` straight from a checkout.
-  #
-  # STRENGTHENED FURTHER, for first-party images specifically: the
-  # `sha-<short_sha>` tag above is immutable IN PRACTICE (nobody re-pushes
-  # over it) but not immutable IN PRINCIPLE -- a tag can always be
-  # overwritten to point at different content; `repo@sha256:...` cannot.
-  # This job's own "Pin first-party image digests into values.yaml" step
-  # below (fed by every matrix leg's own real `steps.build.outputs.digest`,
-  # collected via the `image-digest-<service>` artifacts each leg uploads)
-  # pins each first-party service's `*.image.digest` in the packaged
-  # chart's values.yaml to that exact content digest, which
-  # `distant-signal.image` (_helpers.tpl) prefers over `tag`/appVersion
-  # whenever it's set. `appVersion`/`image.tag` stay the fallback for any
-  # service whose digest wasn't available this run (see that step's own
-  # comment). The non-first-party images (postgres, redis, devAuthentik's
-  # goauthentik/server, scheduleFeed's drakkan/sftpgo) have no `digest`
-  # field; values.yaml pins them as `tag: "<version>@sha256:..."` instead
-  # (INF-11), kept current by Renovate.
-  #
-  # INF-12: the pushed chart is cosign-signed keylessly, like the images,
-  # so a consumer can verify it before installing (Flux: an
-  # OCIRepository/HelmRepository `verify.provider: cosign` with
-  # `matchOIDCIdentity` issuer `https://token.actions.githubusercontent.com`
-  # and subject `https://github.com/<owner>/<repo>/.github/workflows/containers.yml@refs/heads/main`).
-  push-helm-chart:
-    name: Package and push Helm chart
-    needs: build-and-push
-    # build-and-push's `publish` condition.
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+  sign-chart:
+    name: Sign and verify the pushed chart
+    needs: chart
+    if: needs.chart.outputs.digest != ''
     runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: write
-      id-token: write # cosign keyless/OIDC signing of the chart (INF-12)
-
+      id-token: write # cosign keyless/OIDC signing
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # GHCR paths from this repository's owner, lowercased (ghcr.io refuses
-      # upper case): Distant-Signal gives ghcr.io/distant-signal/images and
-      # ghcr.io/distant-signal/charts. See the workflow `env:` comment.
-      - name: Derive this repository's GHCR paths
-        run: |
-          set -euo pipefail
-          owner="${GITHUB_REPOSITORY_OWNER,,}"
-          {
-            echo "IMAGE_BASE=${REGISTRY}/${owner}/images"
-            echo "CHART_BASE=${REGISTRY}/${owner}/charts"
-          } >> "${GITHUB_ENV}"
-
-      # Same action and pinned Helm version as ci.yml's `helm-lint` job,
-      # for consistency rather than introducing a second Helm setup/
-      # version into this repo's CI.
-      - name: Install Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with:
-          version: v4.3.1
-
-      # Pulls in every `image-digest-<service>` artifact build-and-push's 19
-      # matrix legs uploaded above (see that job's own comment on the
-      # digest-plumbing mechanism), flattened into one directory via
-      # `merge-multiple: true` -- safe here specifically because each leg's
-      # own file is named `digest-<service>.txt` (not a fixed `digest.txt`),
-      # so flattening can't make two legs' files collide/overwrite. A
-      # `pattern:` that matches nothing (e.g. this job re-run on its own,
-      # after the matrix's artifacts already expired -- see their 1-day
-      # `retention-days` -- or without a corresponding fresh
-      # build-and-push run at all) is NOT an error: it just leaves this
-      # directory empty, and the next step's loop below then finds nothing
-      # to pin, leaving every `image.digest` at its checked-out-values.yaml
-      # default of `""` -- the intended "fall back to tag/appVersion"
-      # behavior for that case, not a hard failure.
-      - name: Download image digest artifacts
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: image-digest-*
-          path: /tmp/image-digests
-          merge-multiple: true
-
-      - name: Log into ${{ env.REGISTRY }} (Helm OCI)
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} \
-            --username ${{ github.actor }} \
-            --password-stdin
-
-      # Reads $GITHUB_SHA/$GITHUB_RUN_NUMBER (default Actions env vars --
-      # not interpolated via `${{ }}` into the script body) rather than
-      # `github.sha`/`github.run_number` expressions, so nothing here
-      # risks the classic script-injection footgun of splicing an
-      # Actions expression straight into a shell string. See this job's
-      # top comment block for the version-format rationale.
-      - name: Compute chart & app version
-        id: version
-        run: |
-          set -euo pipefail
-          short_sha="${GITHUB_SHA:0:7}"
-          base_version="$(sed -n 's/^version: *"\?\([^"[:space:]]*\)"\?.*/\1/p' charts/distant-signal/Chart.yaml)"
-          if [[ -z "${base_version}" ]]; then
-            echo "::error::could not parse version: from charts/distant-signal/Chart.yaml" >&2
-            exit 1
-          fi
-          echo "chart_version=${base_version}+build.${GITHUB_RUN_NUMBER}.sha.${short_sha}" >> "${GITHUB_OUTPUT}"
-          echo "app_version=sha-${short_sha}" >> "${GITHUB_OUTPUT}"
-
-      # `helm package` (see its own `--help`) has no `--values`/`-f`/`--set`
-      # flag of any kind -- it just tars up whatever is already on disk at
-      # `charts/distant-signal`, unlike `helm template`/`helm install`,
-      # which render on top of caller-supplied overrides. So the ONLY way
-      # to make the packaged chart's own DEFAULT `*.image.digest` values
-      # reflect this run's real digests is to rewrite
-      # charts/distant-signal/values.yaml in this ephemeral checkout
-      # in-place before `helm package` runs below -- nothing is committed
-      # back to git, this workspace is discarded at the end of the job.
-      #
-      # `yq` (mikefarah's Go yq, preinstalled on GitHub's ubuntu-24.04
-      # runner image) does the in-place edit; `SERVICE_TO_PATH` below is a
-      # hand-maintained map from each matrix leg's `service:` name
-      # (containers.yml's own `build-and-push` matrix, kebab-case) to that
-      # service's actual values.yaml key (camelCase, nested under
-      # `pollers`/`scheduleFeed` for the services that live there) -- keep
-      # this in sync with both the matrix `include:` list above and
-      # values.yaml's first-party `image:` blocks whenever either changes.
-      # Only first-party, CI-built images are listed here -- postgresql,
-      # redis, devAuthentik and railMcp are intentionally absent, same as
-      # they have no `image.digest` field in values.yaml at all.
-      #
-      # A missing/empty digest for any one service (see the download step's
-      # own comment above for when that happens) is NOT an error: that
-      # service's `image.digest` is simply left at its checked-out default
-      # of `""`, and `distant-signal.image` (_helpers.tpl) falls back
-      # cleanly to the existing tag/appVersion-based reference for it --
-      # this loop only ever SETS a digest, never clears one, and never
-      # fails the job for an absent file. A malformed digest file (wrong
-      # `service=digest` shape, or a value that doesn't look like a real
-      # `sha256:<64 hex>` digest) DOES fail the job -- that indicates a bug
-      # in the upload side above, not a legitimately-missing digest, and
-      # packaging a chart with a corrupt digest silently baked in would be
-      # worse than failing loudly here.
-      - name: Pin first-party image digests into values.yaml
-        run: |
-          set -euo pipefail
-          declare -A SERVICE_TO_PATH=(
-            [api]=".api"
-            [aggregator]=".aggregator"
-            [enricher]=".enricher"
-            [notifier]=".notifier"
-            [poller-incidents]=".pollers.incidents"
-            [poller-stations]=".pollers.stations"
-            [poller-tocs]=".pollers.tocs"
-            [poller-ldbws]=".pollers.ldbws"
-            [poller-tfl]=".pollers.tfl"
-            [poller-irish-rail-gtfs]=".pollerIrishRailGtfs"
-            [poller-irish-rail-live]=".pollerIrishRailLive"
-            [poller-nir-stations]=".pollerNirStations"
-            [poller-transit-schedule]=".pollerTransitSchedule"
-            [trust-consumer]=".trustConsumer"
-            [full-coverage-consumer]=".fullCoverageConsumer"
-            [trust-backlog-consumer]=".trustBacklogConsumer"
-            [movement-relay]=".movementRelay"
-            [darwin-relay]=".darwinRelay"
-            [schedule-ingest]=".scheduleFeed.ingest"
-            [schedule-reference]=".scheduleFeed.reference"
-            [ingest-writer]=".ingestWriter"
-            [frontend]=".frontend"
-          )
-
-          shopt -s nullglob
-          digest_files=(/tmp/image-digests/*.txt)
-          if [[ ${#digest_files[@]} -eq 0 ]]; then
-            echo "::warning::no image-digest-* artifacts found -- every service's image.digest stays empty, the packaged chart falls back to tag/appVersion-based image references for all of them."
-          fi
-
-          pinned=0
-          for f in "${digest_files[@]}"; do
-            line="$(cat "${f}")"
-            service="${line%%=*}"
-            digest="${line#*=}"
-            if [[ -z "${service}" ]] || [[ -z "${digest}" ]] || [[ "${line}" = "${service}" ]]; then
-              echo "::error::malformed digest file ${f}: '${line}' (expected service=sha256:...)" >&2
-              exit 1
-            fi
-            if [[ ! "${digest}" =~ ^sha256:[0-9a-fA-F]{64}$ ]]; then
-              echo "::error::digest for service '${service}' (from ${f}) doesn't look like a real sha256 digest: '${digest}'" >&2
-              exit 1
-            fi
-            path="${SERVICE_TO_PATH[${service}]:-}"
-            if [[ -z "${path}" ]]; then
-              echo "::error::no values.yaml path mapping for service '${service}' (from ${f}) -- update this step's SERVICE_TO_PATH to match containers.yml's matrix and values.yaml." >&2
-              exit 1
-            fi
-            yq -i "${path}.image.digest = \"${digest}\"" charts/distant-signal/values.yaml
-            pinned=$((pinned + 1))
-          done
-          echo "Pinned ${pinned} first-party image digest(s) into charts/distant-signal/values.yaml."
-
-      # The checked-out charts name this repository's owner as it was when
-      # they were written (values.yaml's `image.repository` defaults, the
-      # runbook base URL, Chart.yaml's home/sources). Point the packaged
-      # copies at where this run actually pushed and at this repository, so
-      # nothing needs hand-editing when the repository changes hands. For
-      # Distant-Signal/distant-signal every value below equals the
-      # checked-in one, so the packaged chart is unchanged.
-      #
-      # Every first-party image is re-pointed, digest pinned or not: this
-      # job runs only after every matrix leg pushed to IMAGE_BASE. Each
-      # service's checked-in repository must already end in
-      # `images/<service>` (the two segments global.imageRegistry
-      # keeps), so a SERVICE_TO_PATH mistake fails here instead of shipping
-      # a wrong image. Same map as the pin step above.
-      - name: Point the packaged charts at this repository
-        env:
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-        run: |
-          set -euo pipefail
-          declare -A SERVICE_TO_PATH=(
-            [api]=".api"
-            [aggregator]=".aggregator"
-            [enricher]=".enricher"
-            [notifier]=".notifier"
-            [poller-incidents]=".pollers.incidents"
-            [poller-stations]=".pollers.stations"
-            [poller-tocs]=".pollers.tocs"
-            [poller-ldbws]=".pollers.ldbws"
-            [poller-tfl]=".pollers.tfl"
-            [poller-irish-rail-gtfs]=".pollerIrishRailGtfs"
-            [poller-irish-rail-live]=".pollerIrishRailLive"
-            [poller-nir-stations]=".pollerNirStations"
-            [poller-transit-schedule]=".pollerTransitSchedule"
-            [trust-consumer]=".trustConsumer"
-            [full-coverage-consumer]=".fullCoverageConsumer"
-            [trust-backlog-consumer]=".trustBacklogConsumer"
-            [movement-relay]=".movementRelay"
-            [darwin-relay]=".darwinRelay"
-            [schedule-ingest]=".scheduleFeed.ingest"
-            [schedule-reference]=".scheduleFeed.reference"
-            [ingest-writer]=".ingestWriter"
-            [frontend]=".frontend"
-          )
-          values=charts/distant-signal/values.yaml
-          for service in "${!SERVICE_TO_PATH[@]}"; do
-            path="${SERVICE_TO_PATH[${service}]}"
-            current="$(yq "${path}.image.repository" "${values}")"
-            if [[ "${current}" != */images/"${service}" ]]; then
-              echo "::error::${values} ${path}.image.repository is '${current}', expected */images/${service}" >&2
-              exit 1
-            fi
-            repo="${IMAGE_BASE}/${service}" yq -i "${path}.image.repository = strenv(repo)" "${values}"
-          done
-          yq -i '.metrics.prometheusRule.runbookBaseUrl = strenv(REPO_URL) + "/blob/main"' "${values}"
-          for chart in charts/distant-signal/Chart.yaml charts/ds-ingest-bucket/Chart.yaml; do
-            yq -i '.home = strenv(REPO_URL) | .sources = [strenv(REPO_URL)]' "${chart}"
-          done
-          echo "Pointed ${#SERVICE_TO_PATH[@]} image repositories at ${IMAGE_BASE}, and the runbook and chart URLs at ${REPO_URL}."
-
-      # AGPL §13 (repo split spec §6): the api's /public/version lists each
-      # image with the source it was built from. Every image above is built
-      # from this commit (an unchanged one keeps its digest because its
-      # inputs are byte-identical), so one source and revision covers all.
-      - name: Record the source revision in values.yaml
-        env:
-          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
-        run: |
-          set -euo pipefail
-          yq -i '.sourceCode.url = strenv(SOURCE_URL) | .sourceCode.revision = strenv(GITHUB_SHA)' charts/distant-signal/values.yaml
-
-      # The release-ordering checks (repo split spec §5.1, §5.3), against
-      # the labels of the images this chart now pins, read anonymously from
-      # the registry as the cluster pulls them: every image's core-version at
-      # most ds-migrate's, the frontend's api-build at most the api's, and
-      # every image at least the `safe after core` of any versioned contract
-      # migration. Everything here builds from one commit, so they hold by
-      # construction; a failure (or an image the registry won't serve
-      # anonymously, e.g. a new package still private) stops the chart push.
-      - name: Release ordering checks (the pinned images' labels)
-        env:
-          APP_VERSION: ${{ steps.version.outputs.app_version }}
-        run: |
-          set -euo pipefail
-          yq -o=json charts/distant-signal/values.yaml > "${RUNNER_TEMP}/values.json"
-          core="$(python3 scripts/core-checkout.py)"
-          python3 scripts/release-order.py check --values "${RUNNER_TEMP}/values.json" \
-            --registry --app-version "${APP_VERSION}" --migrations "${core}/crates/ds-store/migrations"
-
-      - name: helm package
-        id: package
-        run: |
-          set -euo pipefail
-          helm package charts/distant-signal \
-            --version "${{ steps.version.outputs.chart_version }}" \
-            --app-version "${{ steps.version.outputs.app_version }}" \
-            --destination /tmp/helm-package
-          chart_tgz=$(find /tmp/helm-package -maxdepth 1 -name 'distant-signal-*.tgz' -print -quit)
-          echo "chart_tgz=${chart_tgz}" >> "${GITHUB_OUTPUT}"
-
-      - name: helm push
-        id: push
-        env:
-          CHART_TGZ: ${{ steps.package.outputs.chart_tgz }}
-          DEST: oci://${{ env.CHART_BASE }}
-        run: |
-          set -euo pipefail
-          helm push "${CHART_TGZ}" "${DEST}" 2>&1 | tee /tmp/helm-push.log
-          # `helm push` reports what it pushed as "Pushed: <ref>" and
-          # "Digest: sha256:...". Sign that exact digest, never a tag.
-          digest=$(sed -n 's/^Digest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' /tmp/helm-push.log | head -n 1)
-          if [[ -z "${digest}" ]]; then
-            echo "::error::could not read the pushed chart's digest from helm push's output" >&2
-            exit 1
-          fi
-          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
-
-      # INF-12: sign the chart the same way build-and-push signs every image
-      # (keyless, sigstore's public Fulcio/Rekor), then verify the signature
-      # against this workflow's own identity so a broken signing setup fails
-      # here rather than at install time.
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Log into ${{ env.REGISTRY }} (cosign)
+      - name: Log into ghcr.io (cosign)
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Distant-Signal/ci's cosign-sign composite action: sign by digest,
-      # retried (a Rekor upload that times out and is retried by cosign can
-      # fail with 409 createLogEntryConflict though the first attempt
-      # landed; a fresh `cosign sign` has new ephemeral keys and can't
-      # conflict), then verify against this workflow's identity. A composite
-      # action runs in this job, so the certificate identity stays this
-      # workflow's, which Flux's matchOIDCIdentity pins.
-      - name: Sign and verify the pushed chart
-        uses: Distant-Signal/ci/actions/cosign-sign@f68c7866d1119c89d4faf647a49f5c431ad63c45 # main
+      - name: Sign and verify
+        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
         with:
-          ref: ${{ env.CHART_BASE }}/distant-signal@${{ steps.push.outputs.digest }}
+          ref: ${{ needs.chart.outputs.ref }}@${{ needs.chart.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
 
-      # charts/ds-ingest-bucket: the schedule feed's GCS landing bucket
-      # (Crossplane managed resources, no workload), pushed beside
-      # distant-signal as oci://${CHART_BASE}/ds-ingest-bucket.
-      # It has no images, so no digest pinning and no --app-version (its
-      # appVersion is the design version in its Chart.yaml). Same version
-      # scheme as distant-signal above: Chart.yaml's hand-bumped `version:`
-      # plus `+build.<run>.sha.<sha>`, so every push is a new, immutable
-      # tag. Signed and verified the same way (INF-12).
-      - name: helm package and push (ds-ingest-bucket)
-        id: push-ingest-bucket
-        env:
-          DEST: oci://${{ env.CHART_BASE }}
-        run: |
-          set -euo pipefail
-          short_sha="${GITHUB_SHA:0:7}"
-          base_version="$(sed -n 's/^version: *"\?\([^"[:space:]]*\)"\?.*/\1/p' charts/ds-ingest-bucket/Chart.yaml)"
-          if [[ -z "${base_version}" ]]; then
-            echo "::error::could not parse version: from charts/ds-ingest-bucket/Chart.yaml" >&2
-            exit 1
-          fi
-          helm package charts/ds-ingest-bucket \
-            --version "${base_version}+build.${GITHUB_RUN_NUMBER}.sha.${short_sha}" \
-            --destination /tmp/helm-package-ingest-bucket
-          chart_tgz=$(find /tmp/helm-package-ingest-bucket -maxdepth 1 -name 'ds-ingest-bucket-*.tgz' -print -quit)
-          helm push "${chart_tgz}" "${DEST}" 2>&1 | tee /tmp/helm-push-ingest-bucket.log
-          digest=$(sed -n 's/^Digest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' /tmp/helm-push-ingest-bucket.log | head -n 1)
-          if [[ -z "${digest}" ]]; then
-            echo "::error::could not read the pushed ds-ingest-bucket chart's digest from helm push's output" >&2
-            exit 1
-          fi
-          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+  ingest-bucket:
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    permissions:
+      contents: read
+      packages: write
+    with:
+      chart: charts/ds-ingest-bucket
+      lint-values: charts/ds-ingest-bucket/ci/example-values.yaml
+      publish: true
 
-      - name: Sign and verify the pushed chart (ds-ingest-bucket)
-        uses: Distant-Signal/ci/actions/cosign-sign@f68c7866d1119c89d4faf647a49f5c431ad63c45 # main
+  sign-ingest-bucket:
+    name: Sign and verify the pushed chart (ds-ingest-bucket)
+    needs: ingest-bucket
+    if: needs.ingest-bucket.outputs.digest != ''
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless/OIDC signing
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log into ghcr.io (cosign)
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          ref: ${{ env.CHART_BASE }}/ds-ingest-bucket@${{ steps.push-ingest-bucket.outputs.digest }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign and verify
+        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+        with:
+          ref: ${{ needs.ingest-bucket.outputs.ref }}@${{ needs.ingest-bucket.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}

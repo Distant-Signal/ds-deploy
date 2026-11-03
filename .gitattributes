@@ -1,0 +1,14 @@
+# LF everywhere, including on Windows checkouts.
+* text=auto eol=lf
+
+# Collapse lockfiles in diffs and leave them out of language stats.
+*.lock linguist-generated=true
+
+# ds-core's release assets, vendored by scripts/sync-core.py (repo split
+# spec §5.1): review them in ds-core instead.
+charts/distant-signal/files/db-grants.yaml          linguist-generated=true
+charts/distant-signal/files/postgres-grants.sql     linguist-generated=true
+charts/distant-signal/files/postgres-roles.sql      linguist-generated=true
+charts/distant-signal/files/postgres-roles-setup.sh linguist-generated=true
+charts/distant-signal/files/redis-users.acl.tpl     linguist-generated=true
+scripts/render-redis-acl.py                         linguist-generated=true

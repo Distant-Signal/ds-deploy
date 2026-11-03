@@ -10,7 +10,7 @@ instead of it; `charts/distant-signal`'s `scheduleFeed` switches each one
 on separately.
 
 Design and rationale:
-[2026-10-02-schedule-feed-gcs-landing-design](../../docs/superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md)
+[2026-10-02-schedule-feed-gcs-landing-design](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md)
 (the file name predates the move from S3 to GCS).
 
 **Off by default** (`enabled: false`) and not deployed anywhere yet. This

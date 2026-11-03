@@ -13,7 +13,6 @@ import contextlib
 import importlib.util
 import io
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -96,6 +95,34 @@ def version(text: str) -> Any:  # noqa: ANN401  # the loaded module's Version
     return parsed
 
 
+# Every first-party image the chart pins: the services' and ds-migrate.
+PINNED = (
+    "aggregator",
+    "api",
+    "darwin-relay",
+    "ds-migrate",
+    "enricher",
+    "frontend",
+    "full-coverage-consumer",
+    "ingest-writer",
+    "movement-relay",
+    "notifier",
+    "poller-incidents",
+    "poller-irish-rail-gtfs",
+    "poller-irish-rail-live",
+    "poller-ldbws",
+    "poller-nir-stations",
+    "poller-stations",
+    "poller-tfl",
+    "poller-tocs",
+    "poller-transit-schedule",
+    "schedule-ingest",
+    "schedule-reference",
+    "trust-backlog-consumer",
+    "trust-consumer",
+)
+
+
 class VersionTest(unittest.TestCase):
     """Label values and how they order."""
 
@@ -156,11 +183,23 @@ class PinnedImagesTest(unittest.TestCase):
         with self.assertRaises(ro.InputError):
             images["aggregator"].reference("")
 
-    def test_the_chart_pins_every_built_image(self) -> None:
-        """The real values pin each image built here, and ds-core's ds-migrate."""
+    def test_the_chart_pins_every_image(self) -> None:
+        """ds-deploy: every first-party image is pinned by tag and digest.
+
+        The services at a build tag (build.<run id>-<commit>); ds-migrate at
+        its ds-core release (vX.Y.Z), which is core-version.
+        """
         values = ro.read_values(REPO / "charts" / "distant-signal" / "values.yaml")
-        services = sorted(image.service for image in ro.pinned_images(values))
-        self.assertEqual(services, sorted([*ro.image_labels(REPO), "ds-migrate"]))
+        images = list(ro.pinned_images(values))
+        self.assertEqual(sorted(image.service for image in images), sorted(PINNED))
+        core = (REPO / "core-version").read_text(encoding="utf-8").strip()
+        for image in images:
+            with self.subTest(image.service):
+                self.assertRegex(image.digest, r"^sha256:[0-9a-f]{64}$")
+                if image.service == ro.MIGRATE:
+                    self.assertEqual(image.tag, core)
+                else:
+                    self.assertRegex(image.tag, r"^build\.\d+-[0-9a-f]{40}$")
 
 
 class LabelsTest(unittest.TestCase):
@@ -198,20 +237,6 @@ class LabelsTest(unittest.TestCase):
         """A core crate from a registry isn't a ds-core release."""
         with self.assertRaisesRegex(ro.InputError, "not a git tag or the workspace"):
             self.labels("Cargo-registry.lock")
-
-    def test_this_repository(self) -> None:
-        """Today: one commit, so one core-version and one api-build everywhere."""
-        labels = ro.image_labels(REPO)
-        self.assertEqual(len({v[CORE] for v in labels.values() if CORE in v}), 1)
-        self.assertEqual(
-            {labels["api"][API_BUILD], labels["frontend"][API_BUILD]},
-            {labels["frontend"][API_BUILD]},
-        )
-        self.assertNotIn(CORE, labels["frontend"])
-        lines = ro.as_label_lines(labels)
-        self.assertEqual(
-            lines["frontend"], f"{API_BUILD}={labels['frontend'][API_BUILD]}"
-        )
 
 
 class CheckTest(unittest.TestCase):
@@ -481,30 +506,6 @@ class MainTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             status = ro.main(list(argv))
         return status, out.getvalue()
-
-    def test_labels_github_output(self) -> None:
-        """`labels --github-output` writes the JSON map for containers.yml."""
-        with tempfile.TemporaryDirectory() as tmp:
-            output = Path(tmp) / "out"
-            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}):
-                status, out = self.main("labels", "--github-output")
-            written = output.read_text("utf-8")
-        self.assertEqual(status, 0)
-        self.assertTrue(written.startswith("labels={"))
-        self.assertEqual(json.loads(written.removeprefix("labels=")), json.loads(out))
-        self.assertIn("api", json.loads(out))
-        self.assertNotIn("ds-migrate", json.loads(out))
-
-    def test_check_source_passes_on_this_repository(self) -> None:
-        """The pull request check: one commit, so it passes trivially."""
-        status, out = self.main(
-            "check",
-            "--values",
-            str(REPO / "charts" / "distant-signal" / "values.yaml"),
-            "--source",
-        )
-        self.assertEqual(status, 0, out)
-        self.assertIn("release ordering holds", out)
 
     def test_check_registry_fails_on_a_violation(self) -> None:
         """The pre-push check, against a registry whose service is too new."""

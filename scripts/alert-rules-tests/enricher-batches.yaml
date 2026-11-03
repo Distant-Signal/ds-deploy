@@ -28,7 +28,7 @@ tests:
             exp_annotations:
               summary: enricher Message Batches failing to submit or abandoned
               description: "2 batches failed to submit or were abandoned in 6h; the sweep's extractions are not getting done."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalenricherbatchfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalenricherbatchfailing
 
   # 100 requests end, 30 of them expired or errored (30% > 20%): fires. The
   # same share of a handful of requests (under minResults) does not.
@@ -48,7 +48,7 @@ tests:
             exp_annotations:
               summary: enricher batch requests errored, expired or canceled
               description: "30% of batch requests ended errored, expired or canceled in 6h."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalenricherbatchresultsfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalenricherbatchresultsfailing
   - interval: 1m
     input_series:
       - series: 'distant_signal_enricher_llm_batch_requests_total{namespace="distant-signal", pod="enricher", call="primary", result="succeeded"}'
@@ -77,7 +77,7 @@ tests:
             exp_annotations:
               summary: enricher Message Batch in flight for over a day
               description: "The oldest in-flight batch was submitted 1d 2h 20m 0s ago; batches expire after 24 h."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalenricherbatchstuck
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalenricherbatchstuck
       - eval_time: 55m
         alertname: DistantSignalEnricherBatchStuck
         exp_alerts: []
@@ -101,7 +101,7 @@ tests:
             exp_annotations:
               summary: enricher openai batch failed input validation
               description: "1 batches failed validation in 6h; nothing in them ran. The enricher log has the errors."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalenricherbatchinvalid
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalenricherbatchinvalid
 
   # One OpenAI batch hits token_expired (the creator's token expired before
   # OpenAI authorised it): fires on the first, per provider. Batches that
@@ -123,7 +123,7 @@ tests:
             exp_annotations:
               summary: enricher openai batch hit an expired token
               description: "1 batches had requests fail token_expired in 6h; those did not run and go into the next sweep."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalenricherbatchauthexpired
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalenricherbatchauthexpired
 
   # auth_expired requests count towards the results-failing ratio.
   - interval: 1m
@@ -140,7 +140,7 @@ tests:
             exp_annotations:
               summary: enricher batch requests errored, expired or canceled
               description: "40% of batch requests ended errored, expired or canceled in 6h."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalenricherbatchresultsfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalenricherbatchresultsfailing
 
   # Two OpenAI batch file deletions fail: fires. One alone (below
   # minFailures) doesn't, nor do successful deletions.
@@ -161,4 +161,4 @@ tests:
             exp_annotations:
               summary: enricher cannot delete its OpenAI batch files
               description: "2 batch file deletions failed in 6h; the files stay until they expire (2 days)."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalenricherbatchfilecleanupfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalenricherbatchfilecleanupfailing

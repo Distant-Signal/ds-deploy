@@ -60,7 +60,7 @@ tests:
             exp_annotations:
               summary: ds:ingest:station-samples is backing up in front of the ingest-writer
               description: &backlog_description "An entry pending over 600s, or unread plus un-ACKed entries over 0.5 of MAXLEN. At the cap they are trimmed unapplied."
-              runbook_url: &backlog_runbook https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingeststreambacklog
+              runbook_url: &backlog_runbook https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingeststreambacklog
           - exp_labels: {severity: warning, namespace: distant-signal, stream: "ds:ingest:tfl"}
             exp_annotations:
               summary: ds:ingest:tfl is backing up in front of the ingest-writer
@@ -70,7 +70,7 @@ tests:
             exp_annotations:
               summary: ds:ingest:full-coverage is 90% of its MAXLEN behind
               description: "Over 0.8 of MAXLEN: entries are about to be trimmed unapplied. Fix the ingest-writer."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingeststreambacklog
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingeststreambacklog
 
   # Stalled. station-samples: applied every minute until 10m, then
   # nothing while the producer keeps XADDing: over 180s at 13m, firing
@@ -100,7 +100,7 @@ tests:
             exp_annotations:
               summary: "ds:ingest:station-samples: nothing applied for 10m 0s"
               description: "Producers are writing to the stream but the ingest-writer applies nothing from it. Check the writer's log for this stream."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingeststreamstalled
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingeststreamstalled
 
   # Dead letters: one poison entry at 6m fires at once and clears 15m
   # later; the other reasons, registered at 0, stay quiet.
@@ -121,7 +121,7 @@ tests:
             exp_annotations:
               summary: ds:ingest:station-samples entries dead-lettered (poison)
               description: "Over the last 15m. They are not applied until fixed and re-injected; the runbook covers each reason."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestdeadletters
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestdeadletters
       - eval_time: 25m
         alertname: DistantSignalIngestDeadLetters
         exp_alerts: []
@@ -144,7 +144,7 @@ tests:
             exp_annotations:
               summary: a ds:ingest:tfl dead letter is 6d 20h 1m 40s old
               description: "Within 4h of the dead-letter retention trim. Re-inject it or decide it can go."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestdeadletterexpiring
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestdeadletterexpiring
 
   # Unsupported schema: the per-schema series appears on the first refusal
   # (5m) and counts each retry; the second count fires. Applied entries of
@@ -166,7 +166,7 @@ tests:
             exp_annotations:
               summary: the ingest-writer does not know tfl-line-status/2
               description: "ds:ingest:tfl is blocked on an entry of a newer schema version than the writer's. Roll the writer forward."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestunsupportedschema
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestunsupportedschema
 
   # XADD failing. tfl: every attempt `down`, `ok` registered at 0: fires.
   # station-samples: some fail, some succeed: no. full-coverage: idle.
@@ -192,7 +192,7 @@ tests:
             exp_annotations:
               summary: every XADD to ds:ingest:tfl is failing
               description: "No XADD succeeded for 10m: the producers hold only their newest snapshot. Check Redis (OOM, auth, ACL)."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestproducerxaddfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestproducerxaddfailing
 
   # Memory: station-samples is reported by two writer pods during a
   # rollout (counted once, 100 MiB), full-coverage 200 MiB then 350 MiB
@@ -217,7 +217,7 @@ tests:
             exp_annotations:
               summary: the ingest streams use 450MiB of Redis
               description: "Over 0.75 of their 576 MiB budget (D5). Check for a backlog or a full dead-letter stream."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingeststreammemoryhigh
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingeststreammemoryhigh
 
   # Clock skew. station-samples: a series not registered at 0 appears at
   # 6m with its first clamp: fires at once, and clears once the window
@@ -242,7 +242,7 @@ tests:
             exp_annotations: &skew
               summary: ds:ingest:station-samples carries times over 2 min in the future
               description: "The ingest-writer clamped observed times (station-samples/1) to its own clock: a producer's clock is ahead."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestclockskew
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestclockskew
       - eval_time: 13m
         alertname: DistantSignalIngestClockSkew
         exp_alerts:
@@ -252,7 +252,7 @@ tests:
             exp_annotations:
               summary: ds:ingest:tfl carries times over 2 min in the future
               description: "The ingest-writer clamped observed times (tfl-line-status/1) to its own clock: a producer's clock is ahead."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalingestclockskew
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestclockskew
       - eval_time: 34m
         alertname: DistantSignalIngestClockSkew
         exp_alerts: []

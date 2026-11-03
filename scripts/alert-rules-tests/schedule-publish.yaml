@@ -32,7 +32,7 @@ tests:
             exp_annotations:
               summary: schedule_destination_departures publish kept stale rows
               description: "Its staged key count did not match the publisher's total, so rows it left out stay until the next complete publish."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
   # A larger count: fires.
   - interval: 1m
     input_series:
@@ -46,7 +46,7 @@ tests:
             exp_annotations:
               summary: schedule_destination_departures publish kept stale rows
               description: "Its staged key count did not match the publisher's total, so rows it left out stay until the next complete publish."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulepublishstagedmismatch
   # At 0, or another namespace's mismatch: never fires.
   - interval: 1m
     input_series:

@@ -222,9 +222,8 @@ fullCoverageConsumer, trustBacklogConsumer, movementRelay,
 pollerIrishRailGtfs/Live, pollerNirStations, scheduleFeed.ingest/reference,
 migrate)
 carry a `digest` field at all -- see each's own `image.digest` values.yaml
-comment (canonical copy: `api.image.digest`) and
-`.github/workflows/containers.yml`'s `push-helm-chart` job for how it gets
-populated in CI.
+comment (canonical copy: `api.image.digest`): values.yaml commits every
+one, and Renovate bumps them.
 
 When `.Values.global.imageRegistry` is set, it replaces whatever comes
 before the last two `/`-separated segments of `.image.repository` (e.g.

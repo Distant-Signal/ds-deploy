@@ -25,7 +25,7 @@ tests:
             exp_annotations:
               summary: postgres pod distant-signal-postgres-0 cannot pull its image
               description: "postgres: no image for 5m, DS is down. Check the pull secret and image."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalstatefulimagepullfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalstatefulimagepullfailing
   # Redis's init container has an invalid image name: the init-container
   # metric counts too.
   - interval: 1m
@@ -40,7 +40,7 @@ tests:
             exp_annotations:
               summary: redis pod distant-signal-redis-6b7c9d8f5-abcde cannot pull its image
               description: "acl: no image for 5m, live movements stop. Check the pull secret and image."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalstatefulimagepullfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalstatefulimagepullfailing
   # Not firing: a pull that recovers within `for`; another waiting reason;
   # another namespace's postgres-0; the migrate Job's pod and api's pod
   # (not the stateful singletons).

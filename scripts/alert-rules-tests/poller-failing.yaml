@@ -33,12 +33,12 @@ tests:
             exp_annotations:
               summary: poller a is failing its poll cycles
               description: "No success in 2h, or over 0.5 of cycles failed in 15m. Check its upstream, its key, and api."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalpollerfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpollerfailing
           - exp_labels: {severity: warning, namespace: distant-signal, poller: b}
             exp_annotations:
               summary: poller b is failing its poll cycles
               description: "No success in 2h, or over 0.5 of cycles failed in 15m. Check its upstream, its key, and api."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalpollerfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpollerfailing
 
   # 2026-10-01's shape: a poller healthy (one cycle a minute) for two hours
   # starts failing every cycle at 120m. Its 15m failure ratio passes 0.5
@@ -61,7 +61,7 @@ tests:
             exp_annotations:
               summary: poller e is failing its poll cycles
               description: "No success in 2h, or over 0.5 of cycles failed in 15m. Check its upstream, its key, and api."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalpollerfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpollerfailing
 
   # A blip: 5 failed cycles out of a 15m window's 15 at 60m, then healthy
   # again. The ratio never passes 0.5, and nothing fires.

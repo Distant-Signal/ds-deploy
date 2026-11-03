@@ -1,0 +1,122 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+
+  // The hosted Renovate GitHub App (renovate[bot]) runs here, so this file
+  // and the public presets it extends are the whole config. The hosted app
+  // runs no postUpgradeTasks (sync-core.yml re-vendors ds-core's files).
+  //
+  // The shared Distant Signal preset (Distant-Signal/ci's
+  // renovate/default.json5, repo split spec §8.3) holds everything that
+  // isn't specific to this repository. It disables ghcr.io/distant-signal/**
+  // images everywhere; the rules below turn them back on, here only, for the
+  // chart's first-party pins.
+  "extends": ["github>Distant-Signal/ci//renovate/default.json5"],
+
+  // Renovate decides on automerge itself, after every check on the branch
+  // has passed. GitHub's own auto-merge would merge at once: the "Protect
+  // main" ruleset requires no checks (§5.9).
+  "platformAutomerge": false,
+
+  // .github/workflows/sync-core.yml commits the re-vendored ds-core files to
+  // renovate/ds-core* branches as the ds-deploy-sync GitHub App. Without
+  // this, Renovate would treat those branches as edited by someone else
+  // and stop rebasing and automerging them. The number is the App bot
+  // user's id: `gh api '/users/ds-deploy-sync%5Bbot%5D' --jq .id` (runbook
+  // U1: fill it in when the App exists).
+  "gitIgnoredAuthors": [
+    "DS_DEPLOY_SYNC_BOT_USER_ID+ds-deploy-sync[bot]@users.noreply.github.com",
+  ],
+
+  "customManagers": [
+    {
+      // Every first-party service image in the umbrella chart (§5.4 step
+      // 2): the `repository:`, `tag:` and `digest:` lines of one image
+      // block, with only comment lines between them. The tag is the build
+      // tag Distant-Signal/ci's image.yml pushes on a default-branch run (so
+      // not ds-migrate, a ds-core release tagged vX.Y.Z, below),
+      // build.<run id>-<commit>, ordered by run id (run ids rise across
+      // repositories, so a service that moves repository still orders).
+      // The service repositories all push to ghcr.io/distant-signal/images,
+      // so where a service is built doesn't matter here.
+      "customType": "regex",
+      "managerFilePatterns": ["/^charts/distant-signal/values\\.yaml$/"],
+      "matchStrings": [
+        "repository: (?<depName>ghcr\\.io/distant-signal/images/[a-z0-9-]+)\\n(?:[ \\t]*#.*\\n)*[ \\t]*tag: \"(?<currentValue>build\\.\\d+-[0-9a-f]{40})\"\\n(?:[ \\t]*#.*\\n)*[ \\t]*digest: \"(?<currentDigest>sha256:[0-9a-f]{64})\"",
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "regex:^build\\.(?<major>\\d+)-[0-9a-f]{40}$",
+    },
+    {
+      // ds-migrate is a ds-core release image, tagged vX.Y.Z on ds-core's
+      // tag (repo split spec §5.1), not a build: semver, with its digest.
+      // Its tag is always core-version (sync-core.py checks the two agree),
+      // and both bump in the ds-core group below.
+      "customType": "regex",
+      "managerFilePatterns": ["/^charts/distant-signal/values\\.yaml$/"],
+      "matchStrings": [
+        "repository: (?<depName>ghcr\\.io/distant-signal/images/ds-migrate)\\n(?:[ \\t]*#.*\\n)*[ \\t]*tag: \"?(?<currentValue>v\\d+\\.\\d+\\.\\d+)\"?\\n(?:[ \\t]*#.*\\n)*[ \\t]*digest: \"(?<currentDigest>sha256:[0-9a-f]{64})\"",
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "semver",
+    },
+    {
+      // The ds-core release whose access files are vendored into
+      // charts/distant-signal/files/ (§5.1). On the ds-core branch,
+      // .github/workflows/sync-core.yml runs scripts/sync-core.py and
+      // commits the files from that release's signed assets; ci.yml's
+      // chart-checks fail until they match.
+      "customType": "regex",
+      "managerFilePatterns": ["/^core-version$/"],
+      "matchStrings": ["^(?<currentValue>v\\d+\\.\\d+\\.\\d+)\\s*$"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "Distant-Signal/ds-core",
+    },
+  ],
+
+  "packageRules": [
+    {
+      // The helm-values manager would also find the first-party repository
+      // and tag pairs; the custom managers above own them.
+      "matchManagers": ["helm-values"],
+      "matchPackageNames": ["/^ghcr\\.io/distant-signal/images//"],
+      "enabled": false,
+    },
+    {
+      // All service images in one PR, renovate/ds-images, automerged when
+      // every check is green (decision 13): the ordering checks and the
+      // config defaults contract run against the new digests. The human
+      // gate is Ranma-Config's chart PR, filed to deploy-bringer.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["/^ghcr\\.io/distant-signal/images//"],
+      "enabled": true,
+      "groupName": "ds-images",
+      "groupSlug": "ds-images",
+      "automerge": true,
+      "prBodyNotes": [
+        // One line per image (Renovate renders notes per upgrade): the
+        // commits between the two builds, in the repository the image's
+        // org.opencontainers.image.source label names.
+        "`{{{depName}}}`: {{#if sourceUrl}}{{{sourceUrl}}}/compare/{{{replace '^build\\.\\d+-' '' currentValue}}}...{{{replace '^build\\.\\d+-' '' newValue}}}{{else}}no source label on the image{{/if}}",
+      ],
+    },
+    {
+      // ds-core: the core-version file and the ds-migrate image move
+      // together, in their own PR, renovate/ds-core, which merges before
+      // the image group: the expand check fails any service image built
+      // against a newer core than the pinned ds-migrate. sync-core.yml
+      // adds the re-vendored files, then it automerges when green.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": [
+        "Distant-Signal/ds-core",
+        "ghcr.io/distant-signal/images/ds-migrate",
+      ],
+      "enabled": true,
+      "groupName": "ds-core",
+      "groupSlug": "ds-core",
+      "prPriority": 10,
+      "automerge": true,
+    },
+    // Vulnerability PRs stay ungrouped and unscheduled (the preset's
+    // vulnerabilityAlerts).
+  ],
+}

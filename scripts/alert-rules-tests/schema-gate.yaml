@@ -30,4 +30,4 @@ tests:
             exp_annotations:
               summary: notifier is waiting for its database schema
               description: "Its schema gate has not passed for 10m: the migrations have not run, or its role lacks grants. It serves nothing until then."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschemagatewaiting
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschemagatewaiting

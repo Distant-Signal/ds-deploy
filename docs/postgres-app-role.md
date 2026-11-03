@@ -289,12 +289,13 @@ narrows the roles from.
 | `distant_signal_read_shared` (NOLOGIN) | group | `SELECT` on every shared-train, ingest, derived and reference table | – |
 | `distant_signal_schema_gate` (NOLOGIN) | group | `SELECT` on `_sqlx_migrations` (the phase 1B schema gate) | – |
 
-- **The source of truth is `crates/ds-store/db-grants.yaml`.**
+- **The source of truth is Distant-Signal/ds-core's `crates/ds-store/db-grants.yaml`.**
   It classifies every table, sequence, function and (later) view in
   `public`, with each role's target grants. `scripts/gen-db-grants.py
   render` turns it into `charts/distant-signal/files/postgres-grants.sql`,
-  and `scripts/sync-chart-core-files.py` copies it to the chart's
-  `files/db-grants.yaml` (the templates read the copy). CI fails when a
+  and this repository's `scripts/sync-core.py` vendors both, from the
+  ds-core release `core-version` names, into the chart's `files/` (the
+  templates read the copies). CI fails when a
   migration adds an object the YAML does not classify, when the SQL is
   stale, or when the chart's copy differs from the source.
 - **The setup Job runs `postgres-grants.sql` after `postgres-roles.sql`**

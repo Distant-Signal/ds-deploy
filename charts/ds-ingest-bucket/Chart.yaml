@@ -19,7 +19,10 @@ type: application
 # 0.2.2: AGPL-3.0-or-later (LICENSE, annotation).
 # 0.3.0: published at ghcr.io/distant-signal/charts after the repository
 #   transfer (repo split phase 1).
-version: 0.3.0
+# 0.4.0: packaged and pushed by Distant-Signal/ds-deploy (repo split phase
+#   5). A new base so this repository's builds, from run 1, order above the
+#   monorepo's.
+version: 0.4.0
 
 # Not an application image: the chart deploys no workload. Kept at the
 # version of the design it implements.
@@ -32,9 +35,9 @@ kubeVersion: ">=1.23.0-0"
 annotations:
   artifacthub.io/license: AGPL-3.0-or-later
 
-home: https://github.com/Distant-Signal/distant-signal
+home: https://github.com/Distant-Signal/ds-deploy
 sources:
-  - https://github.com/Distant-Signal/distant-signal
+  - https://github.com/Distant-Signal/ds-deploy
 
 # No dependencies: Crossplane and its GCP providers are cluster components
 # owned by Ranma-Config, not subcharts of this chart.

@@ -19,7 +19,7 @@ tests:
             exp_annotations:
               summary: Schedule-feed bucket access revoked
               description: "Every bucket call is refused (kill switch, or a missing or rotated key). SFTP carries on. Recovery is a Ranma reapply."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulebucketaccessrevoked
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketaccessrevoked
   # Never seen an object (the gauge is 0): never fires, however long.
   - interval: 1m
     input_series:
@@ -46,7 +46,7 @@ tests:
             exp_annotations:
               summary: No new object in the schedule-feed bucket in 30h
               description: "The publisher's daily push has not reached the bucket. SFTP may still be delivering: PublishStale is authoritative."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulebucketnonewobject
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketnonewobject
   # A download cap: fires on the first evaluation.
   - interval: 1m
     input_series:
@@ -60,7 +60,7 @@ tests:
             exp_annotations:
               summary: Schedule-feed bucket download cap hit
               description: "The reader's hourly or daily download cap stopped it: a loop or an attack. Find the cause before raising the caps."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulebucketdownloadbudget
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketdownloadbudget
   # One unexpected object at 5m: fires, then resolves once the counter
   # has been flat for more than the 1h window.
   - interval: 1m
@@ -75,7 +75,7 @@ tests:
             exp_annotations:
               summary: Unexpected object in the schedule-feed bucket
               description: "An object with an unexpected name or size was flagged and is deleted unread (recoverable from soft delete for 7 days)."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalschedulebucketunexpectedobject
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketunexpectedobject
       - eval_time: 70m
         alertname: DistantSignalScheduleBucketUnexpectedObject
         exp_alerts: []

@@ -48,9 +48,11 @@ instance of it.
 
 ## Building and pushing the images (manual)
 
-`.github/workflows/containers.yml` builds and publishes every image below to
+Each service's repository (today Distant-Signal/distant-signal's
+`.github/workflows/containers.yml`, and Distant-Signal/ds-core for
+ds-migrate) builds and publishes every image below to
 `ghcr.io/distant-signal/images/<service>` automatically (build-only
-sanity check on PRs; build + push + cosign-sign on push to main/master) — you
+sanity check on PRs; build + push + cosign-sign on push to main) — you
 do not need to do this by hand for a normal install, and every `*.image.repository`
 below already defaults to that exact path. The table and commands below are
 for building and pushing to a registry of your own (e.g. a private registry,
@@ -59,14 +61,15 @@ or testing a local change) without going through that pipeline — either set
 once, or point each `*.image.repository` you're replacing at your own
 `$REG/...` directly.
 
-The same workflow packages this chart and pushes it to
-`oci://ghcr.io/distant-signal/charts/distant-signal`, cosign-signed keylessly
-like the images (INF-12). Verify a pulled chart with:
+This repository's `.github/workflows/chart.yml` packages this chart and
+pushes it to `oci://ghcr.io/distant-signal/charts/distant-signal`,
+cosign-signed keylessly like the images (INF-12). Verify a pulled chart
+with:
 
 ```bash
 cosign verify ghcr.io/distant-signal/charts/distant-signal@sha256:<digest> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/Distant-Signal/distant-signal/.github/workflows/containers.yml@refs/heads/main
+  --certificate-identity https://github.com/Distant-Signal/ds-deploy/.github/workflows/chart.yml@refs/heads/main
 ```
 
 In Flux, set `verify.provider: cosign` with a `matchOIDCIdentity` entry for
@@ -148,11 +151,10 @@ priority over `tag`/`appVersion` entirely: the rendered image reference
 becomes `<repository>@<digest>` with no tag at all, since a digest is the
 only fully immutable reference (a tag, even an otherwise-immutable-looking
 `sha-<short-sha>` one, can in principle be re-pushed to point at different
-content; `repo@sha256:...` cannot). `.github/workflows/containers.yml`'s
-`push-helm-chart` job populates this automatically for every first-party
-image in the packaged chart's own default `values.yaml`, from that same
-run's real, already-pushed image digests -- so a plain `helm install`
-against a chart pulled from `oci://ghcr.io/fasterspeeding/charts` already
+content; `repo@sha256:...` cannot). This repository's `values.yaml`
+commits the tag and digest of every first-party image (Renovate's
+ds-images and ds-core groups bump them) -- so a plain `helm install`
+against a chart pulled from `oci://ghcr.io/distant-signal/charts` already
 pins every first-party image by digest with no operator action needed. Set
 it by hand (`--set api.image.digest=sha256:...`) only if you're building
 and pushing your own images per the table above and want the same
@@ -692,10 +694,10 @@ Off by default (`redis.acl.enabled: false`); with it off nothing below
 renders. It builds on `redis.auth`: each client gets its own Redis user
 with only the commands and keys it needs, and the shared `default` user can
 then be turned off. The users and their rights are in
-`files/redis-users.acl.tpl`, a copy of the repository's
-`access/redis-users.acl.tpl` (edit that, then run
-`scripts/sync-chart-core-files.py`); `crates/common/tests/redis_acl.rs`
-checks them against a real Redis.
+`files/redis-users.acl.tpl`, vendored from Distant-Signal/ds-core's
+`access/redis-users.acl.tpl` (edit it there; `scripts/sync-core.py` vendors
+the release `core-version` names); ds-core's
+`crates/common/tests/redis_acl.rs` checks them against a real Redis.
 
 With `redis.acl.enabled` (and the bundled Redis), an initContainer renders
 `users.acl` into a memory-backed emptyDir from one password per user in
@@ -739,8 +741,9 @@ Off by default (`postgresql.roles.perService.enabled: false`). Stage 0b of
 of `distant_signal_app` with no grants of its own, so `pg_stat_statements`
 and `pg_stat_activity` attribute every query to its service. The roles and
 the grants they will later be narrowed to are in `files/db-grants.yaml`, a
-copy of `crates/ds-store/db-grants.yaml` (edit that, then run
-`scripts/sync-chart-core-files.py`); `scripts/gen-db-grants.py` renders them into `files/postgres-grants.sql`,
+copy of Distant-Signal/ds-core's `crates/ds-store/db-grants.yaml` (edit it
+there; `scripts/sync-core.py` vendors the release `core-version` names);
+ds-core's `scripts/gen-db-grants.py` renders them into `files/postgres-grants.sql`,
 which the role setup Job runs. `perService.<service>.connect` moves one
 service at a time; with the api on its own role its pool is
 `perService.api.maxConnections` (16). The render fails if the connection
@@ -994,7 +997,7 @@ aggregator expires them itself, for stores such as Thoth with no lifecycle
 API; dry-run by default, with a hard 90-day retention floor, protected
 prefixes and a per-run cap). `trust_event_backlog` and the LDBWS-derived
 tables cannot be archived, and movement events are archived without their
-TRUST `raw_body` (licensing). See [docs/cold-archive.md](../../docs/cold-archive.md)
+TRUST `raw_body` (licensing). See [docs/cold-archive.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/cold-archive.md)
 for the key layout, the failure policy, and how to read an archive with
 DuckDB.
 
@@ -1007,7 +1010,7 @@ malformed or unparseable entry) to the Redis stream
 `api` was down or slow; those entries stay pending and are retried. The
 stream is never trimmed. Alert on
 `distant_signal_movement_feed_deadlettered_total`. See
-[docs/movement-events-deadletter.md](../../docs/movement-events-deadletter.md)
+[docs/movement-events-deadletter.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/movement-events-deadletter.md)
 for how to inspect records and re-inject them with `redis-cli`.
 
 The same three consumers, and `movement-relay`, serve two health paths.
@@ -1031,7 +1034,7 @@ and a full day's stream is about 373 MiB, well inside
 `fullCoverageConsumer.windowedStats.enabled` the steady working set is
 430-570 MiB (measured in shadow, 2026-10-02), bounded and reset at each
 rail-day rollover; the request is sized for a ~650 MiB target. See
-[docs/full-coverage-consumer.md](../../docs/full-coverage-consumer.md) for the
+[docs/full-coverage-consumer.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/full-coverage-consumer.md) for the
 startup sequence, partial days, and the metrics to alert on
 (`distant_signal_full_coverage_consumer_startup_complete`,
 `..._day_partial`, `..._stream_gap_detected_total` and more).
@@ -1055,7 +1058,7 @@ occupy 03:00–04:15, so the pgBackRest jobs start at 05:00). The nightly schedu
 ingest takes deliveries between 22:00 and 01:30 and runs whole-day
 publishes, the heaviest WAL and CPU bursts of the day, and 03:00 UTC is
 clear of that window in both GMT and BST. See
-[the backup design](../../docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md),
+[the backup design](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md),
 item 2.
 
 ### Waiting for Postgres and Redis
@@ -1063,7 +1066,7 @@ item 2.
 A new pod's first connections are refused for about 2 to 5 seconds while
 the cluster's network-policy controller adds the pod's IP to the
 NetworkPolicy rules
-([the investigation](../../docs/specs/postgres-connection-pooling.md)). A
+([the investigation](https://github.com/Distant-Signal/distant-signal/blob/main/docs/specs/postgres-connection-pooling.md)). A
 long-running service pays that once per rollout; a CronJob pays it on every
 run. So each CronJob that runs one of this chart's own binaries gets init
 containers that wait first, chosen from its container's env:
@@ -1266,7 +1269,7 @@ frontend proxies shares the frontend pod's one bucket, so the per-client
 limits become one site-wide limit.
 
 Personal API tokens use a port of their own instead
-([docs/personal-api-tokens.md](../../docs/personal-api-tokens.md)): route the
+([docs/personal-api-tokens.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/personal-api-tokens.md)): route the
 API hostname to the `<release>-api-tokens` Service and set
 `networkPolicy.tunnel.tokenApi: true`, which admits the connector to
 `api.personalTokens.port` only. The main api port stays closed to the
@@ -1923,11 +1926,11 @@ Used only when `postgresql.enabled` is `false`.
 | `api.internalOauth.issuerUrl` | `""` | **Required.** OIDC issuer base URL for the internal-service OAuth2 provider (may be the same Authentik instance as `api.sso.*`, a different Application/Provider). |
 | `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token (the internal provider's client id; must differ from `api.sso.clientId`). |
 | `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account, the only internal-token use left since release B removed `/private`: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. See "Distant-Signal-MCP as a service caller" below. |
-| `api.delegated.clients` | `[]` | Delegated access ([docs/connected-apps.md](../../docs/connected-apps.md)): the registered clients, sent to the api as `DELEGATED_CLIENTS` JSON. Each has `name`, `displayName`, `issuerUrl`, `audience`, `maxScopes`, `enabled` (default `true`; `false` is the kill switch) and `serviceGroup`. Empty (the default) turns the feature off: no delegated listener, no delegated Service, and every delegated bearer refused. |
+| `api.delegated.clients` | `[]` | Delegated access ([docs/connected-apps.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/connected-apps.md)): the registered clients, sent to the api as `DELEGATED_CLIENTS` JSON. Each has `name`, `displayName`, `issuerUrl`, `audience`, `maxScopes`, `enabled` (default `true`; `false` is the kill switch) and `serviceGroup`. Empty (the default) turns the feature off: no delegated listener, no delegated Service, and every delegated bearer refused. |
 | `api.delegated.port` | `8082` | The delegated listener's port, published only by the `<release>-api-delegated` ClusterIP Service and admitted by the NetworkPolicy only from `networkPolicy.apiExtraIngressNamespaces`. The only port that accepts delegated bearers. Must differ from `api.service.port` and `metrics.port`. |
 | `api.delegated.dailySaveLimit` / `.dailyDeleteLimit` | `50` / `20` | Journeys one user's client may save, and delete, per rolling 24 hours (429 `daily_limit`). |
 | `api.delegated.revokedGrantRetentionDays` | `365` | Days a revoked grant is kept, as the record of when and why an app's access ended, before the hourly maintenance pass (api loop or `api-maintenance` CronJob) deletes it. |
-| `api.personalTokens.enabled` | `false` | Read-only personal API tokens ([docs/personal-api-tokens.md](../../docs/personal-api-tokens.md)). Off: no token listener, no token Service, no NetworkPolicy rule, and the management routes answer 404. Also switches the hourly token sweep in the api and the `api-maintenance` CronJob. |
+| `api.personalTokens.enabled` | `false` | Read-only personal API tokens ([docs/personal-api-tokens.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/personal-api-tokens.md)). Off: no token listener, no token Service, no NetworkPolicy rule, and the management routes answer 404. Also switches the hourly token sweep in the api and the `api-maintenance` CronJob. |
 | `api.personalTokens.port` | `8083` | The token listener's port, published only by the `<release>-api-tokens` ClusterIP Service, which the tunnel routes the API hostname to. The only port that accepts `dsp_` tokens. Must differ from `api.service.port`, `api.delegated.port` and `metrics.port`. |
 | `api.personalTokens.publicBaseUrl` | `""` | The API hostname's base URL, shown on the Connected apps page. |
 | `api.personalTokens.trustCfConnectingIp` | `false` | Key the failed-authentication bucket on `CF-Connecting-IP` instead of the socket peer. The render fails unless `networkPolicy.enabled`, `networkPolicy.tunnel.enabled` and `networkPolicy.tunnel.tokenApi` are all true. |
@@ -1946,7 +1949,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.rateLimit.tripPlan.perMinute` / `.burst` | `20` / `10` | Per client IP, `/Trips/plan`. |
 | `api.rateLimit.trainByUid.perMinute` / `.burst` | `120` / `60` | Per client IP, `/Train/by-uid/*`. |
 | `api.rateLimit.publicWrite.perMinute` / `.burst` | `120` / `60` | Per client IP, every other non-GET public route. |
-| `api.rateLimit.events.perMinute` / `.burst` | `60` / `30` | Per client IP, `POST /public/events` (opt-in usage analytics, [docs/usage-analytics.md](../../docs/usage-analytics.md)); the MCP gets the same. |
+| `api.rateLimit.events.perMinute` / `.burst` | `60` / `30` | Per client IP, `POST /public/events` (opt-in usage analytics, [docs/usage-analytics.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/usage-analytics.md)); the MCP gets the same. |
 | `api.rateLimit.mcp.tripPlan.perMinute` / `.burst` | `100` / `30` | The MCP's own `/Trips/plan` budget: one bucket for the whole service (`svc:mcp`), 5x public. |
 | `api.rateLimit.mcp.trainByUid.perMinute` / `.burst` | `600` / `200` | The MCP's own `/Train/by-uid/*` budget. |
 | `api.rateLimit.mcp.publicWrite.perMinute` / `.burst` | `600` / `200` | The MCP's own public-write budget. Login has no MCP budget: the bearer is ignored there. |
@@ -2311,7 +2314,7 @@ loop, and it renders unconditionally.
 the five `api.sso.*` values) — leaving either empty aborts the render, because both
 become non-optional env vars on the binary and an empty value would deploy a
 pod that fails every request forever. With `enricher.llm.provider: anthropic`
-(the Claude API, [docs/enricher-anthropic.md](../../docs/enricher-anthropic.md))
+(the Claude API, [docs/enricher-anthropic.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-anthropic.md))
 they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 `enricher.llm.anthropic.existingSecret` is the required value instead.
 
@@ -2327,8 +2330,8 @@ they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 | `enricher.llm.apiKey` | `""` | API key for that endpoint. Rendered into the chart Secret when `existingSecret` is empty. Empty is valid for a local endpoint needing no auth, and is never auto-generated. |
 | `enricher.llm.existingSecret` | `""` | Read the API key from this pre-existing Secret instead. |
 | `enricher.llm.existingSecretApiKeyKey` | `llm-api-key` | Key within `enricher.llm.existingSecret`. |
-| `enricher.llm.reasoningEffort` | `""` | `LLM_REASONING_EFFORT`, sent as `reasoning_effort`. Empty renders nothing (no `reasoning_effort` sent). OpenAI's gpt-6-luna needs `none` (see [docs/enricher-openai.md](../../docs/enricher-openai.md)); NVIDIA's GLM wants `low`. An `enricher.extraEnv` entry of the same name wins. |
-| `enricher.llm.auth` | `apiKey` | `LLM_AUTH`. `apiKey` uses `apiKey`/`existingSecret` above, as before. `openaiWifAuthentik` (primary) and `openaiWifKubernetes` (fallback) are keyless OpenAI workload identity federation: see "Keyless OpenAI auth" below. `anthropicWifAuthentik` (provider `anthropic` only) is keyless Claude auth through a separate Authentik provider, with a fresh Authentik token per exchange: see [docs/enricher-anthropic.md](../../docs/enricher-anthropic.md#keyless-auth). Any other value aborts the render. |
+| `enricher.llm.reasoningEffort` | `""` | `LLM_REASONING_EFFORT`, sent as `reasoning_effort`. Empty renders nothing (no `reasoning_effort` sent). OpenAI's gpt-6-luna needs `none` (see [docs/enricher-openai.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-openai.md)); NVIDIA's GLM wants `low`. An `enricher.extraEnv` entry of the same name wins. |
+| `enricher.llm.auth` | `apiKey` | `LLM_AUTH`. `apiKey` uses `apiKey`/`existingSecret` above, as before. `openaiWifAuthentik` (primary) and `openaiWifKubernetes` (fallback) are keyless OpenAI workload identity federation: see "Keyless OpenAI auth" below. `anthropicWifAuthentik` (provider `anthropic` only) is keyless Claude auth through a separate Authentik provider, with a fresh Authentik token per exchange: see [docs/enricher-anthropic.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-anthropic.md#keyless-auth). Any other value aborts the render. |
 | `enricher.llm.workloadIdentity.identityProviderId` | `""` | `OPENAI_IDENTITY_PROVIDER_ID`, the OpenAI Workload Identity Provider's ID. Required in both WIF modes. |
 | `enricher.llm.workloadIdentity.serviceAccountId` | `""` | `OPENAI_SERVICE_ACCOUNT_ID`, the OpenAI service account the mapping resolves to. Required in both WIF modes. |
 | `enricher.llm.workloadIdentity.tokenAudience` | `""` | Audience of the projected service-account token. Empty in `openaiWifAuthentik` means `authentik.clientId`; required in `openaiWifKubernetes`, where it must equal the OpenAI provider's audience. |
@@ -2347,15 +2350,15 @@ they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 | `enricher.llm.anthropic.existingSecretApiKeyKey` | `anthropic-api-key` | Key within `enricher.llm.anthropic.existingSecret`. |
 | `enricher.llm.anthropic.promptCache` | `1h` | `LLM_PROMPT_CACHE`: `1h`, `5m` or `off`, the `cache_control` TTL on each call's static system prompt (see the doc's caching analysis). Any other value aborts the render. |
 | `enricher.llm.anthropic.thinking` | `""` | `LLM_THINKING`, sent as `thinking.type` when set (e.g. `disabled` on Haiku 5.5, `between_tools` on Sonnet 5.5). Empty: the model's default (adaptive thinking). |
-| `enricher.llm.profile` | `""` | `LLM_PROFILE`: a built-in generation profile (`openai-gpt-6-luna`, `openai-default`, `claude-haiku-5`, `claude-default`). Empty picks it by provider and model: OpenAI-compatible endpoints get `temperature: 0` (gpt-6-luna also effort `none`), Claude no sampling parameters. A profile for the other provider, or an unknown name, aborts the render. See [docs/enricher-anthropic.md](../../docs/enricher-anthropic.md#tuning-per-model). |
-| `enricher.llm.adversarialModel` | `""` | `LLM_ADVERSARIAL_MODEL`: the model for the two adversarial calls (the resolution and severity checks), on the same provider, endpoint and credential as the primary model (e.g. `claude-haiku-5-5` with `enricher.llm.anthropic.model: claude-sonnet-5-5`). A model of the other provider aborts the render. Empty (the default): the primary model, as before. Part of `model_version`, so setting, changing or clearing it re-extracts every live incident once. See [docs/enricher-anthropic.md](../../docs/enricher-anthropic.md#tuning-per-model). |
+| `enricher.llm.profile` | `""` | `LLM_PROFILE`: a built-in generation profile (`openai-gpt-6-luna`, `openai-default`, `claude-haiku-5`, `claude-default`). Empty picks it by provider and model: OpenAI-compatible endpoints get `temperature: 0` (gpt-6-luna also effort `none`), Claude no sampling parameters. A profile for the other provider, or an unknown name, aborts the render. See [docs/enricher-anthropic.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-anthropic.md#tuning-per-model). |
+| `enricher.llm.adversarialModel` | `""` | `LLM_ADVERSARIAL_MODEL`: the model for the two adversarial calls (the resolution and severity checks), on the same provider, endpoint and credential as the primary model (e.g. `claude-haiku-5-5` with `enricher.llm.anthropic.model: claude-sonnet-5-5`). A model of the other provider aborts the render. Empty (the default): the primary model, as before. Part of `model_version`, so setting, changing or clearing it re-extracts every live incident once. See [docs/enricher-anthropic.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-anthropic.md#tuning-per-model). |
 | `enricher.llm.adversarialProfile` | `""` | `LLM_ADVERSARIAL_PROFILE`: the adversarial calls' profile (same names as `enricher.llm.profile`), for their sampling defaults and prompt files; `temperature`, `topP`, `reasoningEffort` and `anthropic.thinking` apply to the primary call only. Empty picks it by provider and `adversarialModel`. Needs `adversarialModel`; an unknown name or another provider's aborts the render. |
 | `enricher.llm.temperature` | `""` | `LLM_TEMPERATURE`: overrides the profile's temperature; a number (quote it, e.g. `"0"`), or `omit` to send none. A value a model is known to reject fails at startup; anything else aborts the render. |
 | `enricher.llm.topP` | `""` | `LLM_TOP_P`: overrides the profile's `top_p` (none); a number (quoted) or `omit`. |
-| `enricher.llm.openaiPromptCache` | `""` | `LLM_OPENAI_PROMPT_CACHE` (Chat Completions only): `explicit` caches the static system prompt (explicit-only mode, one breakpoint, a stable `prompt_cache_key` per profile and call), `off` disables caching and its cache writes, `omit` sends nothing (the endpoint's default). Empty keeps the profile's: `explicit` for gpt-6-luna, nothing otherwise. Any other value aborts the render. See [docs/enricher-openai.md](../../docs/enricher-openai.md#prompt-caching). |
+| `enricher.llm.openaiPromptCache` | `""` | `LLM_OPENAI_PROMPT_CACHE` (Chat Completions only): `explicit` caches the static system prompt (explicit-only mode, one breakpoint, a stable `prompt_cache_key` per profile and call), `off` disables caching and its cache writes, `omit` sends nothing (the endpoint's default). Empty keeps the profile's: `explicit` for gpt-6-luna, nothing otherwise. Any other value aborts the render. See [docs/enricher-openai.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-openai.md#prompt-caching). |
 | `enricher.llm.prompts.configMap` | `""` | An existing ConfigMap of system-prompt overrides, mounted at `/etc/enricher/prompts` (`LLM_PROMPTS_DIR`): keys `<profile>.<call>.txt` or `<call>.txt` (`primary`, `adversarial`, `severity_adversarial`); a call with neither keeps the built-in prompt. A prompt change changes `model_version`, so incidents re-extract. The tuned Haiku set is `crates/enricher/prompts/` (`claude-haiku-5.*.txt`). |
 | `enricher.llm.carryForwardSemanticNoops` | `true` | `CARRY_FORWARD_SEMANTIC_NOOPS`: a text change that only touches HTML, whitespace, entities, case or in-word punctuation re-stamps the existing extraction instead of re-running the LLM (`enricher_extraction_carried_forward_total`). `false` re-runs the LLM for every text change; the edit class then only labels `enricher_extraction_rerun_total` and `enricher_extraction_churn_total` (`edit_class`). Must be a boolean. |
-| `enricher.llm.batch.mode` | `normal` | `LLM_MODE`. `normal`: the stream loop extracts each text change synchronously; the hourly sweep follows `sweepMode`. `batch`: the stream loop and reclaim make no LLM call; a sweep every `sweepIntervalSecs` batches at least `minItems` stale incidents and extracts fewer synchronously. `batch-only`: as `batch`, but everything is batched (half price; results in minutes to hours). Both ignore `sweepMode`. Either provider (OpenAI needs `api.batch.write`: docs/enricher-openai.md, "Batch mode"). Any other value aborts the render. See [docs/enricher-anthropic.md](../../docs/enricher-anthropic.md#llm-modes). |
+| `enricher.llm.batch.mode` | `normal` | `LLM_MODE`. `normal`: the stream loop extracts each text change synchronously; the hourly sweep follows `sweepMode`. `batch`: the stream loop and reclaim make no LLM call; a sweep every `sweepIntervalSecs` batches at least `minItems` stale incidents and extracts fewer synchronously. `batch-only`: as `batch`, but everything is batched (half price; results in minutes to hours). Both ignore `sweepMode`. Either provider (OpenAI needs `api.batch.write`: docs/enricher-openai.md, "Batch mode"). Any other value aborts the render. See [docs/enricher-anthropic.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-anthropic.md#llm-modes). |
 | `enricher.llm.batch.sweepIntervalSecs` | `""` | `LLM_BATCH_SWEEP_INTERVAL_SECS`: the sweep's interval in mode `batch`/`batch-only`. Empty: 120 (`batch`) or 300 (`batch-only`). Anything but a positive whole number aborts the render. |
 | `enricher.llm.batch.sweepMode` | `sync` | `LLM_SWEEP_MODE` (mode `normal` only). `batch` sends the reconciliation sweep's extractions through the provider's batch API (Claude Message Batches, or the OpenAI Batch API with provider `openai`, which needs `api.batch.write`: docs/enricher-openai.md, "Batch mode"), at half price, results usually within an hour (at most 24 h); the stream loop and reclaim stay synchronous. Any other value aborts the render. |
 | `enricher.llm.batch.minItems` | `20` | `LLM_BATCH_MIN_ITEMS`: a sweep that finds fewer incidents runs them synchronously (ignored in mode `batch-only`). |
@@ -2414,7 +2417,7 @@ short-lived, audience-bound Kubernetes service-account token for an OpenAI
 access token (at most an hour), through Authentik in the primary mode or
 directly in the fallback. The setup on the Authentik and OpenAI side, and
 why there are two modes, are in
-[docs/enricher-openai.md](../../docs/enricher-openai.md#keyless-auth-workload-identity-federation).
+[docs/enricher-openai.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-openai.md#keyless-auth-workload-identity-federation).
 
 The chart then:
 
@@ -2471,7 +2474,7 @@ lifetime)` before it expires (default skew 60 s; set it through
 until it expires.
 
 LLM token usage, in every auth mode, for a keyless spend estimate (the
-query is in [docs/enricher-openai.md](../../docs/enricher-openai.md#cost)):
+query is in [docs/enricher-openai.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/enricher-openai.md#cost)):
 
 | Metric | Type | Meaning |
 |---|---|---|
@@ -2638,7 +2641,7 @@ credential of its own it uses trust-consumer's; see "Install" above.
 
 ### darwinRelay
 
-The Darwin Push Port relay (DS-152; [docs/darwin-pushport.md](../../docs/darwin-pushport.md)):
+The Darwin Push Port relay (DS-152; [docs/darwin-pushport.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/darwin-pushport.md)):
 it reads the Rail Data Marketplace's Push Port JSON topic and produces the
 parts DS keeps (schedules, platforms with their confirmed and suppressed
 flags, forecasts, associations, cancellations) on `ds:ingest:darwin`, which
@@ -3272,7 +3275,7 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalNotifierPushDropped` | warning | The notifier dropped at least 5 decided pushes (`notifier_push_dropped_total{reason}`) within the last 1h. Delivery is at-most-once. |
 | `DistantSignalNotifierForwardQueueRetentionOverdue` | warning | The oldest `notifier_forward_queue` row (`notifier_forward_queue_oldest_age_seconds`, sampled after every forward-queue cycle) is older than the longer of `aggregator.trainsRetentionDays` and `untrackedTrainsRetentionDays` + 2 days (`retentionGraceDays`), for 1h. The table is not archived and its rows leave only with their `trains` row, so the trains prune is not removing them. |
 | `DistantSignalNotifierForwardQueueLarge` | warning | `notifier_forward_queue` holds more than 50000 rows (`notifier_forward_queue_rows`, `maxRows`) for 1h: a producer flooding it, or tracked trains have outgrown keeping it unpruned and unarchived. |
-| `DistantSignalUserSignupSpike` | warning | api created more than 20 user accounts (`userSignupSpike.metric`, default `distant_signal_api_users_created_total`) within the last 1h. Sign-up is open to any account the IdP admits (in production, any Discord account), so a burst is real growth or scripted sign-ups. Check the newest `users` rows and the IdP's enrolment log; to stop it, restrict enrolment in the IdP, then revoke the unwanted sessions ([session revocation](../../docs/session-revocation.md)). Needs an api build that exports the counter; silent until then. |
+| `DistantSignalUserSignupSpike` | warning | api created more than 20 user accounts (`userSignupSpike.metric`, default `distant_signal_api_users_created_total`) within the last 1h. Sign-up is open to any account the IdP admits (in production, any Discord account), so a burst is real growth or scripted sign-ups. Check the newest `users` rows and the IdP's enrolment log; to stop it, restrict enrolment in the IdP, then revoke the unwanted sessions ([session revocation](https://github.com/Distant-Signal/distant-signal/blob/main/docs/session-revocation.md)). Needs an api build that exports the counter; silent until then. |
 | `DistantSignalArchiveUploadFailures` | warning | At least 3 cold-archive batch uploads or verifications failed (`aggregator_archive_upload_failures_total`) within the last 1h. |
 | `DistantSignalArchiveExpiryErrors` | warning | Any cold-archive expiry error (`aggregator_archive_expiry_errors_total{stage}`: a failed LIST or DELETE, or a key refused by the pre-delete check) within the last 1d. |
 | `DistantSignalArchiveExpiryUnmatchedKeys` | warning | Expiry listed keys under an archive table prefix that do not match the archive layout (`aggregator_archive_expiry_skipped_unmatched_total{table}`) within the last 1d. They are never deleted. |
@@ -3523,10 +3526,10 @@ helm uninstall distant-signal -n distant-signal
 
 ## Not in scope
 
-- **No image build or publish pipeline in this chart itself.** The repo-level
-  `.github/workflows/containers.yml` covers that (see "Building and pushing
-  the images (manual)" above for the fallback path and the full
-  Dockerfile-to-repository mapping it uses).
+- **No image build or publish pipeline in this chart itself.** Each
+  service's repository builds its images (see "Building and pushing the
+  images (manual)" above for the fallback path and the full
+  Dockerfile-to-repository mapping).
 - **No HorizontalPodAutoscaler.** The aggregator, the enricher and every
   poller are singleton loops that must not be scaled, and the api is
   database-bound.

@@ -651,12 +651,19 @@ def check_sftp_one_pod(c: Checker) -> None:
 
 
 def check_sftp_stable_across_releases(c: Checker) -> None:
-    """Check an app release (chart/app version, image tags) leaves SFTPGo alone."""
+    """Check an app release (chart/app version, image pins) leaves SFTPGo alone."""
+    # values.yaml pins each image by tag and digest, and the digest wins, so
+    # a release moves both.
+    digest = "sha256:" + "9" * 64
     release = (
         "--set",
         "scheduleFeed.ingest.image.tag=9.9.9",
         "--set",
+        f"scheduleFeed.ingest.image.digest={digest}",
+        "--set",
         "scheduleFeed.reference.image.tag=9.9.9",
+        "--set",
+        f"scheduleFeed.reference.image.digest={digest}",
     )
     with tempfile.TemporaryDirectory() as tmp:
         chart = pathlib.Path(tmp) / "distant-signal"

@@ -41,7 +41,7 @@ tests:
             exp_annotations:
               summary: scheduled Job distant-signal-api-maintenance-29890817 failed (BackoffLimitExceeded)
               description: "The run gave up; the CronJob's next run tries again. Its pods' logs say why (an exit 137 is an OOM kill)."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalscheduledjobfailed
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalscheduledjobfailed
 
   # The pod failure policy fails a run at once (an OOM kill, exit 137): the
   # Failed condition's reason is none kube-state-metrics knows, so its series
@@ -64,7 +64,7 @@ tests:
             exp_annotations:
               summary: scheduled Job distant-signal-api-maintenance-29890877 failed (Other)
               description: "The run gave up; the CronJob's next run tries again. Its pods' logs say why (an exit 137 is an OOM kill)."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalscheduledjobfailed
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalscheduledjobfailed
 
   # The hourly api-maintenance last succeeded at 0. 1.5 x 3600s is 5400s
   # (90m); past it from 91m, plus 10m of `for`, it fires at 101m.
@@ -91,7 +91,7 @@ tests:
             exp_annotations:
               summary: "CronJob distant-signal-api-maintenance: no success for 1h 42m 0s"
               description: "Over 1.5x its schedule interval: its runs fail, are skipped (Forbid, a missed start) or never schedule."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalscheduledjobstale
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalscheduledjobstale
 
   # A run still going (kube_cronjob_status_active 1) is not staleness:
   # quiet past the threshold until it ends; then, still with no success,
@@ -121,7 +121,7 @@ tests:
             exp_annotations:
               summary: "CronJob distant-signal-api-maintenance: no success for 2h 12m 0s"
               description: "Over 1.5x its schedule interval: its runs fail, are skipped (Forbid, a missed start) or never schedule."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalscheduledjobstale
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalscheduledjobstale
 
   # Suspended, or never yet past minAgeSeconds: quiet. A CronJob that never
   # succeeded counts from its creation.
@@ -162,7 +162,7 @@ tests:
             exp_annotations:
               summary: "CronJob distant-signal-api-maintenance: no success for 42m 0s"
               description: "Over 1.5x its schedule interval: its runs fail, are skipped (Forbid, a missed start) or never schedule."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalscheduledjobstale
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalscheduledjobstale
 
   # A Job pod OOMKilled at 2m (restartPolicy Never: no restart). A
   # Deployment's pod OOMKilled too is the cluster rules' business, not this.
@@ -192,7 +192,7 @@ tests:
             exp_annotations:
               summary: Job pod distant-signal-api-maintenance-29890817-abcde (api-maintenance) was OOMKilled
               description: "It hit its memory limit. The Job fails at once (exit 137) rather than retry; raise the limit or find the growth."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalscheduledjoboomkilled
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalscheduledjoboomkilled
   - interval: 1h
     input_series:
       - series: 'kube_pod_container_status_terminated_reason{namespace="distant-signal", pod="distant-signal-api-maintenance-29890817-abcde", container="api-maintenance", reason="OOMKilled"}'
@@ -224,4 +224,4 @@ tests:
             exp_annotations:
               summary: Job pod distant-signal-migrate-64bcz Pending for over 15m
               description: "It can't be scheduled (no room for its requests) or its image won't pull. The Job's deadline counts this time."
-              runbook_url: https://github.com/Distant-Signal/distant-signal/blob/main/docs/alerts.md#distantsignalscheduledjobpending
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalscheduledjobpending

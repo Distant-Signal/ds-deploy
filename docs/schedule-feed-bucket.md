@@ -7,7 +7,7 @@ bucket that the Rail Data Marketplace pushes into, as well as, or instead of,
 the SFTP receiver ([schedule-feed-sftp.md](schedule-feed-sftp.md)). This page
 is the operator's view from Distant Signal's side. The design and its
 decisions (D1–D14) are in
-[the GCS landing design](superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md);
+[the GCS landing design](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-10-02-schedule-feed-gcs-landing-design.md);
 the bucket, its IAM and its usage alerts are
 [`charts/ds-ingest-bucket`](../charts/ds-ingest-bucket/README.md)'s.
 
