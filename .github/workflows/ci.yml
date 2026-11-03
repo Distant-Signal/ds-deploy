@@ -199,7 +199,6 @@ jobs:
       SSO_REDIRECT_URL: http://127.0.0.1:3000/api/auth/callback
       SSO_POST_LOGIN_REDIRECT_URL: http://127.0.0.1:3000/
       VAPID_PUBLIC_KEY: BDummyVapidPublicKeyForLocalDevOnlyNotARealKeyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-      LINES_DIR: ${{ github.workspace }}/lines
       # The railMcp public URL, read by the frontend server at REQUEST time
       # (FE-2: frontend/lib/csp.ts's runtimeRailMcpPublicUrl, passed to the
       # chat page as a prop), not inlined at `npm run build`; it only has
