@@ -262,6 +262,9 @@ tables:
   delegated_grant_confirmations: {class: personal, grants: {api: SIUD}}
   delegated_deletions: {class: personal, grants: {api: SIUD}}
   journey_idempotency_keys: {class: personal, grants: {api: SIUD}}
+  # Personal API tokens (docs/specs/personal-api-tokens.md): created,
+  # checked and revoked by the api only.
+  personal_api_tokens: {class: personal, grants: {api: SIUD}}
   # Journey follows (DS-146): written and read by the api only. No notifier
   # grant: followers get no pushes (see the migration, 20261024100000).
   journey_follows: {class: personal, grants: {api: SIUD}}
@@ -533,6 +536,7 @@ sequences:
   journeys_id_seq: {table: journeys}
   line_status_history_id_seq: {table: line_status_history}
   notifier_forward_queue_id_seq: {table: notifier_forward_queue}
+  personal_api_tokens_id_seq: {table: personal_api_tokens}
   push_subscriptions_id_seq: {table: push_subscriptions}
   tracked_train_tickets_id_seq: {table: tracked_train_tickets}
   # Still named after the table's old name (tracked_trains).
