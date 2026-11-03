@@ -263,8 +263,9 @@ tables:
   delegated_deletions: {class: personal, grants: {api: SIUD}}
   journey_idempotency_keys: {class: personal, grants: {api: SIUD}}
   # Personal API tokens (docs/specs/personal-api-tokens.md): created,
-  # checked and revoked by the api only.
-  personal_api_tokens: {class: personal, grants: {api: SIUD}}
+  # checked and revoked by the api. The notifier sends the token_created
+  # web push and records it in push_notified_at.
+  personal_api_tokens: {class: personal, grants: {api: SIUD, notifier: [{privileges: S, columns: [id, user_id, name, created_at, revoked_at, push_notified_at]}, {privileges: U, columns: [push_notified_at]}]}}
   # Journey follows (DS-146): written and read by the api only. No notifier
   # grant: followers get no pushes (see the migration, 20261024100000).
   journey_follows: {class: personal, grants: {api: SIUD}}
