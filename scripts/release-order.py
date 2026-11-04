@@ -26,13 +26,16 @@ by service: every docker/<service>.Dockerfile and `frontend`. With
 containers.yml's matrix. The values come from Cargo.lock: ds-store pulled
 from git at a tag (`?tag=vX.Y.Z`, after the split) gives that tag; a
 workspace crate (the monorepo) gives `v<its version>`. The api-build is the
-`api` crate's, the same way, and only where the lock has that crate (the
-monorepo); after the split the frontend's comes from its api pin
-(frontend/e2e/api-image.txt, §5.3) instead. The values are static until a
-version changes, so an unchanged image keeps its digest (a run number or a
-commit here would restart every Deployment on every deploy). In the
-monorepo every image builds from one commit, so every image gets the same
-core-version and api-build, and the checks pass trivially.
+`api` crate's, the same way, where the lock has that crate (the monorepo).
+Where it doesn't (or there is no Cargo.lock: the landing repository after
+phase 9), the frontend's api-build is the build tag of the api image its
+pin names (frontend/api-image.txt, §5.3), if there is a pin. The values
+are static until a version changes, so an unchanged image keeps its digest
+(a run number or a commit here would restart every Deployment on every
+deploy); the pinned api tag changes only with a pin bump, which changes the
+frontend anyway. In the monorepo every image builds from one commit, so
+every image gets the same core-version and api-build, and the checks pass
+trivially.
 
 `check` reads the chart's values (JSON, e.g. `yq -o=json`, or YAML when
 PyYAML is installed), finds every first-party image (an `image` map with a
@@ -42,7 +45,11 @@ PyYAML is installed), finds every first-party image (an `image` map with a
      (`migrate.image`), so no service reaches the cluster expecting a
      migration or grant the chart's migrate Job won't apply;
   2. api-build: the frontend's api-build is at most the pinned api's, so
-     the chart never ships a frontend that expects an api it doesn't deploy;
+     the chart never ships a frontend that expects an api it doesn't deploy.
+     A frontend api-build that is a build tag (its api pin's, after the
+     split) is compared with the api's pinned `build.<run>-<sha>` tag: the
+     api's own api-build label is its crate version, which doesn't move
+     with each build. Otherwise (the monorepo) with the api's api-build;
   3. contract: a destructive migration whose header says
        -- contract: <what> (code stopped using it in <commit>;
           safe after core vA.B.C)
@@ -92,6 +99,8 @@ CORE_CRATE = "ds-store"
 API_CRATE = "api"
 MIGRATIONS = Path("crates/ds-store/migrations")
 MIGRATE = "ds-migrate"
+API_PIN = Path("frontend/api-image.txt")
+PINNED_BUILD = re.compile(r":(build\.\d+-[0-9a-f]{7,40})@sha256:[0-9a-f]{64}")
 API = "api"
 FRONTEND = "frontend"
 # Images that are not Cargo builds, so carry no core-version.
@@ -164,15 +173,40 @@ def rust_services(root: Path) -> list[str]:
     )
 
 
+def pinned_api_build(root: Path) -> str | None:
+    """Return the build tag of the api image ROOT's frontend pins, if any."""
+    try:
+        text = (root / API_PIN).read_text("utf-8")
+    except FileNotFoundError:
+        return None
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if len(lines) != 1 or not (match := PINNED_BUILD.search(lines[0])):
+        msg = f"{API_PIN}: expected one <repository>:build.<run>-<sha>@sha256:<digest>"
+        raise InputError(msg)
+    return match.group(1)
+
+
 def image_labels(root: Path) -> dict[str, dict[str, str]]:
-    """Each service's version labels, from ROOT's Cargo.lock."""
-    lock = tomllib.loads((root / "Cargo.lock").read_text("utf-8"))
-    core = crate_version(lock, CORE_CRATE)
-    labels: dict[str, dict[str, str]] = {s: {CORE: core} for s in rust_services(root)}
-    if any(p.get("name") == API_CRATE for p in lock.get("package", [])):
-        api_build = crate_version(lock, API_CRATE)
-        labels.setdefault(API, {CORE: core})[API_BUILD] = api_build
-        labels[FRONTEND] = {API_BUILD: api_build}
+    """Each service's version labels, from ROOT's Cargo.lock and api pin."""
+    lock_file = root / "Cargo.lock"
+    lock = tomllib.loads(lock_file.read_text("utf-8")) if lock_file.exists() else {}
+    services = rust_services(root)
+    has_api = any(p.get("name") == API_CRATE for p in lock.get("package", []))
+    labels: dict[str, dict[str, str]] = {}
+    if services or has_api:
+        core = crate_version(lock, CORE_CRATE)
+        labels = {s: {CORE: core} for s in services}
+        if has_api:
+            api_build = crate_version(lock, API_CRATE)
+            labels.setdefault(API, {CORE: core})[API_BUILD] = api_build
+            labels[FRONTEND] = {API_BUILD: api_build}
+            return labels
+    if (pinned := pinned_api_build(root)) is not None:
+        labels[FRONTEND] = {API_BUILD: pinned}
     return labels
 
 
@@ -341,7 +375,18 @@ class Checker:
         if api is None:
             self.findings.append("::error::the values pin a frontend but no api image")
             return
-        wants, has = self.version(frontend, API_BUILD), self.version(api, API_BUILD)
+        wants = self.version(frontend, API_BUILD)
+        if wants is not None and wants.scheme == "build":
+            # Its api pin's build tag: compare with the api's pinned tag.
+            has = parse_version(api.tag)
+            if has is None or has.scheme != "build":
+                self.findings.append(
+                    f"::error::{api.path} (api): the frontend's api-build is a build "
+                    f"tag, so the api's tag must be build.<run>-<sha>, not {api.tag!r}"
+                )
+                return
+        else:
+            has = self.version(api, API_BUILD)
         if wants is not None and has is not None:
             rule = (
                 f"the pinned api ({has.text}) must be at least the build the "
