@@ -14,6 +14,9 @@ workload, feature and CronJob mode switched on):
   - every rendered object has an `app.kubernetes.io/component` label, or
     is listed in `exempt` (by kind and name after the release fullname);
   - that label is a key of `components`, and its group is in `groups`;
+  - the object's `distant-signal/group` label is that group
+    (distant-signal.labels sets it from the same file), so a tool can
+    select a group's objects by label;
   - every `components` key and `exempt` entry renders in some render
     (a stale entry hides a renamed component);
   - the file's shape is right: `groups` a map of names to descriptions,
@@ -40,6 +43,7 @@ COMPONENTS = CHART / "components.yaml"
 PREREQS = CHART / "ci" / "ingest-prereqs.yaml"
 RELEASE = "distant-signal"
 LABEL = "app.kubernetes.io/component"
+GROUP_LABEL = "distant-signal/group"
 
 type Doc = Mapping[str, object]
 
@@ -219,15 +223,20 @@ def check(component_map: Map, renders: Mapping[str, Sequence[Doc]]) -> list[str]
             if key in component_map.exempt:
                 exempt_seen.add(key)
                 continue
-            component = as_map(metadata.get("labels")).get(LABEL)
+            labels = as_map(metadata.get("labels"))
+            component = labels.get(LABEL)
             if not isinstance(component, str):
                 fail.append(f"{where}: no {LABEL} label and not in `exempt`")
                 continue
             used.add(component)
-            if component not in component_map.components:
+            group = component_map.components.get(component)
+            if group is None:
                 fail.append(
                     f"{where}: component {component!r} is not in components.yaml"
                 )
+            elif labels.get(GROUP_LABEL) != group:
+                got = labels.get(GROUP_LABEL)
+                fail.append(f"{where}: {GROUP_LABEL} is {got!r}, not {group!r}")
     fail.extend(
         f"components.yaml: component {c!r} renders in no render (stale?)"
         for c in sorted(component_map.components.keys() - used)

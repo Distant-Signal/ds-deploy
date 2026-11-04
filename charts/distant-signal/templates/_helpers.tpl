@@ -63,6 +63,13 @@ app.kubernetes.io/component: {{ .component }}
 {{/*
 Full common label set. Call as:
   {{- include "distant-signal.labels" (dict "root" . "component" "api") }}
+
+`distant-signal/group` is the component's group from components.yaml
+(ingest, schedule-feed, migrate, roles, ...; the chart README's "Component
+map"), so a tool can select a group's objects by label, e.g.
+`kubectl get all -l distant-signal/group=schedule-feed`. It is on object
+metadata only: never in a selector (immutable) nor a pod template (it
+would roll pods).
 */}}
 {{- define "distant-signal.labels" -}}
 helm.sh/chart: {{ include "distant-signal.chart" .root }}
@@ -72,6 +79,21 @@ app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 app.kubernetes.io/part-of: distant-signal
+distant-signal/group: {{ include "distant-signal.componentGroup" . }}
+{{- end }}
+
+{{/*
+A component's group from components.yaml. Fails the render for a
+component the file does not map, so a new workload cannot ship unmapped.
+Takes (dict "root" $ "component" <component>).
+*/}}
+{{- define "distant-signal.componentGroup" -}}
+{{- $map := .root.Files.Get "components.yaml" | fromYaml -}}
+{{- $group := get ($map.components | default dict) .component -}}
+{{- if not $group -}}
+{{- fail (printf "component %q is not in charts/distant-signal/components.yaml; add it to a group there (the chart README's \"Component map\")." .component) -}}
+{{- end -}}
+{{- $group -}}
 {{- end }}
 
 {{/*
