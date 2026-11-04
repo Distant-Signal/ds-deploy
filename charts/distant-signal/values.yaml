@@ -2521,10 +2521,10 @@ ingestWriter:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/ingest-writer
-    tag: "build.41821859871-4d64b91c44b8119b6f835a95606e2c8c11b1a6ca"
+    tag: "build.41846991778-662fe534e22e3812248ac503348fbbf412214cc2"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:f38fa32f51f347fea7f30b1b5d215913c5c80759306c23d795e783302f344391"
+    digest: "sha256:46c6b304bef792208309e7a99899d6c23c05a278f2669e3602cc9894f5f74ce2"
     pullPolicy: IfNotPresent
   loops:
     # -- Run the train-domain loops (INGEST_WRITER_LOOPS): schedule-match,
@@ -3848,10 +3848,10 @@ enricher:
 trustConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-consumer
-    tag: "build.41821859871-4d64b91c44b8119b6f835a95606e2c8c11b1a6ca"
+    tag: "build.41846991778-662fe534e22e3812248ac503348fbbf412214cc2"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:39df6a90f448131ab213aff88ab500a398aeeb24d4fed574f42fb88c66304dd8"
+    digest: "sha256:f7b18b9b63fe535f53d322351ba651f54854f40bf62ab073d0c5d73438aa4f6f"
     pullPolicy: IfNotPresent
   kafka:
     # -- RDM Train Movements broker address(es), for movement-relay.
@@ -3995,10 +3995,10 @@ trustConsumer:
 fullCoverageConsumer:
   image:
     repository: ghcr.io/distant-signal/images/full-coverage-consumer
-    tag: "build.41821859871-4d64b91c44b8119b6f835a95606e2c8c11b1a6ca"
+    tag: "build.41846991778-662fe534e22e3812248ac503348fbbf412214cc2"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:dc0fa681cc99488fcacc9a6112f35510e989e25aa24b2530fe759300d76eced7"
+    digest: "sha256:22f5609f6505c79e0452b1b8056b1f9e84266ee635b6dd7534e665e04d57ba82"
     pullPolicy: IfNotPresent
   # -- Decision 4: comma-separated line ids to shadow-compute, or "*" for
   # every catalogued line with at least one tiploc. Does NOT gate whether
@@ -4122,10 +4122,10 @@ fullCoverageConsumer:
 trustBacklogConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-backlog-consumer
-    tag: "build.41821859871-4d64b91c44b8119b6f835a95606e2c8c11b1a6ca"
+    tag: "build.41846991778-662fe534e22e3812248ac503348fbbf412214cc2"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:f0511fe80f90baa52d08bda06ad6fa73f3ecd96b720a85f44111af40e3d5cce0"
+    digest: "sha256:b985840bc610bda0c09d9e9fb738a2366e08b180e97b097eed1f7e6bfb79ebae"
     pullPolicy: IfNotPresent
   # Ingest architecture plan 3b.1 (spec R1): each batch's backlog events
   # and reason codes are written to Postgres directly, XACKing
@@ -4229,10 +4229,10 @@ movementRelay:
   enabled: true
   image:
     repository: ghcr.io/distant-signal/images/movement-relay
-    tag: "build.41821859871-4d64b91c44b8119b6f835a95606e2c8c11b1a6ca"
+    tag: "build.41846991778-662fe534e22e3812248ac503348fbbf412214cc2"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:6fecf08e9e0e4ebd18be585b94a14e835c63948b1dd7310fdcf23a4b3b319d7b"
+    digest: "sha256:971c0f3f87eec1c9bd5374b20e1bd264dc02a1dd0f75af62e70c80e289727353"
     pullPolicy: IfNotPresent
   kafka:
     # -- Kafka broker address(es). Empty: trustConsumer.kafka.brokers.
@@ -4354,9 +4354,9 @@ darwinRelay:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/darwin-relay
-    tag: "build.41821859871-4d64b91c44b8119b6f835a95606e2c8c11b1a6ca"
+    tag: "build.41846991778-662fe534e22e3812248ac503348fbbf412214cc2"
     # -- Content digest override (see api.image.digest).
-    digest: "sha256:d47cfa238e68f5d7d822233c876aff39b4dc5028ac8004fcdb5a46e7580bc3dc"
+    digest: "sha256:4dfae09c52d7ab603131d0a32710dfb3bbba1fa1d5e4fbb672e6f2a62acfe3bf"
     pullPolicy: IfNotPresent
   kafka:
     # -- The Secret with the Push Port's Kafka connection, one key per

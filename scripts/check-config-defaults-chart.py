@@ -345,6 +345,9 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "INGEST_WRITER_CORPUS_CROSSWALK_INTERVAL_SECS": no_value("ingestWriter"),
         "INGEST_WRITER_OUTBOX_MAX_ATTEMPTS": no_value("ingestWriter"),
         "INGEST_WRITER_OUTBOX_REJECTED_RETENTION_DAYS": no_value("ingestWriter"),
+        # One fixed consumer name across restarts (ds-ingest 662fe534); the
+        # default `ingest-writer` stays, and the chart refuses a per-pod one.
+        "INGEST_WRITER_STREAM_CONSUMER": no_value("ingestWriter"),
         "INGEST_WRITER_TRAIN_EVENT_OUTBOX_INTERVAL_SECS": no_value("ingestWriter"),
         "LINES_DIR": LINES,
         "SCHEDULE_MATCH_INTERVAL_SECS": "the api's variable, unwired as the api's is",
