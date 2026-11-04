@@ -1515,6 +1515,47 @@ Changing either probe changes the pod template, so the upgrade that first
 applies these defaults restarts Postgres (StatefulSet) and Redis
 (Deployment, `Recreate`) once.
 
+## Component map
+
+[`components.yaml`](components.yaml) says which part of the stack each
+rendered object belongs to. Every object carries an
+`app.kubernetes.io/component` label (part of its selector labels, so it
+never changes on a live object), and the file maps each of those values to
+a group:
+
+| Group | Components |
+|---|---|
+| `ingest` | movement-relay, darwin-relay, trust-consumer, trust-backlog-consumer, full-coverage-consumer, ingest-writer |
+| `pollers` | every `poller-*` |
+| `schedule-feed` | schedulefeed (schedule-ingest), schedulefeed-sftp (the SFTP receiver), schedule-reference |
+| `migrate` | migrate (the ds-core migrate hook Job) |
+| `roles` | postgres-roles (the per-service roles setup hook Job) |
+| `api`, `frontend`, `workers`, `data-stores`, `monitoring`, `shared`, `dev`, `test` | the rest; see the file |
+
+Each component's objects (its workload and its PVC, Service, Secret,
+ConfigMap, ServiceAccount and NetworkPolicies) carry the component's label,
+so they map the same way. The file ships in the chart package, so a tool
+can read the map that matches the chart version it is looking at. It has
+two readers:
+
+- `scripts/check-ingest-rollout.py`, the post-deploy check, verifies the
+  Deployments of the `ingest` and `pollers` groups;
+- deploy-bringer's render-diff classifier decides whether a deploy falls in
+  the `dtd-sftp` window. Any changed object in `schedule-feed`, `migrate`
+  or `roles` puts it there, as does any object the classifier can't map
+  (it fails closed).
+
+The postgres and redis NetworkPolicies admit schedulefeed's pods along with
+every other client. They are `data-stores` objects, not `schedule-feed`
+ones.
+
+`scripts/check-components-chart.py` (CI's chart checks) renders the chart
+with every workload, feature and CronJob mode on, and fails when an object
+has no component label and isn't in the file's `exempt` list, when a
+component isn't mapped, or when a mapped component or exempt entry no
+longer renders. A new workload therefore needs its line in
+`components.yaml`.
+
 ## Values reference
 
 ### Global
