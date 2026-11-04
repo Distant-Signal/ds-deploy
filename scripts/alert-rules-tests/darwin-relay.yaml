@@ -57,3 +57,27 @@ tests:
               summary: darwin-relay is 60000 messages behind the Push Port topic
               description: "Over 50000 messages behind for 15m: the relay, Redis or the ingest-writer cannot keep up."
               runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignaldarwinconsumerlaghigh
+
+  # One offset reset at 10m (from counters registered at 0, one per
+  # reason): fires at once with its reason and clears 30m later.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_darwin_relay_offset_resets_total{namespace="distant-signal", pod="d", reason="reset_after_error"}'
+        values: '0x9 1x80'
+      - series: 'distant_signal_darwin_relay_offset_resets_total{namespace="distant-signal", pod="d", reason="no_committed_offset"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalDarwinOffsetReset
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DistantSignalDarwinOffsetReset
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, reason: reset_after_error}
+            exp_annotations:
+              summary: darwin-relay reset its Kafka offset (reset_after_error, to earliest)
+              description: "Its group had no usable committed offset within 30m. Check the relay's log for how long it was behind."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignaldarwinoffsetreset
+      - eval_time: 45m
+        alertname: DistantSignalDarwinOffsetReset
+        exp_alerts: []

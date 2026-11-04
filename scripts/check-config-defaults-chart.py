@@ -376,6 +376,9 @@ REDIS = ("redis://distant-signal-redis:6379", "redis://redis:6379")
 # as (rendered value, service default): either side changing alone fails.
 OVERRIDES: Mapping[tuple[str, str], tuple[str, str]] = {
     ("aggregator", "FULL_COVERAGE_ENABLED_DEFAULT"): ("true", "false"),
+    # A reset must not skip messages: replay (duplicates the writer's
+    # Darwin-timestamp guards discard) over a silent gap.
+    ("darwin-relay", "KAFKA_AUTO_OFFSET_RESET"): ("earliest", "latest"),
     ("api", "FULL_COVERAGE_ENABLED_DEFAULT"): ("true", "false"),
     ("full-coverage-consumer", "FULL_COVERAGE_LINE_MEMBERSHIP"): ("scope", "legacy"),
     ("full-coverage-consumer", "REDIS_URL"): REDIS,

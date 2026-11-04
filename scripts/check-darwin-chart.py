@@ -215,8 +215,8 @@ def check_kafka_env(env: Mapping[str, Mapping[str, object]], fail: list[str]) ->
             fail.append(f"on: {var} has an inline value")
     if get(env.get("REDIS_USERNAME"), "value") != "darwin-relay":
         fail.append("on: darwin-relay does not connect to Redis as user darwin-relay")
-    if get(env.get("KAFKA_AUTO_OFFSET_RESET"), "value") != "latest":
-        fail.append("on: KAFKA_AUTO_OFFSET_RESET is not latest")
+    if get(env.get("KAFKA_AUTO_OFFSET_RESET"), "value") != "earliest":
+        fail.append("on: KAFKA_AUTO_OFFSET_RESET is not earliest")
 
 
 def check_wiring(docs: Sequence[Doc], fail: list[str]) -> None:
