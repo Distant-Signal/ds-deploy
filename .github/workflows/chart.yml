@@ -20,8 +20,9 @@ name: Chart
 # Images: values.yaml pins every first-party image by tag and digest,
 # committed by Renovate's grouped bump PRs (renovate.json5). Nothing is
 # injected at package time: the packaged chart is the committed chart. The
-# ordering job re-checks the pinned images' labels (scripts/release-order.py,
-# §5.1 and §5.3) before anything is pushed, as ci.yml did on the PR.
+# ordering job re-checks the pinned images' labels (Distant-Signal/ci's
+# scripts/release-order.py, §5.1 and §5.3) before anything is pushed, as
+# ci.yml did on the PR.
 #
 # Signing: each chart is signed by digest in its own job, in THIS workflow,
 # so the Fulcio certificate's identity is
@@ -69,6 +70,14 @@ jobs:
       - name: Install the pinned script tools
         run: uv sync --locked --group lint
 
+      - name: Checkout Distant-Signal/ci (the reusable workflows' commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Distant-Signal/ci
+          ref: 71cc611e1d6f647fa9018b46c9b022440b689187
+          path: .ds-ci
+          persist-credentials: false
+
       # Rule 3 (contract migrations) reads the migrations of the ds-core
       # release core-version pins: a shallow clone of ds-core at that tag.
       - name: Release ordering checks
@@ -78,7 +87,7 @@ jobs:
           version="$(cat core-version)"
           git clone --quiet --depth 1 --branch "${version}" \
             https://github.com/Distant-Signal/ds-core "${core}"
-          uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --registry \
+          uv run --no-sync python .ds-ci/scripts/release-order.py check --values charts/distant-signal/values.yaml --registry \
             --migrations "${core}/crates/ds-store/migrations"
 
       - name: appVersion
@@ -87,7 +96,7 @@ jobs:
 
   chart:
     needs: ordering
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
     permissions:
       contents: read
       packages: write
@@ -118,13 +127,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sign and verify
-        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+        uses: Distant-Signal/ci/actions/cosign-sign@71cc611e1d6f647fa9018b46c9b022440b689187 # main
         with:
           ref: ${{ needs.chart.outputs.ref }}@${{ needs.chart.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
 
   ingest-bucket:
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
     permissions:
       contents: read
       packages: write
@@ -154,7 +163,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sign and verify
-        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+        uses: Distant-Signal/ci/actions/cosign-sign@71cc611e1d6f647fa9018b46c9b022440b689187 # main
         with:
           ref: ${{ needs.ingest-bucket.outputs.ref }}@${{ needs.ingest-bucket.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}

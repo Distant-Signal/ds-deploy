@@ -42,13 +42,13 @@ jobs:
   # "Generated with Claude Code" footer). Other identities pass, outside
   # contributors included.
   commit-identity:
-    uses: Distant-Signal/ci/.github/workflows/identity.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/identity.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
 
   # Every LICENSE (the root one and both charts') is the canonical GNU AGPL
   # v3 text, byte for byte: the licence text is never distributed modified.
   # Distant-Signal/ci's licence.yml compares against a pinned SHA-256.
   licence:
-    uses: Distant-Signal/ci/.github/workflows/licence.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/licence.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
 
   # Distant-Signal/ci's scripts-lint.yml, strict by default:
   #   - every tracked *.sh: shellcheck with every optional check at style
@@ -66,7 +66,7 @@ jobs:
   # from the repository root, with a checkout of Distant-Signal/ci:
   #   uv run python <ci>/scripts/lint-scripts.py
   scripts-lint:
-    uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
 
   # The chart checks, run with the pinned script tools (pyproject.toml's
   # `lint` group). They came from the monorepo's repo-checks job with the
@@ -117,6 +117,14 @@ jobs:
       - name: links to the Distant-Signal repositories resolve
         run: uv run --no-sync scripts/check-doc-links.py
 
+      - name: Checkout Distant-Signal/ci (the reusable workflows' commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Distant-Signal/ci
+          ref: 71cc611e1d6f647fa9018b46c9b022440b689187
+          path: .ds-ci
+          persist-credentials: false
+
       # Repo split spec §5.1, §5.3: the labels of the images values.yaml
       # pins, read anonymously from the registry by digest, against the
       # ordering rules: every image's core-version at most the pinned
@@ -134,7 +142,7 @@ jobs:
           version="$(cat core-version)"
           git clone --quiet --depth 1 --branch "${version}" \
             https://github.com/Distant-Signal/ds-core "${core}"
-          uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --registry \
+          uv run --no-sync python .ds-ci/scripts/release-order.py check --values charts/distant-signal/values.yaml --registry \
             --migrations "${core}/crates/ds-store/migrations"
 
       # Every alert's summary, description, expr and estimated 3-alert
@@ -281,7 +289,7 @@ jobs:
   # workflow can't get more than its caller grants, so both calls grant it;
   # with `publish` off nothing is pushed.
   helm-lint:
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
     permissions:
       contents: read
       packages: write
@@ -290,7 +298,7 @@ jobs:
       lint-values: charts/distant-signal/values-example.yaml
 
   helm-lint-ingest-bucket:
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
     permissions:
       contents: read
       packages: write
