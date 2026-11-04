@@ -224,6 +224,8 @@ def sample(value: float, **labels: str) -> object:
 SUCCESS = 'result="success"'
 NEW_POD = "kube_pod_created"
 ANY_CYCLE = "max by (poller) (distant_signal_poller_cycle_total"
+CYCLES = "distant_signal_poller_cycle_total"
+NS = 'namespace="distant-signal"'
 
 
 def base(cycles: dict[str, float] | None = None) -> object:
@@ -265,6 +267,41 @@ class PollerTest(unittest.TestCase):
         self.assertIn("0.0 cycles an hour", got["poller stations"][1])
         # Only pods created after the baseline count.
         self.assertTrue(any(f"> {T0 - 600:.0f}" in q for q in prom.seen), prom.seen)
+
+    def test_a_success_series_born_at_one_is_a_success(self) -> None:
+        """A new pod's success counter first scraped at 1 counts (deploy e2yb)."""
+        born = "max by (poller) (distant_signal_poller_cycle_total"
+        prom = Scripted(
+            [
+                # increase() over the window sees nothing: the series' first
+                # sample was already 1.
+                (f"increase({CYCLES}{{{NS}, {SUCCESS}}}", []),
+                (
+                    f'{born}{{namespace="distant-signal", {SUCCESS}}}',
+                    [sample(1, poller="irish-rail-gtfs")],
+                ),
+                (
+                    NEW_POD,
+                    [
+                        sample(1, poller="irish-rail-gtfs"),
+                        sample(0, poller="nir-stations"),
+                    ],
+                ),
+            ]
+        )
+        got = self.results(prom, {"irish-rail-gtfs": 0.04, "nir-stations": 12})
+        self.assertEqual(got["poller irish-rail-gtfs"][0], "ok")
+        # No success series at 1 for nir-stations: it still waits.
+        self.assertEqual(got["poller nir-stations"][0], "wait")
+        born_query = next(
+            q
+            for q in prom.seen
+            if q.startswith(f'{born}{{namespace="distant-signal", {SUCCESS}')
+        )
+        self.assertIn(
+            f'kube_pod_created{{namespace="distant-signal"}} > {T0 - 600:.0f}',
+            born_query,
+        )
 
     def test_an_unknown_cadence_waits(self) -> None:
         """A poller with no baseline cadence (newly enabled) waits."""
@@ -391,7 +428,7 @@ class PollerVerifyTest(unittest.TestCase):
             @override
             def query(self, promql: str, at: float | None = None) -> list[object]:
                 """Answer the success query empty on the first look only."""
-                if SUCCESS in promql and NEW_POD in promql:
+                if SUCCESS in promql and NEW_POD in promql and "increase(" in promql:
                     type(self).looks += 1
                     return [sample(1, poller="tfl")] if type(self).looks > 1 else []
                 return super().query(promql, at)
