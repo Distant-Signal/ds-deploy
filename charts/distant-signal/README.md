@@ -2842,6 +2842,7 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.<name>.baseUrl` | `""` (tfl: `https://api.tfl.gov.uk`) | Upstream feed base URL. Required when enabled; empty aborts the render. |
 | `pollers.<name>.baseUrlEnvVar` | per-poller | Env var the binary reads the base URL from. Do not change. |
 | `pollers.<name>.pollIntervalSecs` | 300 / 86400 / 86400 / 60 / 300 | Poll cadence (incidents / stations / tocs / ldbws / tfl). |
+| `pollers.<name>.rollout` | `surge` (stations, tocs: `recreate`) | How a new pod replaces the old one, as a Deployment. `surge`: RollingUpdate (maxSurge 1, maxUnavailable 0) with a readiness probe on `/healthz`, which the poller answers once its first cycle has succeeded (or after `workerHealth.pollerReadyFallbackSecs`), so the old pod keeps polling until the new one has delivered data. `recreate`: the old pod stops first. `surge` raises the computed CONNECTION LIMIT of the poller's Postgres role to hold both pods, and refuses an explicit one that can't ([docs/ingest-rollout.md](../../docs/ingest-rollout.md#pollers)). |
 | `pollers.<name>.apiKey` | `""` | RDM API key (tfl: TfL subscription key). Rendered into the chart Secret when `existingSecret` is empty. |
 | `pollers.<name>.existingSecret` | `""` | Read the API key AND the internal-oauth username/password below from this pre-existing Secret instead. |
 | `pollers.<name>.existingSecretApiKeyKey` | `rdm-<name>-api-key` | Key within `pollers.<name>.existingSecret`. |
@@ -2953,6 +2954,7 @@ default; no API key needed.
 | `pollerIrishRailLive.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollerIrishRailLive.irishRailBaseUrl` | `http://api.irishrail.ie/realtime/realtime.asmx` | Irish Rail realtime service root (public, key-free). |
 | `pollerIrishRailLive.pollIntervalSecs` | `300` | Poll cadence. Conservative: the API's rate limits are unknown and every station is sampled. |
+| `pollerIrishRailLive.rollout` | `surge` | As `pollers.<name>.rollout`. |
 | `pollerIrishRailLive.stationCodesOverride` | `""` | Comma-separated station-code allowlist. Empty polls every station the API lists. |
 | `pollerIrishRailLive.progressStallSecs` | `1800` | `/livez` stall window (see `workerHealth`): one sampling cycle plus its ingest retries. |
 | `pollerIrishRailLive.logLevel` | `info` | `RUST_LOG` value. |
@@ -3260,6 +3262,7 @@ progress before `/livez` fails.
 | `workerHealth.readiness.timeoutSeconds` | `3` | Readiness probe timeout. |
 | `workerHealth.readiness.failureThreshold` | `3` | Readiness failures allowed. |
 | `workerHealth.pollerProgressStallSecs` | `1800` | Stall window for every poller under `pollers`: one fetch plus up to 15 minutes of ingest retries. |
+| `workerHealth.pollerReadyFallbackSecs` | `""` | `POLLER_READY_FALLBACK_SECS` of every `surge` poller: its `/healthz` turns ready this long after it started even without a successful cycle, so a rollout during an upstream outage (when the old pod fails too) still finishes. Empty: the binary's default, 480 s. Else 1 to 540: under the 600 s `progressDeadlineSeconds` and `DistantSignalIngestRolloutStuck`'s 10 minutes. |
 
 ### ingress
 

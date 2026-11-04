@@ -109,3 +109,32 @@ unreachable Prometheus.
   out, so fix it now, don't wait. Start with `DistantSignalIngestRolloutStuck`
   and `DistantSignalMovementRelayNotReady` in [alerts.md](alerts.md), then
   roll back the image if the new version is at fault.
+
+## Pollers
+
+Unlike the TRUST and Darwin feeds, no poller's upstream can be replayed:
+what a poller misses while no pod is polling is lost (ds-pollers
+`docs/redeploy-safety.md` has the per-poller review). For incidents and
+TfL line status, that loss is permanent history. So the frequent pollers
+replace a pod without stopping the old one first
+(`pollers.<name>.rollout`, `pollerIrishRailLive.rollout`):
+
+| Rollout | Pollers (default) | What a deploy does |
+|---|---|---|
+| `surge` | incidents, ldbws, tfl, irish-rail-live | RollingUpdate, maxSurge 1, maxUnavailable 0. The new pod is Ready (`/healthz`) only after its first successful cycle, or after `workerHealth.pollerReadyFallbackSecs` (480 s) if it hasn't had one; then the old pod stops. The new pod's first cycle comes when the old schedule says (its startup cursor), so a deploy costs at most one duplicate poll. |
+| `recreate` | stations, tocs, irish-rail-gtfs, nir-stations; transit-schedule (fixed) | The old pod stops, then the new one starts. Their data is daily reference, healed by the next run. transit-schedule must never run two timetable producers at once. |
+
+With `surge`, a new pod that crashes, waits on the schema gate or fails
+every cycle never replaces the old one. The rollout waits instead, and
+`DistantSignalIngestRolloutStuck` (`extra_pods`) fires if a pod never
+becomes Ready. The fallback also makes a new pod Ready during an upstream
+outage, when the old pod fails too, so such a rollout still finishes
+inside Flux's timeout. A surge poller's Postgres role must admit both
+pods. The chart computes its CONNECTION LIMIT that way and refuses an
+explicit limit below it. `scripts/check-poller-rollout-chart.py` (CI)
+checks every poller Deployment's strategy, probe and fallback.
+
+The surge needs a poller image with ds-pollers' `poller-lifecycle`. With an
+older image `/healthz` is ready at once, so the old pod stops as soon as
+the new one starts. That is the old behaviour minus the image pull, never
+worse.
