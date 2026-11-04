@@ -46,6 +46,8 @@ spec:
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
       automountServiceAccountToken: false
+      # The stream tasks' 20 s drain, then the loop locks (ingestWriter.terminationGracePeriodSeconds).
+      terminationGracePeriodSeconds: {{ include "distant-signal.terminationGrace" (dict "key" "ingestWriter" "value" .Values.ingestWriter.terminationGracePeriodSeconds) }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

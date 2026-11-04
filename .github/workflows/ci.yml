@@ -2009,6 +2009,55 @@ jobs:
             fi
           }
 
+      # The ingest workloads' terminationGracePeriodSeconds: movement-relay
+      # 45 (finish the batch and commit its offset), the consumers and the
+      # ingest-writer 30 (the writer's stream drain is 20 s); never below
+      # Kubernetes' 30, and only whole seconds.
+      - name: helm template (ingest termination grace)
+        run: |
+          set -euo pipefail
+          base=(
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set ingestWriter.enabled=true
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          grace() { awk -v n="distant-signal-$1" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: Deployment\n" && $0 ~ "\n  name: " n "\n" {print}' <<<"$2" | grep -o 'terminationGracePeriodSeconds: [0-9]*' | cut -d' ' -f2; }
+          grace_is() { local got; got=$(grace "$1" "$2"); [[ "${got}" == "$3" ]] || fail "$1's grace must be $3 (got ${got})"; }
+
+          out=$(render)
+          grace_is movement-relay "${out}" 45
+          for w in trust-consumer full-coverage-consumer trust-backlog-consumer ingest-writer; do
+            grace_is "${w}" "${out}" 30
+          done
+          out=$(render --set movementRelay.terminationGracePeriodSeconds=60 --set ingestWriter.terminationGracePeriodSeconds=40)
+          grace_is movement-relay "${out}" 60
+          grace_is ingest-writer "${out}" 40
+
+          # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
+          {
+            for key in movementRelay trustConsumer fullCoverageConsumer trustBacklogConsumer ingestWriter; do
+              if err=$(render --set "${key}.terminationGracePeriodSeconds=10" 2>&1 >/dev/null); then
+                fail "${key}.terminationGracePeriodSeconds=10 must fail the render"
+              fi
+              grep -q "${key}.terminationGracePeriodSeconds is 10, but it must be at least 30" <<<"${err}" \
+                || fail "unexpected ${key} grace error: ${err}"
+            done
+            if render --set-string movementRelay.terminationGracePeriodSeconds=45s >/dev/null 2>&1; then
+              fail "a grace that is not whole seconds must fail the render"
+            fi
+          }
+
       # Reboot resilience: redis must roll with Recreate (single RWO AOF
       # volume, INF-1); postgres needs a startupProbe so WAL redo is never
       # killed by liveness (INF-4), and it and redis default to tcpSocket

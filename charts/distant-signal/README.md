@@ -2099,6 +2099,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.unsupportedDeadlineSecs` | `3600` | `INGEST_WRITER_UNSUPPORTED_DEADLINE_SECS`: an entry pending as unsupported (a newer schema or envelope version) this long is dead-lettered, reason `unsupported_expired`, instead of blocking its stream for good. Roll the writer forward within this time. `0` never dead-letters it. |
 | `ingestWriter.database.maxConnections` | `6` | Its Postgres pool; counted, plus its one loop-lock session, in the connection budgets. |
 | `ingestWriter.progressStallSecs` | `900` | `/livez` stall window (`PROGRESS_STALL_SECS`). |
+| `ingestWriter.terminationGracePeriodSeconds` | `30` | Seconds between SIGTERM and SIGKILL. The writer drains its stream tasks for 20 s, then releases its loop locks. At least 30; the render refuses less. An entry it had not acknowledged is applied again by the next pod. |
 | `ingestWriter.logLevel` | `info` | `RUST_LOG`. |
 | `ingestWriter.extraEnv` | `[]` | Extra env entries; one with a chart entry's name replaces it. The render refuses a per-pod `INGEST_WRITER_STREAM_CONSUMER` (a `valueFrom`, a `$(...)` value, or an empty one): the writer reads every stream as one fixed consumer name (default `ingest-writer`), so a restart takes over its predecessor's pending entries at once. The Deployment is fixed at 1 replica under Recreate. |
 | `ingestWriter.resources` | requests `25m`/`192Mi`, limit `384Mi` | Container resources (production p95 141Mi, max 167Mi). |
@@ -2523,6 +2524,7 @@ falls back to (see `movementRelay`).
 | `trustConsumer.redisGapCheckSecs` | `60` | How often the consumer group's position is compared with the stream's oldest entry to detect a gap. |
 | `trustConsumer.metricsPort` | `9095` | Prometheus `/metrics` port. |
 | `trustConsumer.logLevel` | `info` | `RUST_LOG` value. |
+| `trustConsumer.terminationGracePeriodSeconds` | `30` | Seconds between SIGTERM and SIGKILL, to finish and XACK the batch in hand. At least 30; the render refuses less. Under Recreate a longer grace only delays the new pod, and an un-ACKed entry is replayed, so a kill costs duplicates, not data. |
 | `trustConsumer.trustTimestampCorrectionEnabled` | `true` | Kill switch for the TRUST timestamp Europe/London-mislabelling correction (`crates/common/src/trust_timestamp.rs`). |
 | `trustConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `trustConsumer.resources` | requests `200m`/`256Mi`, limit `384Mi` | Container resource requests/limits. |
@@ -2564,6 +2566,7 @@ its own.
 | `fullCoverageConsumer.windowedStats.feedStaleSecs` | `300` | A newest consumed movement older than this also marks the write `feed_stale`. |
 | `fullCoverageConsumer.windowedStats.lineMembership` | `scope` | Which trains count for a line's windowed stats: `scope` (`schedule-reference`'s train membership, `scope == line`, §4.1 for entries without it; production's setting), `legacy` (§4.1: operator + calls at two stations; the binary's own default) or `shadow` (legacy output, both compared in the `full_coverage_consumer_line_membership_*` gauges and an info log per line). Needs `windowedStats.enabled`. See `docs/superpowers/specs/2026-10-06-line-membership-design.md`. |
 | `fullCoverageConsumer.logLevel` | `info` | `RUST_LOG` value. |
+| `fullCoverageConsumer.terminationGracePeriodSeconds` | `30` | As `trustConsumer.terminationGracePeriodSeconds`. |
 | `fullCoverageConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `fullCoverageConsumer.resources` | requests `200m`/`640Mi`, limit `1Gi` | Container resource requests/limits. Holds per-line population caches, so it scales with the line catalogue; with windowed stats on, the working set is 430-570 MiB (target ~650 MiB). |
 | `fullCoverageConsumer.nodeSelector` | `{}` | Pod node selector. |
@@ -2590,6 +2593,7 @@ Always reads movement-relay's stream (there is no Kafka mode).
 | `trustBacklogConsumer.redisGapCheckSecs` | `60` | See `trustConsumer.redisGapCheckSecs`. |
 | `trustBacklogConsumer.healthPort` | `8083` | Port for `/healthz` (readiness) and `/livez` (liveness). |
 | `trustBacklogConsumer.progressStallSecs` | `300` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
+| `trustBacklogConsumer.terminationGracePeriodSeconds` | `30` | As `trustConsumer.terminationGracePeriodSeconds`. |
 | `trustBacklogConsumer.updateStrategy` | `{type: Recreate}` | The Deployment's rollout. `Recreate` stops the old pod before the new one starts (a gap of seconds; the consumer group keeps every entry and the new pod replays its own pending entries). `RollingUpdate` takes `rollingUpdate.maxSurge` (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge above 0 is added to the replicas in the computed CONNECTION LIMIT and the max_connections budget. A surge with a role sized for one pod deadlocked the 2026-10-10 rollout: see "Rollout strategy and connection limits" below and docs/ingest-phase5-runbook.md "Rollout deadlock". |
 | `trustBacklogConsumer.metricsPort` | `9096` | Prometheus `/metrics` port. |
 | `trustBacklogConsumer.retentionDaysWarningAcknowledged` | `false` | Documentation-only flag; the binary does not read it. The retention safeguard is `aggregator.trustEventBacklogRetentionDays`. |
@@ -2633,6 +2637,7 @@ credential of its own it uses trust-consumer's; see "Install" above.
 | `movementRelay.streamMaxLen` | `1048576` | `MAXLEN ~` cap on the `movement-events` stream, in entries: about 24 hours of traffic and the consumers' only replay window. Move `redis.maxmemory`/`redis.resources` with it (about 100 MiB per 100,000 entries). Minimum 1000. |
 | `movementRelay.healthPort` | `8083` | Port for `/healthz` (readiness: partition assignment confirmed) and `/livez` (liveness). |
 | `movementRelay.progressStallSecs` | `900` | `/livez` answers 503 once no relay-loop iteration has completed for this many seconds (waiting for Kafka never counts). |
+| `movementRelay.terminationGracePeriodSeconds` | `45` | Seconds between SIGTERM and SIGKILL, to finish the batch in hand and commit its offset synchronously. The relay commits only after XADD, so a kill re-reads records (duplicates) and never skips them. Under its RollingUpdate the new pod is Ready before the old one stops. At least 30; the render refuses less. |
 | `movementRelay.metricsPort` | `9094` | Prometheus `/metrics` port. |
 | `movementRelay.logLevel` | `info` | `RUST_LOG` value. |
 | `movementRelay.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |

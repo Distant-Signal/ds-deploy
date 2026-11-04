@@ -73,6 +73,8 @@ spec:
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
       automountServiceAccountToken: false
+      # Time to finish the batch in hand and commit its offset (movementRelay.terminationGracePeriodSeconds).
+      terminationGracePeriodSeconds: {{ include "distant-signal.terminationGrace" (dict "key" "movementRelay" "value" .Values.movementRelay.terminationGracePeriodSeconds) }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

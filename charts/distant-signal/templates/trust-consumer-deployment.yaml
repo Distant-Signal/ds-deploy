@@ -39,6 +39,8 @@ spec:
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
       automountServiceAccountToken: false
+      # Time to finish the batch in hand and XACK it (trustConsumer.terminationGracePeriodSeconds).
+      terminationGracePeriodSeconds: {{ include "distant-signal.terminationGrace" (dict "key" "trustConsumer" "value" .Values.trustConsumer.terminationGracePeriodSeconds) }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
