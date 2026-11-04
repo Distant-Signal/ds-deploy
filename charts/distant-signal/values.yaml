@@ -6046,6 +6046,24 @@ metrics:
       enabled: true
       for: 5m
       severity: critical
+    # DistantSignalIngestRolloutStuck: an ingest Deployment (`deployments`,
+    # each the part of its name after the release fullname, regex allowed)
+    # has not finished rolling out for `for`: Progressing is False
+    # (ProgressDeadlineExceeded), fewer replicas are available than
+    # desired, or more pods run than desired (a surge pod never Ready).
+    # kube-state-metrics' kube_deployment_* series.
+    ingestRolloutStuck:
+      enabled: true
+      for: 10m
+      severity: warning
+      deployments:
+        - movement-relay
+        - darwin-relay
+        - trust-consumer
+        - trust-backlog-consumer
+        - full-coverage-consumer
+        - ingest-writer
+        - poller-.+
     # The ingest stream alerts (ingest spec §14.2, plan 3a.4), on the
     # ingest_stream_* metrics of crates/ingest-stream (the writer's
     # consumers and the stream producers). Like ingestWriterDown they
