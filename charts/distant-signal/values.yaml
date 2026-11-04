@@ -1610,7 +1610,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    tag: "build.41829674554-8d34bcfdc6187656e4ebae2b24416dcdb34c68ce"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1623,7 +1623,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:693795432af5ee27985ceb1faf0840fbb2e70256e1ecdc5fa132320f71830581"
+    digest: "sha256:430b16870b7b546d3c660ba6006771e98a4608d94c23ac0430008b7d2a5a6167"
     pullPolicy: IfNotPresent
   # -- Replicas. >1 does not corrupt anything: crates/api/src/main.rs runs
   # sqlx::migrate!() in process at startup, and sqlx's Migrator takes a
@@ -5741,10 +5741,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    tag: "build.41829674554-8d34bcfdc6187656e4ebae2b24416dcdb34c68ce"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:c6e8de26e2c378d3fea750bf3b2fa87155291b207e5ada93759b61bd31ca495d"
+    digest: "sha256:f1e50ee26ce1bdce0d0e6f6ce490388a7e2a54701084acea08f4e5fccdb0adc2"
     pullPolicy: IfNotPresent
   # -- Safe to raise, with one documented caveat. frontend/lib/liveDataCache.ts
   # keeps a process-local stale-data cache so a backend outage shows the
