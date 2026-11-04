@@ -2654,6 +2654,19 @@ the ingest-writer applies. Off by default. Enabling it needs
 the render fails otherwise. Every Kafka setting comes from the Secret
 `darwinRelay.kafka.existingSecret`.
 
+**Offset reset.** `darwinRelay.kafka.autoOffsetReset` defaults to
+`earliest`, unlike the relay's own `latest`. A reset happens only when the
+consumer group has no usable committed offset: its very first start, or a
+commit older than the topic's retention (the relay down for that long, or
+the group's offsets expired). With `latest` the relay would jump to the
+newest message and silently skip everything in between. With `earliest` it
+replays from the oldest message the topic still holds, so the only data
+lost is what had already aged out of Kafka. The price is the replay
+itself: a cold start reads days of messages through `ds:ingest:darwin`
+into the writer, and the lag alert fires until it catches up. Replayed
+rows are duplicates, which the writer's Darwin-timestamp guards discard.
+`DistantSignalDarwinOffsetReset` says when a reset happened.
+
 | Key | Default | Description |
 |---|---|---|
 | `darwinRelay.enabled` | `false` | Deploy darwin-relay. |
@@ -2663,7 +2676,7 @@ the render fails otherwise. Every Kafka setting comes from the Secret
 | `darwinRelay.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `darwinRelay.kafka.existingSecret` | `distant-signal-darwin-pushport` | The Secret holding the Push Port's Kafka connection, one key per setting. Never rendered by this chart. |
 | `darwinRelay.kafka.keys.bootstrapServer` / `.topic` / `.consumerGroup` / `.username` / `.password` / `.saslMechanism` / `.securityProtocol` / `.saslConfig` | `kafka-bootstrap-server`, `kafka-topic`, `consumer-group`, `username`, `password`, `sasl-mechanism`, `security-protocol`, `sasl-config` | That Secret's key names. `saslConfig` (the Java client's JAAS line) is optional and only a fallback for the user name and password. |
-| `darwinRelay.kafka.autoOffsetReset` | `latest` | Where to start when the group has no committed offset. `latest`: the Push Port is current state, and `earliest` would replay the topic's whole retention on the first start. |
+| `darwinRelay.kafka.autoOffsetReset` | `earliest` | Where to start when the group has no usable committed offset (its first start, or a committed offset the topic no longer holds). `earliest` replays from the oldest retained message, so a reset never skips data; `latest` silently skips everything up to now. The cost: a cold start replays the topic's whole retention (expect `DistantSignalDarwinConsumerLagHigh` until it catches up), and the replayed rows are duplicates the writer's Darwin-timestamp guards discard. See "Offset reset" below. |
 | `darwinRelay.kafka.brokerPorts` | `[9092]` | The bootstrap server's TCP port(s), for the egress policy when `networkPolicy.egress.internetPorts` restricts ports (the address is only in the Secret). |
 | `darwinRelay.batchMaxSecs` | `30` | A batch is published this many seconds after its first record. At least `minBatchMaxSecs`. |
 | `darwinRelay.minBatchMaxSecs` | `30` | The batch interval `ds:ingest:darwin`'s `MAXLEN` is budgeted for (two hours of writer outage); the render refuses a smaller `batchMaxSecs`. |

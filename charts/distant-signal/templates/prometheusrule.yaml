@@ -1665,6 +1665,29 @@ spec:
             description: "Over {{ .maxMessages }} messages behind for {{ .for }}: the relay, Redis or the ingest-writer cannot keep up."
             runbook_url: {{ printf "%s#distantsignaldarwinconsumerlaghigh" $runbook | quote }}
         {{- end }}
+        {{- with $rule.darwinRelay.offsetReset }}
+        {{- /*
+        A reset means the group had no usable committed offset (first
+        start, offsets expired, or the committed one aged out of the
+        topic): the relay started from autoOffsetReset. Under `earliest`
+        that is a replay (duplicates); a committed offset that aged out
+        is a gap either way. A new group's first start counts one per
+        partition (reason no_committed_offset). Inert on an image older
+        than ds-ingest 662fe534.
+        */}}
+        - alert: DistantSignalDarwinOffsetReset
+          expr: |
+            sum by (namespace, reason) (increase(distant_signal_darwin_relay_offset_resets_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "darwin-relay reset its Kafka offset ({{ "{{ $labels.reason }}" }}, to {{ $.Values.darwinRelay.kafka.autoOffsetReset }})"
+            description: "Its group had no usable committed offset within {{ .window }}. Check the relay's log for how long it was behind."
+            runbook_url: {{ printf "%s#distantsignaldarwinoffsetreset" $runbook | quote }}
+        {{- end }}
     {{- end }}
     {{- if or $poolTimeoutsOn $directWritesOn }}
     - name: distant-signal.database

@@ -4348,11 +4348,19 @@ darwinRelay:
       saslMechanism: sasl-mechanism
       securityProtocol: security-protocol
       saslConfig: sasl-config
-    # -- Where to start when the group has no committed offset
-    # (KAFKA_AUTO_OFFSET_RESET). `latest` (default): the Push Port is
-    # current state, and `earliest` would replay the topic's whole
-    # retention into the writer on the first start.
-    autoOffsetReset: latest
+    # -- Where to start when the group has no usable committed offset
+    # (KAFKA_AUTO_OFFSET_RESET): its first start, or a committed offset
+    # the topic no longer holds (the relay was down longer than the
+    # retention, or the group's offsets expired). `earliest` (default)
+    # replays from the oldest message the topic keeps, so a reset never
+    # skips anything; `latest` jumps to the newest and silently skips
+    # every message in between. The cost of `earliest` is the replay: a
+    # cold start reads the topic's whole retention (days of messages) into
+    # ds:ingest:darwin and the writer, and DistantSignalDarwinConsumerLagHigh
+    # fires until it catches up. The replayed rows are duplicates the
+    # writer's Darwin-timestamp guards discard. The relay's own default is
+    # `latest`; scripts/check-config-defaults-chart.py records the override.
+    autoOffsetReset: earliest
     # -- The bootstrap server's TCP port(s). The broker address is only in
     # the Secret, so with `networkPolicy.egress.internetPorts` set the
     # egress policy cannot read its port: list it here.
@@ -6302,6 +6310,14 @@ metrics:
     # maxMessages behind the topic's newest message on some partition
     # (distant_signal_darwin_relay_consumer_lag, from librdkafka every
     # 30 s) for `for`: it, Redis or the writer cannot keep up.
+    #
+    # DistantSignalDarwinOffsetReset: the relay's consumer reset its offset
+    # (distant_signal_darwin_relay_offset_resets_total{reason}, reason
+    # no_committed_offset or reset_after_error) within `window`: it had no
+    # usable committed offset and started from
+    # darwinRelay.kafka.autoOffsetReset. A brand-new consumer group counts
+    # one no_committed_offset per partition on its first start. Exported
+    # since ds-ingest 662fe534; inert on an older image.
     darwinRelay:
       enabled: true
       stale:
@@ -6311,6 +6327,9 @@ metrics:
       consumerLag:
         maxMessages: 50000
         for: 15m
+        severity: warning
+      offsetReset:
+        window: 30m
         severity: warning
     # DistantSignalDbPoolAcquireTimeouts: a component's Postgres pool timed
     # out handing out a connection (distant_signal_db_pool_acquire_timeouts_total,

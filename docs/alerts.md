@@ -1794,6 +1794,35 @@ that cannot keep up (the stream's own alerts, e.g.
 [DistantSignalIngestStreamStalled](#distantsignalingeststreamstalled)),
 shows up here first. A restart after a long outage replays from the last
 commit, which also lags until it catches up: that is expected and clears.
+With `darwinRelay.kafka.autoOffsetReset: earliest` (the default) the same
+holds after a cold start, which replays the topic's whole retention: see
+[DistantSignalDarwinOffsetReset](#distantsignaldarwinoffsetreset).
+
+### DistantSignalDarwinOffsetReset
+
+darwin-relay's Kafka consumer reset its offset within
+`darwinRelay.offsetReset.window` (30m)
+(`distant_signal_darwin_relay_offset_resets_total{reason}`): its group had
+no usable committed offset, so it started from
+`darwinRelay.kafka.autoOffsetReset`. `reason` is `no_committed_offset` (the
+group had none for that partition) or `reset_after_error` (the committed
+offset was out of range). Exported since ds-ingest 662fe534; inert on an
+older image. A failed lookup of the committed offsets is counted in
+`darwin_relay_errors_total{operation="committed_offsets"}` instead.
+
+- The first start of a brand-new consumer group: one
+  `no_committed_offset` per partition, expected, once. Silence it.
+- Otherwise the committed offset is gone. Either the relay was down, or
+  failing to commit, for longer than the topic's retention, or the
+  group's offsets expired. With `earliest` (the default) the relay replays
+  everything the topic still holds: duplicates, which the writer's
+  Darwin-timestamp guards discard, and a lag alert until it catches up.
+  Whatever had already aged out of the topic is lost; the snapshot
+  product (not built) would be the full resync.
+- With `latest` everything between the old offset and now was skipped:
+  switch back to `earliest` unless the replay itself is the problem.
+- Check the relay's log around the reset for how long it had been down
+  or failing to commit, and why.
 
 ## pgBackRest
 
