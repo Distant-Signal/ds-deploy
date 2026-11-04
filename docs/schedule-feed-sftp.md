@@ -344,6 +344,67 @@ every row with an NLC, and at least `scheduleFeed.corpus.minRows` (JSON) or
 `scheduleFeed.corpus.xml.minRows` (XML; both 10,000) rows. An `NLC*` file that
 is not `.xml.gz` is never loaded and raises `DistantSignalCorpusFormatDrift`.
 
+### CORPUS API v2 (the NLC XML snapshots)
+
+NWR's CORPUS API v2 pushes dated full snapshots, `NLC<YYYYMMDD>.xml.gz`, and
+its first delivery is the whole history. On 2026-11-04, after the feed was
+re-registered, DTD pushed 498 weekly snapshots, from `NLC20170208.xml.gz` to
+`NLC20261030.xml.gz`, in two sessions between 18:57 and 19:00 UTC.
+schedule-ingest handles a push like that as follows:
+
+- While files are still uploading it logs `CORPUS file present but not yet
+  stable`. Since ds-api#8 only a file that could be the one loaded holds the
+  decision. Older unstable snapshots are left in `incoming/` until they
+  settle.
+- It loads the snapshot dated latest. An older one, or one dated before the
+  loaded snapshot (newest in `corpus/`), is archived unloaded in
+  `corpus/superseded/` with the outcome `corpus_superseded`.
+- `retentionKeep` (3) applies to `corpus/superseded/` too. A history push
+  therefore keeps only its three newest snapshots, and schedule-ingest deletes
+  the rest. That's what happened on 2026-11-04 (495 files). Those snapshots
+  were never loaded and can be pushed again from the CORPUS subscription.
+
+With `formatPrecedence: json`, a snapshot loads only once no JSON extract has
+loaded for `preferredGraceDays` (35). Until then each one is archived
+unloaded, and schedule-ingest logs a WARN that names the precedence. That's
+why the 2026-11-04 push did not load: the last JSON load was 2026-10-02.
+
+To load a snapshot that was archived unloaded, copy it back into the landing
+folder under its original name, for example
+`corpus/superseded/20261104T190005Z-NLC20261030.xml.gz` to
+`incoming/NLC20261030.xml.gz`, with `formatPrecedence: xml` deployed.
+schedule-ingest loads it once it is stable (`stabilityCycles` scans).
+
+#### The frozen JSON fallback
+
+An XML snapshot holds only locations with a TIPLOC: about 12,100 rows against
+the JSON extract's 56,000. On its own it would lose crosswalk pairs. Measured
+on 2026-11-04, that's 167 TIPLOC to CRS and 2 STANOX to CRS. Since ds-api#11
+(ds-core v0.1.2), an XML load works like this:
+
+- It replaces only the previous snapshot's rows in `corpus_locations`.
+- The last JSON extract's rows stay beside it as a frozen fallback, still
+  marked with their own `source_file` (`CORPUSExtract.json.gz`) and
+  `delivered_at` (2026-10-02 in production).
+- The crosswalk takes the XML's pairs first, then the JSON's for every TIPLOC
+  or STANOX the XML doesn't resolve. The XML wins every key it resolves, and
+  nothing the JSON resolved stops resolving.
+- `corpus_deliveries` and the freshness gauge show the XML delivery.
+- The ingest-writer's crosswalk rebuild and `corpus_compare` read the same
+  two layers.
+
+There is no switch. The fallback is replaced by the next JSON extract that
+loads. To drop it, delete the rows whose `source_file` is not an `NLC*.xml.gz`
+name and let the next load rebuild the crosswalk.
+
+Order matters. An older schedule-ingest loads an XML snapshot as a
+whole-table replace, which discards the JSON rows. Deploy the fallback image
+before `formatPrecedence: xml`, and before any XML snapshot is loaded or
+reloaded. If the JSON rows were lost, reload the JSON first: copy the newest
+`corpus/*-CORPUSExtract.json.gz` back to `incoming/CORPUSExtract.json.gz`,
+then reload the XML snapshot. The JSON loads only while `formatPrecedence` is
+`json`, or once no XML has loaded for `preferredGraceDays`.
+
 ### Provenance and the audit line
 
 Every delivered file is hashed with SHA-256 as schedule-ingest reads it:
@@ -365,7 +426,8 @@ logged as one line with `target` `schedule_ingest::audit`:
 | `accepted` | extracted (CIF) or loaded (CORPUS) and recorded by api | absent |
 | `quarantined` | a CIF zip that failed a check; not retried until a new upload replaces it. Counts in `schedule_feed_zip_rejected_total` (`DistantSignalScheduleFeedZipRejected`) | the failed check |
 | `rejected_by_api` | api refused the record with 400/413/422 (`DistantSignalScheduleFeedIngestRejected`) | api's error |
-| `corpus_rejected` | a CORPUS file that failed its checks (`DistantSignalCorpusRejected`), or one archived unloaded because another won: an older file, or the non-preferred format (`scheduleFeed.corpus.formatPrecedence`) | the failed check, or why it was not loaded |
+| `corpus_rejected` | a CORPUS file that failed its checks (`DistantSignalCorpusRejected`). Before ds-api#8, also one archived unloaded because another won | the failed check |
+| `corpus_superseded` | a CORPUS file archived unloaded in `corpus/superseded/` because another won: an older file, an XML snapshot dated before the loaded one, or the non-preferred format (`scheduleFeed.corpus.formatPrecedence`). Nothing is wrong with the file | why it was not loaded |
 
 A file whose api POST fails transiently gets its line when the retry
 succeeds. Once api accepts a CIF delivery, schedule-ingest writes the zip's

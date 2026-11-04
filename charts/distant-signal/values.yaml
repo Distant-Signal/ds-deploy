@@ -5427,14 +5427,19 @@ scheduleFeed:
       # -- A snapshot with fewer rows is rejected (real: 12,102 on
       # 2026-10-09).
       minRows: 10000
-    # -- Which file is loaded when both formats arrive: `json` (the
-    # default: the superset, and what was loaded before the XML format),
-    # `xml`, or `newest` (by mtime; with both feeds subscribed the table
+    # -- Which file is loaded when both formats arrive: `xml` (the
+    # default since 2026-11-04: NWR stopped updating the JSON extract after
+    # its 2026-10-02 delivery), `json` (the superset, what was loaded
+    # before), or `newest` (by mtime; with both feeds subscribed the table
     # then alternates between them). The non-preferred format is still
     # parsed (a broken file alerts), compared and archived, and is loaded
     # only when the preferred one has not been loaded for
-    # `preferredGraceDays`.
-    formatPrecedence: json
+    # `preferredGraceDays`. Within the XML format the snapshot dated latest
+    # (by its name) wins, and one dated before the loaded snapshot is never
+    # loaded (schedule-ingest since ds-api#8). An XML load keeps the last
+    # JSON extract's rows as a frozen fallback for the codes the XML lacks
+    # (schedule-ingest since ds-api#11; docs/schedule-feed-sftp.md).
+    formatPrecedence: xml
     # -- Days without a load of the preferred format before the other
     # format takes over.
     preferredGraceDays: 35
