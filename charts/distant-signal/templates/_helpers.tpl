@@ -1580,12 +1580,15 @@ aggregator's archive pool, the ingest-writer's ingestWriter.database.maxConnecti
 {{- /* Its pool plus the run-lock session (DS-241), in either mode. */ -}}
 {{- add1 (int $root.Values.scheduleFeed.reference.ingest.database.maxConnections) -}}
 {{- else if has .service (list "full_coverage_ro" "ldbws_ro") -}}
-{{- /* A phase 4 reader: <component>.internalReads.database. */ -}}
+{{- /* A phase 4 reader: <component>.internalReads.database, times its pods
+     (poller-ldbws's surge pod, distant-signal.pollerPods). */ -}}
 {{- $values := ternary $root.Values.pollers.ldbws $root.Values.fullCoverageConsumer (eq .service "ldbws_ro") -}}
-{{- mul $pods (int $values.internalReads.database.maxConnections) -}}
+{{- $readers := ternary (int (include "distant-signal.pollerPods" (dict "root" $root "name" "ldbws"))) $pods (eq .service "ldbws_ro") -}}
+{{- mul $readers (int $values.internalReads.database.maxConnections) -}}
 {{- else if hasKey $root.Values.pollers .service -}}
-{{- /* A poller that writes directly (phase 2): pollers.<name>.ingest.database. */ -}}
-{{- int (get $root.Values.pollers .service).ingest.database.maxConnections -}}
+{{- /* A poller that writes directly (phase 2): pollers.<name>.ingest.database,
+     times its pods (a surge rollout's two, distant-signal.pollerPods). */ -}}
+{{- mul (int (include "distant-signal.pollerPods" (dict "root" $root "name" .service))) (int (get $root.Values.pollers .service).ingest.database.maxConnections) -}}
 {{- else if eq .service "trust_backlog" -}}
 {{- /* Phase 3b: trustBacklogConsumer.ingest.database.maxConnections. */ -}}
 {{- mul $pods (int $root.Values.trustBacklogConsumer.ingest.database.maxConnections) -}}
@@ -2614,6 +2617,103 @@ Takes dict "what" (the mode value's path, for messages), "mode" and
 {{- fail (printf "%s: cronjob is not supported for this workload yet: its binary must first wait for its writes before a once-mode exit (docs/scheduled-jobs.md). Use mode: deployment." .what) -}}
 {{- end -}}
 {{- $mode -}}
+{{- end }}
+
+{{/*
+A long-running poller Deployment's rollout (docs/ingest-rollout.md,
+"Pollers"; ds-pollers docs/redeploy-safety.md): "surge" or "recreate".
+Fails on anything else. Takes dict "what" (the value's path, for messages)
+and "rollout".
+
+  - surge: RollingUpdate, maxSurge 1, maxUnavailable 0, with a readiness
+    probe on /healthz. A poller answers that only after its pod's first
+    successful cycle (or workerHealth.pollerReadyFallbackSecs after it
+    started, ds-pollers' poller-lifecycle), so the old pod keeps polling
+    until the new one has delivered data. A new pod that crashes, waits on
+    the schema gate or fails every cycle never replaces a working one. The
+    overlap costs a duplicate poll, which the writers absorb (the ingest
+    streams' observed-time guard and dedup, the incidents upserts and
+    their FOR UPDATE inference baseline).
+  - recreate: the old pod stops before the new one starts. For the daily
+    pollers, whose next cycle may be a day away and whose data heals on the
+    next run anyway.
+*/}}
+{{- define "distant-signal.pollerRollout" -}}
+{{- $rollout := toString (.rollout | default "recreate") -}}
+{{- if not (has $rollout (list "surge" "recreate")) -}}
+{{- fail (printf "%s must be surge or recreate, not %q." .what $rollout) -}}
+{{- end -}}
+{{- $rollout -}}
+{{- end }}
+
+{{/*
+A poller Deployment's strategy, at the Deployment spec's indent. Takes the
+rollout (distant-signal.pollerRollout).
+*/}}
+{{- define "distant-signal.pollerStrategy" -}}
+strategy:
+{{- if eq . "surge" }}
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+{{- else }}
+  type: Recreate
+{{- end }}
+{{- end }}
+
+{{/*
+The pods a poller in `.Values.pollers` can run at once: 2 while it is a
+Deployment with rollout surge (the old pod and the surge pod), else 1. Its
+Postgres role's computed CONNECTION LIMIT counts them all
+(distant-signal.servicePool). Takes (dict "root" $ "name" <pollers key>).
+*/}}
+{{- define "distant-signal.pollerPods" -}}
+{{- $poller := get .root.Values.pollers .name | default dict -}}
+{{- $rollout := include "distant-signal.pollerRollout" (dict "what" (printf "pollers.%s.rollout" .name) "rollout" $poller.rollout) -}}
+{{- if and (eq $rollout "surge") (ne (toString ($poller.mode | default "deployment")) "cronjob") -}}
+2
+{{- else -}}
+1
+{{- end -}}
+{{- end }}
+
+{{/*
+workerHealth.pollerReadyFallbackSecs, validated: empty (the binary's own
+default, 480 s, poller-lifecycle), or whole seconds from 1 to 540. A surge
+rollout whose new pod never succeeds a cycle finishes after this long
+instead of waiting for ever (an upstream outage fails the old pod too). It
+must stay under the Deployments' progressDeadlineSeconds (600) with room
+for the pod's startup, and under DistantSignalIngestRolloutStuck's 10
+minutes. Renders the seconds, or nothing when empty. Takes root.
+*/}}
+{{- define "distant-signal.pollerReadyFallbackSecs" -}}
+{{- $raw := .Values.workerHealth.pollerReadyFallbackSecs -}}
+{{- $secs := ternary "" (toString $raw) (kindIs "invalid" $raw) -}}
+{{- if and $secs (or (not (regexMatch "^[0-9]+$" $secs)) (lt (int $secs) 1) (gt (int $secs) 540)) -}}
+{{- fail (printf "workerHealth.pollerReadyFallbackSecs must be whole seconds from 1 to 540 (under the 600 s progressDeadlineSeconds), not %q." $secs) -}}
+{{- end -}}
+{{- $secs -}}
+{{- end }}
+
+{{/*
+A surge poller's Postgres role must admit both pods. The computed CONNECTION
+LIMIT does (distant-signal.servicePool counts distant-signal.pollerPods); an
+explicit postgresql.roles.perService.<role>.connectionLimit below both pods'
+pools would refuse the surge pod's connections, so it never becomes Ready
+and the rollout waits out the fallback with a failing new pod. Renders
+nothing. Takes (dict "root" $ "role" <perService key> "what" <the rollout
+value's path>).
+*/}}
+{{- define "distant-signal.pollerConnectionGuard" -}}
+{{- $cfg := get .root.Values.postgresql.roles.perService .role | default dict -}}
+{{- $limit := toString (default "" $cfg.connectionLimit) -}}
+{{- if and (ne $limit "") (include "distant-signal.perServiceConnects" (dict "root" .root "service" .role)) -}}
+{{- $pool := int (include "distant-signal.servicePool" (dict "root" .root "service" .role)) -}}
+{{- if lt (int $limit) $pool -}}
+{{- fail (printf "postgresql.roles.perService.%s.connectionLimit is %s, but %s is surge: the old and the surge pod together hold up to %d connections. Raise it to at least %d (or leave it empty to compute it), or use rollout: recreate." .role $limit .what $pool (add $pool 1)) -}}
+{{- end -}}
+{{- end -}}
 {{- end }}
 
 {{/*

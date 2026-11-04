@@ -20,6 +20,9 @@ order is stable: incidents, ldbws, stations, tfl, tocs.
 {{- fail (printf "pollers.%s.enabled is true but pollers.%s.baseUrl is empty. Set it to this feed's base URL (for the four Rail Data Marketplace pollers -- incidents, stations, tocs, ldbws -- the URL from your RDM subscription; tfl defaults to https://api.tfl.gov.uk). See the chart README's \"Enabling the pollers\" and local.env.example / dev.env.example in the repository root, or set pollers.%s.enabled=false." $name $name $name) }}
 {{- end }}
 {{- $component := printf "poller-%s" $name }}
+{{- /* surge or recreate (distant-signal.pollerRollout), checked in either
+mode; only a Deployment uses it. */}}
+{{- $rollout := include "distant-signal.pollerRollout" (dict "what" (printf "pollers.%s.rollout" $name) "rollout" $poller.rollout) }}
 {{- /* Pollers whose binary waits for its writes before a once-mode exit
 (common::poller_loop::finish_once); docs/scheduled-jobs.md. */}}
 {{- $mode := include "distant-signal.workloadMode" (dict "what" (printf "pollers.%s.mode" $name) "mode" $poller.mode "cronCapable" (has $name (list "tocs" "stations"))) }}
@@ -49,6 +52,12 @@ chart's env and extraEnv. */}}
 ---
 {{ include "distant-signal.cronWorkerSpec" (dict "root" $root "component" $component "cron" $poller.cron "image" $poller.image "env" $env "workload" $poller) }}
 {{- else }}
+{{- if eq $rollout "surge" }}
+{{- /* Both pods' pools must fit its Postgres role (a writer's own, or
+ldbws's read-only one). */}}
+{{- $role := ternary "ldbws_ro" $name (eq $name "ldbws") }}
+{{- include "distant-signal.pollerConnectionGuard" (dict "root" $root "role" $role "what" (printf "pollers.%s.rollout" $name)) }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -58,11 +67,12 @@ metadata:
     {{- include "distant-signal.labels" (dict "root" $root "component" $component) | nindent 4 }}
 spec:
   revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
-  # Every poller is a singleton loop; a second copy would just duplicate
-  # every upstream request and every ingest POST.
+  # Every poller is a singleton loop: one replica. pollers.<name>.rollout
+  # (distant-signal.pollerRollout) picks how a new pod replaces it: surge
+  # keeps the old pod polling until the new one's first successful cycle
+  # (a duplicate poll, which the writers absorb), recreate stops it first.
   replicas: 1
-  strategy:
-    type: Recreate
+  {{- include "distant-signal.pollerStrategy" $rollout | nindent 2 }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
@@ -96,11 +106,12 @@ spec:
           imagePullPolicy: {{ $poller.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          # SVC-08/INF-9: /livez restarts a wedged poll loop. Liveness only:
-          # nothing routes traffic to a poller. Between polls the loop counts
-          # as alive (a 24h poller is not "stalled" for 24h); only a single
-          # poll running past PROGRESS_STALL_SECS is.
-          {{- include "distant-signal.workerHealthProbes" (dict "root" $root "port" $root.Values.workerHealth.port) | nindent 10 }}
+          # SVC-08/INF-9: /livez restarts a wedged poll loop. Between polls
+          # the loop counts as alive (a 24h poller is not "stalled" for 24h);
+          # only a single poll running past PROGRESS_STALL_SECS is. Under
+          # rollout surge, readiness (/healthz) gates the rollout: nothing
+          # routes traffic to a poller.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" $root "port" $root.Values.workerHealth.port "readiness" (eq $rollout "surge")) | nindent 10 }}
           ports:
             - name: health
               containerPort: {{ $root.Values.workerHealth.port }}
@@ -111,7 +122,7 @@ spec:
               protocol: TCP
           {{- end }}
           env:
-            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerEnv" (dict "root" $root "name" $name "poller" $poller "tflJobs" (ternary "status" "all" $tflSplit))) "extra" $poller.extraEnv) | trim | nindent 12 }}
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerEnv" (dict "root" $root "name" $name "poller" $poller "tflJobs" (ternary "status" "all" $tflSplit) "surge" (eq $rollout "surge"))) "extra" $poller.extraEnv) | trim | nindent 12 }}
           {{- with $poller.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -147,7 +158,10 @@ This container's own env entries. distant-signal.mergeEnv renders them
 with $poller.extraEnv, which replaces an entry of the same name.
 */ -}}
 {{- define "distant-signal.pollerEnv" }}
-{{- /* Takes dict "root", "name" and "poller" from the range above. */}}
+{{- /* Takes dict "root", "name" and "poller" from the range above, and
+optionally "tflJobs" (TFL_JOBS) and "surge" (true for a rollout surge
+Deployment: POLLER_READY_FALLBACK_SECS, when
+workerHealth.pollerReadyFallbackSecs is set). */}}
 {{- $root := .root }}
 {{- $name := .name }}
 {{- $poller := .poller }}
@@ -285,6 +299,15 @@ with $poller.extraEnv, which replaces an entry of the same name.
               value: {{ printf "0.0.0.0:%d" (int $root.Values.workerHealth.port) | quote }}
             - name: PROGRESS_STALL_SECS
               value: {{ $poller.progressStallSecs | default $root.Values.workerHealth.pollerProgressStallSecs | quote }}
+            {{- if .surge }}
+            {{- with include "distant-signal.pollerReadyFallbackSecs" $root }}
+            # Rollout surge: /healthz turns ready at the first successful
+            # cycle, or this long after the start whatever the cycles do
+            # (unset: the binary's 480 s).
+            - name: POLLER_READY_FALLBACK_SECS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             - name: RUST_LOG
               value: {{ $poller.logLevel | quote }}
             {{- if eq $name "incidents" }}

@@ -1,6 +1,7 @@
 {{- if .Values.pollerIrishRailLive.enabled }}
 {{- /* Its only sink is its stream: its own narrow Redis user (security review H3). */}}
 {{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "pollerIrishRailLive" "what" "pollerIrishRailLive.enabled") }}
+{{- $rollout := include "distant-signal.pollerRollout" (dict "what" "pollerIrishRailLive.rollout" "rollout" .Values.pollerIrishRailLive.rollout) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,8 +11,8 @@ metadata:
 spec:
   revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   replicas: 1
-  strategy:
-    type: Recreate
+  # pollerIrishRailLive.rollout (distant-signal.pollerRollout).
+  {{- include "distant-signal.pollerStrategy" $rollout | nindent 2 }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "poller-irish-rail-live") | nindent 6 }}
@@ -45,9 +46,10 @@ spec:
           imagePullPolicy: {{ .Values.pollerIrishRailLive.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
-          # SVC-08/INF-9: /livez restarts a wedged poll loop. Liveness only:
-          # nothing routes traffic to a poller.
-          {{- include "distant-signal.workerHealthProbes" (dict "root" . "port" .Values.workerHealth.port) | nindent 10 }}
+          # SVC-08/INF-9: /livez restarts a wedged poll loop. Under rollout
+          # surge, readiness (/healthz) gates the rollout: nothing routes
+          # traffic to a poller.
+          {{- include "distant-signal.workerHealthProbes" (dict "root" . "port" .Values.workerHealth.port "readiness" (eq $rollout "surge")) | nindent 10 }}
           ports:
             - name: health
               containerPort: {{ .Values.workerHealth.port }}
@@ -58,7 +60,7 @@ spec:
               protocol: TCP
           {{- end }}
           env:
-            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerIrishRailLiveEnv" .) "extra" .Values.pollerIrishRailLive.extraEnv) | trim | nindent 12 }}
+            {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.pollerIrishRailLiveEnv" (dict "root" . "surge" (eq $rollout "surge"))) "extra" .Values.pollerIrishRailLive.extraEnv) | trim | nindent 12 }}
           {{- with .Values.pollerIrishRailLive.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -80,34 +82,45 @@ spec:
 {{- /*
 This container's own env entries. distant-signal.mergeEnv renders them
 with pollerIrishRailLive.extraEnv, which replaces an entry of the same name.
+Takes (dict "root" $ "surge" <rollout surge>).
 */ -}}
 {{- define "distant-signal.pollerIrishRailLiveEnv" }}
+{{- $root := .root }}
             - name: IRISH_RAIL_BASE_URL
-              value: {{ .Values.pollerIrishRailLive.irishRailBaseUrl | quote }}
+              value: {{ $root.Values.pollerIrishRailLive.irishRailBaseUrl | quote }}
             # Ingest plan 3c.2 (decision D8): the only sink is the
             # ds:ingest:ioi-live stream (the ingest-writer applies
             # it with ingestWriter.streams.ioi-live), as the
             # poller-irish-rail-live ACL user with redis.acl.clients.pollerIrishRailLive.
             - name: REDIS_URL
-              value: {{ include "distant-signal.redisUrl" . | quote }}
-            {{- include "distant-signal.redisClientAuthEnv" (dict "root" . "client" "pollerIrishRailLive" "user" "poller-irish-rail-live") }}
+              value: {{ include "distant-signal.redisUrl" $root | quote }}
+            {{- include "distant-signal.redisClientAuthEnv" (dict "root" $root "client" "pollerIrishRailLive" "user" "poller-irish-rail-live") }}
             - name: POLL_INTERVAL_SECS
-              value: {{ .Values.pollerIrishRailLive.pollIntervalSecs | quote }}
-            {{- if .Values.pollerIrishRailLive.stationCodesOverride }}
+              value: {{ $root.Values.pollerIrishRailLive.pollIntervalSecs | quote }}
+            {{- if $root.Values.pollerIrishRailLive.stationCodesOverride }}
             - name: STATION_CODES_OVERRIDE
-              value: {{ .Values.pollerIrishRailLive.stationCodesOverride | quote }}
+              value: {{ $root.Values.pollerIrishRailLive.stationCodesOverride | quote }}
             {{- end }}
             - name: METRICS_ENABLED
-              value: {{ .Values.metrics.enabled | quote }}
-            {{- if .Values.metrics.enabled }}
+              value: {{ $root.Values.metrics.enabled | quote }}
+            {{- if $root.Values.metrics.enabled }}
             - name: METRICS_PORT
-              value: {{ .Values.pollerIrishRailLive.metricsPort | quote }}
+              value: {{ $root.Values.pollerIrishRailLive.metricsPort | quote }}
             {{- end }}
             # /livez + /healthz listener (SVC-08/INF-9) -- see workerHealth.
             - name: HEALTH_BIND_URL
-              value: {{ printf "0.0.0.0:%d" (int .Values.workerHealth.port) | quote }}
+              value: {{ printf "0.0.0.0:%d" (int $root.Values.workerHealth.port) | quote }}
             - name: PROGRESS_STALL_SECS
-              value: {{ .Values.pollerIrishRailLive.progressStallSecs | quote }}
+              value: {{ $root.Values.pollerIrishRailLive.progressStallSecs | quote }}
+            {{- if .surge }}
+            {{- with include "distant-signal.pollerReadyFallbackSecs" $root }}
+            # Rollout surge: /healthz turns ready at the first successful
+            # cycle, or this long after the start whatever the cycles do
+            # (unset: the binary's 480 s).
+            - name: POLLER_READY_FALLBACK_SECS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             - name: RUST_LOG
-              value: {{ .Values.pollerIrishRailLive.logLevel | quote }}
+              value: {{ $root.Values.pollerIrishRailLive.logLevel | quote }}
 {{- end }}

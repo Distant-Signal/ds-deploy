@@ -282,6 +282,13 @@ LINES = "a local override: the image embeds the line catalogue (ds-lines)"
 POOL = "the pool size stays the service's own default"
 STANOX = "the image's bundled reference-data/stanox-crs.csv"
 KAFKA_GONE = "R-101: kafka refuses to start; the Redis stream is the only backend"
+# Every long-running poller's readiness fallback (ds-pollers' poller-lifecycle).
+READY_FALLBACK = {
+    "POLLER_READY_FALLBACK_SECS": ahead_of_image(
+        "workerHealth.pollerReadyFallbackSecs, on a rollout surge poller",
+        "ds-pollers#4",
+    )
+}
 
 # Variables a service reads that no render sets, with the reason. A new
 # variable fails until it is wired or listed here.
@@ -358,11 +365,18 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
             "pollers.incidents.ingest.rowHeartbeat=false"
         ),
         "LINES_DIR": LINES,
+        **READY_FALLBACK,
     },
+    "poller-irish-rail-gtfs": READY_FALLBACK,
     "poller-irish-rail-live": {
         "STATION_CODES_OVERRIDE": optional("pollerIrishRailLive.stationCodesOverride"),
+        **READY_FALLBACK,
     },
-    "poller-ldbws": {"LINES_DIR": LINES},
+    "poller-ldbws": {"LINES_DIR": LINES, **READY_FALLBACK},
+    "poller-nir-stations": READY_FALLBACK,
+    "poller-stations": READY_FALLBACK,
+    "poller-tfl": READY_FALLBACK,
+    "poller-tocs": READY_FALLBACK,
     "schedule-ingest": {
         "MAX_EXTRACTED_BYTES": no_value("scheduleFeed.ingest"),
         "MAX_ZIP_ENTRIES": no_value("scheduleFeed.ingest"),

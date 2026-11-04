@@ -792,12 +792,15 @@ kube-state-metrics (`distant_signal:ingest_rollout_stuck:reason`):
   (`ProgressDeadlineExceeded`, after the Deployment's
   `progressDeadlineSeconds`, 600 by default).
 - `unavailable`: fewer available replicas than desired. Under Recreate (the
-  consumers, the ingest-writer, darwin-relay, the pollers) the old pod is
-  already gone, so nothing of that workload is running.
+  consumers, the ingest-writer, darwin-relay, the `recreate` pollers) the
+  old pod is already gone, so nothing of that workload is running.
 - `extra_pods`: more pods than desired, a surge pod that never became
-  Ready (movement-relay, maxSurge 1). The old pod keeps running and
-  reading, so this one is a warning, not an outage, until someone deletes
-  the old pod.
+  Ready (movement-relay, and the `surge` pollers, maxSurge 1). The old pod
+  keeps running and reading, so this one is a warning, not an outage,
+  until someone deletes the old pod. A surge poller's new pod is Ready
+  after its first successful cycle or `workerHealth.pollerReadyFallbackSecs`
+  (480 s), so for a poller this means the new pod crash-loops or never
+  starts ([ingest-rollout.md](ingest-rollout.md#pollers)).
 
 The data waits rather than being lost: Kafka keeps the TRUST and Push
 Port records, the Redis streams keep theirs up to `MAXLEN`, and the

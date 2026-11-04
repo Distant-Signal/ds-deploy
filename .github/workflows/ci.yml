@@ -175,6 +175,15 @@ jobs:
       - name: Kafka relay rollout strategies
         run: uv run --no-sync scripts/check-kafka-rollout-chart.py
 
+      # Every poller Deployment (components.yaml's `pollers` group) is
+      # Recreate or a surge whose new pod is Ready only after its first
+      # successful cycle (maxUnavailable 0, readiness on /healthz, the
+      # fallback set), transit stays Recreate, each default is the expected
+      # one, and the chart refuses an unknown rollout, a fallback out of
+      # range and a connection limit too low for the surge pod.
+      - name: Poller rollout strategies
+        run: uv run --no-sync scripts/check-poller-rollout-chart.py
+
       # charts/distant-signal/components.yaml maps every
       # app.kubernetes.io/component to a group (ingest, schedule-feed,
       # migrate, roles, ...) for check-ingest-rollout.py and deploy-bringer's

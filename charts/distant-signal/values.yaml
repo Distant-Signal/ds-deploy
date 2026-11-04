@@ -1105,6 +1105,12 @@ pollers:
     baseUrlEnvVar: RDM_INCIDENTS_BASE_URL
     # -- RSPS5050 P-03-00 Rev A section 10: "Recommend every 5 minutes."
     pollIntervalSecs: 300
+    # -- How a new pod replaces the old one (distant-signal.pollerRollout;
+    # docs/ingest-rollout.md, "Pollers"): `surge` keeps the old pod polling
+    # until the new one's first successful cycle (RollingUpdate, maxSurge 1,
+    # maxUnavailable 0, readiness on /healthz), so a bad deploy leaves no
+    # gap; `recreate` stops the old pod first. Only for `mode: deployment`.
+    rollout: surge
     # -- RDM API key, sent as the `x-apikey` header. Rendered into the chart
     # Secret as `rdm-incidents-api-key` when `existingSecret` is empty.
     apiKey: ""
@@ -1174,6 +1180,14 @@ pollers:
         maxConnections: 1
     # -- RSPS5050 P-03-00 Rev A section 6: once every 24 hours, overnight.
     pollIntervalSecs: 86400
+    # -- How a new pod replaces the old one (distant-signal.pollerRollout;
+    # docs/ingest-rollout.md, "Pollers"): `surge` keeps the old pod polling
+    # until the new one's first successful cycle (RollingUpdate, maxSurge 1,
+    # maxUnavailable 0, readiness on /healthz), so a bad deploy leaves no
+    # gap; `recreate` stops the old pod first. Only for `mode: deployment`.
+    # recreate here: a daily poller's first cycle may be a day away, and its
+    # data heals on the next run.
+    rollout: recreate
     # -- How it runs: `deployment` (an always-on pod polling every
     # pollIntervalSecs) or `cronjob` (a CronJob, `cron` below, whose run
     # polls once and exits; docs/scheduled-jobs.md). Exactly one renders.
@@ -1277,6 +1291,12 @@ pollers:
     # -- TfL publishes no recommended cadence for the line-status endpoint,
     # and offers no push or conditional requests. 300s mirrors incidents.
     pollIntervalSecs: 300
+    # -- How a new pod replaces the old one (distant-signal.pollerRollout;
+    # docs/ingest-rollout.md, "Pollers"): `surge` keeps the old pod polling
+    # until the new one's first successful cycle (RollingUpdate, maxSurge 1,
+    # maxUnavailable 0, readiness on /healthz), so a bad deploy leaves no
+    # gap; `recreate` stops the old pod first. Only for `mode: deployment`.
+    rollout: surge
     # -- TfL subscription key from api-portal.tfl.gov.uk. Rendered into the
     # chart Secret as `rdm-tfl-api-key` when `existingSecret` is empty — the
     # `rdm-` prefix is the chart's uniform per-poller key naming
@@ -1403,6 +1423,14 @@ pollers:
     # Release B (ingest phase 5) removed the `http` and `http+shadow` sinks.
     # -- RSPS5050 P-03-00 Rev A section 3: at least once every 24 hours.
     pollIntervalSecs: 86400
+    # -- How a new pod replaces the old one (distant-signal.pollerRollout;
+    # docs/ingest-rollout.md, "Pollers"): `surge` keeps the old pod polling
+    # until the new one's first successful cycle (RollingUpdate, maxSurge 1,
+    # maxUnavailable 0, readiness on /healthz), so a bad deploy leaves no
+    # gap; `recreate` stops the old pod first. Only for `mode: deployment`.
+    # recreate here: a daily poller's first cycle may be a day away, and its
+    # data heals on the next run.
+    rollout: recreate
     # -- How it runs: `deployment` (an always-on pod polling every
     # pollIntervalSecs) or `cronjob` (a CronJob, `cron` below, whose run
     # polls once and exits; docs/scheduled-jobs.md). Exactly one of the two
@@ -1495,6 +1523,12 @@ pollers:
     # knobs below can cut it without a code change; all are off by default,
     # and while off their env vars are not rendered at all.
     pollIntervalSecs: 60
+    # -- How a new pod replaces the old one (distant-signal.pollerRollout;
+    # docs/ingest-rollout.md, "Pollers"): `surge` keeps the old pod polling
+    # until the new one's first successful cycle (RollingUpdate, maxSurge 1,
+    # maxUnavailable 0, readiness on /healthz), so a bad deploy leaves no
+    # gap; `recreate` stops the old pod first. Only for `mode: deployment`.
+    rollout: surge
     # -- ldbws only: at most this many LDBWS requests in any rolling hour,
     # spread evenly over the hour's cycles. Stations a cycle cannot afford
     # are skipped (distant_signal_ldbws_budget_skipped_polls_total, plus a
@@ -4522,6 +4556,12 @@ pollerIrishRailLive:
   # Call #3), unlike pollers.ldbws's 60s default against a modern,
   # documented API.
   pollIntervalSecs: 300
+  # -- How a new pod replaces the old one (distant-signal.pollerRollout;
+  # docs/ingest-rollout.md, "Pollers"): `surge` keeps the old pod polling
+  # until the new one's first successful cycle (RollingUpdate, maxSurge 1,
+  # maxUnavailable 0, readiness on /healthz), so a bad deploy leaves no
+  # gap; `recreate` stops the old pod first. Only for `mode: deployment`.
+  rollout: surge
   # -- Comma-separated station-code allowlist; empty means "poll
   # everything getAllStationsXML returns."
   stationCodesOverride: ""
@@ -5920,6 +5960,14 @@ workerHealth:
   # override needed so far): one fetch plus up to 15 minutes of ingest-POST
   # retries (SVC-09).
   pollerProgressStallSecs: 1800
+  # -- POLLER_READY_FALLBACK_SECS of every poller with rollout surge: its
+  # /healthz turns ready at its first successful cycle, or this long after
+  # it started whatever its cycles do, so a rollout during an upstream
+  # outage (the old pod fails too) finishes. Empty: the binary's own
+  # default, 480 s (ds-pollers' poller-lifecycle). Else 1 to 540: under the
+  # Deployments' 600 s progressDeadlineSeconds with room for startup, and
+  # under DistantSignalIngestRolloutStuck's 10 minutes.
+  pollerReadyFallbackSecs: ""
 
 metrics:
   # Cheap, in-process, no new runtime dependency once the images are built
