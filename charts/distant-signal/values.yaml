@@ -1744,8 +1744,8 @@ api:
     # https://status.example.com/. One fixed target, not a round-tripped
     # "return to the page you were on". Required.
     postLoginRedirectUrl: ""
-    # -- Account continuity across a change of identity provider (the
-    # landing repository's docs/connected-apps.md, "Account continuity"):
+    # -- Account continuity across a change of identity provider
+    # (Distant-Signal/ds-api docs/connected-apps.md, "Account continuity"):
     # the ID-token claim carrying the user's Discord id, from the provider's
     # Discord source connection. A login whose sub has no account takes over
     # the account with that `users.discord_id`. Empty (the default) is off;
