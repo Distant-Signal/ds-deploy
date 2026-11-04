@@ -32,6 +32,13 @@ signing identity is
 
 To hold one service back, revert its `tag` and `digest` together in a PR.
 
+Around a deploy that restarts an ingest workload (a relay, a movement
+consumer, the ingest-writer or a poller), Ranma runs
+`scripts/check-ingest-rollout.py`: `baseline` before approving it, `verify`
+after Flux applies it. It reads only Prometheus, and it fails on any sign
+of a gap (data skipped or trimmed unread). See
+[docs/ingest-rollout.md](docs/ingest-rollout.md).
+
 ## Merging
 
 Pull requests merge as merge commits, by an admin, with the bypass:

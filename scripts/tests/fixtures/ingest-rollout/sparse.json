@@ -1,0 +1,524 @@
+[
+ {
+  "query": "sum (increase(distant_signal_trust_consumer_stream_gap_detected_total{namespace=\"distant-signal\"}[660s]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum (increase(distant_signal_full_coverage_consumer_stream_gap_detected_total{namespace=\"distant-signal\"}[660s]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum (increase(distant_signal_trust_backlog_consumer_stream_gap_detected_total{namespace=\"distant-signal\"}[660s]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum (increase(distant_signal_movement_feed_group_recreated_total{namespace=\"distant-signal\"}[660s]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum (increase(distant_signal_darwin_relay_offset_resets_total{namespace=\"distant-signal\"}[660s]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum by (group) (increase(distant_signal_movement_feed_deadlettered_total{namespace=\"distant-signal\"}[660s]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum by (stream) (increase(distant_signal_ingest_stream_dead_lettered_total{namespace=\"distant-signal\"}[660s]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "max by (stream) (distant_signal_movement_relay_deadletter_length{namespace=\"distant-signal\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "max by (deployment) (kube_deployment_spec_replicas{namespace=\"distant-signal\", deployment=~\"distant-signal-(darwin-relay|full-coverage-consumer|ingest-writer|movement-relay|poller-incidents|poller-irish-rail-gtfs|poller-irish-rail-live|poller-ldbws|poller-nir-stations|poller-stations|poller-tfl|poller-tocs|poller-transit-schedule|trust-backlog-consumer|trust-consumer)(-.+)?\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": [
+    {
+     "metric": {
+      "deployment": "distant-signal-movement-relay"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-full-coverage-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-backlog-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-ingest-writer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-poller-tfl"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "query": "max by (deployment) (kube_deployment_status_replicas{namespace=\"distant-signal\", deployment=~\"distant-signal-(darwin-relay|full-coverage-consumer|ingest-writer|movement-relay|poller-incidents|poller-irish-rail-gtfs|poller-irish-rail-live|poller-ldbws|poller-nir-stations|poller-stations|poller-tfl|poller-tocs|poller-transit-schedule|trust-backlog-consumer|trust-consumer)(-.+)?\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": [
+    {
+     "metric": {
+      "deployment": "distant-signal-movement-relay"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-full-coverage-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-backlog-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-ingest-writer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-poller-tfl"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "query": "max by (deployment) (kube_deployment_status_replicas_available{namespace=\"distant-signal\", deployment=~\"distant-signal-(darwin-relay|full-coverage-consumer|ingest-writer|movement-relay|poller-incidents|poller-irish-rail-gtfs|poller-irish-rail-live|poller-ldbws|poller-nir-stations|poller-stations|poller-tfl|poller-tocs|poller-transit-schedule|trust-backlog-consumer|trust-consumer)(-.+)?\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": [
+    {
+     "metric": {
+      "deployment": "distant-signal-movement-relay"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-full-coverage-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-backlog-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-ingest-writer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-poller-tfl"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "query": "max by (deployment) (kube_deployment_status_replicas_updated{namespace=\"distant-signal\", deployment=~\"distant-signal-(darwin-relay|full-coverage-consumer|ingest-writer|movement-relay|poller-incidents|poller-irish-rail-gtfs|poller-irish-rail-live|poller-ldbws|poller-nir-stations|poller-stations|poller-tfl|poller-tocs|poller-transit-schedule|trust-backlog-consumer|trust-consumer)(-.+)?\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": [
+    {
+     "metric": {
+      "deployment": "distant-signal-movement-relay"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-full-coverage-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-backlog-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-ingest-writer"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-poller-tfl"
+     },
+     "value": [
+      1793800800.0,
+      "1"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "query": "max by (deployment) (kube_deployment_status_observed_generation{namespace=\"distant-signal\", deployment=~\"distant-signal-(darwin-relay|full-coverage-consumer|ingest-writer|movement-relay|poller-incidents|poller-irish-rail-gtfs|poller-irish-rail-live|poller-ldbws|poller-nir-stations|poller-stations|poller-tfl|poller-tocs|poller-transit-schedule|trust-backlog-consumer|trust-consumer)(-.+)?\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": [
+    {
+     "metric": {
+      "deployment": "distant-signal-movement-relay"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-full-coverage-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-backlog-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-ingest-writer"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-poller-tfl"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "query": "max by (deployment) (kube_deployment_metadata_generation{namespace=\"distant-signal\", deployment=~\"distant-signal-(darwin-relay|full-coverage-consumer|ingest-writer|movement-relay|poller-incidents|poller-irish-rail-gtfs|poller-irish-rail-live|poller-ldbws|poller-nir-stations|poller-stations|poller-tfl|poller-tocs|poller-transit-schedule|trust-backlog-consumer|trust-consumer)(-.+)?\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": [
+    {
+     "metric": {
+      "deployment": "distant-signal-movement-relay"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-full-coverage-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-trust-backlog-consumer"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-ingest-writer"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    },
+    {
+     "metric": {
+      "deployment": "distant-signal-poller-tfl"
+     },
+     "value": [
+      1793800800.0,
+      "7"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "query": "max (distant_signal_movement_relay_ready{namespace=\"distant-signal\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum (increase(distant_signal_movement_relay_events_published_total{namespace=\"distant-signal\"}[5m]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum (distant_signal_movement_relay_assigned_partitions{namespace=\"distant-signal\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum (max by (partition) (distant_signal_movement_relay_consumer_lag{namespace=\"distant-signal\"}))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "max by (group) (distant_signal_movement_relay_stream_lag{namespace=\"distant-signal\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "min (distant_signal_full_coverage_consumer_startup_complete{namespace=\"distant-signal\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "max by (stream) (distant_signal_ingest_stream_oldest_pending_age_seconds{namespace=\"distant-signal\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "max (distant_signal_darwin_relay_consumer_lag{namespace=\"distant-signal\"})",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum (increase(distant_signal_full_coverage_consumer_startup_replay_entries_total{namespace=\"distant-signal\"}[660s]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ },
+ {
+  "query": "sum (increase(distant_signal_movement_feed_long_pending_total{namespace=\"distant-signal\"}[660s]))",
+  "at": null,
+  "data": {
+   "resultType": "vector",
+   "result": []
+  }
+ }
+]
