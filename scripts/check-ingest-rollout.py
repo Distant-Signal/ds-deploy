@@ -34,6 +34,11 @@ runs out. What it checks, gap signals first:
               minutes; darwin-relay's Kafka lag under its alert threshold;
               movement-relay's Kafka lag near baseline and its partitions
               all held (exported since ds-ingest 662fe534);
+  pollers     each poller pod the deploy started has completed a
+              successful cycle (a poller whose cycle is over 10 minutes
+              apart is only reported); with the gap signals, no poller
+              CronJob missed a scheduled start (a skipped run) or failed a
+              run since the baseline;
   duplicates  information only: entries replayed by full-coverage-consumer
               and re-delivered entries since the baseline.
 
@@ -82,6 +87,13 @@ DARWIN_LAG_MAX = 50000
 RELAY_KAFKA_LAG_SLACK = 5000
 # The TRUST topic's partitions (scripts/check-kafka-rollout-chart.py).
 TRUST_PARTITIONS = 2
+# A poller cycling at least this often must complete a cycle in its new
+# pod within the wait; a slower one (a daily poller) is only reported.
+POLLER_MAX_INTERVAL_SECS = 600
+HOUR_SECS = 3600
+# How late a poller CronJob's scheduled start may be before it counts as
+# missed (the controller starts a run within seconds).
+CRONJOB_START_SLACK_SECS = 600
 # UTC hours during which movement-relay must be publishing (the
 # DistantSignalMovementRelayNotPublishing default).
 RAIL_HOURS_UTC = range(5, 23)
@@ -237,6 +249,8 @@ class Baseline:
     pending: Mapping[str, float]
     deadletter_length: Mapping[str, float]
     relay_kafka_lag: float | None
+    # Each poller's cycles in the hour before the baseline (its cadence).
+    poller_cycles_per_hour: Mapping[str, float] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, object]:
         """Return the baseline file's content."""
@@ -247,6 +261,7 @@ class Baseline:
             "pending": dict(self.pending),
             "deadletter_length": dict(self.deadletter_length),
             "relay_kafka_lag": self.relay_kafka_lag,
+            "poller_cycles_per_hour": dict(self.poller_cycles_per_hour),
         }
 
     @classmethod
@@ -264,6 +279,7 @@ class Baseline:
             pending=floats("pending"),
             deadletter_length=floats("deadletter_length"),
             relay_kafka_lag=None if kafka is None else float(cast("float", kafka)),
+            poller_cycles_per_hour=floats("poller_cycles_per_hour"),
         )
 
 
@@ -283,6 +299,10 @@ class Scope:
         """Return a selector matching the checked Deployments by name."""
         names = "|".join(self.components)
         return self.sel(f'deployment=~"{self.fullname}-({names})(-.+)?"')
+
+    def cronjob_names(self) -> str:
+        """Return a regex matching the checked components' CronJobs by name."""
+        return f"{self.fullname}-({'|'.join(self.components)})(-.+)?"
 
 
 def lag_query(scope: Scope) -> str:
@@ -312,6 +332,14 @@ def relay_kafka_lag_query(scope: Scope) -> str:
     )
 
 
+def poller_cycles_query(scope: Scope) -> str:
+    """Return each poller's cycles over the last hour (its cadence)."""
+    return (
+        "sum by (poller) "
+        f"(increase(distant_signal_poller_cycle_total{{{scope.sel()}}}[1h]))"
+    )
+
+
 def take_baseline(
     prom: Prometheus, scope: Scope, at: float | None, now: float
 ) -> Baseline:
@@ -322,6 +350,7 @@ def take_baseline(
         pending=by(prom.query(pending_query(scope), at), "group"),
         deadletter_length=by(prom.query(deadletter_length_query(scope), at), "stream"),
         relay_kafka_lag=scalar(prom.query(relay_kafka_lag_query(scope), at)),
+        poller_cycles_per_hour=by(prom.query(poller_cycles_query(scope), at), "poller"),
     )
 
 
@@ -497,6 +526,144 @@ def check_deployments(prom: Prometheus, scope: Scope) -> list[Result]:
             results.append(Result(f"deployment {name}", "wait", "; ".join(problems)))
         else:
             results.append(Result(f"deployment {name}", "ok", "rolled out, 1 pod"))
+    return results
+
+
+def check_pollers(
+    prom: Prometheus, scope: Scope, baseline: Baseline, now: float
+) -> list[Result]:
+    """Each poller restarted since the baseline has completed a cycle since.
+
+    A poller's upstream can't be replayed, so a pod that never completes a
+    cycle is a gap that grows until someone acts. "Restarted" is a pod
+    created after the baseline exporting the poller's cycle counter (a
+    CronJob run exports none).
+    """
+    metric = "distant_signal_poller_cycle_total"
+    new_pods = (
+        f"on (namespace, pod) (kube_pod_created{{{scope.sel()}}} > {baseline.at:.0f})"
+    )
+    restarted = by(
+        prom.query(f"max by (poller) ({metric}{{{scope.sel()}}} and {new_pods})"),
+        "poller",
+    )
+    if not restarted:
+        if prom.query(f"max by (poller) ({metric}{{{scope.sel()}}})"):
+            return [
+                Result("pollers", "info", "no poller pod started since the baseline")
+            ]
+        return [Result("pollers", "skip", not_available(metric))]
+    window = since(baseline, now)
+    success = scope.sel('result="success"')
+    succeeded = by(
+        prom.query(
+            f"sum by (poller) "
+            f"(increase({metric}{{{success}}}[{window}]) and {new_pods})"
+        ),
+        "poller",
+    )
+    results = []
+    for poller in sorted(restarted):
+        name = f"poller {poller}"
+        cycles = baseline.poller_cycles_per_hour.get(poller)
+        if succeeded.get(poller, 0.0) > 0:
+            results.append(
+                Result(name, "ok", "a successful cycle in a pod the deploy started")
+            )
+        elif cycles is not None and cycles * POLLER_MAX_INTERVAL_SECS < HOUR_SECS:
+            results.append(
+                Result(
+                    name,
+                    "info",
+                    f"no successful cycle yet; it ran {cycles:.1f} cycles an hour, "
+                    "so its next may be after the wait",
+                )
+            )
+        else:
+            results.append(
+                Result(name, "wait", "no successful cycle yet in its new pod")
+            )
+    return results
+
+
+def check_poller_cronjobs(
+    prom: Prometheus, scope: Scope, baseline: Baseline
+) -> list[Result]:
+    """No poller CronJob skipped a scheduled start or failed a run since the baseline.
+
+    A missed start (kube-state-metrics' next schedule time left in the past:
+    the controller missed its starting deadline, or Forbid held it) is a run
+    that never happened; a failed run gave up. Either way that day's data
+    waits for the next run.
+    """
+    sel = scope.sel(f'cronjob=~"{scope.cronjob_names()}"')
+    overdue = by(
+        prom.query(
+            f"max by (cronjob) (time() - kube_cronjob_next_schedule_time{{{sel}}})"
+        ),
+        "cronjob",
+    )
+    if not overdue:
+        return [
+            Result(
+                "poller cronjobs",
+                "skip",
+                not_available("kube_cronjob_next_schedule_time"),
+            )
+        ]
+    suspended = by(
+        prom.query(f"max by (cronjob) (kube_cronjob_spec_suspend{{{sel}}})"), "cronjob"
+    )
+    active = by(
+        prom.query(f"max by (cronjob) (kube_cronjob_status_active{{{sel}}})"), "cronjob"
+    )
+    owned = scope.sel(f'owner_kind="CronJob", owner_name=~"{scope.cronjob_names()}"')
+    failed_job = f'kube_job_failed{{{scope.sel()}, condition="true"}} == 1'
+    started = f"kube_job_status_start_time{{{scope.sel()}}} > {baseline.at:.0f}"
+    # Each failed Job started since the baseline, with its CronJob's name.
+    failed = prom.query(
+        f"max by (owner_name, job_name) (({failed_job})"
+        f" * on (namespace, job_name) group_left (owner_name) kube_job_owner{{{owned}}}"
+        f" and on (namespace, job_name) ({started}))"
+    )
+    failed_by = {
+        s.labels.get("owner_name", ""): s.labels.get("job_name", "") for s in failed
+    }
+    results = []
+    for cronjob in sorted(overdue):
+        name = f"cronjob {cronjob}"
+        late = overdue[cronjob]
+        if suspended.get(cronjob, 0.0) >= 1:
+            results.append(Result(name, "info", "suspended"))
+        elif cronjob in failed_by:
+            results.append(
+                Result(
+                    name,
+                    "fail",
+                    f"run {failed_by[cronjob]} failed since the baseline: its data "
+                    "waits for the next run (DistantSignalScheduledJobFailed)",
+                )
+            )
+        elif late > CRONJOB_START_SLACK_SECS and active.get(cronjob, 0.0) > 0:
+            results.append(
+                Result(
+                    name,
+                    "wait",
+                    f"a scheduled start is {late / 60:.0f} min late; "
+                    "a run is still going",
+                )
+            )
+        elif late > CRONJOB_START_SLACK_SECS:
+            results.append(
+                Result(
+                    name,
+                    "fail",
+                    f"missed a scheduled start {late / 60:.0f} min ago: that run "
+                    "never happened",
+                )
+            )
+        else:
+            results.append(Result(name, "ok", "no missed start, no failed run"))
     return results
 
 
@@ -713,7 +880,9 @@ def run_checks(
     return [
         *check_gaps(prom, scope, baseline, now),
         *check_dead_letters(prom, scope, baseline, now),
+        *check_poller_cronjobs(prom, scope, baseline),
         *check_deployments(prom, scope),
+        *check_pollers(prom, scope, baseline, now),
         *check_relay(prom, scope, now),
         check_relay_kafka_lag(prom, scope, baseline),
         *check_groups(prom, scope, baseline),

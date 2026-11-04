@@ -60,6 +60,7 @@ waiting won't undo it:
 | group recreated | a movement-events consumer group was recreated (`movement_feed_group_recreated_total`): Redis lost the stream or the group |
 | darwin offset reset | darwin-relay reset its Kafka offset (`darwin_relay_offset_resets_total`): its committed offset was gone |
 | dead letters | new dead letters since the baseline: movement-feed's (`movement_feed_deadlettered_total`), the ingest streams' (`ingest_stream_dead_lettered_total`), or a dead-letter stream longer than before |
+| cronjob (a poller's) | a poller CronJob in the `pollers` group missed a scheduled start, its `kube_cronjob_next_schedule_time` over 10 minutes in the past with no run going, so that run never happened. Or a run of it started since the baseline failed (`kube_job_failed`). Its data waits for the next run. Suspended CronJobs are only reported; a late start with a run still going waits |
 
 Recovery checks may need time. A check that hasn't passed by the deadline
 fails:
@@ -67,6 +68,7 @@ fails:
 | Check | Passes when |
 |---|---|
 | deployments | every `ingest` and `pollers` Deployment has exactly 1 pod, which is available and updated, and its new spec has been observed (kube-state-metrics). A Deployment scaled to 0 is reported, not failed. |
+| poller | every poller with a pod created since the baseline (its `poller_cycle_total` series and `kube_pod_created`) has a successful cycle in that pod. A poller that ran fewer than 6 cycles an hour before the baseline (the baseline records each one's cadence) may not be due within the wait, so it is only reported. A poller's upstream can't be replayed, so a new pod that never completes a cycle is a growing gap. |
 | movement-relay ready | `movement_relay_ready` is 1 |
 | movement-relay publishing | `movement_relay_events_published_total` rose over the last 5 minutes (05:00 to 23:00 UTC; overnight a flat counter is only reported) |
 | movement-relay partitions, Kafka lag | both TRUST partitions held (`movement_relay_assigned_partitions`, summed over pods), and Kafka lag (`movement_relay_consumer_lag`) within 5000 records of the baseline |

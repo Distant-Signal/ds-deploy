@@ -21,6 +21,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import re
 import socket
 import sys
 import tempfile
@@ -197,6 +198,223 @@ class VerifyTest(unittest.TestCase):
         self.assertIn("verify: 1 check(s) had not recovered in 15 minutes", out)
 
 
+class Scripted:
+    """A Prometheus answering each query by the first needle it contains."""
+
+    def __init__(self, answers: list[tuple[str, list[object]]]) -> None:
+        """Answer queries containing each needle, first match wins."""
+        self.answers = answers
+        self.seen: list[str] = []
+
+    def query(self, promql: str, at: float | None = None) -> list[object]:
+        """Return the first matching answer, else nothing."""
+        del at
+        self.seen.append(promql)
+        for needle, samples in self.answers:
+            if needle in promql:
+                return samples
+        return []
+
+
+def sample(value: float, **labels: str) -> object:
+    """Return one series."""
+    return rollout.Sample(labels, value)
+
+
+SUCCESS = 'result="success"'
+NEW_POD = "kube_pod_created"
+ANY_CYCLE = "max by (poller) (distant_signal_poller_cycle_total"
+
+
+def base(cycles: dict[str, float] | None = None) -> object:
+    """Return a baseline 10 minutes before T0 with the pollers' cadence."""
+    return rollout.Baseline(T0 - 600, {}, {}, {}, None, cycles or {})
+
+
+class PollerTest(unittest.TestCase):
+    """check_pollers: a successful cycle in each restarted poller's new pod."""
+
+    def results(
+        self, prom: Scripted, cycles: dict[str, float] | None = None
+    ) -> dict[str, tuple[str, str]]:
+        """Run the check; each result's status and detail by name."""
+        got = rollout.check_pollers(prom, scope(), base(cycles), T0)
+        return {r.name: (r.status, r.detail) for r in got}
+
+    def test_restarted_pollers_by_cadence(self) -> None:
+        """Succeeded is ok, a frequent one not yet waits, a daily one is reported."""
+        prom = Scripted(
+            [
+                (SUCCESS, [sample(1, poller="tfl")]),
+                (
+                    NEW_POD,
+                    [
+                        sample(0, poller="tfl"),
+                        sample(0, poller="incidents"),
+                        sample(0, poller="stations"),
+                    ],
+                ),
+            ]
+        )
+        got = self.results(prom, {"tfl": 12, "incidents": 12, "stations": 0.04})
+        self.assertEqual(got["poller tfl"][0], "ok")
+        self.assertEqual(
+            got["poller incidents"], ("wait", "no successful cycle yet in its new pod")
+        )
+        self.assertEqual(got["poller stations"][0], "info")
+        self.assertIn("0.0 cycles an hour", got["poller stations"][1])
+        # Only pods created after the baseline count.
+        self.assertTrue(any(f"> {T0 - 600:.0f}" in q for q in prom.seen), prom.seen)
+
+    def test_an_unknown_cadence_waits(self) -> None:
+        """A poller with no baseline cadence (newly enabled) waits."""
+        prom = Scripted([(NEW_POD, [sample(0, poller="ldbws")])])
+        self.assertEqual(self.results(prom)["poller ldbws"][0], "wait")
+
+    def test_nothing_restarted_is_reported(self) -> None:
+        """Pollers running but none restarted: information only."""
+        prom = Scripted([(NEW_POD, []), (ANY_CYCLE, [sample(40, poller="tfl")])])
+        self.assertEqual(
+            self.results(prom),
+            {"pollers": ("info", "no poller pod started since the baseline")},
+        )
+
+    def test_no_series_is_skipped(self) -> None:
+        """No poller metrics at all: skipped."""
+        self.assertEqual(self.results(Scripted([]))["pollers"][0], "skip")
+
+
+class PollerCronJobTest(unittest.TestCase):
+    """check_poller_cronjobs: missed starts and failed runs."""
+
+    def results(
+        self, answers: list[tuple[str, list[object]]]
+    ) -> dict[str, tuple[str, str]]:
+        """Run the check; each result's status and detail by name."""
+        prom = Scripted(answers)
+        got = rollout.check_poller_cronjobs(prom, scope(), base())
+        self.prom = prom
+        return {r.name: (r.status, r.detail) for r in got}
+
+    def test_each_state(self) -> None:
+        """On time, missed, late with a run going, suspended, a failed run."""
+        got = self.results(
+            [
+                (
+                    "kube_cronjob_next_schedule_time",
+                    [
+                        sample(-3600, cronjob="distant-signal-poller-tocs"),
+                        sample(1800, cronjob="distant-signal-poller-stations"),
+                        sample(1800, cronjob="distant-signal-poller-tfl-daily"),
+                        sample(
+                            86400, cronjob="distant-signal-poller-transit-schedule-tfl"
+                        ),
+                        sample(
+                            -60,
+                            cronjob="distant-signal-poller-transit-schedule-metrolink",
+                        ),
+                    ],
+                ),
+                (
+                    "kube_cronjob_spec_suspend",
+                    [sample(1, cronjob="distant-signal-poller-transit-schedule-tfl")],
+                ),
+                (
+                    "kube_cronjob_status_active",
+                    [sample(1, cronjob="distant-signal-poller-tfl-daily")],
+                ),
+                (
+                    "kube_job_failed",
+                    [
+                        sample(
+                            1,
+                            owner_name="distant-signal-poller-transit-schedule-metrolink",
+                            job_name="distant-signal-poller-transit-schedule-metrolink-29870",
+                        )
+                    ],
+                ),
+            ]
+        )
+        self.assertEqual(got["cronjob distant-signal-poller-tocs"][0], "ok")
+        self.assertEqual(
+            got["cronjob distant-signal-poller-stations"],
+            ("fail", "missed a scheduled start 30 min ago: that run never happened"),
+        )
+        self.assertEqual(got["cronjob distant-signal-poller-tfl-daily"][0], "wait")
+        self.assertEqual(
+            got["cronjob distant-signal-poller-transit-schedule-tfl"],
+            ("info", "suspended"),
+        )
+        status, detail = got["cronjob distant-signal-poller-transit-schedule-metrolink"]
+        self.assertEqual(status, "fail")
+        self.assertIn(
+            "run distant-signal-poller-transit-schedule-metrolink-29870 failed", detail
+        )
+        # The failed runs are only those started since the baseline.
+        failed_query = next(q for q in self.prom.seen if "kube_job_failed" in q)
+        started = 'kube_job_status_start_time{namespace="distant-signal"}'
+        self.assertIn(f"{started} > {T0 - 600:.0f}", failed_query)
+        self.assertIn("group_left (owner_name) kube_job_owner", failed_query)
+
+    def test_no_series_is_skipped(self) -> None:
+        """No poller CronJob (or no kube-state-metrics): skipped."""
+        self.assertEqual(self.results([])["poller cronjobs"][0], "skip")
+
+    def test_the_cronjob_selector_covers_every_poller_component(self) -> None:
+        """Transit's per-network and tfl's daily CronJob names match."""
+        checked = rollout.Scope(
+            "distant-signal",
+            "distant-signal",
+            rollout.load_components(rollout.COMPONENTS),
+        )
+        pattern = re.compile(checked.cronjob_names())
+        for name in (
+            "distant-signal-poller-stations",
+            "distant-signal-poller-tfl-daily",
+            "distant-signal-poller-transit-schedule-metrolink",
+        ):
+            self.assertTrue(pattern.fullmatch(name), name)
+        self.assertFalse(pattern.fullmatch("distant-signal-api-maintenance"))
+
+
+class PollerVerifyTest(unittest.TestCase):
+    """verify waits for a restarted poller's first cycle."""
+
+    def test_waits_for_the_first_cycle_then_passes(self) -> None:
+        """No cycle on the first look, one on the second."""
+
+        class Later(Scripted):
+            """Succeeds from the second look on."""
+
+            looks = 0
+
+            @override
+            def query(self, promql: str, at: float | None = None) -> list[object]:
+                """Answer the success query empty on the first look only."""
+                if SUCCESS in promql and NEW_POD in promql:
+                    type(self).looks += 1
+                    return [sample(1, poller="tfl")] if type(self).looks > 1 else []
+                return super().query(promql, at)
+
+        prom = Later([(NEW_POD, [sample(0, poller="tfl")])])
+        clock = FakeClock()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = rollout.verify(
+                prom,
+                scope(),
+                base({"tfl": 12}),
+                rollout.Polling(900, 30, clock.time, clock.sleep),
+            )
+        self.assertEqual(status, 0, out.getvalue())
+        self.assertEqual(clock.sleeps, 1)
+        self.assertIn("waiting on 1 check(s): poller tfl", out.getvalue())
+        self.assertIn(
+            "OK   poller tfl: a successful cycle in a pod the deploy started",
+            out.getvalue(),
+        )
+
+
 class BaselineTest(unittest.TestCase):
     """The baseline: read from Prometheus, and its file round trip."""
 
@@ -212,8 +430,15 @@ class BaselineTest(unittest.TestCase):
 
     def test_the_file_round_trips(self) -> None:
         """A baseline survives its JSON file."""
-        baseline = rollout.Baseline(T0, {"g": 1.0}, {"g": 2.0}, {"s": 3.0}, 4.0)
+        baseline = rollout.Baseline(
+            T0, {"g": 1.0}, {"g": 2.0}, {"s": 3.0}, 4.0, {"tfl": 12.0}
+        )
         self.assertEqual(rollout.Baseline.from_json(baseline.to_json()), baseline)
+
+    def test_a_file_from_before_the_poller_checks_reads(self) -> None:
+        """A baseline file with no poller cadence reads with none."""
+        old = {"at": T0, "lag": {}, "pending": {}, "deadletter_length": {}}
+        self.assertEqual(rollout.Baseline.from_json(old).poller_cycles_per_hour, {})
 
 
 class OptionsTest(unittest.TestCase):
