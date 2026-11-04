@@ -1276,7 +1276,7 @@ frontend proxies shares the frontend pod's one bucket, so the per-client
 limits become one site-wide limit.
 
 Personal API tokens use a port of their own instead
-([docs/personal-api-tokens.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/personal-api-tokens.md)): route the
+([docs/personal-api-tokens.md](https://github.com/Distant-Signal/ds-api/blob/main/docs/personal-api-tokens.md)): route the
 API hostname to the `<release>-api-tokens` Service and set
 `networkPolicy.tunnel.tokenApi: true`, which admits the connector to
 `api.personalTokens.port` only. The main api port stays closed to the
@@ -1976,7 +1976,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.sso.existingSecretClientSecretKey` | `sso-client-secret` | Key within `api.sso.existingSecret`. |
 | `api.sso.redirectUrl` | `""` | **Required.** Callback URI registered with the SSO server — the *frontend's* origin plus `/api/auth/callback`, not the api's. |
 | `api.sso.postLoginRedirectUrl` | `""` | **Required.** Where sign-in and sign-out send the browser afterwards — the frontend's root URL. |
-| `api.sso.discordIdClaim` | `""` | Account continuity: the ID-token claim carrying the user's Discord id (from the identity provider's Discord source connection, never an editable attribute). A login whose sub has no account takes over the account with that `users.discord_id`. Empty is off; becomes `SSO_DISCORD_ID_CLAIM` only when set. Needs an api built against ds-core v0.1.1 or later (the landing repository's docs/connected-apps.md, "Account continuity"). |
+| `api.sso.discordIdClaim` | `""` | Account continuity: the ID-token claim carrying the user's Discord id (from the identity provider's Discord source connection, never an editable attribute). A login whose sub has no account takes over the account with that `users.discord_id`. Empty is off; becomes `SSO_DISCORD_ID_CLAIM` only when set. Needs an api built against ds-core v0.1.1 or later ([Distant-Signal/ds-api docs/connected-apps.md](https://github.com/Distant-Signal/ds-api/blob/main/docs/connected-apps.md#account-continuity), "Account continuity", which has the cut-over runbook). |
 | `api.sso.primarySubClaim` | `""` | Account continuity, staff: the ID-token claim carrying the user's sub at the previous identity provider (their existing `users.id`). Empty is off; becomes `SSO_PRIMARY_SUB_CLAIM` only when set. |
 | `api.sessionTtlDays` | `14` | Session idle timeout in days. The expiry slides: an authenticated request moves it to now + this (at most once per `api.sessionExtendThrottleHours`), never past `api.sessionMaxAgeDays` after sign-in. |
 | `api.sessionMaxAgeDays` | `90` | Absolute session lifetime in days from sign-in, however active the session; also the session cookie's `Max-Age`. At least `api.sessionTtlDays`. |
@@ -1984,11 +1984,11 @@ Used only when `postgresql.enabled` is `false`.
 | `api.internalOauth.issuerUrl` | `""` | **Required.** OIDC issuer base URL for the internal-service OAuth2 provider (may be the same Authentik instance as `api.sso.*`, a different Application/Provider). |
 | `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token (the internal provider's client id; must differ from `api.sso.clientId`). |
 | `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account, the only internal-token use left since release B removed `/private`: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. See "Distant-Signal-MCP as a service caller" below. |
-| `api.delegated.clients` | `[]` | Delegated access ([docs/connected-apps.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/connected-apps.md)): the registered clients, sent to the api as `DELEGATED_CLIENTS` JSON. Each has `name`, `displayName`, `issuerUrl`, `audience`, `maxScopes`, `enabled` (default `true`; `false` is the kill switch) and `serviceGroup`. Empty (the default) turns the feature off: no delegated listener, no delegated Service, and every delegated bearer refused. |
+| `api.delegated.clients` | `[]` | Delegated access ([docs/connected-apps.md](https://github.com/Distant-Signal/ds-api/blob/main/docs/connected-apps.md)): the registered clients, sent to the api as `DELEGATED_CLIENTS` JSON. Each has `name`, `displayName`, `issuerUrl`, `audience`, `maxScopes`, `enabled` (default `true`; `false` is the kill switch) and `serviceGroup`. Empty (the default) turns the feature off: no delegated listener, no delegated Service, and every delegated bearer refused. |
 | `api.delegated.port` | `8082` | The delegated listener's port, published only by the `<release>-api-delegated` ClusterIP Service and admitted by the NetworkPolicy only from `networkPolicy.apiExtraIngressNamespaces`. The only port that accepts delegated bearers. Must differ from `api.service.port` and `metrics.port`. |
 | `api.delegated.dailySaveLimit` / `.dailyDeleteLimit` | `50` / `20` | Journeys one user's client may save, and delete, per rolling 24 hours (429 `daily_limit`). |
 | `api.delegated.revokedGrantRetentionDays` | `365` | Days a revoked grant is kept, as the record of when and why an app's access ended, before the hourly maintenance pass (api loop or `api-maintenance` CronJob) deletes it. |
-| `api.personalTokens.enabled` | `false` | Read-only personal API tokens ([docs/personal-api-tokens.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/personal-api-tokens.md)). Off: no token listener, no token Service, no NetworkPolicy rule, and the management routes answer 404. Also switches the hourly token sweep in the api and the `api-maintenance` CronJob. |
+| `api.personalTokens.enabled` | `false` | Read-only personal API tokens ([docs/personal-api-tokens.md](https://github.com/Distant-Signal/ds-api/blob/main/docs/personal-api-tokens.md)). Off: no token listener, no token Service, no NetworkPolicy rule, and the management routes answer 404. Also switches the hourly token sweep in the api and the `api-maintenance` CronJob. |
 | `api.personalTokens.port` | `8083` | The token listener's port, published only by the `<release>-api-tokens` ClusterIP Service, which the tunnel routes the API hostname to. The only port that accepts `dsp_` tokens. Must differ from `api.service.port`, `api.delegated.port` and `metrics.port`. |
 | `api.personalTokens.publicBaseUrl` | `""` | The API hostname's base URL, shown on the Connected apps page. |
 | `api.personalTokens.trustCfConnectingIp` | `false` | Key the failed-authentication bucket on `CF-Connecting-IP` instead of the socket peer. The render fails unless `networkPolicy.enabled`, `networkPolicy.tunnel.enabled` and `networkPolicy.tunnel.tokenApi` are all true. |
@@ -2007,7 +2007,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.rateLimit.tripPlan.perMinute` / `.burst` | `20` / `10` | Per client IP, `/Trips/plan`. |
 | `api.rateLimit.trainByUid.perMinute` / `.burst` | `120` / `60` | Per client IP, `/Train/by-uid/*`. |
 | `api.rateLimit.publicWrite.perMinute` / `.burst` | `120` / `60` | Per client IP, every other non-GET public route. |
-| `api.rateLimit.events.perMinute` / `.burst` | `60` / `30` | Per client IP, `POST /public/events` (opt-in usage analytics, [docs/usage-analytics.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/usage-analytics.md)); the MCP gets the same. |
+| `api.rateLimit.events.perMinute` / `.burst` | `60` / `30` | Per client IP, `POST /public/events` (opt-in usage analytics, [docs/usage-analytics.md](https://github.com/Distant-Signal/ds-api/blob/main/docs/usage-analytics.md)); the MCP gets the same. |
 | `api.rateLimit.mcp.tripPlan.perMinute` / `.burst` | `100` / `30` | The MCP's own `/Trips/plan` budget: one bucket for the whole service (`svc:mcp`), 5x public. |
 | `api.rateLimit.mcp.trainByUid.perMinute` / `.burst` | `600` / `200` | The MCP's own `/Train/by-uid/*` budget. |
 | `api.rateLimit.mcp.publicWrite.perMinute` / `.burst` | `600` / `200` | The MCP's own public-write budget. Login has no MCP budget: the bearer is ignored there. |
