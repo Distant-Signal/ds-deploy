@@ -1,0 +1,33 @@
+name: Dependency vulnerability scan
+
+# OSV-Scanner over uv.lock, the chart and alert scripts' tools
+# (Distant-Signal/ci's reusable dependency-scan.yml, whose header explains
+# the thresholds): a pull request or push fails only on a CRITICAL finding
+# with a fix available, or an inconclusive scan; other HIGH/CRITICAL
+# findings are warnings. Exceptions would go in an osv-scanner.toml here.
+#
+# No daily schedule here: its tracking issue needs Issues, which this
+# repository has off (repo split spec §4.2). Distant-Signal/distant-signal's
+# dependency-scan-all.yml scans this repository's main daily and keeps its
+# tracking issue there (label dependency-vulnerability/ds-deploy).
+
+concurrency:
+  group: dependency-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-scan:
+    uses: Distant-Signal/ci/.github/workflows/dependency-scan.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
+    permissions:
+      contents: read
+      checks: write
+      issues: write # report-findings asks for it; it only runs on a schedule

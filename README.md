@@ -72,7 +72,8 @@ merge.
 - the alert rules: payload sizes, a runbook section in
   [`docs/alerts.md`](docs/alerts.md) for every alert, and the promtool
   unit tests in `scripts/alert-rules-tests/`;
-- the release ordering checks (`scripts/release-order.py`): every pinned
+- the release ordering checks (Distant-Signal/ci's
+  `scripts/release-order.py`, run from its workflow pin): every pinned
   image's `core-version` label is at most the pinned `ds-migrate`'s, the
   frontend's `api-build` at most the pinned api's, and every image at
   least the floor of any versioned contract migration in the pinned
