@@ -243,6 +243,12 @@ helm upgrade distant-signal ./charts/distant-signal -n distant-signal
 
 Read the next section before upgrading if you rely on generated secrets.
 
+For an upgrade that restarts an ingest workload, run
+`scripts/check-ingest-rollout.py baseline` before it and `verify` after.
+It checks, from Prometheus alone, that nothing was skipped or trimmed
+unread, and that every ingest Deployment came back
+([docs/ingest-rollout.md](../../docs/ingest-rollout.md)).
+
 > **Upgrade note: Redis 7.4 to Valkey 8.1 (DS-174).** `redis.image` is now
 > `valkey/valkey:8.1.x` instead of `redis:7.4.11`. Every value, Secret, port,
 > probe and client is unchanged, but a running Redis 7.4's AOF has an RDB 12
