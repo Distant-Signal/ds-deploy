@@ -109,6 +109,14 @@ jobs:
       - name: chart values reference is complete
         run: uv run --no-sync scripts/chart-values-doc.py check
 
+      # Every link to a file in a Distant-Signal repository (the chart
+      # README's and docs/'s links to the services' docs, including the
+      # alert runbooks behind docs/alerts.md's runbook_urls) names a file
+      # that exists on that repository's branch, and a heading that exists
+      # in it. A doc that moves between repositories fails here.
+      - name: links to the Distant-Signal repositories resolve
+        run: uv run --no-sync scripts/check-doc-links.py
+
       # Repo split spec §5.1, §5.3: the labels of the images values.yaml
       # pins, read anonymously from the registry by digest, against the
       # ordering rules: every image's core-version at most the pinned

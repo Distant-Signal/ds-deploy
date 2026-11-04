@@ -1,7 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
 
-  // The hosted Renovate GitHub App (renovate[bot]) runs here, so this file
+  // The hosted Renovate GitHub App (renovate[bot]) is installed here but
+  // not running yet (bumps are by hand until it is; README.md), so this file
   // and the public presets it extends are the whole config. The hosted app
   // runs no postUpgradeTasks (sync-core.yml re-vendors ds-core's files).
   //

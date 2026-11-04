@@ -19,14 +19,18 @@ signing identity is
 
 1. A service repository builds its image on `main` and pushes
    `ghcr.io/distant-signal/images/<service>:build.<run id>-<commit>`.
-2. Renovate bumps the tag and digest in
-   [`values.yaml`](charts/distant-signal/values.yaml): every service image
-   in one `renovate/ds-images` PR, and `ds-core` (the
-   [`core-version`](core-version) file and the `ds-migrate` release image)
-   in its own `renovate/ds-core` PR, which merges first. On that PR,
-   [`sync-core.yml`](.github/workflows/sync-core.yml) commits the
-   re-vendored `ds-core` access files as the `ds-deploy-sync` GitHub App.
-   Both PRs automerge when every check passes.
+2. A PR bumps the tag and digest in
+   [`values.yaml`](charts/distant-signal/values.yaml). Renovate is
+   installed here but not running yet, so until it is, these bumps are
+   made by hand: a PR that changes an image's `tag` and `digest` together,
+   and for `ds-core` one that changes the [`core-version`](core-version)
+   file and the `ds-migrate` release image together and re-vendors its
+   access files (`uv run scripts/sync-core.py`). Once Renovate runs, it
+   opens them instead: every service image in one `renovate/ds-images` PR,
+   and `ds-core` in its own `renovate/ds-core` PR, which merges first. On
+   that PR, [`sync-core.yml`](.github/workflows/sync-core.yml) commits the
+   re-vendored `ds-core` access files as the `ds-deploy-sync` GitHub App,
+   and both PRs are set to automerge when every check passes.
 3. The merge pushes a new chart build. Ranma-Config's Renovate files that
    build as a deploy request, and a person approves it.
 
@@ -78,6 +82,10 @@ merge.
   `--print-config-defaults`;
 - the vendored `ds-core` files against that release's signed assets, and
   `migrate.image.tag` against `core-version` (`scripts/sync-core.py --check`);
+- every link to a file in a Distant-Signal repository resolves, anchors
+  included (`scripts/check-doc-links.py`): the docs the chart README and
+  [`docs/alerts.md`](docs/alerts.md)'s runbooks link to live in the
+  service repositories, and a doc that moves fails here;
 - licence, commit identity and the scripts lint, from
   [`Distant-Signal/ci`](https://github.com/Distant-Signal/ci).
 
@@ -86,9 +94,19 @@ Locally, with [uv](https://docs.astral.sh/uv/), Helm and cosign:
 ```sh
 uv sync --locked
 uv run scripts/sync-core.py --check
+uv run scripts/check-doc-links.py            # --checkouts .. reads sibling checkouts instead
 uv run scripts/check-config-defaults-chart.py --images   # needs docker
 uv run python -m unittest discover -s scripts/tests
 ```
+
+## Issues
+
+File them in
+[Distant-Signal/distant-signal](https://github.com/Distant-Signal/distant-signal/issues),
+with the `area:deploy` label: this repository has Issues turned off. The
+contributing guide for every repository is the organisation's
+[CONTRIBUTING.md](https://github.com/Distant-Signal/.github/blob/main/CONTRIBUTING.md);
+[CLAUDE.md](CLAUDE.md) lists this repository's commands and conventions.
 
 ## Licence
 

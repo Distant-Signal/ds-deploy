@@ -114,7 +114,7 @@ client is on, so merging it changes nothing that renders
 (`scripts/check-ingest-phase0-chart.py` checks this).
 
 To turn one on (the transit networks' rollout, transit spec §15.1, and
-[transit-networks.md](https://github.com/Distant-Signal/distant-signal/blob/main/docs/transit-networks.md), its runbook):
+[transit-networks.md](https://github.com/Distant-Signal/ds-pollers/blob/main/docs/transit-networks.md), its runbook):
 
 1. Add `<user>-password` to the users Secret (the SealedSecret in
    Ranma-Config), letters and digits only.
