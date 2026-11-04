@@ -14,6 +14,11 @@ container reads KAFKA_TOPIC:
     old pods until the new ones are Ready), the pods a surge makes
     (replicas + maxSurge) are no more than the partitions.
 
+It also checks values.yaml's
+metrics.prometheusRule.relayPartitionsUnassigned.partitions (what
+DistantSignalMovementRelayPartitionsUnassigned expects movement-relay to
+hold) is movement-relay's count here.
+
 Why: the relays' readiness is a confirmed partition assignment, and Kafka
 gives each partition to one group member. With more members than
 partitions a surge pod can be left with none, never become Ready, and
@@ -38,6 +43,7 @@ import yaml
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 CHART = REPO / "charts" / "distant-signal"
+VALUES = CHART / "values.yaml"
 PREREQS = CHART / "ci" / "ingest-prereqs.yaml"
 
 # Component -> its topic's partition count, as observed in production: the
@@ -199,6 +205,19 @@ def check(docs: Sequence[Doc]) -> list[str]:
     return fail
 
 
+def alert_partitions(values: object) -> list[str]:
+    """Return a failure unless the partitions alert expects movement-relay's count."""
+    expected = PARTITIONS["movement-relay"]
+    got = get(
+        values, "metrics", "prometheusRule", "relayPartitionsUnassigned", "partitions"
+    )
+    if got != expected:
+        key = "metrics.prometheusRule.relayPartitionsUnassigned.partitions"
+        why = f"values.yaml {key} is {got!r}, but movement-relay's topic has "
+        return [why + f"{expected} (PARTITIONS)"]
+    return []
+
+
 def main() -> int:
     """Run the check; 1 when any failed."""
     parser = argparse.ArgumentParser(
@@ -208,6 +227,7 @@ def main() -> int:
     args = parser.parse_args()
     docs, err = render(cast("str", args.helm))
     fail = [f"render failed: {err.strip()}"] if err else check(docs)
+    fail.extend(alert_partitions(yaml.safe_load(VALUES.read_text())))
     for line in fail:
         print(f"FAIL: {line}")
     if not fail:
