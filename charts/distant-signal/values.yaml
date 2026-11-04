@@ -6436,6 +6436,46 @@ metrics:
       window: 10m
       for: 5m
       severity: critical
+    # DistantSignalMovementRelayNotPublishing: movement-relay published no
+    # event over `window` (events_published_total flat, or no series while
+    # its scrape target is up), between activeHoursUtc.start and .end
+    # (UTC hours; TRUST can go quiet for minutes overnight). Nothing
+    # failing, nothing published: a lost assignment or a stuck consumer.
+    relayNotPublishing:
+      enabled: true
+      window: 15m
+      for: 2m
+      activeHoursUtc:
+        start: 5
+        end: 23
+      severity: critical
+    # DistantSignalMovementRelayNotReady: no relay pod reports a confirmed
+    # partition assignment (movement_relay_ready), or its Deployment has no
+    # available replica (kube-state-metrics), for `for`.
+    relayNotReady:
+      enabled: true
+      for: 10m
+      severity: critical
+    # DistantSignalMovementRelayKafkaLagHigh: movement-relay's Kafka
+    # consumer lag (movement_relay_consumer_lag, per partition) over
+    # maxMessages for `for`. Exported since ds-ingest 662fe534; inert on an
+    # older image.
+    relayKafkaLag:
+      enabled: true
+      maxMessages: 20000
+      for: 15m
+      severity: warning
+    # DistantSignalMovementRelayPartitionsUnassigned: the partitions
+    # movement-relay's pods hold (movement_relay_assigned_partitions,
+    # summed) below the TRUST topic's `partitions` for `for`. Keep
+    # `partitions` equal to scripts/check-kafka-rollout-chart.py's
+    # PARTITIONS (it checks). Exported since ds-ingest 662fe534; inert on
+    # an older image.
+    relayPartitionsUnassigned:
+      enabled: true
+      partitions: 2
+      for: 10m
+      severity: critical
     # DistantSignalRedisPersistenceFailing: Redis's last AOF write or AOF
     # rewrite failed, or (bundled Redis with redis.persistence.enabled) AOF
     # is off. Read from movement-relay's INFO persistence gauges.

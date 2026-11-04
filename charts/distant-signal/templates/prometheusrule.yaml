@@ -42,7 +42,7 @@ so that clause fired on every rollout.
 {{- $runbookBase := trimSuffix "/" $rule.runbookBaseUrl }}
 {{- $runbook := printf "%s/docs/alerts.md" $runbookBase }}
 {{- $extraLabels := $rule.ruleLabels | default dict }}
-{{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled ($rule.deadLetterExpiring).enabled ($rule.longPending).enabled ($rule.parseEnvelope).enabled) }}
+{{- $movementOn := and .Values.movementRelay.enabled (or $rule.movementLag.enabled $rule.movementLagGrowing.enabled $rule.streamGap.enabled $rule.deadLetter.enabled $rule.deadLetterFull.enabled ($rule.relayPublishFailing).enabled ($rule.relayNotPublishing).enabled ($rule.relayNotReady).enabled ($rule.relayKafkaLag).enabled ($rule.relayPartitionsUnassigned).enabled ($rule.redisPersistence).enabled ($rule.groupRecreated).enabled ($rule.deadLetterExpiring).enabled ($rule.longPending).enabled ($rule.parseEnvelope).enabled) }}
 {{- $fcwOn := and ($rule.fullCoverageWindow).enabled .Values.fullCoverageConsumer.windowedStats.enabled }}
 {{- $pipelineOn := and ($rule.schedulePipeline).enabled .Values.scheduleFeed.enabled }}
 {{- $sftpOn := and ($rule.scheduleSftp).enabled .Values.scheduleFeed.enabled .Values.scheduleFeed.sftp.enabled .Values.scheduleFeed.sftp.telemetry.enabled }}
@@ -565,6 +565,113 @@ spec:
             summary: "movement-relay cannot publish to movement-events"
             description: "Every XADD failed for {{ .window }}: TRUST ingestion is stopped. Check Redis (OOM, AOF, auth) and the relay's logs."
             runbook_url: {{ printf "%s#distantsignalmovementrelaypublishfailing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- $relayDeployment := printf "%s-movement-relay" $fullname | trunc 63 | trimSuffix "-" }}
+        {{- with $rule.relayNotPublishing }}
+        {{- if .enabled }}
+        {{- /*
+        movement-relay connected but publishing nothing: a lost partition
+        assignment, a consumer stuck after a rebalance, or a rollout that
+        left no relay reading. DistantSignalMovementRelayPublishFailing
+        covers failed XADDs only; here nothing fails, the stream just stops
+        growing, and every consumer stays caught up with it.
+
+        The published counter is labelled by msg_type and only appears on
+        a pod's first publish, so a relay that has published nothing since
+        it started has no series: `up` stands in for it as 0. Only within
+        activeHoursUtc, as TRUST can be quiet for minutes overnight; a relay
+        with no scrape target at all is DistantSignalMovementRelayNotReady.
+        */}}
+        - record: distant_signal:movement_relay_published:increase
+          expr: |
+            sum by (namespace) (increase(distant_signal_movement_relay_events_published_total{namespace="{{ $ns }}"}[{{ .window }}]))
+            or on (namespace) 0 * max by (namespace) (up{namespace="{{ $ns }}", app_kubernetes_io_component="movement-relay"})
+        - alert: DistantSignalMovementRelayNotPublishing
+          expr: |
+            distant_signal:movement_relay_published:increase{namespace="{{ $ns }}"} == 0
+            and on () (hour() >= {{ int .activeHoursUtc.start }} and hour() < {{ int .activeHoursUtc.end }})
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-relay has published nothing for {{ .window }}"
+            description: "No TRUST movement reached movement-events in {{ .window }} during rail hours. Check its partitions, Kafka and logs."
+            runbook_url: {{ printf "%s#distantsignalmovementrelaynotpublishing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.relayNotReady }}
+        {{- if .enabled }}
+        {{- /*
+        Two sources, either enough: the relay's own readiness gauge (1 once
+        its partition assignment is confirmed; max over pods, so a surge
+        pod still waiting does not count), or its Deployment has no
+        available replica (kube-state-metrics, which still answers when the
+        pod is gone or never set the gauge).
+        */}}
+        - alert: DistantSignalMovementRelayNotReady
+          expr: |
+            max by (namespace) (distant_signal_movement_relay_ready{namespace="{{ $ns }}"}) == 0
+            or max by (namespace) (kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ $relayDeployment }}"}) < 1
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-relay is not ready"
+            description: "No relay with a confirmed partition assignment for {{ .for }}: TRUST movements are not being read from Kafka."
+            runbook_url: {{ printf "%s#distantsignalmovementrelaynotready" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.relayKafkaLag }}
+        {{- if .enabled }}
+        {{- /*
+        movement-relay's Kafka consumer lag per partition (committed offset
+        to high watermark, every 30 s; exported since ds-ingest 662fe534):
+        inert on an older image, since a plain comparison on an absent
+        series never fires.
+        */}}
+        - alert: DistantSignalMovementRelayKafkaLagHigh
+          expr: |
+            max by (namespace) (distant_signal_movement_relay_consumer_lag{namespace="{{ $ns }}"}) > {{ int .maxMessages }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-relay is {{ "{{ $value }}" }} records behind the TRUST topic"
+            description: "Over {{ int .maxMessages }} records behind for {{ .for }}: past the topic's retention they are lost. Check the relay and Redis."
+            runbook_url: {{ printf "%s#distantsignalmovementrelaykafkalaghigh" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.relayPartitionsUnassigned }}
+        {{- if .enabled }}
+        {{- /*
+        Partitions movement-relay holds (assigned_partitions, 0 until the
+        first assignment), summed over its pods, against the TRUST topic's
+        count. A partition no pod holds is read by nobody. Exported since
+        ds-ingest 662fe534; inert on an older image.
+        */}}
+        - alert: DistantSignalMovementRelayPartitionsUnassigned
+          expr: |
+            sum by (namespace) (distant_signal_movement_relay_assigned_partitions{namespace="{{ $ns }}"}) < {{ int .partitions }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "movement-relay holds {{ "{{ $value }}" }} of {{ int .partitions }} TRUST partitions"
+            description: "A TRUST partition has had no relay reading it for {{ .for }}: its movements are not reaching movement-events."
+            runbook_url: {{ printf "%s#distantsignalmovementrelaypartitionsunassigned" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.redisPersistence }}

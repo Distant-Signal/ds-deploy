@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from types import ModuleType
 
+import yaml
+
 SCRIPT = Path(__file__).resolve().parent.parent / "check-kafka-rollout-chart.py"
 
 
@@ -135,6 +137,37 @@ class CheckTest(unittest.TestCase):
         fail = rollout.check([deployment("movement-relay", NEW_BEFORE_OLD)])
         self.assertEqual(len(fail), 1)
         self.assertIn("darwin-relay", fail[0])
+
+
+class AlertPartitionsTest(unittest.TestCase):
+    """The partitions alert's expected count against PARTITIONS."""
+
+    @staticmethod
+    def values(partitions: object) -> Doc:
+        """Return values with the alert's `partitions` set."""
+        rule = {"relayPartitionsUnassigned": {"partitions": partitions}}
+        return {"metrics": {"prometheusRule": rule}}
+
+    def test_the_topic_count_passes(self) -> None:
+        """The topic's own count passes."""
+        count = rollout.PARTITIONS["movement-relay"]
+        self.assertEqual(rollout.alert_partitions(self.values(count)), [])
+
+    def test_a_different_count_fails(self) -> None:
+        """A count other than the topic's fails."""
+        count = rollout.PARTITIONS["movement-relay"] + 1
+        fail = rollout.alert_partitions(self.values(count))
+        self.assertEqual(len(fail), 1)
+        self.assertIn("relayPartitionsUnassigned.partitions", fail[0])
+
+    def test_a_missing_count_fails(self) -> None:
+        """No count at all fails."""
+        self.assertEqual(len(rollout.alert_partitions({})), 1)
+
+    def test_the_chart_values_pass(self) -> None:
+        """The chart's own values.yaml passes."""
+        values = yaml.safe_load(rollout.VALUES.read_text())
+        self.assertEqual(rollout.alert_partitions(values), [])
 
 
 if __name__ == "__main__":

@@ -366,6 +366,71 @@ restarts it. Kafka holds the backlog only for as long as the topic retains it.
 
 Design: [Redis message queue evaluation](https://github.com/Distant-Signal/distant-signal/blob/main/docs/superpowers/specs/2026-09-30-redis-message-queue-evaluation-design.md).
 
+### DistantSignalMovementRelayNotPublishing
+
+movement-relay published no event to `movement-events` over
+`relayNotPublishing.window` (15m) during rail hours
+(`relayNotPublishing.activeHoursUtc`, 05:00 to 23:00 UTC), and nothing
+failed: `distant_signal:movement_relay_published:increase` is 0. The
+consumers stay caught up with a stream that has stopped growing, so no lag
+alert fires; every minute of it is TRUST data that has not reached DS yet.
+Kafka keeps the records for its retention, so a relay that resumes reading
+fills the gap; one that stays silent past the retention loses them.
+
+- `kubectl -n distant-signal logs deploy/distant-signal-movement-relay`:
+  look for a rebalance with no "partition assignment confirmed" after it,
+  Kafka authentication or broker errors.
+- During or just after a rollout: check both pods held a partition. With
+  maxSurge 1 a stuck surge pod keeps the old one running, so the old pod
+  should still be publishing; if neither is, delete the newer pod.
+- See [DistantSignalMovementRelayPartitionsUnassigned](#distantsignalmovementrelaypartitionsunassigned)
+  and [DistantSignalMovementRelayKafkaLagHigh](#distantsignalmovementrelaykafkalaghigh)
+  once the relay exports those gauges.
+- Overnight quiet is excluded by the hours; a real overnight outage shows
+  at 05:00 UTC.
+
+### DistantSignalMovementRelayNotReady
+
+No movement-relay pod has reported a confirmed Kafka partition assignment
+(`movement_relay_ready`, max over pods) for `relayNotReady.for` (10m), or
+its Deployment has no available replica (kube-state-metrics'
+`kube_deployment_status_replicas_available`). Nothing is reading the TRUST
+topic.
+
+- `kubectl -n distant-signal get pods -l app.kubernetes.io/component=movement-relay`
+  and the relay's logs: Kafka credentials, broker reachability (egress
+  policy), a crash loop, or an image that will not pull.
+- A rollout stuck on a surge pod that never gets a partition keeps the old
+  pod running, so this fires only once that one is gone too:
+  `kubectl -n distant-signal rollout status deploy/distant-signal-movement-relay`,
+  and `scripts/check-kafka-rollout-chart.py` for the strategy.
+
+### DistantSignalMovementRelayKafkaLagHigh
+
+movement-relay's consumer lag on a TRUST partition
+(`movement_relay_consumer_lag`) has been over `relayKafkaLag.maxMessages`
+(20000 records) for 15m. The relay is reading slower than RDM writes, or
+not at all; records older than the topic's retention are lost for good.
+Exported since ds-ingest 662fe534; inert on an older image.
+
+- Check [DistantSignalMovementRelayPublishFailing](#distantsignalmovementrelaypublishfailing)
+  (Redis refusing writes holds every record back).
+- Check the relay's CPU throttling and logs, and Kafka.
+
+### DistantSignalMovementRelayPartitionsUnassigned
+
+The TRUST partitions movement-relay's pods hold
+(`movement_relay_assigned_partitions`, summed over pods) have been fewer
+than the topic's `relayPartitionsUnassigned.partitions` (2) for 10m. A
+partition no pod holds is read by nobody: its movements wait in Kafka.
+Exported since ds-ingest 662fe534; inert on an older image.
+
+- Another consumer in the same RDM consumer group (a second deployment, a
+  local run with production credentials) may hold it: the group is shared.
+- If RDM changed the topic's partition count, update
+  `relayPartitionsUnassigned.partitions` and
+  `scripts/check-kafka-rollout-chart.py`'s `PARTITIONS` together.
+
 ### DistantSignalRedisPersistenceFailing
 
 From movement-relay's `INFO persistence` gauges

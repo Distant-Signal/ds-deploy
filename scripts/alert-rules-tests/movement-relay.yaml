@@ -1,0 +1,160 @@
+# promtool unit tests for movement-relay's silence and readiness alerts
+# (see recorded-alerts.yaml's header for how rules.yaml is rendered).
+# Defaults: not publishing over 15m, for 2m, between 05:00 and 23:00 UTC;
+# not ready for 10m; Kafka lag over 20000 for 15m; fewer than 2 partitions
+# held for 10m. promtool's clock starts at 1970-01-01 00:00 UTC.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Publishing until 06:00 UTC, then flat while the target stays up: the
+  # 15m increase is 0 from 06:15, firing 2m later. A flat counter between
+  # 01:00 and 02:00 (outside the hours) never fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_movement_relay_events_published_total{namespace="distant-signal", pod="relay-1", msg_type="0003"}'
+        values: '0+10x60 600x60 600+10x240 3000x60'
+      - series: 'up{namespace="distant-signal", app_kubernetes_io_component="movement-relay", pod="relay-1"}'
+        values: '1x420'
+    alert_rule_test:
+      - eval_time: 1h50m
+        alertname: DistantSignalMovementRelayNotPublishing
+        exp_alerts: []
+      - eval_time: 6h14m
+        alertname: DistantSignalMovementRelayNotPublishing
+        exp_alerts: []
+      - eval_time: 6h18m
+        alertname: DistantSignalMovementRelayNotPublishing
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: movement-relay has published nothing for 15m
+              description: "No TRUST movement reached movement-events in 15m during rail hours. Check its partitions, Kafka and logs."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementrelaynotpublishing
+
+  # A relay that has published nothing since it started has no published
+  # series; its scrape target stands in as 0 and it fires.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="distant-signal", app_kubernetes_io_component="movement-relay", pod="relay-1"}'
+        values: '1x420'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: DistantSignalMovementRelayNotPublishing
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: movement-relay has published nothing for 15m
+              description: "No TRUST movement reached movement-events in 15m during rail hours. Check its partitions, Kafka and logs."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementrelaynotpublishing
+
+  # A rollout: the old pod publishes until 6h05m and goes; the new one
+  # publishes from 6h06m. The sum keeps rising, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_movement_relay_events_published_total{namespace="distant-signal", pod="relay-old", msg_type="0003"}'
+        values: '0+10x365'
+      - series: 'distant_signal_movement_relay_events_published_total{namespace="distant-signal", pod="relay-new", msg_type="0003"}'
+        values: '_x366 0+10x60'
+      - series: 'up{namespace="distant-signal", app_kubernetes_io_component="movement-relay", pod="relay-old"}'
+        values: '1x365'
+      - series: 'up{namespace="distant-signal", app_kubernetes_io_component="movement-relay", pod="relay-new"}'
+        values: '_x365 1x60'
+    alert_rule_test:
+      - eval_time: 6h30m
+        alertname: DistantSignalMovementRelayNotPublishing
+        exp_alerts: []
+
+  # The only pod's readiness gauge drops at 5m (its Deployment still counts
+  # it available for a while): fires 10m later. A surge pod at 0 beside a
+  # ready pod does not.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_movement_relay_ready{namespace="distant-signal", pod="relay-1"}'
+        values: '1x4 0x30'
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-movement-relay"}'
+        values: '1x35'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DistantSignalMovementRelayNotReady
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: DistantSignalMovementRelayNotReady
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: movement-relay is not ready
+              description: "No relay with a confirmed partition assignment for 10m: TRUST movements are not being read from Kafka."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementrelaynotready
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_movement_relay_ready{namespace="distant-signal", pod="relay-1"}'
+        values: '1x30'
+      - series: 'distant_signal_movement_relay_ready{namespace="distant-signal", pod="relay-2"}'
+        values: '0x30'
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-movement-relay"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DistantSignalMovementRelayNotReady
+        exp_alerts: []
+
+  # No pod at all (no gauge), and no available replica: fires on the
+  # Deployment.
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-movement-relay"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: DistantSignalMovementRelayNotReady
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: movement-relay is not ready
+              description: "No relay with a confirmed partition assignment for 10m: TRUST movements are not being read from Kafka."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementrelaynotready
+
+  # Kafka lag on one partition over 20000 from 10m; fires 15m later.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_movement_relay_consumer_lag{namespace="distant-signal", pod="relay-1", partition="0"}'
+        values: '100x9 30000x30'
+      - series: 'distant_signal_movement_relay_consumer_lag{namespace="distant-signal", pod="relay-1", partition="1"}'
+        values: '100x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DistantSignalMovementRelayKafkaLagHigh
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: DistantSignalMovementRelayKafkaLagHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: movement-relay is 30000 records behind the TRUST topic
+              description: "Over 20000 records behind for 15m: past the topic's retention they are lost. Check the relay and Redis."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementrelaykafkalaghigh
+
+  # Two pods during a surge hold one partition each (2: fine); the old one
+  # goes after 10m, its series is stale 5m later, and the new one holds
+  # only one: fires 10m after that.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_movement_relay_assigned_partitions{namespace="distant-signal", pod="relay-old"}'
+        values: '1x10'
+      - series: 'distant_signal_movement_relay_assigned_partitions{namespace="distant-signal", pod="relay-new"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DistantSignalMovementRelayPartitionsUnassigned
+        exp_alerts: []
+      - eval_time: 24m
+        alertname: DistantSignalMovementRelayPartitionsUnassigned
+        exp_alerts: []
+      - eval_time: 27m
+        alertname: DistantSignalMovementRelayPartitionsUnassigned
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: movement-relay holds 1 of 2 TRUST partitions
+              description: "A TRUST partition has had no relay reading it for 10m: its movements are not reaching movement-events."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalmovementrelaypartitionsunassigned
