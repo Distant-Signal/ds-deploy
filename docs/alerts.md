@@ -713,6 +713,43 @@ with thousands of rows, or many rows with no `dedup_key`), or tracked trains
 have grown enough that the table should be pruned or archived on its own
 schedule. Raise `maxRows` only after ruling out the first.
 
+## ingest rollouts
+
+### DistantSignalIngestRolloutStuck
+
+An ingest Deployment (`ingestRolloutStuck.deployments`: movement-relay,
+darwin-relay, trust-consumer, trust-backlog-consumer,
+full-coverage-consumer, ingest-writer and every poller) has not finished
+rolling out for `ingestRolloutStuck.for` (10m). `reason` says how, from
+kube-state-metrics (`distant_signal:ingest_rollout_stuck:reason`):
+
+- `progress_deadline`: its `Progressing` condition is False
+  (`ProgressDeadlineExceeded`, after the Deployment's
+  `progressDeadlineSeconds`, 600 by default).
+- `unavailable`: fewer available replicas than desired. Under Recreate (the
+  consumers, the ingest-writer, darwin-relay, the pollers) the old pod is
+  already gone, so nothing of that workload is running.
+- `extra_pods`: more pods than desired, a surge pod that never became
+  Ready (movement-relay, maxSurge 1). The old pod keeps running and
+  reading, so this one is a warning, not an outage, until someone deletes
+  the old pod.
+
+The data waits rather than being lost: Kafka keeps the TRUST and Push
+Port records, the Redis streams keep theirs up to `MAXLEN`, and the
+consumers resume from their consumer group. A stuck rollout that lasts
+long enough to reach those limits is a gap, so fix it, don't wait it out.
+
+1. `kubectl -n distant-signal rollout status deploy/<deployment>` and
+   `kubectl -n distant-signal describe deploy/<deployment>`: the condition
+   and its message.
+2. `kubectl -n distant-signal get pods -l app.kubernetes.io/component=<component>`,
+   then the new pod's events and logs: an image that will not pull, a
+   failing readiness probe (the schema gate, Postgres, Redis, Kafka
+   assignment), a crash loop, or no room to schedule it.
+3. If the new version is broken, roll back the chart (revert its image
+   digest in ds-deploy) rather than deleting pods: a deleted Recreate pod
+   comes back as the same broken version.
+
 ## ingest-writer
 
 ### DistantSignalIngestWriterDown

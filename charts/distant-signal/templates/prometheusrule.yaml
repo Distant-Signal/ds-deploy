@@ -81,6 +81,8 @@ so that clause fired on every rollout.
 {{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled }}
 {{- $darwinOn := and ($rule.darwinRelay).enabled .Values.darwinRelay.enabled }}
 {{- $anyOn = or $anyOn $darwinOn }}
+{{- $rolloutStuckOn := ($rule.ingestRolloutStuck).enabled }}
+{{- $anyOn = or $anyOn $rolloutStuckOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -1006,6 +1008,42 @@ spec:
             summary: "notifier forward queue holds {{ "{{ $value | humanize }}" }} rows"
             description: "Over {{ int .maxRows }}. It keeps a trains retention window of signals: a producer is flooding it, or it has outgrown being unarchived."
             runbook_url: {{ printf "%s#distantsignalnotifierforwardqueuelarge" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $rolloutStuckOn }}
+    {{- with $rule.ingestRolloutStuck }}
+    - name: distant-signal.ingest-rollouts
+      rules:
+        {{- /*
+        A rollout of an ingest Deployment (the movement relays and
+        consumers, the ingest-writer, the pollers) that has not finished:
+        its Progressing condition is False (progressDeadlineSeconds passed,
+        ProgressDeadlineExceeded), it has fewer available replicas than
+        desired (a Recreate pod that never became Ready), or it runs more
+        pods than desired (a surge pod that never became Ready, keeping the
+        old one; Progressing only turns False after the deadline). All from
+        kube-state-metrics, which answers when the pods do not. One series
+        per Deployment and `reason`.
+        */}}
+        {{- $sel := printf `namespace="%s", deployment=~"%s-(%s)"` $ns $fullname (join "|" .deployments) }}
+        - record: distant_signal:ingest_rollout_stuck:reason
+          expr: |
+            label_replace(max by (namespace, deployment) (kube_deployment_status_condition{ {{- $sel }}, condition="Progressing", status="false"}) == 1, "reason", "progress_deadline", "", "")
+            or label_replace(max by (namespace, deployment) (kube_deployment_status_replicas_available{ {{- $sel }}}) < max by (namespace, deployment) (kube_deployment_spec_replicas{ {{- $sel }}}), "reason", "unavailable", "", "")
+            or label_replace(max by (namespace, deployment) (kube_deployment_status_replicas{ {{- $sel }}}) > max by (namespace, deployment) (kube_deployment_spec_replicas{ {{- $sel }}}), "reason", "extra_pods", "", "")
+        - alert: DistantSignalIngestRolloutStuck
+          expr: |
+            distant_signal:ingest_rollout_stuck:reason{namespace="{{ $ns }}"}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.deployment }}" }} rollout stuck ({{ "{{ $labels.reason }}" }})"
+            description: "Not rolled out for {{ .for }}: its new pod is not Ready, so it may be reading nothing. Check its pods and events."
+            runbook_url: {{ printf "%s#distantsignalingestrolloutstuck" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $writerDownOn }}

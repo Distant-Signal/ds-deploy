@@ -1,0 +1,89 @@
+# promtool unit tests for DistantSignalIngestRolloutStuck (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered). Default:
+# for 10m, on the ingest Deployments' kube-state-metrics series.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # A Recreate consumer whose new pod never becomes Ready: no available
+  # replica from 2m, fires 10m later. A healthy poller and a non-ingest
+  # Deployment (the api, stuck too) do not.
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="distant-signal", deployment="distant-signal-trust-consumer"}'
+        values: '1x30'
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-trust-consumer"}'
+        values: '1 0x30'
+      - series: 'kube_deployment_status_replicas{namespace="distant-signal", deployment="distant-signal-trust-consumer"}'
+        values: '1x30'
+      - series: 'kube_deployment_spec_replicas{namespace="distant-signal", deployment="distant-signal-poller-tocs"}'
+        values: '1x30'
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-poller-tocs"}'
+        values: '1x30'
+      - series: 'kube_deployment_spec_replicas{namespace="distant-signal", deployment="distant-signal-api"}'
+        values: '2x30'
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-api"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalIngestRolloutStuck
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DistantSignalIngestRolloutStuck
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, deployment: distant-signal-trust-consumer, reason: unavailable}
+            exp_annotations:
+              summary: distant-signal-trust-consumer rollout stuck (unavailable)
+              description: "Not rolled out for 10m: its new pod is not Ready, so it may be reading nothing. Check its pods and events."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestrolloutstuck
+
+  # movement-relay's surge pod never becomes Ready: two pods for one
+  # desired, the old one still available. extra_pods fires after 10m; at
+  # the progress deadline Progressing turns False too.
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="distant-signal", deployment="distant-signal-movement-relay"}'
+        values: '1x40'
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-movement-relay"}'
+        values: '1x40'
+      - series: 'kube_deployment_status_replicas{namespace="distant-signal", deployment="distant-signal-movement-relay"}'
+        values: '1 2x40'
+      - series: 'kube_deployment_status_condition{namespace="distant-signal", deployment="distant-signal-movement-relay", condition="Progressing", status="false"}'
+        values: '0x10 1x30'
+      - series: 'kube_deployment_status_condition{namespace="distant-signal", deployment="distant-signal-movement-relay", condition="Progressing", status="true"}'
+        values: '1x10 0x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: DistantSignalIngestRolloutStuck
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, deployment: distant-signal-movement-relay, reason: extra_pods}
+            exp_annotations:
+              summary: distant-signal-movement-relay rollout stuck (extra_pods)
+              description: "Not rolled out for 10m: its new pod is not Ready, so it may be reading nothing. Check its pods and events."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestrolloutstuck
+      - eval_time: 22m
+        alertname: DistantSignalIngestRolloutStuck
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, deployment: distant-signal-movement-relay, reason: extra_pods}
+            exp_annotations:
+              summary: distant-signal-movement-relay rollout stuck (extra_pods)
+              description: "Not rolled out for 10m: its new pod is not Ready, so it may be reading nothing. Check its pods and events."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestrolloutstuck
+          - exp_labels: {severity: warning, namespace: distant-signal, deployment: distant-signal-movement-relay, reason: progress_deadline}
+            exp_annotations:
+              summary: distant-signal-movement-relay rollout stuck (progress_deadline)
+              description: "Not rolled out for 10m: its new pod is not Ready, so it may be reading nothing. Check its pods and events."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestrolloutstuck
+
+  # A normal rollout: the surge pod is Ready within 2m. Nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="distant-signal", deployment="distant-signal-movement-relay"}'
+        values: '1x30'
+      - series: 'kube_deployment_status_replicas_available{namespace="distant-signal", deployment="distant-signal-movement-relay"}'
+        values: '1x30'
+      - series: 'kube_deployment_status_replicas{namespace="distant-signal", deployment="distant-signal-movement-relay"}'
+        values: '1 2 2 1x27'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DistantSignalIngestRolloutStuck
+        exp_alerts: []
