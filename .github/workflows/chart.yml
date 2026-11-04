@@ -87,7 +87,7 @@ jobs:
 
   chart:
     needs: ordering
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@f405ba7d7d51df62ad597f8fc1e56070abafca64 # main
     permissions:
       contents: read
       packages: write
@@ -118,13 +118,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sign and verify
-        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+        uses: Distant-Signal/ci/actions/cosign-sign@f405ba7d7d51df62ad597f8fc1e56070abafca64 # main
         with:
           ref: ${{ needs.chart.outputs.ref }}@${{ needs.chart.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
 
   ingest-bucket:
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@f405ba7d7d51df62ad597f8fc1e56070abafca64 # main
     permissions:
       contents: read
       packages: write
@@ -154,7 +154,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sign and verify
-        uses: Distant-Signal/ci/actions/cosign-sign@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+        uses: Distant-Signal/ci/actions/cosign-sign@f405ba7d7d51df62ad597f8fc1e56070abafca64 # main
         with:
           ref: ${{ needs.ingest-bucket.outputs.ref }}@${{ needs.ingest-bucket.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}

@@ -42,13 +42,13 @@ jobs:
   # "Generated with Claude Code" footer). Other identities pass, outside
   # contributors included.
   commit-identity:
-    uses: Distant-Signal/ci/.github/workflows/identity.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/identity.yml@f405ba7d7d51df62ad597f8fc1e56070abafca64 # main
 
   # Every LICENSE (the root one and both charts') is the canonical GNU AGPL
   # v3 text, byte for byte: the licence text is never distributed modified.
   # Distant-Signal/ci's licence.yml compares against a pinned SHA-256.
   licence:
-    uses: Distant-Signal/ci/.github/workflows/licence.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/licence.yml@f405ba7d7d51df62ad597f8fc1e56070abafca64 # main
 
   # Distant-Signal/ci's scripts-lint.yml, strict by default:
   #   - every tracked *.sh: shellcheck with every optional check at style
@@ -66,7 +66,7 @@ jobs:
   # from the repository root, with a checkout of Distant-Signal/ci:
   #   uv run python <ci>/scripts/lint-scripts.py
   scripts-lint:
-    uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@f405ba7d7d51df62ad597f8fc1e56070abafca64 # main
 
   # The chart checks, run with the pinned script tools (pyproject.toml's
   # `lint` group). They came from the monorepo's repo-checks job with the
@@ -271,7 +271,7 @@ jobs:
   # workflow can't get more than its caller grants, so both calls grant it;
   # with `publish` off nothing is pushed.
   helm-lint:
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@f405ba7d7d51df62ad597f8fc1e56070abafca64 # main
     permissions:
       contents: read
       packages: write
@@ -280,7 +280,7 @@ jobs:
       lint-values: charts/distant-signal/values-example.yaml
 
   helm-lint-ingest-bucket:
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@34cb92770c8fc1e81f3719f1fbf8069bc8afbbe1 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@f405ba7d7d51df62ad597f8fc1e56070abafca64 # main
     permissions:
       contents: read
       packages: write
