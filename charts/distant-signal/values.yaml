@@ -1094,10 +1094,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-incidents
-      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+      tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:f5ae8294752a2ac0e23441e4ae14bf23be43bdc23d99328c395b6e302ba8723c"
+      digest: "sha256:2be4cec766d8dcedae2dde266ba93450b2de1a4e785e85428eae7d4cbf3b1c06"
       pullPolicy: IfNotPresent
     # -- RDM Knowledgebase Incidents feed base URL. Required when enabled.
     baseUrl: ""
@@ -1153,10 +1153,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-stations
-      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+      tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:ae4091feba7d584f5acfc33482b4bf72162173ed1d8046cdc968c82be1f0c5ee"
+      digest: "sha256:07838efc138dcfbd07240fadd1060a2cbe0daecef0fc2a685b19a2bae8033869"
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_STATIONS_BASE_URL
@@ -1255,10 +1255,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-tfl
-      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+      tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:8c70492a19fb254fe47e1c7690826170607aab211bbfc002122fb494f2e4ffc5"
+      digest: "sha256:0e625eac1f96cbc42dd3dea244d6f171eb961c04a169ad23055cc69500ccd6f9"
       pullPolicy: IfNotPresent
     # -- TfL Unified API root. Unlike the RDM feeds this is a real, public,
     # documented endpoint, so it has a working default rather than "".
@@ -1387,10 +1387,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-tocs
-      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+      tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:c1a7f76f23fb1ee62f6429405d8ebd5ef8b22559bd814aeac24763ff14a03d77"
+      digest: "sha256:fa11c837db8e630bc69abb35d46febe852726acb6dad4127f3e03a8a49242975"
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_TOCS_BASE_URL
@@ -1471,10 +1471,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-ldbws
-      tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+      tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:cfbccc2bdaf25019f60873149be621f009f2327aebbb47a063ac3c5cccec7127"
+      digest: "sha256:d442eb25bec46d5ee84af33f1fac6ef6c7909df8c081ce5b04181dcf0d1f2ac2"
       pullPolicy: IfNotPresent
     # -- LDBWS base URL up to and including the /LDBWS/api/20220120 segment;
     # the binary appends /GetDepBoardWithDetails/{crs} itself.
@@ -4403,10 +4403,10 @@ pollerIrishRailGtfs:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/poller-irish-rail-gtfs
-    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:db3484f1b0bf55eeb0838ee2ad84ec8b9e7d2364131285d3383c14f32259ca87"
+    digest: "sha256:519949ebf160c12bb44c8eaa3aa80a5ef62ec8799af8a0850ea11a09d888b16c"
     pullPolicy: IfNotPresent
   # -- Transport for Ireland's public GTFS zip for Iarnrod Eireann -- real,
   # key-free, confirmed reachable directly
@@ -4463,10 +4463,10 @@ pollerIrishRailLive:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/poller-irish-rail-live
-    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:a1f5fdf073a898ddfc6420b8fd1b6b31f3491a86d6218b7a4fa5f73e631b4a13"
+    digest: "sha256:df8e098e568ab50a63bc11a3f53449633f38e8bf2fbc06d05a7ea64c56d46bc0"
     pullPolicy: IfNotPresent
   # -- api.irishrail.ie's legacy realtime ASMX service root -- real,
   # key-free, confirmed reachable directly
@@ -4518,10 +4518,10 @@ pollerNirStations:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/poller-nir-stations
-    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:4bc4e42d0e98939ed1e33da6a6fe32d47c2a76a1a3e5aa266d3c0bcbea2a59ec"
+    digest: "sha256:bfae5373f7fd6d296f3a2eb108e22642caea3ab677cac4218bdf1b2cbdd9d115"
     pullPolicy: IfNotPresent
   # -- OpenDataNI's own CKAN download URLs for Translink's "Northern
   # Ireland Railways Stations"/"...Halts" CSVs -- real, key-free, confirmed
@@ -4568,9 +4568,9 @@ pollerTransitSchedule:
   image:
     repository: ghcr.io/distant-signal/images/poller-transit-schedule
     # -- Build tag; see api.image.tag. Empty means "use the chart's appVersion".
-    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
     # -- Content digest override. See api.image.digest's own comment above.
-    digest: "sha256:399a44358c779a77caf1e9fa94dda3f330cde34d3bf3382faa628f147b01170a"
+    digest: "sha256:4cd8cf85d4482147afed83a9b1211159b87c7c1dd70f0af26aa35dbff70b07a7"
     pullPolicy: IfNotPresent
   # -- /livez stall window (see workerHealth): one GTFS download (159 MB on
   # 2026-10-14), its parse and the produce.
