@@ -384,8 +384,8 @@ with api.extraEnv, which replaces an entry of the same name.
             - name: API_TRANSIT_NETWORKS
               value: {{ join "," .Values.api.transitNetworks | quote }}
             # AGPL-3.0 §13: the images this release runs and the source
-            # each was built from, served by /public/version (sourceCode
-            # in values.yaml). A mounted ConfigMap, read per request, not an
+            # each was built from, served by /public/version (each image's
+            # `source` in values.yaml). A mounted ConfigMap, read per request, not an
             # env value: the revision changes with every chart build, and in
             # the pod template it would restart the api even when its own
             # image is unchanged.

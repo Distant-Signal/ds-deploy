@@ -40,17 +40,19 @@ global:
 # The source the images were built from, for the api's `/public/version`
 # (AGPL-3.0 §13: users reach the source of what is deployed over the
 # network). The api lists every first-party image this release runs with
-# this url and revision, from a ConfigMap it reads per request, so a new
-# revision doesn't restart it (`distant-signal.sourceImagesJson`). An image
-# pinned at a build tag, `build.<run id>-<commit>` (every first-party
-# service image here), lists that tag's commit instead of `revision`.
+# its source and revision, from a ConfigMap it reads per request, so a new
+# revision doesn't restart it (`distant-signal.sourceImagesJson`). Each
+# image's source is its `image.source` (the repository that builds it,
+# checked against its label by release-order.py), else `url` below. Its
+# revision is the commit in its build tag, `build.<run id>-<commit>`, else
+# its release tag (`vX.Y.Z`: ds-migrate), else `revision` below.
 sourceCode:
-  # -- Repository the images are built from. Every first-party service
-  # image is built in the landing repository until its service is extracted
-  # (repo split phases 6 to 9).
+  # -- Repository for an image with no `image.source`. Every first-party
+  # image here sets its own: since the repo split they are built in
+  # several repositories, and this one's README lists them all.
   url: "https://github.com/Distant-Signal/distant-signal"
-  # -- Commit for an image whose tag is not a build tag. Empty: every
-  # first-party service image here is pinned at a build tag.
+  # -- Commit for an image whose tag is neither a build tag nor a release
+  # tag. Empty: every first-party image here is pinned at one.
   revision: ""
 
 serviceAccount:
@@ -1098,6 +1100,8 @@ pollers:
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
       digest: "sha256:2be4cec766d8dcedae2dde266ba93450b2de1a4e785e85428eae7d4cbf3b1c06"
+      # -- Source repository. See api.image.source.
+      source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
     # -- RDM Knowledgebase Incidents feed base URL. Required when enabled.
     baseUrl: ""
@@ -1157,6 +1161,8 @@ pollers:
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
       digest: "sha256:07838efc138dcfbd07240fadd1060a2cbe0daecef0fc2a685b19a2bae8033869"
+      # -- Source repository. See api.image.source.
+      source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_STATIONS_BASE_URL
@@ -1259,6 +1265,8 @@ pollers:
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
       digest: "sha256:0e625eac1f96cbc42dd3dea244d6f171eb961c04a169ad23055cc69500ccd6f9"
+      # -- Source repository. See api.image.source.
+      source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
     # -- TfL Unified API root. Unlike the RDM feeds this is a real, public,
     # documented endpoint, so it has a working default rather than "".
@@ -1391,6 +1399,8 @@ pollers:
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
       digest: "sha256:fa11c837db8e630bc69abb35d46febe852726acb6dad4127f3e03a8a49242975"
+      # -- Source repository. See api.image.source.
+      source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
     baseUrl: ""
     baseUrlEnvVar: RDM_TOCS_BASE_URL
@@ -1475,6 +1485,8 @@ pollers:
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
       digest: "sha256:d442eb25bec46d5ee84af33f1fac6ef6c7909df8c081ce5b04181dcf0d1f2ac2"
+      # -- Source repository. See api.image.source.
+      source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
     # -- LDBWS base URL up to and including the /LDBWS/api/20220120 segment;
     # the binary appends /GetDepBoardWithDetails/{crs} itself.
@@ -1624,6 +1636,13 @@ api:
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
     digest: "sha256:16cef2b4562d2d5438c09edfe50a2f7cdf57d96d76879d1ed633920ce1e1f689"
+    # -- The repository this image is built from, as its
+    # `org.opencontainers.image.source` label says: the api's
+    # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
+    # (CI) fails when it differs from the pinned digest's label. Change it
+    # with the pin when a service moves repository. Empty falls back to
+    # `sourceCode.url`.
+    source: https://github.com/Distant-Signal/ds-api
     pullPolicy: IfNotPresent
   # -- Replicas. >1 does not corrupt anything: crates/api/src/main.rs runs
   # sqlx::migrate!() in process at startup, and sqlx's Migrator takes a
@@ -2384,6 +2403,8 @@ migrate:
     tag: v0.1.1
     # -- The release's digest (its release notes list it).
     digest: "sha256:46ff075f4fdde636cfed9e7badd742c148052013acb9d5763bff57b4d6038753"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-core
     pullPolicy: IfNotPresent
   job:
     # -- Run the migrations in a hook Job.
@@ -2525,6 +2546,8 @@ ingestWriter:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:46c6b304bef792208309e7a99899d6c23c05a278f2669e3602cc9894f5f74ce2"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
   loops:
     # -- Run the train-domain loops (INGEST_WRITER_LOOPS): schedule-match,
@@ -2763,6 +2786,8 @@ aggregator:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:33b824727652d6224bf324615402d49f52867449d150189afaf508055f112e19"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
   # -- DESIGN.md section 4 targets every 30-60s; 60 is the conservative end.
   pollIntervalSecs: 60
@@ -3031,6 +3056,8 @@ notifier:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:ff20408078fc6f77c55927e72e05fd89eb5a964fdb5e09ebb2d969c621030bf5"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
   # -- Same "reasonable round number, not load-tested" posture as
   # aggregator.pollIntervalSecs.
@@ -3561,6 +3588,8 @@ enricher:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:a436df9ef30122e25f72cd95a3f16def6a32c37719f7fc705a0667186b7d10a9"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
   llm:
     # -- LLM_PROVIDER: `openai` (the default) is any OpenAI-compatible Chat
@@ -3852,6 +3881,8 @@ trustConsumer:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:f7b18b9b63fe535f53d322351ba651f54854f40bf62ab073d0c5d73438aa4f6f"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
   kafka:
     # -- RDM Train Movements broker address(es), for movement-relay.
@@ -3999,6 +4030,8 @@ fullCoverageConsumer:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:22f5609f6505c79e0452b1b8056b1f9e84266ee635b6dd7534e665e04d57ba82"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
   # -- Decision 4: comma-separated line ids to shadow-compute, or "*" for
   # every catalogued line with at least one tiploc. Does NOT gate whether
@@ -4126,6 +4159,8 @@ trustBacklogConsumer:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:b985840bc610bda0c09d9e9fb738a2366e08b180e97b097eed1f7e6bfb79ebae"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
   # Ingest architecture plan 3b.1 (spec R1): each batch's backlog events
   # and reason codes are written to Postgres directly, XACKing
@@ -4233,6 +4268,8 @@ movementRelay:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:971c0f3f87eec1c9bd5374b20e1bd264dc02a1dd0f75af62e70c80e289727353"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
   kafka:
     # -- Kafka broker address(es). Empty: trustConsumer.kafka.brokers.
@@ -4357,6 +4394,8 @@ darwinRelay:
     tag: "build.41846991778-662fe534e22e3812248ac503348fbbf412214cc2"
     # -- Content digest override (see api.image.digest).
     digest: "sha256:4dfae09c52d7ab603131d0a32710dfb3bbba1fa1d5e4fbb672e6f2a62acfe3bf"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
   kafka:
     # -- The Secret with the Push Port's Kafka connection, one key per
@@ -4449,6 +4488,8 @@ pollerIrishRailGtfs:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:519949ebf160c12bb44c8eaa3aa80a5ef62ec8799af8a0850ea11a09d888b16c"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-pollers
     pullPolicy: IfNotPresent
   # -- Transport for Ireland's public GTFS zip for Iarnrod Eireann -- real,
   # key-free, confirmed reachable directly
@@ -4509,6 +4550,8 @@ pollerIrishRailLive:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:df8e098e568ab50a63bc11a3f53449633f38e8bf2fbc06d05a7ea64c56d46bc0"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-pollers
     pullPolicy: IfNotPresent
   # -- api.irishrail.ie's legacy realtime ASMX service root -- real,
   # key-free, confirmed reachable directly
@@ -4564,6 +4607,8 @@ pollerNirStations:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:bfae5373f7fd6d296f3a2eb108e22642caea3ab677cac4218bdf1b2cbdd9d115"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-pollers
     pullPolicy: IfNotPresent
   # -- OpenDataNI's own CKAN download URLs for Translink's "Northern
   # Ireland Railways Stations"/"...Halts" CSVs -- real, key-free, confirmed
@@ -4613,6 +4658,8 @@ pollerTransitSchedule:
     tag: "build.41801872738-4420d2cbf4cb97eb4f16dc17b774af7f30a8ef1c"
     # -- Content digest override. See api.image.digest's own comment above.
     digest: "sha256:4cd8cf85d4482147afed83a9b1211159b87c7c1dd70f0af26aa35dbff70b07a7"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/ds-pollers
     pullPolicy: IfNotPresent
   # -- /livez stall window (see workerHealth): one GTFS download (159 MB on
   # 2026-10-14), its parse and the produce.
@@ -5225,6 +5272,8 @@ scheduleFeed:
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
       digest: "sha256:719f5af2acea21bb653c0ec025e351c7970fde26c526185dc6fb51bfebbf963e"
+      # -- Source repository. See api.image.source.
+      source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
     checkTimes: "22:00,22:30,23:00,23:30,00:00,00:30,01:00,01:30,16:00"
     # -- Seconds between watch_dir scans. Replaces checkTimes as the thing
@@ -5488,6 +5537,8 @@ scheduleFeed:
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
       digest: "sha256:efea95e439b4709c124d0f0845e71ad6efe4657c3a3679088c92f2f994934652"
+      # -- Source repository. See api.image.source.
+      source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
     pollIntervalSecs: 1800
     # -- How it runs (docs/scheduled-jobs.md, "schedule-reference"):
@@ -5774,6 +5825,8 @@ frontend:
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:f1e50ee26ce1bdce0d0e6f6ce490388a7e2a54701084acea08f4e5fccdb0adc2"
+    # -- Source repository. See api.image.source.
+    source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
   # -- Safe to raise, with one documented caveat. frontend/lib/liveDataCache.ts
   # keeps a process-local stale-data cache so a backend outage shows the

@@ -184,6 +184,20 @@ class PinnedImagesTest(unittest.TestCase):
         with self.assertRaises(ro.InputError):
             images["aggregator"].reference("")
 
+    def test_source(self) -> None:
+        """An image's own `source`, else `sourceCode.url`."""
+        images = {image.service: image for image in fixture_images()}
+        self.assertEqual(images["api"].source, "https://example.com/api")
+        self.assertEqual(images["aggregator"].source, "https://example.com/landing")
+        values = json.loads((FIXTURES / "values.json").read_text("utf-8"))
+        del values["sourceCode"]
+        self.assertEqual(
+            {image.service: image.source for image in ro.pinned_images(values)}[
+                "aggregator"
+            ],
+            "",
+        )
+
     def test_the_chart_pins_every_image(self) -> None:
         """ds-deploy: every first-party image is pinned by tag and digest.
 
@@ -191,12 +205,17 @@ class PinnedImagesTest(unittest.TestCase):
         its ds-core release (vX.Y.Z), which is core-version.
         """
         values = ro.read_values(REPO / "charts" / "distant-signal" / "values.yaml")
-        images = list(ro.pinned_images(values))
+        # Each sets its own source (not sourceCode.url's fallback): since the
+        # split the images come from several repositories.
+        images = list(ro.pinned_images(values, default_source=""))
         self.assertEqual(sorted(image.service for image in images), sorted(PINNED))
         core = (REPO / "core-version").read_text(encoding="utf-8").strip()
         for image in images:
             with self.subTest(image.service):
                 self.assertRegex(image.digest, r"^sha256:[0-9a-f]{64}$")
+                self.assertRegex(
+                    image.source, r"^https://github\.com/Distant-Signal/[a-z-]+$"
+                )
                 if image.service == ro.MIGRATE:
                     self.assertEqual(image.tag, core)
                 else:
@@ -403,6 +422,52 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(len(findings), 4, findings)
 
 
+class SourceTest(unittest.TestCase):
+    """Each image's source against its org.opencontainers.image.source label."""
+
+    def labels(self, **overrides: str | None) -> dict[str, dict[str, str]]:
+        """Every fixture image labelled with its own source, with OVERRIDES."""
+        labels = {
+            image.service: {ro.SOURCE: image.source} for image in fixture_images()
+        }
+        for service, value in overrides.items():
+            if value is None:
+                del labels[service][ro.SOURCE]
+            else:
+                labels[service][ro.SOURCE] = value
+        return labels
+
+    def findings(self, labels: Mapping[str, Mapping[str, str]]) -> list[str]:
+        """source_findings over the fixture images with LABELS."""
+        return list(
+            ro.source_findings(fixture_images(), lambda image: labels[image.service])
+        )
+
+    def test_matching(self) -> None:
+        """Every source is its label: no finding."""
+        self.assertEqual(self.findings(self.labels()), [])
+
+    def test_moved_repository(self) -> None:
+        """An image built elsewhere than its source says."""
+        findings = self.findings(self.labels(api="https://example.com/elsewhere"))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn(".api.image (api)", findings[0])
+        self.assertIn("would name https://example.com/api", findings[0])
+        self.assertIn("built in https://example.com/elsewhere", findings[0])
+
+    def test_falls_back_to_source_code_url(self) -> None:
+        """No `source`: sourceCode.url must be the label."""
+        findings = self.findings(self.labels(aggregator="https://example.com/workers"))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("would name https://example.com/landing", findings[0])
+
+    def test_missing_label(self) -> None:
+        """An image with no source label is a finding."""
+        findings = self.findings(self.labels(frontend=None))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn(f"(frontend) has no {ro.SOURCE} label", findings[0])
+
+
 class ContractFloorsTest(unittest.TestCase):
     """Reading `safe after core` from the migrations' headers."""
 
@@ -589,6 +654,31 @@ class MainTest(unittest.TestCase):
             )
         self.assertEqual(status, 1)
         self.assertIn("v2.0.0 is newer than v1.0.0", out)
+
+    def test_check_registry_checks_sources(self) -> None:
+        """--registry also compares each image's source with its label."""
+        images = fixture_images()
+        labels = labels_by_service()
+        for image in images:
+            labels[image.service][ro.SOURCE] = image.source
+        labels["poller-tfl"][ro.SOURCE] = "https://example.com/pollers"
+        configs = {image.reference("x"): labels[image.service] for image in images}
+
+        def fake(reference: str, _fetch: object) -> dict[str, str]:
+            return configs[reference]
+
+        argv = ["--root", str(REPO), "check", "--values", str(FIXTURES / "values.json")]
+        with mock.patch.object(ro, "with_retries", fake):
+            status, out = self.main(*argv, "--registry", "--app-version", "x")
+        self.assertEqual(status, 1)
+        self.assertIn(".pollers.tfl.image (poller-tfl)", out)
+        self.assertIn("built in https://example.com/pollers", out)
+
+        labels["poller-tfl"][ro.SOURCE] = "https://example.com/landing"
+        with mock.patch.object(ro, "with_retries", fake):
+            status, out = self.main(*argv, "--registry", "--app-version", "x")
+        self.assertEqual(status, 0, out)
+        self.assertIn("each image's source", out)
 
     def test_bad_values(self) -> None:
         """Unreadable values exit 2."""

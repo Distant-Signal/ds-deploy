@@ -3725,15 +3725,19 @@ The api's `/public/version` list, rendered into the source-images ConfigMap
 (api-source-images-configmap.yaml; AGPL-3.0 §13, repo split spec §6): a JSON
 array with one `{service, image, source, revision}` per first-party image
 this release runs. `image` is the reference the pods pull
-(`distant-signal.image`, so the pinned digest when CI set one); `source` is
-`sourceCode.url`. `revision` is the commit in the image's own tag when the
-tag is a build tag, `build.<run>-<40-hex commit>` (what ds-deploy pins,
-repo split spec §5.4), so a service held back at an older build lists its
-own commit; otherwise `sourceCode.revision`, which the chart push sets to
-the commit every image was built from. A workload whose values carry
+(`distant-signal.image`, so the pinned digest when CI set one). `source` is
+the image's own `image.source`, the repository that builds it (since the
+repo split, one of several; release-order.py checks it against the pinned
+digest's `org.opencontainers.image.source` label), else `sourceCode.url`.
+`revision` is the commit in the image's own tag when the tag is a build
+tag, `build.<run>-<40-hex commit>` (what ds-deploy pins, repo split spec
+§5.4), so a service held back at an older build lists its own commit; the
+tag itself when it is a release tag, `vX.Y.Z` (ds-migrate, a ds-core
+release); otherwise `sourceCode.revision`. A workload whose values carry
 `enabled: false` is left out, as is scheduleFeed's pair while
-`scheduleFeed.enabled` is off and pollerTransitSchedule with no network on.
-The service names are containers.yml's matrix names. Takes root.
+`scheduleFeed.enabled` is off, pollerTransitSchedule with no network on and
+ds-migrate while `migrate.job.enabled` is off. The service names are the
+images' names. Takes root.
 */}}
 {{- define "distant-signal.sourceImagesJson" -}}
 {{- $v := .Values -}}
@@ -3764,6 +3768,7 @@ The service names are containers.yml's matrix names. Takes root.
   (list "ingest-writer" $v.ingestWriter true)
   (list "schedule-ingest" $v.scheduleFeed.ingest $v.scheduleFeed.enabled)
   (list "schedule-reference" $v.scheduleFeed.reference $v.scheduleFeed.enabled)
+  (list "ds-migrate" $v.migrate $v.migrate.job.enabled)
 -}}
 {{- $images := list -}}
 {{- range $workloads -}}
@@ -3775,8 +3780,11 @@ The service names are containers.yml's matrix names. Takes root.
 {{- $tag := $values.image.tag | default "" | toString -}}
 {{- if regexMatch "^build\\.[0-9]+-[0-9a-f]{40}$" $tag -}}
 {{- $revision = regexFind "[0-9a-f]{40}$" $tag -}}
+{{- else if regexMatch "^v[0-9]+\\.[0-9]+\\.[0-9]+$" $tag -}}
+{{- $revision = $tag -}}
 {{- end -}}
-{{- $images = append $images (dict "service" (index . 0) "image" $image "source" $v.sourceCode.url "revision" $revision) -}}
+{{- $source := $values.image.source | default $v.sourceCode.url -}}
+{{- $images = append $images (dict "service" (index . 0) "image" $image "source" $source "revision" $revision) -}}
 {{- end -}}
 {{- end -}}
 {{- toJson $images -}}
