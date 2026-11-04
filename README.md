@@ -54,8 +54,10 @@ merge.
 [`ci.yml`](.github/workflows/ci.yml) runs on every pull request:
 
 - `helm lint --strict` and the render assertions for both charts;
-- the chart policy scripts (`scripts/check-*-chart.py`) and the values
-  reference (`scripts/chart-values-doc.py`);
+- the chart policy scripts (`scripts/check-*-chart.py`), among them the
+  component map (`charts/distant-signal/components.yaml`, every rendered
+  object mapped to a group), and the values reference
+  (`scripts/chart-values-doc.py`);
 - the alert rules: payload sizes, a runbook section in
   [`docs/alerts.md`](docs/alerts.md) for every alert, and the promtool
   unit tests in `scripts/alert-rules-tests/`;

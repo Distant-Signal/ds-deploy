@@ -175,6 +175,15 @@ jobs:
       - name: Kafka relay rollout strategies
         run: uv run --no-sync scripts/check-kafka-rollout-chart.py
 
+      # charts/distant-signal/components.yaml maps every
+      # app.kubernetes.io/component to a group (ingest, schedule-feed,
+      # migrate, roles, ...) for check-ingest-rollout.py and deploy-bringer's
+      # render-diff classifier, which fails closed on what it cannot map.
+      # Rendered with every workload and feature on: each object must have
+      # a mapped component (or be exempt), and no entry may be stale.
+      - name: every rendered object maps to a component group
+        run: uv run --no-sync scripts/check-components-chart.py
+
       # The Redis NetworkPolicy admits exactly the workloads whose env has
       # REDIS_URL, rendered with every Redis client on (and with none of the
       # optional ones): darwin-relay shipped without its entry and every

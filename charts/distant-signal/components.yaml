@@ -1,0 +1,95 @@
+# Which part of the stack each object this chart renders belongs to: the
+# one source of truth for tools that need to know what a deploy touches.
+#
+# Every rendered object carries `app.kubernetes.io/component` (part of its
+# selector labels, so it never changes for a live object). `components`
+# maps each of those values to a group; `groups` lists the groups.
+#
+# Readers:
+#   - scripts/check-ingest-rollout.py decides what to verify after a deploy
+#     from the `ingest` and `pollers` groups;
+#   - deploy-bringer's render-diff classifier (Ranma-Config
+#     docs/specs/deploy-window-render-effect.md) decides whether a deploy
+#     falls in the dtd-sftp window: any changed object in `schedule-feed`,
+#     `migrate` or `roles` applies it, and so does any object it cannot map
+#     (fail closed).
+#
+# The file ships inside the chart package, so a reader can take it from the
+# chart version it is classifying. scripts/check-components-chart.py
+# (CI's chart-checks job) fails when a rendered object has no component
+# label and is not in `exempt`, when its component is not mapped here, or
+# when a mapped component or exempt object no longer renders.
+#
+# Shared objects are mapped by their own label. NetworkPolicy objects
+# belong to the workload whose pods they select: the schedulefeed and
+# schedulefeed-sftp policies (SFTP ingress, schedulefeed egress) are
+# schedule-feed, while the postgres and redis policies, which also admit
+# schedulefeed's pods among every other client, are data-stores.
+
+groups:
+  ingest: >-
+    The TRUST and Darwin path from Kafka to Postgres: the relays, the
+    movement-events consumers and the ingest-writer.
+  pollers: >-
+    Every poller Deployment and CronJob (RDM, TfL, island of Ireland,
+    transit timetables). They feed the ingest-writer's streams or write
+    Postgres directly.
+  schedule-feed: >-
+    The CIF timetable delivery path: the SFTP receiver, schedule-ingest
+    (schedulefeed), schedule-reference, and the PVC, Service, Secret,
+    ConfigMap, ServiceAccount and NetworkPolicies they use.
+  migrate: The ds-core migrate hook Job and its NetworkPolicies.
+  roles: The Postgres per-service roles setup hook Job and its ConfigMaps.
+  api: The api, its Service and source-images ConfigMap, and the api-maintenance CronJob.
+  frontend: The frontend.
+  workers: The aggregator, the enricher and the notifier.
+  data-stores: The bundled Postgres and Redis, and Postgres's pgBackRest jobs.
+  monitoring: The PrometheusRules and the PodMonitor.
+  shared: >-
+    Objects every workload uses: the chart's Secret and ServiceAccount, and
+    the Ingress.
+  dev: The local devAuthentik identity provider (never in production).
+  test: The `helm test` pod.
+
+components:
+  movement-relay: ingest
+  darwin-relay: ingest
+  trust-consumer: ingest
+  trust-backlog-consumer: ingest
+  full-coverage-consumer: ingest
+  ingest-writer: ingest
+  poller-incidents: pollers
+  poller-stations: pollers
+  poller-tocs: pollers
+  poller-ldbws: pollers
+  poller-tfl: pollers
+  poller-irish-rail-gtfs: pollers
+  poller-irish-rail-live: pollers
+  poller-nir-stations: pollers
+  poller-transit-schedule: pollers
+  schedulefeed: schedule-feed
+  schedulefeed-sftp: schedule-feed
+  schedule-reference: schedule-feed
+  migrate: migrate
+  postgres-roles: roles
+  api: api
+  api-maintenance: api
+  frontend: frontend
+  aggregator: workers
+  enricher: workers
+  notifier: workers
+  postgres: data-stores
+  redis: data-stores
+  pgbackrest: data-stores
+  metrics: monitoring
+  shared: shared
+  devauthentik: dev
+  devauthentik-server: dev
+  devauthentik-postgres: dev
+  devauthentik-worker: dev
+  test: test
+
+# Rendered objects with no app.kubernetes.io/component label, as
+# {kind, name (after the release fullname), reason}. Empty: every object
+# has one.
+exempt: []
