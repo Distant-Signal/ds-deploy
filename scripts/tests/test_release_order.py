@@ -27,6 +27,7 @@ from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "release-order.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "release-order"
+PIN = "ghcr.io/distant-signal/images/api:build.42-0123abcd@sha256:" + "a" * 64
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -233,6 +234,30 @@ class LabelsTest(unittest.TestCase):
         self.assertNotIn("frontend", labels)
         self.assertNotIn(API_BUILD, labels["api"])
 
+    def test_split_frontend_reads_the_api_pin(self) -> None:
+        """No api crate: the frontend's api-build is its pinned api's build tag."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy(FIXTURES / "Cargo-split.lock", root / "Cargo.lock")
+            pin = root / "frontend" / "api-image.txt"
+            pin.parent.mkdir(parents=True)
+            pin.write_text(f"# comment\n{PIN}\n", "utf-8")
+            self.assertEqual(
+                ro.image_labels(root), {"frontend": {API_BUILD: "build.42-0123abcd"}}
+            )
+            (root / "Cargo.lock").unlink()
+            self.assertEqual(
+                ro.image_labels(root), {"frontend": {API_BUILD: "build.42-0123abcd"}}
+            )
+            pin.write_text(PIN.replace("build.42-0123abcd", "main"), "utf-8")
+            with self.assertRaisesRegex(ro.InputError, "api-image.txt"):
+                ro.image_labels(root)
+
+    def test_no_lock_and_no_pin(self) -> None:
+        """Nothing to label: no images."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(ro.image_labels(Path(tmp)), {})
+
     def test_other_sources_are_refused(self) -> None:
         """A core crate from a registry isn't a ds-core release."""
         with self.assertRaisesRegex(ro.InputError, "not a git tag or the workspace"):
@@ -293,17 +318,48 @@ class CheckTest(unittest.TestCase):
         )
 
     def test_missing_labels(self) -> None:
-        """Every Rust image needs core-version; the frontend and api need api-build."""
+        """Every Rust image needs core-version; the frontend needs api-build."""
         for service, key in (
             ("aggregator", CORE),
             ("ds-migrate", CORE),
             ("frontend", API_BUILD),
-            ("api", API_BUILD),
         ):
             with self.subTest(service=service, key=key):
                 self.assert_one_finding(
                     run_check({service: {key: None}}), f"({service}) has no {key} label"
                 )
+
+    def test_a_build_tag_api_build_reads_the_api_tag(self) -> None:
+        """After the split the api's own api-build label isn't read."""
+        self.assertEqual(run_check({"api": {API_BUILD: None}}), [])
+        self.assertEqual(run_check({"api": {API_BUILD: "v0.1.0"}}), [])
+
+    def test_a_build_tag_api_build_needs_a_build_tag_api(self) -> None:
+        """The api pinned by digest alone can't be ordered against the frontend."""
+        images = [
+            ro.Pinned(i.path, i.service, i.repository, "", i.digest)
+            if i.service == "api"
+            else i
+            for i in fixture_images()
+        ]
+        labels = labels_by_service()
+        findings = list(ro.check(images, lambda image: labels[image.service], []))
+        self.assert_one_finding(findings, "(api)", "must be build.<run>-<sha>")
+
+    def test_semver_api_build_reads_the_api_label(self) -> None:
+        """The monorepo: both are its api crate's version, from the labels."""
+        same = {"api": {API_BUILD: "v0.1.0"}, "frontend": {API_BUILD: "v0.1.0"}}
+        self.assertEqual(run_check(same), [])
+        self.assert_one_finding(
+            run_check(
+                {"api": {API_BUILD: "v0.1.0"}, "frontend": {API_BUILD: "v0.2.0"}}
+            ),
+            "v0.2.0 is newer than v0.1.0",
+        )
+        self.assert_one_finding(
+            run_check({"api": {API_BUILD: None}, "frontend": {API_BUILD: "v0.1.0"}}),
+            "(api) has no org.distant-signal.api-build label",
+        )
 
     def test_unparseable_label(self) -> None:
         """A label that isn't a version is a finding."""

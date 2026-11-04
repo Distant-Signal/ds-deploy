@@ -1,6 +1,6 @@
 {
   "global": {"imageRegistry": ""},
-  "api": {"image": {"repository": "ghcr.io/distant-signal/images/api", "tag": "", "digest": "sha256:aaaa", "pullPolicy": "IfNotPresent"}},
+  "api": {"image": {"repository": "ghcr.io/distant-signal/images/api", "tag": "build.10-0123abc", "digest": "sha256:aaaa", "pullPolicy": "IfNotPresent"}},
   "aggregator": {"image": {"repository": "ghcr.io/distant-signal/images/aggregator", "tag": "", "digest": ""}},
   "pollers": {"tfl": {"image": {"repository": "ghcr.io/distant-signal/images/poller-tfl", "tag": "build.7-abcdef0", "digest": ""}}},
   "frontend": {"image": {"repository": "ghcr.io/distant-signal/images/frontend", "tag": "", "digest": "sha256:ffff"}},
