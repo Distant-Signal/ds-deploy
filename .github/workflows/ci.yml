@@ -1938,10 +1938,61 @@ jobs:
           grep -q '^      maxUnavailable: 1$' <<<"${s}" || fail "RollingUpdate must default to maxUnavailable 1"
           limit_is trust_backlog "${out}" 4 "maxSurge 0 adds no pod"
 
-          # 25% of 2 replicas rounds up to 1 surge pod: (2 + 1) x 2 + 1 = 7.
-          out=$(render --set trustConsumer.replicaCount=2 --set trustConsumer.updateStrategy.type=RollingUpdate \
-            --set-string trustConsumer.updateStrategy.rollingUpdate.maxSurge=25%)
-          limit_is trust_consumer "${out}" 7 "a percentage surge must round up"
+          # 25% of 1 replica rounds up to 1 surge pod: (1 + 1) x 3 + 1 = 7.
+          out=$(render --set trustBacklogConsumer.updateStrategy.type=RollingUpdate \
+            --set-string trustBacklogConsumer.updateStrategy.rollingUpdate.maxSurge=25%)
+          limit_is trust_backlog "${out}" 7 "a percentage surge must round up"
+
+          # trust-consumer and full-coverage-consumer run one pod, ever: a
+          # fixed Redis consumer name each, and full-coverage-consumer's
+          # stats in memory (distant-signal.singleConsumerGuard). 0 stops
+          # them; Recreate is the only strategy.
+          for w in trustConsumer fullCoverageConsumer; do
+            render --set "${w}.replicaCount=0" >/dev/null
+            render --set "${w}.replicaCount=1" >/dev/null
+            # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
+            {
+              if err=$(render --set "${w}.replicaCount=2" 2>&1 >/dev/null); then
+                fail "${w}.replicaCount=2 must fail the render"
+              fi
+              grep -q "${w}.replicaCount is 2, but it must be 0 or 1" <<<"${err}" || fail "unexpected ${w} replicas error: ${err}"
+              if err=$(render --set "${w}.updateStrategy.type=RollingUpdate" 2>&1 >/dev/null); then
+                fail "${w} RollingUpdate must fail the render"
+              fi
+              grep -q "${w}.updateStrategy.type is \"RollingUpdate\", but it must be Recreate" <<<"${err}" \
+                || fail "unexpected ${w} strategy error: ${err}"
+              if render --set "${w}.updateStrategy.type=RollingUpdate" \
+                  --set "${w}.updateStrategy.rollingUpdate.maxSurge=1" \
+                  --set "${w}.updateStrategy.rollingUpdate.maxUnavailable=0" >/dev/null 2>&1; then
+                fail "${w} with a surge must fail the render"
+              fi
+            }
+          done
+
+          # The ingest-writer: one replica, Recreate, and one fixed stream
+          # consumer name (distant-signal.ingestWriterConsumerGuard).
+          out=$(render --set ingestWriter.enabled=true)
+          writer=$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: Deployment\n" && $0 ~ "\n  name: distant-signal-ingest-writer\n" {print}' <<<"${out}")
+          grep -q '^  replicas: 1$' <<<"${writer}" || fail "the ingest-writer must run 1 replica"
+          grep -A1 '^  strategy:' <<<"${writer}" | grep -q 'type: Recreate' || fail "the ingest-writer must be Recreate"
+          render --set ingestWriter.enabled=true \
+            --set 'ingestWriter.extraEnv[0].name=INGEST_WRITER_STREAM_CONSUMER' \
+            --set 'ingestWriter.extraEnv[0].value=writer-a' >/dev/null
+          # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
+          {
+            if err=$(render --set ingestWriter.enabled=true \
+                --set 'ingestWriter.extraEnv[0].name=INGEST_WRITER_STREAM_CONSUMER' \
+                --set 'ingestWriter.extraEnv[0].valueFrom.fieldRef.fieldPath=metadata.name' 2>&1 >/dev/null); then
+              fail "a per-pod INGEST_WRITER_STREAM_CONSUMER (valueFrom) must fail the render"
+            fi
+            grep -q 'sets INGEST_WRITER_STREAM_CONSUMER per pod' <<<"${err}" || fail "unexpected writer error: ${err}"
+            # shellcheck disable=SC2016 # a literal $(POD_NAME), for Kubernetes to expand
+            if render --set ingestWriter.enabled=true \
+                --set 'ingestWriter.extraEnv[0].name=INGEST_WRITER_STREAM_CONSUMER' \
+                --set 'ingestWriter.extraEnv[0].value=$(POD_NAME)' >/dev/null 2>&1; then
+              fail "INGEST_WRITER_STREAM_CONSUMER=\$(POD_NAME) must fail the render"
+            fi
+          }
 
           # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
           {

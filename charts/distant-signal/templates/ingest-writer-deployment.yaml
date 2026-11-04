@@ -9,6 +9,7 @@ once any is not off, REDIS_URL and the redis NetworkPolicy admission and
 egress.
 */}}
 {{- if .Values.ingestWriter.enabled }}
+{{- include "distant-signal.ingestWriterConsumerGuard" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,7 +19,9 @@ metadata:
 spec:
   revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
   # One replica, Recreate (spec §10): the loops' advisory locks would make a
-  # second one harmless, but the stream consumers of phase 3 assume one.
+  # second one harmless, but the stream consumers of phase 3 assume one,
+  # and read as one fixed consumer name (distant-signal.ingestWriterConsumerGuard).
+  # No value changes either; CI asserts both.
   replicas: 1
   strategy:
     type: Recreate
