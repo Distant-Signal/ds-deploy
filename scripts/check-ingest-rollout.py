@@ -562,11 +562,20 @@ def check_pollers(
         ),
         "poller",
     )
+    # A new pod's success series can be born at 1: its first cycle ran
+    # before the first scrape, and increase() never sees a series' first
+    # value. A pod created after the baseline counts from 0, so any value
+    # of 1 or more is a success in that pod (deploy e2yb: irish-rail-gtfs
+    # and nir-stations).
+    born_succeeded = by(
+        prom.query(f"max by (poller) ({metric}{{{success}}} and {new_pods})"),
+        "poller",
+    )
     results = []
     for poller in sorted(restarted):
         name = f"poller {poller}"
         cycles = baseline.poller_cycles_per_hour.get(poller)
-        if succeeded.get(poller, 0.0) > 0:
+        if succeeded.get(poller, 0.0) > 0 or born_succeeded.get(poller, 0.0) >= 1:
             results.append(
                 Result(name, "ok", "a successful cycle in a pod the deploy started")
             )
