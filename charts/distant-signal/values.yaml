@@ -2611,6 +2611,14 @@ ingestWriter:
     maxConnections: 6
   # -- /livez stall window (PROGRESS_STALL_SECS; see workerHealth).
   progressStallSecs: 900
+  # -- terminationGracePeriodSeconds: how long Kubernetes waits after
+  # SIGTERM before SIGKILL. The writer gives its stream tasks 20 s to
+  # finish the entry in hand (STREAM_SHUTDOWN_GRACE), then releases the
+  # loop locks, so this must leave room after that; the render refuses
+  # less than 30 (Kubernetes' default). An entry the writer had not
+  # acknowledged stays pending and the next pod applies it again, so a
+  # short grace costs duplicates, not data.
+  terminationGracePeriodSeconds: 30
   # -- tracing-subscriber EnvFilter (RUST_LOG).
   logLevel: info
   # -- Extra env entries; one with the same name as a chart entry replaces
@@ -3904,6 +3912,13 @@ trustConsumer:
   # failureThreshold * periodSeconds = 90s on top). See the binary's
   # --progress-stall-secs doc for how the default is sized.
   progressStallSecs: 300
+  # -- terminationGracePeriodSeconds: how long Kubernetes waits after
+  # SIGTERM before SIGKILL, time to finish the batch in hand and XACK it.
+  # Under Recreate the new pod starts only after the old one is gone, so a
+  # longer grace only delays it. An entry not yet acknowledged stays pending
+  # and is replayed, so a kill mid-batch costs duplicates, not data. At
+  # least 30 (Kubernetes' default); the render refuses less.
+  terminationGracePeriodSeconds: 30
   # -- Values-driven replica count, so scaling to 0 is done via
   # `helm upgrade`, not an out-of-band `kubectl scale` a later
   # `helm upgrade` could silently undo. See
@@ -4017,6 +4032,8 @@ fullCoverageConsumer:
   # failureThreshold * periodSeconds = 90s on top). See the binary's
   # --progress-stall-secs doc for how the default is sized.
   progressStallSecs: 900
+  # -- terminationGracePeriodSeconds: as trustConsumer's. At least 30.
+  terminationGracePeriodSeconds: 30
   metricsPort: 9093
   # -- Values-driven replica count -- symmetry with trustConsumer's own
   # knob (see that block's comment).
@@ -4142,6 +4159,8 @@ trustBacklogConsumer:
   # failureThreshold * periodSeconds = 90s on top). See the binary's
   # --progress-stall-secs doc for how the default is sized.
   progressStallSecs: 300
+  # -- terminationGracePeriodSeconds: as trustConsumer's. At least 30.
+  terminationGracePeriodSeconds: 30
   metricsPort: 9096
   # -- The Deployment's rollout. `Recreate` (the default) stops the old
   # pod before the new one starts: a gap of a few seconds (the consumer group keeps every entry, and the
@@ -4288,6 +4307,15 @@ movementRelay:
   # top). See the binary's --progress-stall-secs doc for how the default is
   # sized.
   progressStallSecs: 900
+  # -- terminationGracePeriodSeconds: how long Kubernetes waits after
+  # SIGTERM before SIGKILL. The relay commits a Kafka offset only after the
+  # record's events are XADDed, so a kill at any point re-reads records
+  # (duplicates on movement-events), never skips them; the grace is time
+  # to finish the batch in hand and commit it synchronously on shutdown,
+  # which keeps those duplicates few. Under the RollingUpdate the new pod
+  # is Ready before the old one is stopped, so a longer grace never leaves
+  # the topic unread. At least 30; the render refuses less.
+  terminationGracePeriodSeconds: 45
   metricsPort: 9094
   logLevel: info
   extraEnv: []

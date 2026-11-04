@@ -3714,3 +3714,20 @@ The service names are containers.yml's matrix names. Takes root.
 {{- end -}}
 {{- toJson $images -}}
 {{- end }}
+
+{{/*
+An ingest workload's terminationGracePeriodSeconds, validated: a whole
+number of seconds, at least 30 (Kubernetes' default; a shorter one only
+cuts the shutdown drain short). Takes (dict "key" <values key> "value"
+<value>).
+*/}}
+{{- define "distant-signal.terminationGrace" -}}
+{{- $v := toString .value -}}
+{{- if not (regexMatch "^[0-9]+$" $v) -}}
+{{- fail (printf "%s.terminationGracePeriodSeconds must be a whole number of seconds, not %q." .key $v) -}}
+{{- end -}}
+{{- if lt (int $v) 30 -}}
+{{- fail (printf "%s.terminationGracePeriodSeconds is %s, but it must be at least 30: a shorter grace kills the process mid-drain (duplicates on the next start) and buys nothing." .key $v) -}}
+{{- end -}}
+{{- int $v -}}
+{{- end }}
