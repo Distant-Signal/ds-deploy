@@ -265,6 +265,19 @@ def optional(value: str) -> str:
     return f"rendered only when {value} is set"
 
 
+# A setting the chart wires before the pinned image reads it: rendered
+# only when its optional value is set, and listed in UNWIRED before the
+# image that reads it is pinned, so neither the chart change nor the image
+# bump fails `unwired`. Once the pinned image reads it, the entry is an
+# ordinary `optional()` one; rewrite it as such when convenient.
+AHEAD_OF_IMAGE = "ahead of the pinned image: "
+
+
+def ahead_of_image(value: str, change: str) -> str:
+    """Return the reason for an optional setting the pinned image may not read yet."""
+    return f"{AHEAD_OF_IMAGE}{optional(value)} (read since {change})"
+
+
 LINES = "a local override: the image embeds the line catalogue (ds-lines)"
 POOL = "the pool size stays the service's own default"
 STANOX = "the image's bundled reference-data/stanox-crs.csv"
@@ -285,6 +298,12 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
     "api": {
         "LINES_DIR": LINES,
         "SCHEDULE_MATCH_INTERVAL_SECS": "unwired on purpose (its doc in config.rs)",
+        "SSO_DISCORD_ID_CLAIM": ahead_of_image(
+            "api.sso.discordIdClaim", "distant-signal#192, ds-core v0.1.1"
+        ),
+        "SSO_PRIMARY_SUB_CLAIM": ahead_of_image(
+            "api.sso.primarySubClaim", "distant-signal#192, ds-core v0.1.1"
+        ),
     },
     "darwin-relay": {"DARWIN_STREAM_MAXLEN": no_value("darwinRelay")},
     "enricher": {
@@ -497,7 +516,9 @@ def unwired(
 ) -> Iterator[str]:
     """Yield each variable a service reads that no render ever sets.
 
-    Unless `allow` lists it; and each `allow` entry that is no longer true.
+    Unless `allow` lists it; and each `allow` entry that is no longer true,
+    except that an `ahead_of_image` entry may name a variable the pinned
+    image does not read yet.
     """
     rendered: dict[str, set[str]] = {}
     for c in containers:
@@ -514,6 +535,8 @@ def unwired(
                     "value can reach it (wire it, or list it in UNWIRED with why)"
                 )
         for name in sorted(set(allowed) - set(defaults[service].env)):
+            if allowed[name].startswith(AHEAD_OF_IMAGE):
+                continue
             yield f"{service}: UNWIRED lists {name}, which {service} no longer reads"
 
 

@@ -645,6 +645,15 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ $redirectUrl | quote }}
             - name: SSO_POST_LOGIN_REDIRECT_URL
               value: {{ $postLoginRedirectUrl | quote }}
+            {{- /* Account continuity: off (and absent) unless set. */}}
+            {{- with .Values.api.sso.discordIdClaim }}
+            - name: SSO_DISCORD_ID_CLAIM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.api.sso.primarySubClaim }}
+            - name: SSO_PRIMARY_SUB_CLAIM
+              value: {{ . | quote }}
+            {{- end }}
             - name: SESSION_TTL_DAYS
               value: {{ .Values.api.sessionTtlDays | quote }}
             - name: SESSION_MAX_AGE_DAYS
