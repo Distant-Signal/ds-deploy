@@ -25,7 +25,9 @@ type: application
 #   pinned by tag and digest in values.yaml (repo split phase 5). A new
 #   base so this repository's builds, from run 1, order above the
 #   monorepo's.
-version: 0.6.0
+# 0.6.1: /public/version names each image's own repository (image.source),
+#   and lists ds-migrate at its release tag while migrate.job.enabled.
+version: 0.6.1
 
 # CI sets appVersion to `sha-<short sha>` of the ds-deploy commit it packages
 # (`helm package --app-version`). No first-party image falls back to it:

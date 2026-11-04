@@ -115,8 +115,10 @@ jobs:
       # ds-migrate's, the frontend's api-build at most the pinned api's, and
       # every image at least the `safe after core` of any versioned contract
       # migration in the core-version release (a shallow clone of ds-core at
-      # that tag). A Renovate image group that would break one fails here,
-      # so it doesn't automerge. chart.yml runs it again before the push.
+      # that tag). It also checks each image's `source` (what /public/version
+      # names) is its org.opencontainers.image.source label. A Renovate
+      # image group that would break one fails here, so it doesn't
+      # automerge. chart.yml runs it again before the push.
       - name: release ordering (the pinned images' labels)
         run: |
           set -euo pipefail

@@ -1581,8 +1581,8 @@ renders. A new workload therefore needs its line in
 | `imagePullSecrets` | `[]` | Image pull secrets applied to every pod in the chart. |
 | `revisionHistoryLimit` | `3` | Old ReplicaSets and StatefulSet ControllerRevisions kept, on every Deployment and StatefulSet (Kubernetes' default is 10). A whole number >= 0; `helm rollback` does not need them. |
 | `global.imageRegistry` | `""` | Registry (and optional path prefix) put in front of every image in place of the registry its `image.repository` carries, e.g. `registry.example.com/myfork`. Empty keeps each repository as written. |
-| `sourceCode.url` | `"https://github.com/Distant-Signal/distant-signal"` | Repository the images were built from, listed by the api's `/public/version` (AGPL-3.0 §13). CI sets it at package time. |
-| `sourceCode.revision` | `""` | Commit the images were built from, listed by `/public/version` for every image whose `image.tag` is not a `build.<run>-<commit>` build tag (those list the tag's commit). CI sets it to the packaged commit; empty outside CI. |
+| `sourceCode.url` | `"https://github.com/Distant-Signal/distant-signal"` | Repository `/public/version` lists for a first-party image with no `image.source` (AGPL-3.0 §13). Every image here sets its own: since the repo split they are built in several repositories, and this one's README lists them all. |
+| `sourceCode.revision` | `""` | Commit `/public/version` lists for an image whose `image.tag` is neither a build tag, `build.<run>-<commit>` (it lists the tag's commit), nor a release tag, `vX.Y.Z` (it lists the tag: ds-migrate). Empty: every first-party image here is pinned at one. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount for the chart's workloads. |
 | `serviceAccount.name` | `""` | Name to use. Empty + `create` uses the fullname. |
 | `serviceAccount.annotations` | `{}` | Annotations for the ServiceAccount (e.g. workload identity). |
@@ -1958,6 +1958,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.image.repository` | `ghcr.io/distant-signal/images/api` | api image repository. |
 | `api.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `api.image.digest` | `""` | Exact content digest (`sha256:...`). When set, takes priority over `tag`/appVersion -- see "Pinning by content digest instead of tag" above. CI populates this automatically for images it builds and pushes. |
+| `api.image.source` | `https://github.com/Distant-Signal/ds-api` | The repository the image is built from, which the api's `/public/version` lists for it (AGPL-3.0 §13). Must be the pinned image's `org.opencontainers.image.source` label: `release-order.py check --registry` (CI) fails otherwise, so change it with the pin when a service moves repository. Empty falls back to `sourceCode.url`. |
 | `api.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `api.replicaCount` | `1` | Replicas. >1 is safe for migrations — sqlx's Migrator takes a Postgres advisory lock — but each replica adds `api.database.maxConnections` (50) connections: see that row before scaling. |
 | `api.strategy.type` | `Recreate` | Rollout strategy: `Recreate` (a short outage per deploy) or `RollingUpdate` (`maxSurge: 1`, `maxUnavailable: 0`), which the render refuses unless `migrate.job.enabled` and `api.migrateOnStartup` is `false`. The surge pod's pool counts in the connection budget. |
@@ -2090,7 +2091,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 
 | Key | Default | Description |
 |---|---|---|
-| `migrate.image` | `ghcr.io/distant-signal/images/ds-migrate`, tag `""` (appVersion), digest `""`, `IfNotPresent` | The ds-migrate image the Job runs; same shape as `api.image`. CI pins its digest. The api image carries the same binary: point `repository` and `digest` at it to run the Job from there instead. |
+| `migrate.image` | `ghcr.io/distant-signal/images/ds-migrate`, tag `""` (appVersion), digest `""`, source `https://github.com/Distant-Signal/ds-core`, `IfNotPresent` | The ds-migrate image the Job runs; same shape as `api.image`. CI pins its digest. While `migrate.job.enabled`, `/public/version` lists it with its `source` and its release tag. The api image carries the same binary: point `repository` and `digest` at it to run the Job from there instead. |
 | `migrate.job.enabled` | `false` | Run the migrations in a `pre-upgrade,post-install` hook Job (weight -5). |
 | `migrate.job.command` | `["/usr/local/bin/ds-migrate"]` | Command, in `migrate.image`. |
 | `migrate.job.args` | `["run"]` | Arguments to `command`. |
@@ -2199,6 +2200,7 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 | `aggregator.image.repository` | `ghcr.io/distant-signal/images/aggregator` | aggregator image repository. |
 | `aggregator.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `aggregator.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `aggregator.image.source` | `https://github.com/Distant-Signal/ds-workers` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `aggregator.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `aggregator.pollIntervalSecs` | `60` | Recompute cadence. |
 | `aggregator.historyRetentionDays` | `7` | How long `line_status_history` rows are kept. |
@@ -2264,6 +2266,7 @@ twice.
 | `notifier.image.repository` | `ghcr.io/distant-signal/images/notifier` | notifier image repository. |
 | `notifier.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `notifier.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `notifier.image.source` | `https://github.com/Distant-Signal/ds-workers` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `notifier.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `notifier.progressStallSecs` | `900` | `/livez` stall window (`PROGRESS_STALL_SECS`, see `workerHealth`). |
 | `notifier.pollIntervalSecs` | `60` | How often line status and tracked trains are polled for changes. |
@@ -2382,6 +2385,7 @@ they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 | `enricher.image.repository` | `ghcr.io/distant-signal/images/enricher` | enricher image repository. |
 | `enricher.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `enricher.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `enricher.image.source` | `https://github.com/Distant-Signal/ds-workers` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `enricher.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `enricher.llm.provider` | `openai` | `LLM_PROVIDER`. `openai` is any OpenAI-compatible Chat Completions endpoint (the keys below). `anthropic` is the Claude API, configured by `enricher.llm.anthropic.*` (`baseUrl`/`model`/`apiKey`/`existingSecret` here are then unused, and `auth` must stay `apiKey`). Switching either way re-extracts every live incident once. Any other value aborts the render. |
 | `enricher.llm.baseUrl` | `""` | **Required** (provider `openai`). Base URL of an OpenAI-compatible chat-completions endpoint. Empty aborts the render. |
@@ -2555,6 +2559,7 @@ falls back to (see `movementRelay`).
 | `trustConsumer.image.repository` | `ghcr.io/distant-signal/images/trust-consumer` | trust-consumer image repository. |
 | `trustConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `trustConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `trustConsumer.image.source` | `https://github.com/Distant-Signal/ds-ingest` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `trustConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `trustConsumer.kafka.brokers` | `""` | RDM Train Movements broker address(es). Used by movement-relay when `movementRelay.kafka.brokers` is empty. trust-consumer itself does not read Kafka. |
 | `trustConsumer.kafka.topic` | `""` | Train Movements topic (production: `TRAIN_MVT_ALL_TOC`). Same fallback as `brokers`. |
@@ -2600,6 +2605,7 @@ its own.
 | `fullCoverageConsumer.image.repository` | `ghcr.io/distant-signal/images/full-coverage-consumer` | full-coverage-consumer image repository. |
 | `fullCoverageConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `fullCoverageConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `fullCoverageConsumer.image.source` | `https://github.com/Distant-Signal/ds-ingest` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `fullCoverageConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `fullCoverageConsumer.shadowLines` | `*` | Comma-separated line ids to compute, or `*` for every catalogued line with at least one TIPLOC. Does not decide whether the stats are shown; that is `api`/`aggregator.fullCoverageEnabledDefault` and each line's `full_coverage_enabled`. |
 | `fullCoverageConsumer.populationReloadSecs` | `300` | How often the per-line schedule population is reloaded from api. |
@@ -2640,6 +2646,7 @@ Always reads movement-relay's stream (there is no Kafka mode).
 | `trustBacklogConsumer.image.repository` | `ghcr.io/distant-signal/images/trust-backlog-consumer` | trust-backlog-consumer image repository. |
 | `trustBacklogConsumer.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `trustBacklogConsumer.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `trustBacklogConsumer.image.source` | `https://github.com/Distant-Signal/ds-ingest` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `trustBacklogConsumer.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `trustBacklogConsumer.ingest.database.maxConnections` | `3` | The pool under `sink: db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
 | `trustBacklogConsumer.stanoxCrsReloadSecs` | `3600` | How often the STANOX-to-CRS table is reloaded from api. |
@@ -2675,6 +2682,7 @@ credential of its own it uses trust-consumer's; see "Install" above.
 | `movementRelay.image.repository` | `ghcr.io/distant-signal/images/movement-relay` | movement-relay image repository. |
 | `movementRelay.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `movementRelay.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `movementRelay.image.source` | `https://github.com/Distant-Signal/ds-ingest` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `movementRelay.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `movementRelay.kafka.brokers` | `""` | Broker address(es). Empty: `trustConsumer.kafka.brokers`. |
 | `movementRelay.kafka.topic` | `""` | Train Movements topic. Empty: `trustConsumer.kafka.topic`. |
@@ -2732,6 +2740,7 @@ rows are duplicates, which the writer's Darwin-timestamp guards discard.
 | `darwinRelay.image.repository` | `ghcr.io/distant-signal/images/darwin-relay` | darwin-relay image repository. |
 | `darwinRelay.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `darwinRelay.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `darwinRelay.image.source` | `https://github.com/Distant-Signal/ds-ingest` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `darwinRelay.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `darwinRelay.kafka.existingSecret` | `distant-signal-darwin-pushport` | The Secret holding the Push Port's Kafka connection, one key per setting. Never rendered by this chart. |
 | `darwinRelay.kafka.keys.bootstrapServer` / `.topic` / `.consumerGroup` / `.username` / `.password` / `.saslMechanism` / `.securityProtocol` / `.saslConfig` | `kafka-bootstrap-server`, `kafka-topic`, `consumer-group`, `username`, `password`, `sasl-mechanism`, `security-protocol`, `sasl-config` | That Secret's key names. `saslConfig` (the Java client's JAAS line) is optional and only a fallback for the user name and password. |
@@ -2759,6 +2768,7 @@ rows are duplicates, which the writer's Darwin-timestamp guards discard.
 | `frontend.image.repository` | `ghcr.io/distant-signal/images/frontend` | frontend image repository. |
 | `frontend.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `frontend.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `frontend.image.source` | `https://github.com/Distant-Signal/distant-signal` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `frontend.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `frontend.replicaCount` | `1` | Safe to raise, with one documented caveat. frontend/lib/liveDataCache.ts keeps a process-local stale-data cache so a backend outage shows the last-known line status instead of an error page (docs/superpowers/specs/2026-09-02-frontend-disconnect-reconnect-ux-design.md). That cache is per-pod: with more than one replica, during an outage one visitor may get stale-but-useful content from a warm pod while another gets the auto-retrying error page from a cold one. Each pod stays internally consistent and no stale data crosses users (entries are session-scoped), so this is a degraded-experience caveat, not a correctness one -- deliberately documented rather than blocked, unlike postgresql.replicaCount above. |
 | `frontend.service.type` | `ClusterIP` | Service type. |
@@ -2826,6 +2836,7 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.<name>.image.repository` | `ghcr.io/distant-signal/images/poller-<name>` | Poller image repository. |
 | `pollers.<name>.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollers.<name>.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `pollers.<name>.image.source` | `https://github.com/Distant-Signal/ds-pollers` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `pollers.<name>.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollers.<name>.baseUrl` | `""` (tfl: `https://api.tfl.gov.uk`) | Upstream feed base URL. Required when enabled; empty aborts the render. |
 | `pollers.<name>.baseUrlEnvVar` | per-poller | Env var the binary reads the base URL from. Do not change. |
@@ -2910,6 +2921,7 @@ Irish Rail GTFS zip. Off by default; no API key needed.
 | `pollerIrishRailGtfs.image.repository` | `ghcr.io/distant-signal/images/poller-irish-rail-gtfs` | Image repository. |
 | `pollerIrishRailGtfs.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailGtfs.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `pollerIrishRailGtfs.image.source` | `https://github.com/Distant-Signal/ds-pollers` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `pollerIrishRailGtfs.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollerIrishRailGtfs.gtfsUrl` | `https://www.transportforireland.ie/transitData/Data/GTFS_Irish_Rail.zip` | GTFS zip URL (public, key-free). |
 | `pollerIrishRailGtfs.pollIntervalSecs` | `86400` | Poll cadence. The feed's real refresh cadence is unknown; 24h matches the other reference-data pollers. |
@@ -2936,6 +2948,7 @@ default; no API key needed.
 | `pollerIrishRailLive.image.repository` | `ghcr.io/distant-signal/images/poller-irish-rail-live` | Image repository. |
 | `pollerIrishRailLive.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailLive.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `pollerIrishRailLive.image.source` | `https://github.com/Distant-Signal/ds-pollers` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `pollerIrishRailLive.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollerIrishRailLive.irishRailBaseUrl` | `http://api.irishrail.ie/realtime/realtime.asmx` | Irish Rail realtime service root (public, key-free). |
 | `pollerIrishRailLive.pollIntervalSecs` | `300` | Poll cadence. Conservative: the API's rate limits are unknown and every station is sampled. |
@@ -2962,6 +2975,7 @@ Off by default; no API key needed.
 | `pollerNirStations.image.repository` | `ghcr.io/distant-signal/images/poller-nir-stations` | Image repository. |
 | `pollerNirStations.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerNirStations.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `pollerNirStations.image.source` | `https://github.com/Distant-Signal/ds-pollers` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `pollerNirStations.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollerNirStations.stationsCsvUrl` | OpenDataNI `translink_rail_stations.csv` | Stations CSV URL (see values.yaml for the full URL). |
 | `pollerNirStations.haltsCsvUrl` | OpenDataNI `translink_halts.csv` | Halts CSV URL (see values.yaml for the full URL). |
@@ -2992,6 +3006,7 @@ spec's §15.1.
 | `pollerTransitSchedule.image.repository` | `ghcr.io/distant-signal/images/poller-transit-schedule` | Image repository. |
 | `pollerTransitSchedule.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerTransitSchedule.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `pollerTransitSchedule.image.source` | `https://github.com/Distant-Signal/ds-pollers` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `pollerTransitSchedule.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `pollerTransitSchedule.progressStallSecs` | `3600` | `/livez` stall window (see `workerHealth`): one GTFS download, its parse and the produce. |
 | `pollerTransitSchedule.logLevel` | `info` | `RUST_LOG` value. |
@@ -3174,6 +3189,7 @@ one-pod layout.
 | `scheduleFeed.ingest.image.repository` | `ghcr.io/distant-signal/images/schedule-ingest` | schedule-ingest image repository. |
 | `scheduleFeed.ingest.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `scheduleFeed.ingest.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `scheduleFeed.ingest.image.source` | `https://github.com/Distant-Signal/ds-api` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `scheduleFeed.ingest.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `scheduleFeed.ingest.checkTimes` | `22:00,22:30,…,01:30,16:00` | Europe/London times of the provider's delivery window. Only the last entry matters now: after it an incomplete delivery is logged as an error. Scanning is driven by `pollIntervalSecs`. |
 | `scheduleFeed.ingest.pollIntervalSecs` | `120` | Seconds between scans of the watch folder. |
@@ -3186,6 +3202,7 @@ one-pod layout.
 | `scheduleFeed.reference.image.repository` | `ghcr.io/distant-signal/images/schedule-reference` | schedule-reference image repository. |
 | `scheduleFeed.reference.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `scheduleFeed.reference.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
+| `scheduleFeed.reference.image.source` | `https://github.com/Distant-Signal/ds-api` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `scheduleFeed.reference.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `scheduleFeed.reference.pollIntervalSecs` | `1800` | How often the storage folder is checked for a new complete delivery (`mode: deployment`). |
 | `scheduleFeed.reference.mode` | `deployment` | `deployment` (the `reference` container of the schedulefeed pod) or `cronjob` (its own CronJob, `cron` below: each run takes the run lock, publishes the newest delivery if it is new, and exits). Exactly one renders. As a CronJob it mounts the schedulefeed PVC read-only (ReadWriteOnce: same node), serves no `/metrics`, and its four alerts read the ingest-writer's gauges of its database rows (`schedule_reference_signals`, `schedule_reference_publishes`; needs `ingestWriter.enabled`). See `docs/scheduled-jobs.md`, "schedule-reference". |
