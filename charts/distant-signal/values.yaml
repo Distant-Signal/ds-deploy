@@ -2751,10 +2751,10 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    tag: "build.41821852145-4dd1c46b019a170ad192f4d7b607d7cdab1a6064"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:b2f82dec00c4b1166062f3d46d8b94b1e6dff7f85a96eb3142d6f65a5aa6e5c4"
+    digest: "sha256:33b824727652d6224bf324615402d49f52867449d150189afaf508055f112e19"
     pullPolicy: IfNotPresent
   # -- DESIGN.md section 4 targets every 30-60s; 60 is the conservative end.
   pollIntervalSecs: 60
@@ -3019,10 +3019,10 @@ notifier:
   progressStallSecs: 900
   image:
     repository: ghcr.io/distant-signal/images/notifier
-    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    tag: "build.41821852145-4dd1c46b019a170ad192f4d7b607d7cdab1a6064"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:3fcf79212772d01f19b8bbaf36c00cc7ae128f12882503ab6772243feafaaf5e"
+    digest: "sha256:ff20408078fc6f77c55927e72e05fd89eb5a964fdb5e09ebb2d969c621030bf5"
     pullPolicy: IfNotPresent
   # -- Same "reasonable round number, not load-tested" posture as
   # aggregator.pollIntervalSecs.
@@ -3549,10 +3549,10 @@ enricher:
     type: Recreate
   image:
     repository: ghcr.io/distant-signal/images/enricher
-    tag: "build.41730208148-eac5feacb601a7a36b4a469ffb5a928be4a18ac1"
+    tag: "build.41821852145-4dd1c46b019a170ad192f4d7b607d7cdab1a6064"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:e0fd4cbddaeab5da4c9b43f955d37755ebee0e866103160f71a19c81a96c7e60"
+    digest: "sha256:a436df9ef30122e25f72cd95a3f16def6a32c37719f7fc705a0667186b7d10a9"
     pullPolicy: IfNotPresent
   llm:
     # -- LLM_PROVIDER: `openai` (the default) is any OpenAI-compatible Chat
