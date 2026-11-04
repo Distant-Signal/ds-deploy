@@ -3908,19 +3908,15 @@ trustConsumer:
   # `helm upgrade`, not an out-of-band `kubectl scale` a later
   # `helm upgrade` could silently undo. See
   # docs/superpowers/plans/2026-09-04-movement-relay-plan.md,
-  # "Judgment calls," item 2.
+  # "Judgment calls," item 2. 0 or 1 only (the render fails on more): it
+  # reads movement-events as one fixed consumer name, trust-consumer-1.
   replicaCount: 1
-  # -- The Deployment's rollout. `Recreate` (the default) stops the old
-  # pod before the new one starts: a gap of a few seconds (the consumer group keeps every entry, and the
-  # new pod replays its own pending entries). Under a
-  # surge both pods hold a Postgres pool at once, and the 2026-10-10
-  # rollout deadlocked on exactly that (the new pod could not connect past
-  # its role's CONNECTION LIMIT, so it never became Ready and the old pod
-  # was never stopped). `RollingUpdate` takes `rollingUpdate.maxSurge`
-  # (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge
-  # above 0 is added to the replicas when the chart computes the
-  # per-service role's CONNECTION LIMIT and the max_connections budget.
-  # See docs/ingest-phase5-runbook.md "Rollout deadlock".
+  # -- The Deployment's rollout: `Recreate`, the only type the render
+  # accepts (distant-signal.singleConsumerGuard). It stops the old pod
+  # before the new one starts: a gap of a few seconds that loses nothing
+  # (the consumer group keeps every entry, and the new pod replays its own
+  # pending entries). `RollingUpdate`, even with maxSurge 0, starts the new
+  # pod beside the old one, two readers under one consumer name.
   updateStrategy:
     type: Recreate
   # (movementFeed was removed in Deploy C: trust-consumer only reads the
@@ -4019,19 +4015,16 @@ fullCoverageConsumer:
   progressStallSecs: 900
   metricsPort: 9093
   # -- Values-driven replica count -- symmetry with trustConsumer's own
-  # knob (see that block's comment).
+  # knob (see that block's comment). 0 or 1 only (the render fails on
+  # more): the day's stats live in this one pod's memory, and it reads
+  # movement-events as one fixed consumer name, so a second pod would
+  # split the stream between two copies of the stats.
   replicaCount: 1
-  # -- The Deployment's rollout. `Recreate` (the default) stops the old
-  # pod before the new one starts: a gap of a few seconds (the consumer group keeps every entry, and the
-  # new pod replays its own pending entries). Under a
-  # surge both pods hold a Postgres pool at once, and the 2026-10-10
-  # rollout deadlocked on exactly that (the new pod could not connect past
-  # its role's CONNECTION LIMIT, so it never became Ready and the old pod
-  # was never stopped). `RollingUpdate` takes `rollingUpdate.maxSurge`
-  # (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge
-  # above 0 is added to the replicas when the chart computes the
-  # per-service role's CONNECTION LIMIT and the max_connections budget.
-  # See docs/ingest-phase5-runbook.md "Rollout deadlock".
+  # -- The Deployment's rollout: `Recreate`, the only type the render
+  # accepts, for the same reason as trustConsumer.updateStrategy. It stops
+  # the old pod before the new one starts: a gap of a few seconds that
+  # loses nothing (the consumer group keeps every entry, and the new pod
+  # replays the day before it consumes).
   updateStrategy:
     type: Recreate
   # (movementFeed was removed in Deploy C; see trustConsumer.)

@@ -2055,6 +2055,50 @@ The values keys that have one, by their per-service role key.
 {{- end }}
 
 {{/*
+trust-consumer and full-coverage-consumer must never run two pods at once:
+each reads movement-events as one fixed Redis consumer name
+("trust-consumer-1", "full-coverage-consumer-1"), and full-coverage-consumer
+keeps the day's stats in memory, so a second pod (another replica, or a
+RollingUpdate's new pod beside the old one) splits the stream between two
+copies of that state and corrupts the stats, and two trust-consumers
+contend for one consumer's pending entries. Only Recreate stops the old pod
+before the new one starts: a RollingUpdate, even with maxSurge 0, starts the
+new pod while the old one is still terminating. replicaCount 0 (stopped) is
+allowed. Takes (dict "key" <values key> "replicas" <replicaCount> "type"
+<updateStrategy.type>); renders nothing.
+*/}}
+{{- define "distant-signal.singleConsumerGuard" -}}
+{{- if has .key (list "trustConsumer" "fullCoverageConsumer") -}}
+{{- if gt (int (default 1 .replicas)) 1 -}}
+{{- fail (printf "%s.replicaCount is %v, but it must be 0 or 1: it reads movement-events under one fixed consumer name (and full-coverage-consumer keeps its stats in memory), so a second pod duplicates or corrupts its work." .key .replicas) -}}
+{{- end -}}
+{{- if ne .type "Recreate" -}}
+{{- fail (printf "%s.updateStrategy.type is %q, but it must be Recreate: any other strategy runs the new pod beside the old one (fixed consumer name; full-coverage-consumer's in-memory stats). The few seconds between them lose nothing: the consumer group keeps every entry." .key .type) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The ingest-writer reads every ds:ingest:* stream as one fixed consumer name
+(INGEST_WRITER_STREAM_CONSUMER, default `ingest-writer`, since ds-ingest
+662fe534), so a restart picks up its predecessor's pending entries at once.
+Its Deployment is fixed at one replica under Recreate (the template has no
+value for either); this refuses an ingestWriter.extraEnv that makes the name
+per pod (a valueFrom, or a value expanding `$(...)` such as `$(POD_NAME)`),
+which would strand each old pod's pending entries until the idle sweep.
+Takes root; renders nothing.
+*/}}
+{{- define "distant-signal.ingestWriterConsumerGuard" -}}
+{{- range (.Values.ingestWriter.extraEnv | default list) -}}
+{{- if eq (toString .name) "INGEST_WRITER_STREAM_CONSUMER" -}}
+{{- if or (hasKey . "valueFrom") (contains "$(" (toString .value)) (not .value) -}}
+{{- fail "ingestWriter.extraEnv sets INGEST_WRITER_STREAM_CONSUMER per pod (a valueFrom, a $(...) expansion, or empty): the writer must keep one fixed consumer name across restarts, or each old pod's pending entries wait for the idle sweep. Leave it unset (`ingest-writer`) or give one fixed name." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 A worker's updateStrategy, validated, as JSON: {"type": ..., "maxSurge":
 ..., "maxUnavailable": ...} (the last two only for RollingUpdate, defaulting
 to 0 and 1). Takes (dict "root" $ "key" <values key>).
@@ -2063,6 +2107,7 @@ to 0 and 1). Takes (dict "root" $ "key" <values key>).
 {{- $values := get .root.Values .key | default dict -}}
 {{- $cfg := $values.updateStrategy | default dict -}}
 {{- $type := toString (default "Recreate" $cfg.type) -}}
+{{- include "distant-signal.singleConsumerGuard" (dict "key" .key "replicas" $values.replicaCount "type" $type) -}}
 {{- if eq $type "Recreate" -}}
 {{- dict "type" "Recreate" | toJson -}}
 {{- else if eq $type "RollingUpdate" -}}

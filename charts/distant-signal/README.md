@@ -783,7 +783,8 @@ workload's rollout is now:
 
 | Workload | Rollout | Per-service limit |
 |---|---|---|
-| trust-backlog-consumer, trust-consumer, full-coverage-consumer, enricher | `<component>.updateStrategy`, default `Recreate` | (replicas + maxSurge) × pool + 1; maxSurge is 0 under Recreate |
+| trust-backlog-consumer, enricher | `<component>.updateStrategy`, default `Recreate` | (replicas + maxSurge) × pool + 1; maxSurge is 0 under Recreate |
+| trust-consumer, full-coverage-consumer | `Recreate` only, at most 1 replica: the render fails otherwise (a fixed Redis consumer name each; full-coverage-consumer's stats live in memory) | pool + 1 |
 | aggregator, notifier, ingest-writer, schedulefeed (schedule-ingest, schedule-reference), every poller | fixed `Recreate` (two copies would double-write) | pool + 1 (writer: pool + lock session + 1) |
 | api | `api.strategy.type`, Recreate or RollingUpdate (maxSurge 1, maxUnavailable 0) | (replicas + 1) × pool + 2 + the api-maintenance pool |
 | movement-relay | RollingUpdate, maxSurge 1 (no Postgres) | none |
@@ -2098,7 +2099,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.database.maxConnections` | `6` | Its Postgres pool; counted, plus its one loop-lock session, in the connection budgets. |
 | `ingestWriter.progressStallSecs` | `900` | `/livez` stall window (`PROGRESS_STALL_SECS`). |
 | `ingestWriter.logLevel` | `info` | `RUST_LOG`. |
-| `ingestWriter.extraEnv` | `[]` | Extra env entries; one with a chart entry's name replaces it. |
+| `ingestWriter.extraEnv` | `[]` | Extra env entries; one with a chart entry's name replaces it. The render refuses a per-pod `INGEST_WRITER_STREAM_CONSUMER` (a `valueFrom`, a `$(...)` value, or an empty one): the writer reads every stream as one fixed consumer name (default `ingest-writer`), so a restart takes over its predecessor's pending entries at once. The Deployment is fixed at 1 replica under Recreate. |
 | `ingestWriter.resources` | requests `25m`/`192Mi`, limit `384Mi` | Container resources (production p95 141Mi, max 167Mi). |
 | `ingestWriter.nodeSelector` | `{}` | Node selector. |
 | `ingestWriter.tolerations` | `[]` | Tolerations. |
@@ -2515,8 +2516,8 @@ falls back to (see `movementRelay`).
 | `trustConsumer.retentionDays` | `90` | Days `train_movement_events` rows are kept before pruning. |
 | `trustConsumer.healthPort` | `8081` | Port for `/healthz` (readiness) and `/livez` (liveness). |
 | `trustConsumer.progressStallSecs` | `300` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
-| `trustConsumer.replicaCount` | `1` | Replicas. Exists so trust-consumer can be scaled to 0 through `helm upgrade`. |
-| `trustConsumer.updateStrategy` | `{type: Recreate}` | The Deployment's rollout. `Recreate` stops the old pod before the new one starts (a gap of seconds; the consumer group keeps every entry and the new pod replays its own pending entries). `RollingUpdate` takes `rollingUpdate.maxSurge` (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge above 0 is added to the replicas in the computed CONNECTION LIMIT and the max_connections budget. A surge with a role sized for one pod deadlocked the 2026-10-10 rollout: see "Rollout strategy and connection limits" below and docs/ingest-phase5-runbook.md "Rollout deadlock". |
+| `trustConsumer.replicaCount` | `1` | Replicas, 0 or 1: the render fails on more. Exists so trust-consumer can be scaled to 0 through `helm upgrade`. It reads `movement-events` as one fixed consumer name (`trust-consumer-1`), so a second pod would contend for its pending entries. |
+| `trustConsumer.updateStrategy` | `{type: Recreate}` | The Deployment's rollout, and it must be `Recreate`: the render fails on `RollingUpdate`, which starts the new pod while the old one still runs (even with maxSurge 0, beside a terminating pod). `Recreate` stops the old pod before the new one starts. That leaves a gap of seconds in which nothing is lost: the consumer group keeps every entry, and the new pod replays its own pending entries. |
 | `trustConsumer.redisAutoclaimMinIdleSecs` | `30` | How long an entry may sit unacknowledged in this consumer's pending list before the periodic sweep reclaims it. |
 | `trustConsumer.redisGapCheckSecs` | `60` | How often the consumer group's position is compared with the stream's oldest entry to detect a gap. |
 | `trustConsumer.metricsPort` | `9095` | Prometheus `/metrics` port. |
@@ -2551,8 +2552,8 @@ its own.
 | `fullCoverageConsumer.healthPort` | `8082` | Port for `/healthz` (readiness) and `/livez` (liveness). |
 | `fullCoverageConsumer.progressStallSecs` | `900` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
 | `fullCoverageConsumer.metricsPort` | `9093` | Prometheus `/metrics` port. |
-| `fullCoverageConsumer.replicaCount` | `1` | Replicas. |
-| `fullCoverageConsumer.updateStrategy` | `{type: Recreate}` | The Deployment's rollout. `Recreate` stops the old pod before the new one starts (a gap of seconds; the consumer group keeps every entry and the new pod replays its own pending entries). `RollingUpdate` takes `rollingUpdate.maxSurge` (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge above 0 is added to the replicas in the computed CONNECTION LIMIT and the max_connections budget. A surge with a role sized for one pod deadlocked the 2026-10-10 rollout: see "Rollout strategy and connection limits" below and docs/ingest-phase5-runbook.md "Rollout deadlock". |
+| `fullCoverageConsumer.replicaCount` | `1` | Replicas, 0 or 1: the render fails on more. Its day's stats live in memory in the one pod, and it reads `movement-events` as one fixed consumer name (`full-coverage-consumer-1`). A second pod would split the stream between two copies of the stats and corrupt them. |
+| `fullCoverageConsumer.updateStrategy` | `{type: Recreate}` | The Deployment's rollout, and it must be `Recreate`: the render fails on `RollingUpdate`, for the same reason as `trustConsumer.updateStrategy`. `Recreate` stops the old pod before the new one starts. In the gap of seconds nothing is lost: the consumer group keeps every entry, and the new pod replays the day before it consumes. |
 | `fullCoverageConsumer.redisAutoclaimMinIdleSecs` | `30` | See `trustConsumer.redisAutoclaimMinIdleSecs`. |
 | `fullCoverageConsumer.redisGapCheckSecs` | `60` | See `trustConsumer.redisGapCheckSecs`. |
 | `fullCoverageConsumer.windowedStats.enabled` | `false` | Windowed full-coverage stats (`docs/superpowers/specs/2026-09-27-full-coverage-windowed-stats-design.md`). Off: only the whole-day rows are written. Turn on only after api and schedule-reference support it; `aggregator.fullCoverageWindow.mode` is a separate switch. |
