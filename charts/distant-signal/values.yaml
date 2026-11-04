@@ -1725,6 +1725,19 @@ api:
     # https://status.example.com/. One fixed target, not a round-tripped
     # "return to the page you were on". Required.
     postLoginRedirectUrl: ""
+    # -- Account continuity across a change of identity provider (the
+    # landing repository's docs/connected-apps.md, "Account continuity"):
+    # the ID-token claim carrying the user's Discord id, from the provider's
+    # Discord source connection. A login whose sub has no account takes over
+    # the account with that `users.discord_id`. Empty (the default) is off;
+    # rendered as SSO_DISCORD_ID_CLAIM only when set. Needs an api built
+    # against ds-core v0.1.1 or later.
+    discordIdClaim: ""
+    # -- Account continuity, staff: the ID-token claim carrying the user's
+    # sub at the previous (primary) identity provider, i.e. their existing
+    # `users.id`. Empty (the default) is off; rendered as
+    # SSO_PRIMARY_SUB_CLAIM only when set.
+    primarySubClaim: ""
   # -- Session idle timeout, in days: a sliding expiry. A session ends after
   # this many days without an authenticated request; each request that comes
   # more than sessionExtendThrottleHours after the expiry last moved moves
@@ -2368,9 +2381,9 @@ migrate:
     # vendors; release-order.py checks every pinned image was built against
     # at most this release. Renovate's ds-core group bumps both, with the
     # digest.
-    tag: v0.1.0
+    tag: v0.1.1
     # -- The release's digest (its release notes list it).
-    digest: "sha256:8692781cb26763c3d3a3ce00e7bd8b3ead07410a24e7e04a1d04914a7d5961b2"
+    digest: "sha256:46ff075f4fdde636cfed9e7badd742c148052013acb9d5763bff57b4d6038753"
     pullPolicy: IfNotPresent
   job:
     # -- Run the migrations in a hook Job.

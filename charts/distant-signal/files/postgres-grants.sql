@@ -702,6 +702,8 @@ BEGIN
         ('notification_holds', 'notifier', 'INSERT', ''),
         ('notification_holds', 'notifier', 'UPDATE', ''),
         ('notification_holds', 'notifier', 'DELETE', ''),
+        ('group_train_share_moves', 'api', 'SELECT', 'added_by'),
+        ('group_train_share_moves', 'api', 'UPDATE', 'added_by'),
         ('trains', 'api', 'SELECT', ''),
         ('trains', 'api', 'INSERT', ''),
         ('trains', 'api', 'UPDATE', ''),

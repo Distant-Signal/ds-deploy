@@ -170,6 +170,20 @@ class UnwiredTest(unittest.TestCase):
         self.assertTrue(any("now sets it" in f for f in failures), failures)
         self.assertTrue(any("no longer reads" in f for f in failures), failures)
 
+    def test_an_ahead_of_image_entry_passes_before_and_after_the_image_reads_it(
+        self,
+    ) -> None:
+        """The chart may wire an optional setting before the image reads it."""
+        containers = cdc.service_containers([deployment("api", {"A": "1"})])
+        allow = {"api": {"NEW": cdc.ahead_of_image("api.new", "a change")}}
+        before = {"api": defaults("api", {"A": "1"})}
+        self.assertEqual(list(cdc.unwired(containers, before, allow)), [])
+        after = {"api": defaults("api", {"A": "1", "NEW": ""})}
+        self.assertEqual(list(cdc.unwired(containers, after, allow)), [])
+        rendered = cdc.service_containers([deployment("api", {"A": "1", "NEW": "x"})])
+        failures = list(cdc.unwired(rendered, after, allow))
+        self.assertTrue(any("now sets it" in f for f in failures), failures)
+
 
 class OverriddenTest(unittest.TestCase):
     """A chart default that differs from the code default."""
