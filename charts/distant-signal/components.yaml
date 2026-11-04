@@ -3,7 +3,11 @@
 #
 # Every rendered object carries `app.kubernetes.io/component` (part of its
 # selector labels, so it never changes for a live object). `components`
-# maps each of those values to a group; `groups` lists the groups.
+# maps each of those values to a group; `groups` lists the groups. The
+# chart stamps each object's group on it as the `distant-signal/group`
+# label (distant-signal.labels reads this file; object metadata only, never
+# a selector or pod template), and refuses to render a component missing
+# here.
 #
 # Readers:
 #   - scripts/check-ingest-rollout.py decides what to verify after a deploy

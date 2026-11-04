@@ -36,9 +36,18 @@ MAP: Doc = {
 }
 
 
-def obj(kind: str, name: str, component: str | None) -> Doc:
-    """Return a rendered object, with `component` as its label unless None."""
-    labels = {} if component is None else {components.LABEL: component}
+GROUPS = {"movement-relay": "ingest", "schedulefeed": "schedule-feed"}
+
+
+def obj(kind: str, name: str, component: str | None, group: str | None = None) -> Doc:
+    """Return a rendered object with `component` and its group as labels.
+
+    No labels when `component` is None; `group` overrides the mapped group.
+    """
+    labels = {}
+    if component is not None:
+        labels[components.LABEL] = component
+        labels[components.GROUP_LABEL] = group or GROUPS.get(component, "")
     return {
         "kind": kind,
         "metadata": {"name": f"distant-signal-{name}", "labels": labels},
@@ -119,6 +128,13 @@ class CheckTest(unittest.TestCase):
         fail = components.check(parsed(), {"r": [*GOOD, obj("Deployment", "x", "x")]})
         self.assertEqual(len(fail), 1)
         self.assertIn("component 'x' is not in components.yaml", fail[0])
+
+    def test_a_wrong_group_label_fails(self) -> None:
+        """An object whose group label is not its component's group fails."""
+        wrong = obj("Secret", "schedulefeed", "schedulefeed", group="ingest")
+        fail = components.check(parsed(), {"r": [*GOOD, wrong]})
+        self.assertEqual(len(fail), 1)
+        self.assertIn("distant-signal/group is 'ingest', not 'schedule-feed'", fail[0])
 
     def test_a_stale_component_fails(self) -> None:
         """A mapped component that renders nowhere fails."""

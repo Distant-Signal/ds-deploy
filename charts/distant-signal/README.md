@@ -1535,7 +1535,13 @@ a group:
 
 Each component's objects (its workload and its PVC, Service, Secret,
 ConfigMap, ServiceAccount and NetworkPolicies) carry the component's label,
-so they map the same way. The file ships in the chart package, so a tool
+so they map the same way. The chart also stamps the group on every object
+as the `distant-signal/group` label, read from the same file. It is on the
+objects' own metadata only, never in a selector (immutable) or a pod
+template (a change there would roll pods), so
+`kubectl get all,pvc,secret,configmap,serviceaccount,networkpolicy -l distant-signal/group=schedule-feed`
+lists the SFTP delivery path. A component missing from `components.yaml`
+fails the render. The file ships in the chart package, so a tool
 can read the map that matches the chart version it is looking at. It has
 two readers:
 
@@ -1553,8 +1559,9 @@ ones.
 `scripts/check-components-chart.py` (CI's chart checks) renders the chart
 with every workload, feature and CronJob mode on, and fails when an object
 has no component label and isn't in the file's `exempt` list, when a
-component isn't mapped, or when a mapped component or exempt entry no
-longer renders. A new workload therefore needs its line in
+component isn't mapped, when an object's `distant-signal/group` isn't its
+component's group, or when a mapped component or exempt entry no longer
+renders. A new workload therefore needs its line in
 `components.yaml`.
 
 ## Values reference
