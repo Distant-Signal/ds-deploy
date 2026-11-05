@@ -1715,6 +1715,12 @@ templates/zz-ingest-sink-preflight.yaml. Takes root.
 {{- end -}}
 {{- end -}}
 {{- $streamed = append $streamed (dict "client" "fullCoverageConsumer" "stream" "full-coverage" "key" "fullCoverageConsumer") -}}
+{{- /* The island-of-Ireland pollers, each on its own stream (DS-355). */ -}}
+{{- range $p := list (list "pollerIrishRailGtfs" "ioi-gtfs") (list "pollerIrishRailLive" "ioi-live") (list "pollerNirStations" "ioi-nir") -}}
+{{- if (get $v (index $p 0) | default dict).enabled -}}
+{{- $streamed = append $streamed (dict "client" (index $p 0) "stream" (index $p 1) "key" (index $p 0)) -}}
+{{- end -}}
+{{- end -}}
 {{- /* Postgres: every direct writer connects as its own narrow role. */ -}}
 {{- range $d := $db -}}
 {{- if not (get $v.postgresql.roles.perService $d.svc | default dict).connect -}}

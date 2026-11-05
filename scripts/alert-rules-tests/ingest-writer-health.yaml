@@ -193,6 +193,38 @@ tests:
               description: "Its ingest_freshness row is over 172800s old: its producer is down or failing, or writes nowhere."
               runbook_url: *source_runbook
 
+  # Iarnród Éireann's live boards (DS-363): 1800s while ds:ingest:ioi-live
+  # applies. Last landed at 0: over 30 min from 31m, firing from 41m. The
+  # same source with the stream off stays silent.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="island_of_ireland_station_samples_live"}'
+        values: '0x60'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-live", mode="apply"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 38m
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, source: island_of_ireland_station_samples_live}
+            exp_annotations:
+              summary: "island_of_ireland_station_samples_live data last landed 45m 0s ago"
+              description: "Its ingest_freshness row is over 1800s old: its producer is down or failing, or writes nowhere."
+              runbook_url: *source_runbook
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="island_of_ireland_station_samples_live"}'
+        values: '0x60'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-live", mode="off"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts: []
+
   # Backlog severities. station-samples at 400 of 720 (0.56): warning from
   # 10m. At 16m it jumps to 648 (0.9): the critical pends, the warning
   # keeps firing (no gap), and once the critical fires (26m) the warning is

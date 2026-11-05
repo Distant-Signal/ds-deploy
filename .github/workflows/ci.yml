@@ -523,10 +523,29 @@ jobs:
           # defaultUser on-unshared and the disabled island-of-Ireland pollers: no user
           # needed (the render above). Enabled, each needs its own.
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if render "${all[@]}" --set pollerIrishRailGtfs.enabled=true >/dev/null 2>&1; then
+          if render "${all[@]}" --set pollerIrishRailGtfs.enabled=true --set ingestWriter.streams.ioi-gtfs=apply >/dev/null 2>&1; then
             fail "an enabled island-of-Ireland poller without its Redis user must fail the render"
           fi
-          render "${all[@]}" --set pollerIrishRailGtfs.enabled=true --set redis.acl.clients.pollerIrishRailGtfs=true >/dev/null
+          render "${all[@]}" --set pollerIrishRailGtfs.enabled=true --set redis.acl.clients.pollerIrishRailGtfs=true \
+            --set ingestWriter.streams.ioi-gtfs=apply >/dev/null
+          # DS-355: each island-of-Ireland poller XADDs only to its own
+          # stream, so with the writer not applying it nothing would reach
+          # Postgres: the preflight and the poller's own guard refuse it.
+          for p in pollerIrishRailGtfs:ioi-gtfs pollerIrishRailLive:ioi-live pollerNirStations:ioi-nir; do
+            poller=${p%%:*} stream=${p#*:}
+            on=(--set "${poller}.enabled=true" --set "redis.acl.clients.${poller}=true")
+            # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+            if err=$(render "${all[@]}" "${on[@]}" --set "ingestWriter.streams.${stream}=off" 2>&1 >/dev/null); then
+              fail "${poller} with ingestWriter.streams.${stream} off must fail the render"
+            fi
+            grep -qF "ingestWriter.streams.${stream}: apply (${poller} XADDs to it)" <<<"${err}" \
+              || fail "the preflight must name ingestWriter.streams.${stream}: ${err}"
+            # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+            if err=$(render "${all[@]}" "${on[@]}" --set ingestWriter.enabled=false 2>&1 >/dev/null); then
+              fail "${poller} with the ingest-writer off must fail the render"
+            fi
+            render "${all[@]}" "${on[@]}" --set "ingestWriter.streams.${stream}=apply" >/dev/null
+          done
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if err=$(render "${all[@]}" --set redis.acl.clients.enricher=false 2>&1 >/dev/null); then
             fail "defaultUser on-unshared with a deployed client on default must fail the render"
@@ -2200,6 +2219,8 @@ jobs:
             --set redis.acl.enabled=true --set redis.acl.existingSecret=redis-users --set redis.acl.stage=narrow
             --set redis.acl.clients.pollerIrishRailGtfs=true --set redis.acl.clients.pollerIrishRailLive=true
             --set redis.acl.clients.pollerNirStations=true
+            --set ingestWriter.streams.ioi-gtfs=apply --set ingestWriter.streams.ioi-live=apply
+            --set ingestWriter.streams.ioi-nir=apply
             --set redis.acl.clients.pollerTransitMetrolink=true
             --set ingestWriter.streams.transit-metrolink=apply
             --set redis.acl.clients.pollerTransitNet=true
@@ -2676,6 +2697,8 @@ jobs:
             --set redis.acl.enabled=true --set redis.acl.existingSecret=redis-users --set redis.acl.stage=narrow
             --set redis.acl.clients.pollerIrishRailGtfs=true --set redis.acl.clients.pollerIrishRailLive=true
             --set redis.acl.clients.pollerNirStations=true
+            --set ingestWriter.streams.ioi-gtfs=apply --set ingestWriter.streams.ioi-live=apply
+            --set ingestWriter.streams.ioi-nir=apply
             --set redis.acl.clients.pollerTransitMetrolink=true
             --set ingestWriter.streams.transit-metrolink=apply
             --set redis.acl.clients.pollerTransitNet=true

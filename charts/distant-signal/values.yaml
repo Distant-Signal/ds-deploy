@@ -2620,8 +2620,10 @@ ingestWriter:
     # One stream per island-of-Ireland poller (security review H1,
     # 2026-10-08): ds:ingest:ioi-gtfs (pollerIrishRailGtfs: ioi-stations,
     # ioi-lines), ds:ingest:ioi-nir (pollerNirStations: the same two) and
-    # ds:ingest:ioi-live (pollerIrishRailLive: ioi-station-samples). The
-    # old shared `island-of-ireland` key is refused unless "off".
+    # ds:ingest:ioi-live (pollerIrishRailLive: ioi-station-samples and
+    # ioi-live-stations). Each poller enabled needs its stream on `apply`
+    # (DS-355). The old shared `island-of-ireland` key is refused unless
+    # "off".
     ioi-gtfs: "off"
     ioi-nir: "off"
     ioi-live: "off"
@@ -6387,7 +6389,10 @@ metrics:
     # incidents and tfl every 5 min, stations and tocs daily.
     # The island-of-Ireland catalogues are stream-only, one source per table
     # and network (poller-irish-rail-gtfs and poller-nir-stations, daily
-    # each), so 2 days as for the GB reference data.
+    # each), so 2 days as for the GB reference data. The live boards
+    # (island_of_ireland_station_samples_live, ds:ingest:ioi-live) are
+    # stream-only too, recorded from ingest-writer builds with ds-core
+    # v0.3.1; before that the row never exists and raises nothing.
     ingestSourceStale:
       enabled: true
       maxAgeSeconds:
@@ -6403,6 +6408,10 @@ metrics:
         island_of_ireland_lines_gtfs: 172800
         island_of_ireland_stations_nir: 172800
         island_of_ireland_lines_nir: 172800
+        # Iarnród Éireann's live boards (poller-irish-rail-live, every 5
+        # minutes, around the clock; DS-363): 30 min, six missed cycles, as
+        # station-samples, so a slow upstream cycle or two stays quiet.
+        island_of_ireland_station_samples_live: 1800
         # Transit networks (spec §13.4): a daily timetable, so 36 h; the
         # situations every 5 minutes (written from batch 4).
         transit-metrolink-timetable: 129600
@@ -6431,6 +6440,7 @@ metrics:
         island_of_ireland_lines_gtfs: "ds:ingest:ioi-gtfs"
         island_of_ireland_stations_nir: "ds:ingest:ioi-nir"
         island_of_ireland_lines_nir: "ds:ingest:ioi-nir"
+        island_of_ireland_station_samples_live: "ds:ingest:ioi-live"
         transit-metrolink-timetable: "ds:ingest:transit-metrolink"
         transit-metrolink-situations: "ds:ingest:transit-metrolink"
         darwin-pushport: "ds:ingest:darwin"

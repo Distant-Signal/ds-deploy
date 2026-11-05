@@ -1431,8 +1431,10 @@ also off by default, with working public default URLs; see their comments
 in `values.yaml`. Since ingest plan 3c.2 (decision D8) each writes only to
 its own Redis stream (`ds:ingest:ioi-gtfs`, `ds:ingest:ioi-live`,
 `ds:ingest:ioi-nir`), which the ingest-writer applies
-(`ingestWriter.streams.ioi-gtfs` / `ioi-live` / `ioi-nir: apply`); they no longer
-call the api, so they need no OAuth credential or api-side group.
+(`ingestWriter.streams.ioi-gtfs` / `ioi-live` / `ioi-nir: apply`; an enabled
+poller whose stream is not applied **aborts the render**, as nothing else would
+write its data); they no longer call the api, so they need no OAuth credential
+or api-side group.
 
 Enabling a poller without setting its `baseUrl` **aborts the render** with an
 explicit message, rather than deploying a pod that cannot work.
@@ -1927,7 +1929,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `metrics.prometheusRule.ingestStreamBacklog` / `ingestStreamStalled` / `ingestDeadLetters` / `ingestDeadLetterExpiring` / `ingestUnsupportedSchema` / `ingestProducerXaddFailing` / `ingestStreamMemoryHigh` / `ingestClockSkew` | see `values.yaml` | The ingest stream alerts (ingest spec §14.2): `DistantSignalIngestStreamBacklog` (pending over 600s or 0.5 of MAXLEN: warning; 0.8: critical, which replaces the warning once it fires; `maxlen` per stream, kept in step with `crates/ingest-stream/src/budget.rs`), `…StreamStalled` (XADDs succeed but nothing applied for `stallAfterSecs` per stream; critical), `…DeadLetters` (any in 15m), `…DeadLetterExpiring` (within 4h of the 7-day trim), `…UnsupportedSchema` (critical), `…ProducerXaddFailing` (every XADD failed for 10m; critical), `…StreamMemoryHigh` (over 0.75 of 576 MiB), `…ClockSkew` (an observed time clamped, D13). (`…ShadowMismatch` went with the producers' `http+shadow` sink in release B.) Each has `enabled`, `for`, `severity`. Render only with `ingestWriter.enabled`, and silent until a stream is on. Runbooks: `docs/alerts.md`, `docs/ingest-streams-deadletter.md`. |
 | `metrics.prometheusRule.writerLoopStale` / `.writerLoopUnowned` | see `values.yaml` | `DistantSignalWriterLoopStale`: a loop's newest success (`loop_last_success_timestamp_seconds`) older than `maxAgeSeconds` (1800; `maxAgeSecondsByCycle` per loop, `excludeCycles` [canary]), for 10m. `DistantSignalWriterLoopUnowned`: no process holds a loop's lock (`sum by (loop) (loop_lock_held) < 1`) for 15m (`forByLoop` per loop). Each has `enabled`, `for`, `severity`; render only with `ingestWriter.enabled` and `ingestWriter.loops.enabled`. |
 | `metrics.prometheusRule.ingestApplyWritesNothing` | see `values.yaml` | `DistantSignalIngestApplyWritesNothing`: over `window` (15m) the writer applied entries of a stream but wrote no row (`ingest_stream_row_writes_total{outcome="written"}` flat), for 5m; `excludeStreams` (the daily `ds:ingest:reference`). Renders only with `ingestWriter.enabled`. |
-| `metrics.prometheusRule.ingestSourceStale` | see `values.yaml` | `DistantSignalIngestSourceStale`: an `ingest_freshness` row (`ingest_freshness_timestamp_seconds{source}`, read by the writer every 60s) older than its `maxAgeSeconds` entry (incidents and tfl 900, stations and tocs 172800, the stream-only snapshot sources 1800, the island-of-Ireland catalogues' per-network sources 172800, a transit network's timetable 129600 and situations 1800), for 10m; a source in `whileStreamApplies` only while the writer applies that stream. Renders only with `ingestWriter.enabled`. |
+| `metrics.prometheusRule.ingestSourceStale` | see `values.yaml` | `DistantSignalIngestSourceStale`: an `ingest_freshness` row (`ingest_freshness_timestamp_seconds{source}`, read by the writer every 60s) older than its `maxAgeSeconds` entry (incidents and tfl 900, stations and tocs 172800, the stream-only snapshot sources 1800, the island-of-Ireland catalogues' per-network sources 172800, Iarnród Éireann's live boards (`island_of_ireland_station_samples_live`) 1800, a transit network's timetable 129600 and situations 1800), for 10m; a source in `whileStreamApplies` only while the writer applies that stream. Renders only with `ingestWriter.enabled`. |
 | `metrics.prometheusRule.dbPoolAcquireTimeouts` / `.directWritesFailing` | see `values.yaml` | `DistantSignalDbPoolAcquireTimeouts`: a component's pool timed out an acquire (`db_pool_acquire_timeouts_total`) within `window` (10m). `DistantSignalDirectWritesFailing`: a direct writer's writes of one operation (`db_writes_total`) all failed (timeout, transient, rejected; no ok) over `window` (15m), for 30m. Each has `enabled`, `for`, `severity`. |
 | `metrics.prometheusRule.incidentSnapshotsMissing` | see `values.yaml` | `DistantSignalIncidentSnapshotsMissing`: no incidents snapshot reached the database (`store_incident_removal_inference_total`, any outcome, from poller-incidents; `api_` before ingest phase 5) within `window` (2h), for 15m. Only with `pollers.incidents.enabled`. |
 | `metrics.prometheusRule.scheduleFeedMarkerStale` | see `values.yaml` | `DistantSignalScheduleFeedMarkerStale`: the newest recorded CIF delivery (`schedule_feed_last_ingest_delivered_at_seconds`) older than `maxAgeSeconds` (108000, 30h), for 15m. Only with `scheduleFeed.enabled`. |
@@ -2920,7 +2922,7 @@ Irish Rail GTFS zip. Off by default; no API key needed.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerIrishRailGtfs.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-gtfs` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailGtfs`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-gtfs: apply` with it. |
+| `pollerIrishRailGtfs.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-gtfs` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailGtfs`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-gtfs: apply` with it (the render fails otherwise). |
 | `pollerIrishRailGtfs.image.repository` | `ghcr.io/distant-signal/images/poller-irish-rail-gtfs` | Image repository. |
 | `pollerIrishRailGtfs.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailGtfs.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
@@ -2947,7 +2949,7 @@ default; no API key needed.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerIrishRailLive.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-live` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailLive`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-live: apply` with it. |
+| `pollerIrishRailLive.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-live` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerIrishRailLive`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-live: apply` with it (the render fails otherwise). |
 | `pollerIrishRailLive.image.repository` | `ghcr.io/distant-signal/images/poller-irish-rail-live` | Image repository. |
 | `pollerIrishRailLive.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerIrishRailLive.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
@@ -2975,7 +2977,7 @@ Off by default; no API key needed.
 
 | Key | Default | Description |
 |---|---|---|
-| `pollerNirStations.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-nir` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerNirStations`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-nir: apply` with it. |
+| `pollerNirStations.enabled` | `false` | Deploy the poller (off by default, decision D8). It writes only to the `ds:ingest:ioi-nir` stream (ingest plan 3c.2: `REDIS_URL`, the user in `redis.acl.clients.pollerNirStations`; no api route or OAuth), so turn on `ingestWriter.streams.ioi-nir: apply` with it (the render fails otherwise). |
 | `pollerNirStations.image.repository` | `ghcr.io/distant-signal/images/poller-nir-stations` | Image repository. |
 | `pollerNirStations.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `pollerNirStations.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |

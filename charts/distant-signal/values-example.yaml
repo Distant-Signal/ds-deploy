@@ -119,6 +119,12 @@ ingestWriter:
     tag: "0.1.0"
   loops:
     enabled: true
+  # The island-of-Ireland pollers enabled below each XADD to their own
+  # stream; the render fails unless the writer applies it.
+  streams:
+    ioi-gtfs: apply
+    ioi-nir: apply
+    ioi-live: apply
 
 enricher:
   image:

@@ -1,6 +1,7 @@
 {{- if .Values.pollerIrishRailGtfs.enabled }}
-{{- /* Its only sink is its stream: its own narrow Redis user (security review H3). */}}
-{{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "pollerIrishRailGtfs" "what" "pollerIrishRailGtfs.enabled") }}
+{{- /* Its only sink is its stream, ds:ingest:ioi-gtfs: its own narrow Redis user
+     (security review H3), and the ingest-writer applying the stream (DS-355). */}}
+{{- include "distant-signal.requireStreamApplied" (dict "root" . "client" "pollerIrishRailGtfs" "stream" "ioi-gtfs" "what" "pollerIrishRailGtfs.enabled") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
