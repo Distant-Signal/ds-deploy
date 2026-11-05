@@ -974,6 +974,9 @@ every 5 min), `stations` and `tocs` 2 days (daily), the stream-only sources
 min, the island-of-Ireland catalogues 2 days (daily; one source per table
 and network: `island_of_ireland_{stations,lines}_gtfs` from
 poller-irish-rail-gtfs, `_nir` from poller-nir-stations),
+`island_of_ireland_station_samples_live` 30 min (Iarnród Éireann's live
+boards from poller-irish-rail-live, every 5 minutes, while
+`ds:ingest:ioi-live` applies; DS-363),
 `darwin-pushport` 15 min (the Darwin Push Port, DS-152), and `tfl-stops`
 and `tfl-line-routes` 2 days (poller-tfl's daily jobs, while
 `ds:ingest:tfl-stops` applies; `tfl-line-routes` is written only while
@@ -993,6 +996,12 @@ them.
 3. A stream source whose stream is `off`: its row stops
    moving for good; drop its `whileStreamApplies` entry only if the stream
    stays in `apply`.
+4. `island_of_ireland_station_samples_live`: poller-irish-rail-live's log
+   (a failing `getStationDataByCodeXML` cycle, or the station code list
+   it samples coming back empty, sends nothing) and
+   `ds:ingest:ioi-live`'s stream alerts. The writer records it only for a
+   non-empty `ioi-station-samples/1` batch; the hourly
+   `ioi-live-stations/1` list on the same stream does not move it.
 
 ## database
 
