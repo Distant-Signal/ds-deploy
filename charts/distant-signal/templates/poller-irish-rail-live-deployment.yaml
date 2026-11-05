@@ -1,6 +1,7 @@
 {{- if .Values.pollerIrishRailLive.enabled }}
-{{- /* Its only sink is its stream: its own narrow Redis user (security review H3). */}}
-{{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "pollerIrishRailLive" "what" "pollerIrishRailLive.enabled") }}
+{{- /* Its only sink is its stream, ds:ingest:ioi-live: its own narrow Redis user
+     (security review H3), and the ingest-writer applying the stream (DS-355). */}}
+{{- include "distant-signal.requireStreamApplied" (dict "root" . "client" "pollerIrishRailLive" "stream" "ioi-live" "what" "pollerIrishRailLive.enabled") }}
 {{- $rollout := include "distant-signal.pollerRollout" (dict "what" "pollerIrishRailLive.rollout" "rollout" .Values.pollerIrishRailLive.rollout) }}
 apiVersion: apps/v1
 kind: Deployment

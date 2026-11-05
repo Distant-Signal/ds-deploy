@@ -1,6 +1,7 @@
 {{- if .Values.pollerNirStations.enabled }}
-{{- /* Its only sink is its stream: its own narrow Redis user (security review H3). */}}
-{{- include "distant-signal.requireOwnRedisUser" (dict "root" . "client" "pollerNirStations" "what" "pollerNirStations.enabled") }}
+{{- /* Its only sink is its stream, ds:ingest:ioi-nir: its own narrow Redis user
+     (security review H3), and the ingest-writer applying the stream (DS-355). */}}
+{{- include "distant-signal.requireStreamApplied" (dict "root" . "client" "pollerNirStations" "stream" "ioi-nir" "what" "pollerNirStations.enabled") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

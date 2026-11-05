@@ -998,7 +998,10 @@ def check_redis_user_guards(c: Checker) -> None:
         ("fullCoverageConsumer", (), "fullCoverageConsumer"),
         (
             "pollerIrishRailLive",
-            sets("pollerIrishRailLive.enabled=true"),
+            sets(
+                "pollerIrishRailLive.enabled=true",
+                "ingestWriter.streams.ioi-live=apply",
+            ),
             "pollerIrishRailLive",
         ),
     )

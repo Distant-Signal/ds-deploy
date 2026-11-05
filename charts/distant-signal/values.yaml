@@ -2620,8 +2620,10 @@ ingestWriter:
     # One stream per island-of-Ireland poller (security review H1,
     # 2026-10-08): ds:ingest:ioi-gtfs (pollerIrishRailGtfs: ioi-stations,
     # ioi-lines), ds:ingest:ioi-nir (pollerNirStations: the same two) and
-    # ds:ingest:ioi-live (pollerIrishRailLive: ioi-station-samples). The
-    # old shared `island-of-ireland` key is refused unless "off".
+    # ds:ingest:ioi-live (pollerIrishRailLive: ioi-station-samples and
+    # ioi-live-stations). Each poller enabled needs its stream on `apply`
+    # (DS-355). The old shared `island-of-ireland` key is refused unless
+    # "off".
     ioi-gtfs: "off"
     ioi-nir: "off"
     ioi-live: "off"
