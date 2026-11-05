@@ -389,8 +389,13 @@ tables:
   station_full_coverage_samples: {class: ingest, grants: {api: S, writer: SIU}}
   full_coverage_line_stats: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
   full_coverage_line_window_stats: {class: ingest, grants: {api: S, writer: SIU, aggregator: SD}}
-  island_of_ireland_lines: {class: ingest, grants: {api: S, writer: SIU}}
+  # The writer deletes a GTFS line a merged corridor replaces (its
+  # directional rows, IslandOfIrelandLineDefinition.replaces), and sets each
+  # station's live_code from island_of_ireland_live_stations
+  # (ds_store::samples::island_of_ireland, migration 20261104120000).
+  island_of_ireland_lines: {class: ingest, grants: {api: S, writer: SIUD}}
   island_of_ireland_stations: {class: ingest, grants: {api: S, writer: SIU}}
+  island_of_ireland_live_stations: {class: ingest, grants: {api: S, writer: SIU}}
   island_of_ireland_station_samples: {class: ingest, grants: {api: S, writer: SIU}}
   # Transit networks (docs/superpowers/specs/2026-10-09-transit-networks-design.md
   # §8; migration 20261014100000): the writer applies the
