@@ -22,7 +22,12 @@ signing identity is
 2. A PR bumps the tag and digest in
    [`values.yaml`](charts/distant-signal/values.yaml). Renovate is
    installed here but not running yet, so until it is, these bumps are
-   made by hand: a PR that changes an image's `tag` and `digest` together,
+   made by hand: a PR that changes an image's `tag`, `digest` and `source`
+   together, written by
+   [`scripts/pin-images.py`](scripts/pin-images.py) from the registry
+   (`uv run --no-sync scripts/pin-images.py --tag build.<run id>-<commit>
+   <service>...`, one repository's services at its build tag; `source` is
+   the image's `org.opencontainers.image.source` label, which CI checks),
    and for `ds-core` one that changes the [`core-version`](core-version)
    file and the `ds-migrate` release image together and re-vendors its
    access files (`uv run scripts/sync-core.py`). Once Renovate runs, it

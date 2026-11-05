@@ -31,6 +31,7 @@ helm lint --strict charts/distant-signal -f charts/distant-signal/values-example
 helm lint --strict charts/ds-ingest-bucket -f charts/ds-ingest-bucket/ci/example-values.yaml
 uv run --no-sync scripts/chart-values-doc.py check     # the chart README's values reference vs values.yaml
 uv run --no-sync scripts/sync-core.py --check          # vendored ds-core files vs the core-version release (rewrite without --check)
+uv run --no-sync scripts/pin-images.py --tag build.<run id>-<commit> <service>...   # pin images' tag, digest and source (GHCR)
 uv run --no-sync scripts/check-doc-links.py            # links to the Distant-Signal repositories' files resolve
 uv run --no-sync scripts/check-alert-payloads.py --report --download-promtool /tmp/promtool   # alert sizes, runbooks, promtool tests
 uv run --no-sync scripts/check-components-chart.py     # and the other scripts/check-*-chart.py policy checks
@@ -47,8 +48,9 @@ from `ci.yml` locally.
 
 **How a change reaches the cluster** (README.md). A service repository
 pushes `ghcr.io/distant-signal/images/<service>:build.<run id>-<commit>`;
-a PR here bumps that image's `tag` and `digest` together in
-`charts/distant-signal/values.yaml`, and a ds-core release bumps
+a PR here bumps that image's `tag`, `digest` and `source` together in
+`charts/distant-signal/values.yaml` (`scripts/pin-images.py` writes all
+three from the registry; never hand-edit `source`), and a ds-core release bumps
 `core-version` with the `ds-migrate` image and the re-vendored access files
 (`charts/distant-signal/files/`, `scripts/render-redis-acl.py`). Renovate is
 installed but not running yet, so these bumps are made by hand until it is;
