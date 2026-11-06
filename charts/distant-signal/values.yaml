@@ -1656,7 +1656,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.42211306077-ee042dffae4965b34ea47c349450e83491fc60a5"
+    tag: "build.42268400155-fd5522031d452cea6819d96d0a89e10297bc78c7"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1669,7 +1669,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:530aa1d6d818f75f1e3fe232826ce7bddc95c445b48792875b9f476523f03f02"
+    digest: "sha256:00b3ff8ba0c03095981e6b8765adf62ea1b14e348bcb260fd5ba9e0162487018"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -2434,9 +2434,9 @@ migrate:
     # vendors; release-order.py checks every pinned image was built against
     # at most this release. Renovate's ds-core group bumps both, with the
     # digest.
-    tag: v0.4.1
+    tag: v0.5.0
     # -- The release's digest (its release notes list it).
-    digest: "sha256:f10f2d7217689b80429e4d9ce640b85ec0b640e19eea6f0a3bff3dcb4d65c907"
+    digest: "sha256:30060408924c7c72105bcd81d588a35c61500e5aba07a32d474f3734b7e8a4fa"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-core
     pullPolicy: IfNotPresent
@@ -2835,10 +2835,10 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: "build.42237990116-88c07741ce69720873c6debeee5e07413c77ac36"
+    tag: "build.42256426504-8cea6078a6e47e73721558fccbe9603a92269343"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:5acf420c512a4e9404103652c1a4264bf92d8c5804719cb80df20c1e038bf4af"
+    digest: "sha256:cccf5558c38e570e5ea3cfb75d3b21813f62ad02b81fa4f5c10236fbce4377cf"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3105,10 +3105,10 @@ notifier:
   progressStallSecs: 900
   image:
     repository: ghcr.io/distant-signal/images/notifier
-    tag: "build.42237990116-88c07741ce69720873c6debeee5e07413c77ac36"
+    tag: "build.42256426504-8cea6078a6e47e73721558fccbe9603a92269343"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:e953fa7f86c2a87766307723e6fe2b6952a56da254dd968d55766c9220cc9d11"
+    digest: "sha256:1b67454b75f2f3222f8ca5040494a20c3ac6cae29a7c7af0543411f8590fbb28"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3142,8 +3142,14 @@ notifier:
   # skip_check_poll_interval_secs doc.
   skipCheckPollIntervalSecs: 90
   # -- Recurring-journey materialization sweep cadence (spec §3.1) -- see
-  # config.rs's own template_sweep_poll_interval_secs doc.
-  templateSweepPollIntervalSecs: 3600
+  # config.rs's own template_sweep_poll_interval_secs doc. 900 (the image's
+  # default is 3600) so the evening mint below lands by about 15 minutes
+  # past the hour (regular journeys design §4.3).
+  templateSweepPollIntervalSecs: 900
+  # -- The London hour (0-23) from which the sweep also mints tomorrow's
+  # regular journeys, so they show under "Upcoming" the evening before
+  # (regular journeys design §4.3, decision 3). 24 turns it off.
+  templateMintEveningHour: 18
   # -- Predicted-late-start check cadence (DS-127): a tracked train with
   # no TRUST report yet, within 3 hours of departure, whose previous
   # working's delay predicts a late start at high confidence and at least
@@ -3642,10 +3648,10 @@ enricher:
     type: Recreate
   image:
     repository: ghcr.io/distant-signal/images/enricher
-    tag: "build.42237990116-88c07741ce69720873c6debeee5e07413c77ac36"
+    tag: "build.42256426504-8cea6078a6e47e73721558fccbe9603a92269343"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:d79cb24d3f57a891058e1c226421725bba4ba8f2b97072d80c5f13a25a53cb97"
+    digest: "sha256:0b7aae4103c6f6eb18514fdd36e56ce0ab62647026c0955c69c8107a0b3e10d3"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -5332,10 +5338,10 @@ scheduleFeed:
     progressStallSecs: 1800
     image:
       repository: ghcr.io/distant-signal/images/schedule-ingest
-      tag: "build.42211306077-ee042dffae4965b34ea47c349450e83491fc60a5"
+      tag: "build.42268400155-fd5522031d452cea6819d96d0a89e10297bc78c7"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: "sha256:b240b06bdcd83b60f9a6d69b7977ff7c9acdadd8aedf8b9c8a656b32b44d2df2"
+      digest: "sha256:bddd46c8fda4dc7d411d17848f920c9f1dcafe667980c4ac6b9a583bdcc6b5d6"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
@@ -5602,10 +5608,10 @@ scheduleFeed:
     progressStallSecs: 7200
     image:
       repository: ghcr.io/distant-signal/images/schedule-reference
-      tag: "build.42211306077-ee042dffae4965b34ea47c349450e83491fc60a5"
+      tag: "build.42268400155-fd5522031d452cea6819d96d0a89e10297bc78c7"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: "sha256:bae683eb876d9bbd428390a9e73c603e44e7871cd821f8d6d82925b7c8bbf21a"
+      digest: "sha256:b5b16f37827a62af44708c08e4dda4c058939acfb95f29a51a907a8d426fe7b5"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
@@ -5890,10 +5896,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.42235768975-37a785472a3db67e7a78be582ff32dcfda2d8a68"
+    tag: "build.42272346916-0f0be50dfb57ce40328e53304e57e789e7edba37"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:14f93c614a2bd82efbc32c0cf4a503f6432e220037dbb9f27e1129e1976161a1"
+    digest: "sha256:de6310f5d3d524575e8d1390e94f44ead9d2321add311fcfdd432bae7fa4d0bf"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
