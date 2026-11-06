@@ -164,6 +164,17 @@ with notifier.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.journeyBreaks.enabled | quote }}
             - name: JOURNEY_BREAKS_POLL_INTERVAL_SECS
               value: {{ .Values.notifier.journeyBreaksPollIntervalSecs | quote }}
+            # Regular journeys' leave-by reminders and morning summary.
+            - name: LEAVE_REMINDERS_ENABLED
+              value: {{ .Values.notifier.leaveReminders.enabled | quote }}
+            - name: LEAVE_REMINDERS_POLL_INTERVAL_SECS
+              value: {{ .Values.notifier.leaveReminders.pollIntervalSecs | int | quote }}
+            - name: LEAVE_REMINDERS_MAX_PUSHES_PER_OCCURRENCE
+              value: {{ .Values.notifier.leaveReminders.maxPushesPerOccurrence | int | quote }}
+            - name: LEAVE_REMINDERS_MOVE_THRESHOLD_MINUTES
+              value: {{ .Values.notifier.leaveReminders.moveThresholdMinutes | int | quote }}
+            - name: LEAVE_REMINDERS_TTL_SECS
+              value: {{ .Values.notifier.leaveReminders.ttlSecs | int | quote }}
             - name: VAPID_SUBJECT
               value: {{ .Values.notifier.vapid.subject | quote }}
             - name: VAPID_PUBLIC_KEY
