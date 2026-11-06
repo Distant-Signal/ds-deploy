@@ -108,6 +108,9 @@ with notifier.extraEnv, which replaces an entry of the same name.
             # default 30s, not overridden here).
             - name: PUSH_SHUTDOWN_GRACE_SECS
               value: {{ .Values.notifier.push.shutdownGraceSecs | quote }}
+            # Web Push TTL for train, line and journey pushes (DS-377).
+            - name: PUSH_TTL_SECS
+              value: {{ .Values.notifier.push.ttlSeconds | int | quote }}
             - name: POLL_INTERVAL_SECS
               value: {{ .Values.notifier.pollIntervalSecs | quote }}
             - name: COOLDOWN_MINUTES

@@ -2835,7 +2835,7 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: "build.42173902106-f4fe7697ac3d79df42cc035804782539aa991606"
+    tag: "build.42237990116-88c07741ce69720873c6debeee5e07413c77ac36"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:5acf420c512a4e9404103652c1a4264bf92d8c5804719cb80df20c1e038bf4af"
@@ -3105,10 +3105,10 @@ notifier:
   progressStallSecs: 900
   image:
     repository: ghcr.io/distant-signal/images/notifier
-    tag: "build.42173902106-f4fe7697ac3d79df42cc035804782539aa991606"
+    tag: "build.42237990116-88c07741ce69720873c6debeee5e07413c77ac36"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:508933dafbe6e621626f1816c5fd589708013d3aca89636c8ed37ac00c482134"
+    digest: "sha256:e953fa7f86c2a87766307723e6fe2b6952a56da254dd968d55766c9220cc9d11"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3178,6 +3178,11 @@ notifier:
     # -- On SIGTERM, seconds to let queued/in-flight pushes finish. Keep
     # below the pod's terminationGracePeriodSeconds (30).
     shutdownGraceSecs: 20
+    # -- Seconds a push service keeps an undelivered train, line or journey
+    # push (the Web Push TTL header, PUSH_TTL_SECS) before dropping it, so
+    # an offline phone doesn't show a stale delay later. Must be above 0.
+    # The account security notices keep a fixed 28 days.
+    ttlSeconds: 3600
   vapid:
     # -- mailto: or https: contact, required by RFC 8292's VAPID "sub" claim.
     subject: ""
@@ -3637,7 +3642,7 @@ enricher:
     type: Recreate
   image:
     repository: ghcr.io/distant-signal/images/enricher
-    tag: "build.42173902106-f4fe7697ac3d79df42cc035804782539aa991606"
+    tag: "build.42237990116-88c07741ce69720873c6debeee5e07413c77ac36"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:d79cb24d3f57a891058e1c226421725bba4ba8f2b97072d80c5f13a25a53cb97"
