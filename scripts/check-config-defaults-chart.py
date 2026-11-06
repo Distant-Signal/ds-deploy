@@ -404,6 +404,9 @@ OVERRIDES: Mapping[tuple[str, str], tuple[str, str]] = {
     ("movement-relay", "MOVEMENT_STREAM_MAXLEN"): ("1048576", "524288"),
     ("movement-relay", "REDIS_URL"): REDIS,
     ("notifier", "PROGRESS_STALL_SECS"): ("900", "1800"),
+    # Regular journeys' 90-day rule (design decision 11), on once the api
+    # had recorded legs' arrival delays for long enough (DS-379).
+    ("api", "REGULAR_JOURNEY_RETENTION_DAYS"): ("90", "0"),
     # The evening mint (TEMPLATE_MINT_EVENING_HOUR) should land by about a
     # quarter past the hour (regular journeys design §4.3).
     ("notifier", "TEMPLATE_SWEEP_POLL_INTERVAL_SECS"): ("900", "3600"),

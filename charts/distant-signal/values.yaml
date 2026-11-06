@@ -1856,10 +1856,10 @@ api:
   # their last leg, unless one might claim Delay Repay for them: a ticket,
   # a train cancelled or at least 15 minutes late, or a missed connection
   # (regular journeys design decision 11). The api records each leg's
-  # arrival delay before ds-workers prunes its train (DS-379). OFF (0) by
-  # default; the privacy notice states the rule while it is on (the
+  # arrival delay before ds-workers prunes its train (DS-379); 0 turns the
+  # rule off. The privacy notice states the rule while it is on (the
   # frontend reads RETENTION_REGULAR_JOURNEY_DAYS).
-  regularJourneyRetentionDays: 0
+  regularJourneyRetentionDays: 90
   # Internal-service OAuth2 verification, used ONLY to recognise the
   # Distant-Signal-MCP since release B (ingest phase 5) removed the api's
   # /private routes and their per-producer groups. The MCP (a separate
