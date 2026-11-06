@@ -2666,6 +2666,13 @@ ingestWriter:
   # docs/superpowers/specs/2026-11-05-irish-rail-train-tracking-design.md
   # §4.3). Train data, not personal data.
   ioiTrainHistoryRetentionDays: 14
+  # -- Days of `train_date` the same history keeps for a train someone
+  # tracks (an `ie:` trains row with a subscription), counting back from
+  # Dublin's today (IOI_TRACKED_TRAIN_HISTORY_RETENTION_DAYS, 1 to 3650; a
+  # value under ioiTrainHistoryRetentionDays counts as it). 30 matches
+  # aggregator.trainsRetentionDays, the window a tracked GB train is kept
+  # (the same design, §4.3). Train data, not personal data.
+  ioiTrackedTrainHistoryRetentionDays: 30
   # -- Seconds an entry may stay pending as unsupported (a schema or
   # envelope version newer than the writer's; it alerts as
   # DistantSignalIngestUnsupportedSchema) before it is dead-lettered with
