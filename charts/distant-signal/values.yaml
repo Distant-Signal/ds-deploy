@@ -6968,6 +6968,20 @@ metrics:
       threshold: 20
       for: 0m
       severity: warning
+    # DistantSignalLoginMissingNameClaims: at least `threshold` logins
+    # within `window` whose ID token gave neither a name nor a username.
+    # The IdP always sends `preferred_username` when its profile scope
+    # mapping works, so a run of these means the mapping broke (2026-11-06:
+    # ds-sso sent no name claims). The api keeps the stored names, but new
+    # users get none. `metric` is api's counter; it needs the api build
+    # that exports it, and never fires without it.
+    loginMissingNameClaims:
+      enabled: true
+      metric: distant_signal_api_login_missing_name_claims_total
+      window: 1h
+      threshold: 3
+      for: 0m
+      severity: warning
     # DistantSignalArchiveUploadFailures: at least minFailures cold-archive
     # batch uploads (or their verification) failed within `window`. Renders
     # only when archive.enabled is also true.

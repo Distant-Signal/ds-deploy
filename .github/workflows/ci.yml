@@ -2348,6 +2348,9 @@ jobs:
             --set metrics.prometheusRule.userSignupSpike.threshold=5 \
             --show-only templates/prometheusrule.yaml)
           grep -q 'increase(users_total{namespace="[^"]*"}\[1h\])) > 5$' <<<"${spike}"
+          # Logins without name claims alert (the IdP's mapping broke).
+          grep -q 'alert: DistantSignalLoginMissingNameClaims' <<<"${rule}"
+          grep -q 'increase(distant_signal_api_login_missing_name_claims_total{namespace="[^"]*"}\[1h\])) >= 3$' <<<"${rule}"
           # SVC-04/SVC-08: the poller rules render (as <fullname>-pollers)
           # once a poller is enabled.
           pollers=$(helm template distant-signal charts/distant-signal "${base[@]}" \
