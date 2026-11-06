@@ -1202,6 +1202,19 @@ rows in `users` and the IdP's enrolment log. To stop it, restrict the IdP's
 enrolment (e.g. bind the application to a group), then revoke the unwanted
 sessions: [session revocation](https://github.com/Distant-Signal/ds-api/blob/main/docs/session-revocation.md).
 
+### DistantSignalLoginMissingNameClaims
+
+At least `loginMissingNameClaims.threshold` logins within the window carried
+an ID token with neither a name (`name`, `given_name`, `family_name`) nor a
+username (`preferred_username`, `nickname`). The IdP always sends
+`preferred_username` while its profile scope mapping works, so this is that
+mapping broken, as on 2026-11-06 when `ds-sso` sent no name claims. The api
+keeps each returning user's stored name and username (it logs a WARN with
+the user id), but a new user is created with neither and shows as
+"A member". Check the IdP's scope mappings for the Distant Signal
+application and that the api still requests the `profile` scope. Users
+created while it fired get their names at their next login after the fix.
+
 ## cold archive
 
 Details: [cold archive](https://github.com/Distant-Signal/ds-workers/blob/main/docs/cold-archive.md).
