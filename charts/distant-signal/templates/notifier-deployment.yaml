@@ -144,6 +144,10 @@ with notifier.extraEnv, which replaces an entry of the same name.
             # never wired" gap as the two intervals above.
             - name: TEMPLATE_SWEEP_POLL_INTERVAL_SECS
               value: {{ .Values.notifier.templateSweepPollIntervalSecs | quote }}
+            # Regular journeys: the London hour from which tomorrow's are
+            # minted too; 24 turns that off.
+            - name: TEMPLATE_MINT_EVENING_HOUR
+              value: {{ .Values.notifier.templateMintEveningHour | int | quote }}
             # Predicted-late-start pushes (DS-127): high confidence only;
             # 0 turns the check off.
             - name: PREDICTED_START_POLL_INTERVAL_SECS

@@ -2281,7 +2281,8 @@ twice.
 | `notifier.lineHistoryMaxAgeSeconds` | `900` | Line-status history rows whose `computed_at` is older than this are skipped, not pushed (`LINE_HISTORY_MAX_AGE_SECS`, ingest plan 3c.4, D13): the cursor moves past them, they stay the next row's "previous" status, and each counts in `notifier_line_history_skipped_total{reason="stale"}`. Deploy before `ingestWriter.streams.tfl: apply`. `0` turns the skip off. |
 | `notifier.forwardQueuePollIntervalSecs` | `15` | Poll cadence for the forwarding queue (notifications api hands over), faster than `pollIntervalSecs`. |
 | `notifier.skipCheckPollIntervalSecs` | `90` | Cadence of the station-skip check for tracked journeys. |
-| `notifier.templateSweepPollIntervalSecs` | `3600` | Cadence of the recurring-journey materialisation sweep. |
+| `notifier.templateSweepPollIntervalSecs` | `900` | Cadence of the regular-journey (template) sweep. 900 rather than the image's 3600, so the evening mint lands by about a quarter past the hour. |
+| `notifier.templateMintEveningHour` | `18` | The London hour (0-23) from which the sweep also mints tomorrow's regular journeys, so they show the evening before (`TEMPLATE_MINT_EVENING_HOUR`). `24` turns it off. |
 | `notifier.predictedStartPollIntervalSecs` | `60` | Cadence of the predicted-late-start check (DS-127): one push per subscriber for a high-confidence predicted late start at or above `trainDelayThresholdMinutes`, sharing the delay pushes' state; an open journey break on the train sends its suggestion push instead. `0` turns it off. |
 | `notifier.autoCommitLeadMinutes` | `120` | Lead time, in minutes, for the commit check on `auto`-mode journey legs. |
 | `notifier.journeyBreaksPollIntervalSecs` | `15` | How often open journey breaks are checked for a suggestion push (only with `api.journeyBreaks.enabled`). |
