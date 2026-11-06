@@ -1656,7 +1656,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.42268400155-fd5522031d452cea6819d96d0a89e10297bc78c7"
+    tag: "build.42291718851-b28b70a08ff6a714d3ffc5da06d5c95b664a0219"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1669,7 +1669,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:00b3ff8ba0c03095981e6b8765adf62ea1b14e348bcb260fd5ba9e0162487018"
+    digest: "sha256:5f19580472b46af96498f4aeafa439bf1ec74d7442858117877908ec574a6c4a"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -2173,6 +2173,25 @@ api:
     maxJourneysPerTick: 200
     # Stored suggestions older than this are re-planned when opened.
     suggestionsMaxAgeSecs: 120
+  # -- Regular journeys, phase 3 (distant-signal's
+  # docs/superpowers/specs/2026-11-06-regular-journeys-design.md §6): the
+  # api's plan sweep chooses the day's train for each journey of a regular
+  # journey with a target, dated today or tomorrow (London). Remind mode
+  # stores a suggestion and commits nothing; auto mode commits the choice.
+  # It never touches a journey that has started, has had a break or has a
+  # train the user picked, and never decides "no service" on a day the
+  # timetable doesn't cover. Off by default.
+  regularJourneys:
+    planSweep:
+      enabled: false
+      # Sweep cadence; each tick holds an advisory lock, so one replica
+      # runs it.
+      intervalSecs: 300
+      # Most journeys planned per tick (each up to 6 searches through the
+      # sweep's own planning slot).
+      maxOccurrencesPerTick: 200
+      # London hour of the morning re-check on the day (0 to 23).
+      morningCheckHour: 5
   # -- Live arrivals on the /tfl/stops/{id} page (DS-136,
   # GET /public/tfl/stops/{id}/arrivals): the api asks TfL's Unified API
   # (`StopPoint/{id}/Arrivals`) on demand and keeps each stop's answer for
@@ -2434,9 +2453,9 @@ migrate:
     # vendors; release-order.py checks every pinned image was built against
     # at most this release. Renovate's ds-core group bumps both, with the
     # digest.
-    tag: v0.5.0
+    tag: v0.8.1
     # -- The release's digest (its release notes list it).
-    digest: "sha256:30060408924c7c72105bcd81d588a35c61500e5aba07a32d474f3734b7e8a4fa"
+    digest: "sha256:188a3a1096df1f7b13d4a475d0f90ab25a4f0d4f3704274e1c3e3e4984df4a56"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-core
     pullPolicy: IfNotPresent
@@ -5338,10 +5357,10 @@ scheduleFeed:
     progressStallSecs: 1800
     image:
       repository: ghcr.io/distant-signal/images/schedule-ingest
-      tag: "build.42268400155-fd5522031d452cea6819d96d0a89e10297bc78c7"
+      tag: "build.42291718851-b28b70a08ff6a714d3ffc5da06d5c95b664a0219"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: "sha256:bddd46c8fda4dc7d411d17848f920c9f1dcafe667980c4ac6b9a583bdcc6b5d6"
+      digest: "sha256:a1e8c1e5dbc6406ad81f76f16cef7d5b65245cf3e7151318d7424b06b1a0a9c6"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
@@ -5608,10 +5627,10 @@ scheduleFeed:
     progressStallSecs: 7200
     image:
       repository: ghcr.io/distant-signal/images/schedule-reference
-      tag: "build.42268400155-fd5522031d452cea6819d96d0a89e10297bc78c7"
+      tag: "build.42291718851-b28b70a08ff6a714d3ffc5da06d5c95b664a0219"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: "sha256:b5b16f37827a62af44708c08e4dda4c058939acfb95f29a51a907a8d426fe7b5"
+      digest: "sha256:a0102bf3c0ae4a8629c4635ba790cd7ca4d7b0866a214fc4cad80299729cbd2b"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
@@ -5896,10 +5915,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.42272346916-0f0be50dfb57ce40328e53304e57e789e7edba37"
+    tag: "build.42292206579-4225bc51333c0df54f9778241c508175ed96cc39"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:de6310f5d3d524575e8d1390e94f44ead9d2321add311fcfdd432bae7fa4d0bf"
+    digest: "sha256:2d36bd3ac2896ee3f9b23cd13ca1f69d8eef48f06b304259d27094204d87f152"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent

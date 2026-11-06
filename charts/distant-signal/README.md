@@ -2067,6 +2067,10 @@ Used only when `postgresql.enabled` is `false`.
 | `api.journeyBreaks.intervalSecs` | `60` | Break sweep cadence; each tick holds an advisory lock, so one api replica runs it. |
 | `api.journeyBreaks.maxJourneysPerTick` | `200` | Most journeys the sweep evaluates per tick. |
 | `api.journeyBreaks.suggestionsMaxAgeSecs` | `120` | Stored suggestions older than this are re-planned when opened. |
+| `api.regularJourneys.planSweep.enabled` | `false` | The regular journeys plan sweep: picks the day's train for each regular journey with a target (a suggestion in remind mode, a commit in auto mode). Never touches a started, broken or user-picked journey. |
+| `api.regularJourneys.planSweep.intervalSecs` | `300` | Plan sweep cadence; each tick holds an advisory lock, so one api replica runs it. |
+| `api.regularJourneys.planSweep.maxOccurrencesPerTick` | `200` | Most journeys the plan sweep plans per tick. |
+| `api.regularJourneys.planSweep.morningCheckHour` | `5` | London hour of the morning re-check, which re-plans a day whose train stopped running in the timetable. |
 | `api.tflArrivals.enabled` | `true` | Live arrivals on `/tfl/stops/{id}` (`GET /public/tfl/stops/{id}/arrivals`), fetched from TfL on demand. Off, that route answers 503. Needs egress to `baseUrl`; the api's internet rule allows it and gains `baseUrl`'s port. |
 | `api.tflArrivals.baseUrl` | `https://api.tfl.gov.uk` | TfL Unified API root. |
 | `api.tflArrivals.useTflPollerKey` | `true` | Send `pollers.tfl`'s subscription key (its Secret, when `pollers.tfl` is enabled or has an `existingSecret`; `optional`). Without a key the api calls TfL anonymously, at TfL's lower rate limit. |

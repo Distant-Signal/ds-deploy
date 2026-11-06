@@ -599,6 +599,16 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.journeyBreaks.maxJourneysPerTick | quote }}
             - name: JOURNEY_BREAKS_SUGGESTIONS_MAX_AGE_SECS
               value: {{ .Values.api.journeyBreaks.suggestionsMaxAgeSecs | quote }}
+            # Regular journeys: the plan sweep that picks the day's train --
+            # see api.regularJourneys.planSweep in values.yaml.
+            - name: REGULAR_PLAN_SWEEP_ENABLED
+              value: {{ .Values.api.regularJourneys.planSweep.enabled | quote }}
+            - name: REGULAR_PLAN_SWEEP_INTERVAL_SECS
+              value: {{ .Values.api.regularJourneys.planSweep.intervalSecs | quote }}
+            - name: REGULAR_PLAN_SWEEP_MAX_OCCURRENCES_PER_TICK
+              value: {{ .Values.api.regularJourneys.planSweep.maxOccurrencesPerTick | quote }}
+            - name: REGULAR_PLAN_SWEEP_MORNING_CHECK_HOUR
+              value: {{ .Values.api.regularJourneys.planSweep.morningCheckHour | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see api.fullCoverageEnabledDefault's own comment in values.yaml.
             # The binary defaults to false, the chart value to true; it must be
