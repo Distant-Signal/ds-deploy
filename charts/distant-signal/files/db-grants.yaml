@@ -312,8 +312,11 @@ tables:
   #   notifier: candidates and legs (id, user_id, trains_id,
   #     notifications_enabled, the pins: a leg's route falls back to them,
   #     DS-144), create_subscription_for_train's insert and re-enable, and
-  #     the NULL-pin fill on its CIF enrichment (fill_route_into_subscribers).
-  train_subscriptions: {class: personal, grants: {api: SIUD, writer: [{privileges: S, columns: [id, trains_id, service_date, resolution_status, unresolved_from, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_skipped_stations, pin_platform, pin_planned_platform]}, {privileges: U, columns: [resolution_status, unresolved_from, trains_id, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}], trust_backlog: [{privileges: S, columns: [id, trains_id, resolution_status, unresolved_from]}, {privileges: U, columns: [resolution_status, unresolved_from]}], trust_consumer: {privileges: S, columns: [id, trains_id]}, aggregator: {privileges: S, columns: [trains_id]}, notifier: [{privileges: S, columns: [id, user_id, trains_id, notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: I, columns: [user_id, trains_id, service_date, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: U, columns: [notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}]}}
+  #     the NULL-pin fill on its CIF enrichment (fill_route_into_subscribers),
+  #     and pin_origin_ref for an Irish push's "from" station (v0.4.0).
+  #   The writer's Irish history prune reads only trains_id (whether a
+  #   train is tracked); the pin refs are the api's.
+  train_subscriptions: {class: personal, grants: {api: SIUD, writer: [{privileges: S, columns: [id, trains_id, service_date, resolution_status, unresolved_from, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_skipped_stations, pin_platform, pin_planned_platform]}, {privileges: U, columns: [resolution_status, unresolved_from, trains_id, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}], trust_backlog: [{privileges: S, columns: [id, trains_id, resolution_status, unresolved_from]}, {privileges: U, columns: [resolution_status, unresolved_from]}], trust_consumer: {privileges: S, columns: [id, trains_id]}, aggregator: {privileges: S, columns: [trains_id]}, notifier: [{privileges: S, columns: [id, user_id, trains_id, notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_origin_ref]}, {privileges: I, columns: [user_id, trains_id, service_date, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: U, columns: [notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}]}}
   # No UPDATE for anyone (security review L3): every writer inserts with
   # ON CONFLICT (trains_id, dedup_key) DO NOTHING. The conflict target
   # needs SELECT on its columns, so trust_consumer (outside read_shared)
@@ -637,6 +640,8 @@ row_policies:
   #     island_of_ireland_* names writers recorded before the per-network
   #     split were dropped a release after it (batch 54; migration
   #     20261010100100 deletes their rows).
+  #     And Iarnród Éireann's live boards
+  #     (island_of_ireland_station_samples_live, ds:ingest:ioi-live), DS-363.
   ingest_freshness:
     writer:
       writes: >-
@@ -647,6 +652,7 @@ row_policies:
         'transit-metrolink-timetable', 'transit-metrolink-situations',
         'tfl-stops', 'tfl-line-routes', 'tracked-stop-boards', 'darwin-pushport',
         'tracked-stop-arrival-boards', 'transit-net-timetable', 'transit-net-situations',
-        'transit-tfl-timetable', 'transit-tfl-situations')
+        'transit-tfl-timetable', 'transit-tfl-situations',
+        'island_of_ireland_station_samples_live')
     stations: {writes: "source = 'stations'"}
     incidents: {writes: "source = 'incidents'"}
