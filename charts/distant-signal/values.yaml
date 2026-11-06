@@ -1096,10 +1096,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-incidents
-      tag: "build.42042434696-875fbb841499ad8e263a02ba8067c95a70ee2c04"
+      tag: "build.42165433239-f27c6c57bfabad2e37d88af229dea42054b48e50"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:01411c00f7cccce94259bbf213c81f6836b41f0ba859a47f335e00e4d116e16a"
+      digest: "sha256:2532defb821f8393c565e9faac604818ced45d1c1667ac401f89b29993c16c56"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
@@ -1163,10 +1163,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-stations
-      tag: "build.42042434696-875fbb841499ad8e263a02ba8067c95a70ee2c04"
+      tag: "build.42165433239-f27c6c57bfabad2e37d88af229dea42054b48e50"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:2084ec4d0291938b58b20a9a5655ddc775eb9bc982609ca9552f70c4acede171"
+      digest: "sha256:3d5f0821885fc785ecb2dcc8139796ab45fb5b6811e4389ca5cb7c6264d96c63"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
@@ -1275,10 +1275,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-tfl
-      tag: "build.42042434696-875fbb841499ad8e263a02ba8067c95a70ee2c04"
+      tag: "build.42165433239-f27c6c57bfabad2e37d88af229dea42054b48e50"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:244b4e6c97c2c8c09cd60c86310ed520da9484c821228614b5d8fce2c81c2c64"
+      digest: "sha256:3e1652d346314912aee8886d0df977ca8bf367515d1aaeb3792b6118c2a2e6ee"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
@@ -1415,10 +1415,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-tocs
-      tag: "build.42042434696-875fbb841499ad8e263a02ba8067c95a70ee2c04"
+      tag: "build.42165433239-f27c6c57bfabad2e37d88af229dea42054b48e50"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:8b16367027e977e2ad79850ad5ba0a49308912fa3d2a494ec2660bf6a0610c13"
+      digest: "sha256:a3b00855b0a4209ffdb7d47bad71321b7182bc5d899f55d1847fef118e445bd2"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
@@ -1509,10 +1509,10 @@ pollers:
     enabled: false
     image:
       repository: ghcr.io/distant-signal/images/poller-ldbws
-      tag: "build.42042434696-875fbb841499ad8e263a02ba8067c95a70ee2c04"
+      tag: "build.42165433239-f27c6c57bfabad2e37d88af229dea42054b48e50"
       # -- Content digest override. See api.image.digest's own comment below
       # for the full rationale; same shape here.
-      digest: "sha256:66dc614c02c2186c3adc68e91c4e740c66dacfeb8bdf365bacdd25b1cdd85b57"
+      digest: "sha256:9cfe01d6cb620cd2e0fdb33848c7507f1e89905f923203a76cb7765233e4650b"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-pollers
       pullPolicy: IfNotPresent
@@ -4530,10 +4530,10 @@ pollerIrishRailGtfs:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/poller-irish-rail-gtfs
-    tag: "build.42042434696-875fbb841499ad8e263a02ba8067c95a70ee2c04"
+    tag: "build.42165433239-f27c6c57bfabad2e37d88af229dea42054b48e50"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:e4c063918a9f4b05d30d835ecadf2d5a3e742d8265350bb047f637221f8c8893"
+    digest: "sha256:6b1587dcc72efdb3eb05d44cc25e5b8ed01abc385e4dd7ba5a6da8d2051580af"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-pollers
     pullPolicy: IfNotPresent
@@ -4592,10 +4592,10 @@ pollerIrishRailLive:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/poller-irish-rail-live
-    tag: "build.42042434696-875fbb841499ad8e263a02ba8067c95a70ee2c04"
+    tag: "build.42165433239-f27c6c57bfabad2e37d88af229dea42054b48e50"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:1439666583abc6585473056fc640d2b35580256a051d9e34e4b0ac8b7631ab90"
+    digest: "sha256:a0b43ae13fff38b4c236694448f5bbf2719dd7c56955964ecd55a9616a4e3436"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-pollers
     pullPolicy: IfNotPresent
@@ -4655,10 +4655,10 @@ pollerNirStations:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/poller-nir-stations
-    tag: "build.42042434696-875fbb841499ad8e263a02ba8067c95a70ee2c04"
+    tag: "build.42165433239-f27c6c57bfabad2e37d88af229dea42054b48e50"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:e31b664b9d19af7de337b9140bd6b5bd0dd071c0ee9ebd2b7057a0401994e9e2"
+    digest: "sha256:0d1099862c07941e5071a13fc8cf24b7a4558efb57c71134034dab6ef919bd2e"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-pollers
     pullPolicy: IfNotPresent
@@ -4707,9 +4707,9 @@ pollerTransitSchedule:
   image:
     repository: ghcr.io/distant-signal/images/poller-transit-schedule
     # -- Build tag; see api.image.tag. Empty means "use the chart's appVersion".
-    tag: "build.42042434696-875fbb841499ad8e263a02ba8067c95a70ee2c04"
+    tag: "build.42165433239-f27c6c57bfabad2e37d88af229dea42054b48e50"
     # -- Content digest override. See api.image.digest's own comment above.
-    digest: "sha256:c56c976a5597368effe5f243986c1e379b3491b59460a0a576796956f640b4b6"
+    digest: "sha256:cea2ccdb81f5f7d1d050167bce4dbb85d66cc78392718c0e0237f63d5fbbdb9e"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-pollers
     pullPolicy: IfNotPresent
@@ -5878,10 +5878,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.42049760232-63da1c00bd06ddb6402b6dd2289e435ed0e6cc9e"
+    tag: "build.42165516189-91cbb8142aa54af1fc9160cfa6bcc97a4c865df3"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:05522fab6f93b3af42998412d5c14bc16040686650cff4493a0e82518764e894"
+    digest: "sha256:03403bcec94cda6db29cf11130e8abe3b29dbdf533f769bb2eee390e73798d57"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
