@@ -304,10 +304,6 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
     },
     "api": {
         "LINES_DIR": LINES,
-        # Regular journeys' 90-day rule (DS-378): off at the image's 0
-        # until the website's privacy page states it and the rule's
-        # arrival-delay data is settled; then api.regularJourneyRetentionDays.
-        "REGULAR_JOURNEY_RETENTION_DAYS": no_value("api"),
         "SCHEDULE_MATCH_INTERVAL_SECS": "unwired on purpose (its doc in config.rs)",
         "SSO_DISCORD_ID_CLAIM": ahead_of_image(
             "api.sso.discordIdClaim", "distant-signal#192, ds-core v0.1.1"

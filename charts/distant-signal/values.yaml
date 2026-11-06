@@ -1852,6 +1852,14 @@ api:
   # cannot be warned first, and enabling it is an operator decision the privacy notice
   # must state. The audit suggests 730 (24 months).
   inactiveAccountRetentionDays: 0
+  # Journeys made from a regular journey are deleted this many days after
+  # their last leg, unless one might claim Delay Repay for them: a ticket,
+  # a train cancelled or at least 15 minutes late, or a missed connection
+  # (regular journeys design decision 11). The api records each leg's
+  # arrival delay before ds-workers prunes its train (DS-379). OFF (0) by
+  # default; the privacy notice states the rule while it is on (the
+  # frontend reads RETENTION_REGULAR_JOURNEY_DAYS).
+  regularJourneyRetentionDays: 0
   # Internal-service OAuth2 verification, used ONLY to recognise the
   # Distant-Signal-MCP since release B (ingest phase 5) removed the api's
   # /private routes and their per-producer groups. The MCP (a separate
