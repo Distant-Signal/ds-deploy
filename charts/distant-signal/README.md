@@ -2291,6 +2291,11 @@ twice.
 | `notifier.predictedStartPollIntervalSecs` | `60` | Cadence of the predicted-late-start check (DS-127): one push per subscriber for a high-confidence predicted late start at or above `trainDelayThresholdMinutes`, sharing the delay pushes' state; an open journey break on the train sends its suggestion push instead. `0` turns it off. |
 | `notifier.autoCommitLeadMinutes` | `120` | Lead time, in minutes, for the commit check on `auto`-mode journey legs. |
 | `notifier.journeyBreaksPollIntervalSecs` | `15` | How often open journey breaks are checked for a suggestion push (only with `api.journeyBreaks.enabled`). |
+| `notifier.leaveReminders.enabled` | `false` | Send regular journeys' leave-by reminders and morning summaries (`LEAVE_REMINDERS_ENABLED`). Turn on only after an iPhone home-screen web app test. |
+| `notifier.leaveReminders.pollIntervalSecs` | `60` | How often today's regular journeys are checked for a leave-by, seconds (`LEAVE_REMINDERS_POLL_INTERVAL_SECS`). |
+| `notifier.leaveReminders.maxPushesPerOccurrence` | `3` | The most regular-journey pushes one day gets: the pick-your-train reminder, the leave-by and its moves (`LEAVE_REMINDERS_MAX_PUSHES_PER_OCCURRENCE`). |
+| `notifier.leaveReminders.moveThresholdMinutes` | `5` | How much earlier a leave-by must move, minutes, to be sent again (`LEAVE_REMINDERS_MOVE_THRESHOLD_MINUTES`). |
+| `notifier.leaveReminders.ttlSecs` | `900` | The most Web Push TTL a leave-by is sent with, seconds; never past 5 minutes after the leave-by (`LEAVE_REMINDERS_TTL_SECS`). |
 | `notifier.push.workers` | `8` | Notifications sent at once (each fans out to all of that user's subscriptions). |
 | `notifier.push.queueCapacity` | `1024` | Notifications waiting for a worker. Beyond this new ones are dropped (`distant_signal_notifier_push_dropped_total`). |
 | `notifier.push.perUserInFlight` | `2` | At most this many of one user's notifications in flight, so one user's slow endpoints cannot take the whole pool. |

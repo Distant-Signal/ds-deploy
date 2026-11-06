@@ -2862,10 +2862,10 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: "build.42256426504-8cea6078a6e47e73721558fccbe9603a92269343"
+    tag: "build.42294562606-92c0b06e8c6352484fc68e3ac9feb8a69c6c16b0"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:cccf5558c38e570e5ea3cfb75d3b21813f62ad02b81fa4f5c10236fbce4377cf"
+    digest: "sha256:3ac163db35f56bd1bca3aae9727f25615663cd17b5ec2709888c4ae0d9e5145b"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3132,10 +3132,10 @@ notifier:
   progressStallSecs: 900
   image:
     repository: ghcr.io/distant-signal/images/notifier
-    tag: "build.42256426504-8cea6078a6e47e73721558fccbe9603a92269343"
+    tag: "build.42294562606-92c0b06e8c6352484fc68e3ac9feb8a69c6c16b0"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:1b67454b75f2f3222f8ca5040494a20c3ac6cae29a7c7af0543411f8590fbb28"
+    digest: "sha256:2f631207628dc4e2a427409d1dcb45d4e828bd92389fc44c8ed36cc1607addb4"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3190,6 +3190,26 @@ notifier:
   # -- How often open journey breaks are checked for a suggestion notice
   # (on only with api.journeyBreaks.enabled).
   journeyBreaksPollIntervalSecs: 15
+  # Regular journeys' leave-by reminders and morning summary
+  # (distant-signal's docs/superpowers/specs/2026-11-06-regular-journeys-design.md
+  # §5.3, crates/notifier/src/leave_reminder.rs). Off by default: turn it on
+  # only after a test on an iPhone home-screen web app (§9).
+  leaveReminders:
+    # -- Send leave-by reminders and morning summaries (LEAVE_REMINDERS_ENABLED).
+    enabled: false
+    # -- How often today's regular journeys are checked, seconds
+    # (LEAVE_REMINDERS_POLL_INTERVAL_SECS).
+    pollIntervalSecs: 60
+    # -- The most regular-journey pushes one day of a regular journey gets:
+    # the pick-your-train reminder, the leave-by and its moves
+    # (LEAVE_REMINDERS_MAX_PUSHES_PER_OCCURRENCE).
+    maxPushesPerOccurrence: 3
+    # -- How much earlier a leave-by must move, minutes, to be sent again
+    # (LEAVE_REMINDERS_MOVE_THRESHOLD_MINUTES).
+    moveThresholdMinutes: 5
+    # -- The most Web Push TTL a leave-by is sent with, seconds; it is never
+    # kept past 5 minutes after the leave-by either (LEAVE_REMINDERS_TTL_SECS).
+    ttlSecs: 900
   # Web Push worker pool (services review SVC-02): cycles only decide and
   # enqueue; these workers send. See crates/notifier/src/push_queue.rs.
   push:
@@ -3675,10 +3695,10 @@ enricher:
     type: Recreate
   image:
     repository: ghcr.io/distant-signal/images/enricher
-    tag: "build.42256426504-8cea6078a6e47e73721558fccbe9603a92269343"
+    tag: "build.42294562606-92c0b06e8c6352484fc68e3ac9feb8a69c6c16b0"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:0b7aae4103c6f6eb18514fdd36e56ce0ab62647026c0955c69c8107a0b3e10d3"
+    digest: "sha256:046d35e67c234a63c1a20a7f47a09bf9aa0d40df2a29837e0681c573e86ec51b"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -5923,10 +5943,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.42292206579-4225bc51333c0df54f9778241c508175ed96cc39"
+    tag: "build.42306363926-8110f19ffa233c6869c71a84a50d7635f76e70c8"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:2d36bd3ac2896ee3f9b23cd13ca1f69d8eef48f06b304259d27094204d87f152"
+    digest: "sha256:3bda4648cec62d38338898aec5e9f8e05887b9963c258ebd2bc83aa6d80e883a"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
