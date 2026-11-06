@@ -89,6 +89,8 @@ spec:
                   value: {{ .Values.api.stalePushSubscriptionDays | quote }}
                 - name: INACTIVE_ACCOUNT_RETENTION_DAYS
                   value: {{ .Values.api.inactiveAccountRetentionDays | quote }}
+                - name: REGULAR_JOURNEY_RETENTION_DAYS
+                  value: {{ .Values.api.regularJourneyRetentionDays | quote }}
                 # Delegated access: how long a revoked grant is kept.
                 - name: DELEGATED_REVOKED_GRANT_RETENTION_DAYS
                   value: {{ dig "delegated" "revokedGrantRetentionDays" 365 .Values.api | quote }}

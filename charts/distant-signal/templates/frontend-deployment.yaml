@@ -107,6 +107,8 @@ with frontend.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.stalePushSubscriptionDays | int | toString | quote }}
             - name: RETENTION_INACTIVE_ACCOUNT_DAYS
               value: {{ .Values.api.inactiveAccountRetentionDays | int | toString | quote }}
+            - name: RETENTION_REGULAR_JOURNEY_DAYS
+              value: {{ .Values.api.regularJourneyRetentionDays | int | toString | quote }}
             {{- if .Values.railMcp.enabled }}
             # The in-app chat's link to the separately-deployed derived MCP
             # service -- absent, correctly, when railMcp is disabled. Only

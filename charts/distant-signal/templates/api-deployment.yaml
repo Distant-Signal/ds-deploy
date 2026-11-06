@@ -702,6 +702,8 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.stalePushSubscriptionDays | quote }}
             - name: INACTIVE_ACCOUNT_RETENTION_DAYS
               value: {{ .Values.api.inactiveAccountRetentionDays | quote }}
+            - name: REGULAR_JOURNEY_RETENTION_DAYS
+              value: {{ .Values.api.regularJourneyRetentionDays | quote }}
             # Must equal the aggregator Deployment's own HISTORY_RETENTION_DAYS
             # -- sourced from the SAME value (not a separate api.* setting)
             # so the two can't drift apart. See
