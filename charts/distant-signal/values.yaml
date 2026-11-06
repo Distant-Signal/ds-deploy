@@ -1656,7 +1656,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.42042453384-d970c1d48fd25cd9023df99721d849bec9016789"
+    tag: "build.42133785965-753efbc284d2b6ec9e68ba0f2f12756f08ac99e2"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1669,7 +1669,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:a9e56a2a337524715cf049d5efd5d2592e48c9b2da8ff4023bf9c887ef3cddd8"
+    digest: "sha256:b1bf18d86b496157c97b9cb6159e6e05f1a33d315bbb3453c8832e9005b375e9"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -2576,10 +2576,10 @@ ingestWriter:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/ingest-writer
-    tag: "build.42042415420-792594ba9e3d3f293566cc2704a9197678628241"
+    tag: "build.42133766460-e943fe9d9a6b6ed4794ee69c2acec22281f1b0a5"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:0df9cb069736b98fcfc83b698c2f955927bc3bb6a047774bdd4b144788b3fbdf"
+    digest: "sha256:68a0d85037bfc4de8a637a59e9505feaf13d1d515afe41162c77e83a26c6940d"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -2828,10 +2828,10 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: "build.41821852145-4dd1c46b019a170ad192f4d7b607d7cdab1a6064"
+    tag: "build.42133775885-068d7fcb7da8ff065796a18fe551b106e44740bc"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:33b824727652d6224bf324615402d49f52867449d150189afaf508055f112e19"
+    digest: "sha256:51480bc3df0b3e131ab18a3f00c3cc35aee2a1107752f446eb3468a63bf64f34"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3098,10 +3098,10 @@ notifier:
   progressStallSecs: 900
   image:
     repository: ghcr.io/distant-signal/images/notifier
-    tag: "build.41821852145-4dd1c46b019a170ad192f4d7b607d7cdab1a6064"
+    tag: "build.42133775885-068d7fcb7da8ff065796a18fe551b106e44740bc"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:ff20408078fc6f77c55927e72e05fd89eb5a964fdb5e09ebb2d969c621030bf5"
+    digest: "sha256:058639ffeeb371400be630ba5d744233822e6ae9ed44b7be312907eaffbe47b1"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3630,10 +3630,10 @@ enricher:
     type: Recreate
   image:
     repository: ghcr.io/distant-signal/images/enricher
-    tag: "build.41821852145-4dd1c46b019a170ad192f4d7b607d7cdab1a6064"
+    tag: "build.42133775885-068d7fcb7da8ff065796a18fe551b106e44740bc"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:a436df9ef30122e25f72cd95a3f16def6a32c37719f7fc705a0667186b7d10a9"
+    digest: "sha256:235ff9a761ccf476a35357bbad2cdd6de8a1778f974987f2eb097b86537dfd3f"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3923,10 +3923,10 @@ enricher:
 trustConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-consumer
-    tag: "build.42042415420-792594ba9e3d3f293566cc2704a9197678628241"
+    tag: "build.42133766460-e943fe9d9a6b6ed4794ee69c2acec22281f1b0a5"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:bcb10b00dab1cb84c6b4c85583c9255851927f5472b4a12b9efe980d7236fec7"
+    digest: "sha256:4fd8b2710a9c839b2b373471c1b57babbab1a15443e539f67c82b85aed51ebfb"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4072,10 +4072,10 @@ trustConsumer:
 fullCoverageConsumer:
   image:
     repository: ghcr.io/distant-signal/images/full-coverage-consumer
-    tag: "build.42042415420-792594ba9e3d3f293566cc2704a9197678628241"
+    tag: "build.42133766460-e943fe9d9a6b6ed4794ee69c2acec22281f1b0a5"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:87632e7644ef1a48bb98bcda59e29161f310a1a57aeba13a28c3618926698083"
+    digest: "sha256:b49ce085f99294d1c360f64af592f2a7a36283f26cf701db1575bb3cf84f53f5"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4201,10 +4201,10 @@ fullCoverageConsumer:
 trustBacklogConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-backlog-consumer
-    tag: "build.42042415420-792594ba9e3d3f293566cc2704a9197678628241"
+    tag: "build.42133766460-e943fe9d9a6b6ed4794ee69c2acec22281f1b0a5"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:02b4640650b12ff27e481d65235bac145167d95f00b6ea01bad802dcc72440e4"
+    digest: "sha256:5aed078ce204f9ee11dd0972b85c403cf3a95e00f2f93526371db9cc5dc16ef1"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4310,10 +4310,10 @@ movementRelay:
   enabled: true
   image:
     repository: ghcr.io/distant-signal/images/movement-relay
-    tag: "build.42042415420-792594ba9e3d3f293566cc2704a9197678628241"
+    tag: "build.42133766460-e943fe9d9a6b6ed4794ee69c2acec22281f1b0a5"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:5aa3dda3c9c7dd2cb261db42874139f52e617ea61988929b3a911471df3dff07"
+    digest: "sha256:6dd8d40082c7f1cdab49b526a55e67e36c91148bb6de33d9fdef49b661ec2457"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4437,9 +4437,9 @@ darwinRelay:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/darwin-relay
-    tag: "build.42042415420-792594ba9e3d3f293566cc2704a9197678628241"
+    tag: "build.42133766460-e943fe9d9a6b6ed4794ee69c2acec22281f1b0a5"
     # -- Content digest override (see api.image.digest).
-    digest: "sha256:b6cf0b081aebedd423a7577d3fb0728cbfe7de95f7f12b24364eccbd146b047b"
+    digest: "sha256:406bf1e7303225923421cf3ad3827e7b0d5c5cffd06e379c9177019b3ca2ac53"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -5320,10 +5320,10 @@ scheduleFeed:
     progressStallSecs: 1800
     image:
       repository: ghcr.io/distant-signal/images/schedule-ingest
-      tag: "build.42042453384-d970c1d48fd25cd9023df99721d849bec9016789"
+      tag: "build.42133785965-753efbc284d2b6ec9e68ba0f2f12756f08ac99e2"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: "sha256:ec0958f7c16b98b0eaee4ca8796f9d4f1a27102c5b96adbcf0557c05b60ebe39"
+      digest: "sha256:d662d0309abbd6db26893fd6355b418e9285ba673f542ea95388fe1110a3fa47"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
@@ -5590,10 +5590,10 @@ scheduleFeed:
     progressStallSecs: 7200
     image:
       repository: ghcr.io/distant-signal/images/schedule-reference
-      tag: "build.42042453384-d970c1d48fd25cd9023df99721d849bec9016789"
+      tag: "build.42133785965-753efbc284d2b6ec9e68ba0f2f12756f08ac99e2"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: "sha256:1a44c4fc378322d6afec9bb9ac761f2b50a980ed1fbfa0bc85f0c0db6914d8bb"
+      digest: "sha256:c74a3d128c4afe18a78463ad231c1522f5e65ee868d00a81b8c97ae8d26ec100"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
