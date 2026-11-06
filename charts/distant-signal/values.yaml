@@ -1656,7 +1656,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.42173909833-b3aef0ff99fdecb17de2118f57f43781085f1b9b"
+    tag: "build.42211306077-ee042dffae4965b34ea47c349450e83491fc60a5"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1669,7 +1669,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:f44e440e105cefca675298317b8a6b6719a442bb67b6579b0e96bbf3105989fd"
+    digest: "sha256:530aa1d6d818f75f1e3fe232826ce7bddc95c445b48792875b9f476523f03f02"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -5327,7 +5327,7 @@ scheduleFeed:
     progressStallSecs: 1800
     image:
       repository: ghcr.io/distant-signal/images/schedule-ingest
-      tag: "build.42173909833-b3aef0ff99fdecb17de2118f57f43781085f1b9b"
+      tag: "build.42211306077-ee042dffae4965b34ea47c349450e83491fc60a5"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
       digest: "sha256:b240b06bdcd83b60f9a6d69b7977ff7c9acdadd8aedf8b9c8a656b32b44d2df2"
@@ -5597,7 +5597,7 @@ scheduleFeed:
     progressStallSecs: 7200
     image:
       repository: ghcr.io/distant-signal/images/schedule-reference
-      tag: "build.42173909833-b3aef0ff99fdecb17de2118f57f43781085f1b9b"
+      tag: "build.42211306077-ee042dffae4965b34ea47c349450e83491fc60a5"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
       digest: "sha256:bae683eb876d9bbd428390a9e73c603e44e7871cd821f8d6d82925b7c8bbf21a"
@@ -5885,10 +5885,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.42165516189-91cbb8142aa54af1fc9160cfa6bcc97a4c865df3"
+    tag: "build.42235768975-37a785472a3db67e7a78be582ff32dcfda2d8a68"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:03403bcec94cda6db29cf11130e8abe3b29dbdf533f769bb2eee390e73798d57"
+    digest: "sha256:14f93c614a2bd82efbc32c0cf4a503f6432e220037dbb9f27e1129e1976161a1"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
