@@ -273,8 +273,10 @@ tables:
   # §4.1): plan snapshots and breaks, written by the api. The notifier reads
   # open breaks, stamps notified_at/notified_severity (its push bookkeeping)
   # and reads the opt-out switch (§6.3, §6.5).
-  journey_revisions: {class: personal, grants: {api: SIUD}}
-  journey_revision_legs: {class: personal, grants: {api: SIUD}}
+  # notifier: the columns ds_store::journeys::leave_by_sql reads (the
+  # current revision's booked times; regular journeys phase 2, §5.1).
+  journey_revisions: {class: personal, grants: {api: SIUD, notifier: [{privileges: S, columns: [id, journey_id, revision_no]}]}}
+  journey_revision_legs: {class: personal, grants: {api: SIUD, notifier: [{privileges: S, columns: [revision_id, position, source_leg_id, kind, trains_id, booked_departure, planned_departure]}]}}
   journey_breaks: {class: personal, grants: {api: SIUD, notifier: [S, {privileges: U, columns: [notified_at, notified_severity]}]}}
   notification_preferences: {class: personal, grants: {api: SIUD, notifier: S}}
   # Quiet hours (DS-153): pushes held until the user's quiet hours end,
@@ -350,6 +352,12 @@ tables:
   train_notification_state: {class: internal, grants: {notifier: SIU, api: S}}
   line_notification_state: {class: internal, grants: {notifier: SIU, api: S}}
   journey_leg_notification_state: {class: internal, grants: {notifier: SIU, api: S}}
+  # Regular journeys phase 2 (§5.1): the leave_reminder cycle's
+  # bookkeeping per occurrence, and one morning summary per user and day
+  # (the notifier prunes these after 7 days). api: S for the account
+  # export, as for the other notification state tables.
+  regular_journey_push_state: {class: internal, grants: {notifier: SIU, api: S}}
+  regular_journey_summaries: {class: internal, grants: {notifier: SID, api: S}}
   # The ingest-writer's stream idempotency keys (plan 3a.3, spec §7.4):
   # inserted with each applied entry, pruned hourly after 48 h.
   ingest_dedup: {class: internal, grants: {writer: SID}}
