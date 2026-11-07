@@ -428,6 +428,7 @@ logged as one line with `target` `schedule_ingest::audit`:
 | `rejected_by_api` | api refused the record with 400/413/422 (`DistantSignalScheduleFeedIngestRejected`) | api's error |
 | `corpus_rejected` | a CORPUS file that failed its checks (`DistantSignalCorpusRejected`). Before ds-api#8, also one archived unloaded because another won | the failed check |
 | `corpus_superseded` | a CORPUS file archived unloaded in `corpus/superseded/` because another won: an older file, an XML snapshot dated before the loaded one, or the non-preferred format (`scheduleFeed.corpus.formatPrecedence`). Nothing is wrong with the file | why it was not loaded |
+| `corpus_unchanged` | a CORPUS file whose rows are exactly the last applied delivery's (a re-upload of the same content in new gzip bytes): nothing in Postgres is replaced and the ingest-writer doesn't re-run its comparison; the file is archived in `corpus/` as loaded. Counts in `schedule_feed_corpus_unchanged_total{format}`. Nothing is wrong with the file | the applied delivery it repeats |
 
 A file whose api POST fails transiently gets its line when the retry
 succeeds. Once api accepts a CIF delivery, schedule-ingest writes the zip's
