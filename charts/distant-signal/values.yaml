@@ -2209,6 +2209,16 @@ api:
     # default.
     recurrence:
       enabled: false
+    # -- The scheduling options' R3: a regular journey can run at a
+    # different time on some weekdays ("Fridays an hour earlier"), each
+    # with its own target and usual train. The api refuses them, and the
+    # website doesn't offer them, until this is on. Turn it on only once
+    # the notifier from ds-workers eac006c (core v0.13.0; #20 for the pick
+    # reminder's link, core v0.14.0) is deployed: an older notifier would
+    # mint the template's own legs and a weekday's legs into one journey.
+    # Needs an api from ds-api#33 (core v0.14.0). Off by default.
+    dayOverrides:
+      enabled: false
   # -- Regular journeys, phase 5 (distant-signal's
   # docs/superpowers/specs/2026-11-06-regular-journeys-design.md §8): the
   # api's bank holidays sync fetches GOV.UK's bank holidays JSON once for
