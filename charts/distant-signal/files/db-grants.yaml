@@ -254,6 +254,10 @@ tables:
   journey_templates: {class: personal, grants: {api: SIUD, notifier: SU}}
   journey_template_legs: {class: personal, grants: {api: SIUD, notifier: S}}
   journey_template_skipped_dates: {class: personal, grants: {api: SIUD, notifier: S}}
+  # Regular journeys' time away (R1): the user's own dates, read by the
+  # notifier's mint through ds_store::recurrence::load; the api writes,
+  # prunes and exports them.
+  user_away_periods: {class: personal, grants: {api: SIUD, notifier: S}}
   # notifier: U on last_pushed_at only, stamped on each delivered push for
   # the Notifications page's device list (DS-153).
   push_subscriptions: {class: personal, grants: {api: SIUD, notifier: [SD, {privileges: U, columns: [last_pushed_at]}]}}
@@ -576,6 +580,7 @@ sequences:
   personal_api_tokens_id_seq: {table: personal_api_tokens}
   push_subscriptions_id_seq: {table: push_subscriptions}
   tracked_train_tickets_id_seq: {table: tracked_train_tickets}
+  user_away_periods_id_seq: {table: user_away_periods}
   # Still named after the table's old name (tracked_trains).
   tracked_trains_id_seq: {table: train_subscriptions}
   train_current_state_id_seq: {table: train_current_state}
