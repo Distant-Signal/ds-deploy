@@ -609,6 +609,10 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.regularJourneys.planSweep.maxOccurrencesPerTick | quote }}
             - name: REGULAR_PLAN_SWEEP_MORNING_CHECK_HOUR
               value: {{ .Values.api.regularJourneys.planSweep.morningCheckHour | quote }}
+            # Regular journeys: every few weeks, extra dates and lists of
+            # dates -- see api.regularJourneys.recurrence in values.yaml.
+            - name: REGULAR_JOURNEY_RECURRENCE_ENABLED
+              value: {{ dig "recurrence" "enabled" false .Values.api.regularJourneys | quote }}
             # Regular journeys: the GOV.UK bank holidays sync -- see
             # api.bankHolidays in values.yaml.
             {{- $bankHolidays := .Values.api.bankHolidays | default dict }}

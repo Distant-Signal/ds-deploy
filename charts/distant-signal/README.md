@@ -2072,6 +2072,7 @@ Used only when `postgresql.enabled` is `false`.
 | `api.regularJourneys.planSweep.intervalSecs` | `300` | Plan sweep cadence; each tick holds an advisory lock, so one api replica runs it. |
 | `api.regularJourneys.planSweep.maxOccurrencesPerTick` | `200` | Most journeys the plan sweep plans per tick. |
 | `api.regularJourneys.planSweep.morningCheckHour` | `5` | London hour of the morning re-check, which re-plans a day whose train stopped running in the timetable. |
+| `api.regularJourneys.recurrence.enabled` | `false` | Regular journeys that repeat every 2 to 4 weeks, run on extra dates, or run only on a list of dates (`REGULAR_JOURNEY_RECURRENCE_ENABLED`). Off: the api refuses them and the website doesn't offer them. Needs a notifier from ds-workers#17 (core v0.12.0) on, so the mint knows every kind. |
 | `api.bankHolidays.enabled` | `false` | The bank holidays sync: one GOV.UK fetch for the whole service into `bank_holidays`, which regular journeys skip in their owner's division. With nothing fetched, nothing is skipped. |
 | `api.bankHolidays.url` | `https://www.gov.uk/bank-holidays.json` | Where the sync fetches; with egress policies on, its port joins the api's internet rule. A failed or implausible response keeps the stored holidays. |
 | `api.bankHolidays.intervalHours` | `24` | How old the last good fetch may get before the next (one api replica fetches, under an advisory lock); a failure is retried after 50 minutes. |
