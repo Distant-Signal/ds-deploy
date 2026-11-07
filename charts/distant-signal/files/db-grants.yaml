@@ -261,6 +261,11 @@ tables:
   # Regular journeys' extra dates (R2): the api writes them, the
   # notifier's mint reads them through ds_store::recurrence::load.
   journey_template_extra_dates: {class: personal, grants: {api: SIUD, notifier: S}}
+  # Regular journeys' different time on some days (R3): the api writes
+  # them and its plan sweep reads them. The notifier mints from the variant
+  # legs (journey_template_legs.variant_weekday) and reads a weekday's
+  # usual_itinerary here for the pick reminder's link.
+  journey_template_day_overrides: {class: personal, grants: {api: SIUD, notifier: S}}
   # notifier: U on last_pushed_at only, stamped on each delivered push for
   # the Notifications page's device list (DS-153).
   push_subscriptions: {class: personal, grants: {api: SIUD, notifier: [SD, {privileges: U, columns: [last_pushed_at]}]}}
