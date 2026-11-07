@@ -354,6 +354,10 @@ spec:
 {{- if dig "tflArrivals" "enabled" true .Values.api }}
 {{- $apiIdpUrls = append $apiIdpUrls (dig "tflArrivals" "baseUrl" "https://api.tfl.gov.uk" .Values.api) }}
 {{- end }}
+{{- /* Regular journeys phase 5: the api fetches GOV.UK's bank holidays. */}}
+{{- if dig "bankHolidays" "enabled" false .Values.api }}
+{{- $apiIdpUrls = append $apiIdpUrls (dig "bankHolidays" "url" "https://www.gov.uk/bank-holidays.json" .Values.api) }}
+{{- end }}
 {{- range (dig "delegated" "clients" list .Values.api | default list) }}
 {{- $apiIdpUrls = append $apiIdpUrls (dig "issuerUrl" "" .) }}
 {{- end }}

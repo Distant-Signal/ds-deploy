@@ -1215,6 +1215,30 @@ the user id), but a new user is created with neither and shows as
 application and that the api still requests the `profile` scope. Users
 created while it fired get their names at their next login after the fix.
 
+## bank holidays
+
+### DistantSignalBankHolidaysStale
+
+Renders only with `api.bankHolidays.enabled`. The api's bank holidays sync
+(ds-api's `bank_holidays_sync`) fetches GOV.UK's bank holidays JSON
+(`api.bankHolidays.url`) for the whole service, one replica at a time, and
+regular journeys skip each owner's bank holidays from `bank_holidays`. It
+fires when there has been no good fetch for `bankHolidaysStale.maxAgeHours`
+(or none yet), or when the latest holiday known is under `minDaysAhead`
+days away (GOV.UK publishes about two years ahead, so a near end means the
+fetches stopped long ago). The stored holidays are kept on any failure, so
+nothing breaks until the last known date; after it, regular journeys mint
+on bank holidays again.
+
+Check the api's logs for `bank holidays fetch failed` (transport, status,
+size) or `bank holidays response refused` (a division missing, too few
+events, a bad date), and `distant_signal_api_bank_holidays_sync_total{result}`.
+The one-row `bank_holidays_sync` table has the last attempt, its result and
+the last success. A `fetch_failed` run is usually egress (the api's
+NetworkPolicy internet rule, DNS) or GOV.UK being down; an `invalid` run
+means GOV.UK changed its format, which needs an api fix. A failed fetch is
+retried hourly.
+
 ## cold archive
 
 Details: [cold archive](https://github.com/Distant-Signal/ds-workers/blob/main/docs/cold-archive.md).

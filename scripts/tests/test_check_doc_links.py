@@ -93,5 +93,15 @@ class CheckTests(unittest.TestCase):
             )
 
 
+class OwnRepositoryTests(unittest.TestCase):
+    """Links to this repository's main read this checkout."""
+
+    def test_only_this_repositorys_main_is_own(self) -> None:
+        """Another ref or another repository is still cloned."""
+        self.assertTrue(links.is_own("ds-deploy", "main"))
+        self.assertFalse(links.is_own("ds-deploy", "v1.0.0"))
+        self.assertFalse(links.is_own("ds-api", "main"))
+
+
 if __name__ == "__main__":
     unittest.main()

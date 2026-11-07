@@ -53,6 +53,7 @@ so that clause fired on every rollout.
 {{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
 {{- $signupSpikeOn := ($rule.userSignupSpike).enabled }}
 {{- $missingNamesOn := ($rule.loginMissingNameClaims).enabled }}
+{{- $bankHolidaysOn := and ($rule.bankHolidaysStale).enabled (dig "bankHolidays" "enabled" false .Values.api) }}
 {{- $archiveExpiryOn := and ($rule.archiveExpiry).enabled .Values.archive.enabled (.Values.archive.expiry).enabled }}
 {{- $postgresDownOn := ($rule.postgresDown).enabled }}
 {{- $apiDbDownOn := ($rule.apiDatabaseDown).enabled }}
@@ -77,7 +78,7 @@ so that clause fired on every rollout.
 {{- $poolTimeoutsOn := ($rule.dbPoolAcquireTimeouts).enabled }}
 {{- $directWritesOn := ($rule.directWritesFailing).enabled }}
 {{- $feedMarkerOn := and ($rule.scheduleFeedMarkerStale).enabled .Values.scheduleFeed.enabled }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $archiveAlertOn $signupSpikeOn $missingNamesOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $archiveAlertOn $signupSpikeOn $missingNamesOn $bankHolidaysOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
 {{- $archiveHealthOn := and .Values.archive.enabled (or ($rule.archiveStale).enabled ($rule.archiveBatchChurn).enabled) }}
 {{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled }}
 {{- $darwinOn := and ($rule.darwinRelay).enabled .Values.darwinRelay.enabled }}
@@ -1822,6 +1823,40 @@ spec:
             summary: "{{ "{{ $value | humanize }}" }} logins without name claims in {{ .window }}"
             description: "The IdP sent no name or username claim. Check its profile scope mapping for the Distant Signal application."
             runbook_url: {{ printf "%s#distantsignalloginmissingnameclaims" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $bankHolidaysOn }}
+    {{- with $rule.bankHolidaysStale }}
+    - name: distant-signal.bank-holidays
+      rules:
+        {{- /*
+        The api's bank holidays sync (regular journeys phase 5): the replica
+        holding its advisory lock sets
+        distant_signal_api_bank_holidays_last_success_seconds (the last good
+        GOV.UK fetch) and ..._latest_date_seconds{division} (the latest
+        holiday known) every hour. Absent before the first good fetch.
+        */}}
+        - record: distant_signal:bank_holidays_last_success_age_seconds:max
+          expr: |
+            time() - max by (namespace) (distant_signal_api_bank_holidays_last_success_seconds{namespace="{{ $ns }}"})
+        - record: distant_signal:bank_holidays_latest_date_ahead_seconds:min
+          expr: |
+            min by (namespace) (distant_signal_api_bank_holidays_latest_date_seconds{namespace="{{ $ns }}"}) - time()
+        - alert: DistantSignalBankHolidaysStale
+          expr: |
+            distant_signal:bank_holidays_last_success_age_seconds:max{namespace="{{ $ns }}"} > {{ mul (int .maxAgeHours) 3600 }}
+            or distant_signal:bank_holidays_latest_date_ahead_seconds:min{namespace="{{ $ns }}"} < {{ mul (int .minDaysAhead) 86400 }}
+            or absent(distant_signal_api_bank_holidays_last_success_seconds{namespace="{{ $ns }}"})
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "bank holidays are stale or end within {{ .minDaysAhead }} days"
+            description: "No good GOV.UK fetch in {{ .maxAgeHours }}h, or the latest known holiday is near. Past it, regular journeys mint on bank holidays."
+            runbook_url: {{ printf "%s#distantsignalbankholidaysstale" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $archiveAlertOn }}

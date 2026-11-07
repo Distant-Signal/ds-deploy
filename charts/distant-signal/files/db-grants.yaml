@@ -229,7 +229,10 @@ roles:
 # derived, reference, internal, migrations.
 tables:
   # --- personal: user data. Never in read_shared.
-  users: {class: personal, grants: {api: SIUD}}
+  # notifier: the owner's bank holiday division, for the template mint's
+  # bank holiday skip (ds_store::bank_holidays; regular journeys phase 5,
+  # §8.1). Nothing else of the account.
+  users: {class: personal, grants: {api: SIUD, notifier: [{privileges: S, columns: [id, bank_holiday_division]}]}}
   sessions: {class: personal, grants: {api: SIUD}}
   oidc_login_state: {class: personal, grants: {api: SIUD}}
   pinned_lines: {class: personal, grants: {api: SIUD, notifier: S}}
@@ -365,6 +368,9 @@ tables:
   # docs/enricher-anthropic.md): inserted at submission, deleted once the
   # results are written (crates/enricher/src/batch.rs). No UPDATE.
   enricher_llm_batches: {class: internal, grants: {enricher: SID}}
+  # The bank holidays sync's one row: last attempt, result and success
+  # (regular journeys phase 5, §8.2), shared by the api's replicas.
+  bank_holidays_sync: {class: internal, grants: {api: SIU}}
   # The api's shared TfL arrivals cache (DS-136, UNLOGGED): one row per
   # stop, upserted by whichever replica refreshes it, pruned by the api
   # after a day untouched (crates/api/src/data/tfl_arrivals.rs).
@@ -476,6 +482,12 @@ tables:
   # delete the stops that left, rebuild the links); the api reads them. The
   # link rows cascade from tfl_stops (no grant needed) and are never
   # updated.
+  # UK bank holidays per division (regular journeys phase 5, §8.1;
+  # migration 20261106210000): the api's bank_holidays_sync loop upserts
+  # each GOV.UK response and deletes the holidays it no longer lists; the
+  # api's nextDate and the notifier's template mint read them (S through
+  # read_shared).
+  bank_holidays: {class: reference, grants: {api: SIUD, notifier: S}}
   tfl_stops: {class: reference, grants: {api: S, writer: SIUD}}
   tfl_stop_crs: {class: reference, grants: {api: S, writer: SID}}
   # TfL's route sequences (DS-151; migration 20261026100000): the writer's
