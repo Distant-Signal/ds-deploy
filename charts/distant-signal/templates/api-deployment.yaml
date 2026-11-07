@@ -613,6 +613,10 @@ with api.extraEnv, which replaces an entry of the same name.
             # dates -- see api.regularJourneys.recurrence in values.yaml.
             - name: REGULAR_JOURNEY_RECURRENCE_ENABLED
               value: {{ dig "recurrence" "enabled" false .Values.api.regularJourneys | quote }}
+            # Regular journeys: a different time on some days -- see
+            # api.regularJourneys.dayOverrides in values.yaml.
+            - name: REGULAR_JOURNEY_DAY_OVERRIDES_ENABLED
+              value: {{ dig "dayOverrides" "enabled" false .Values.api.regularJourneys | quote }}
             # Regular journeys: the GOV.UK bank holidays sync -- see
             # api.bankHolidays in values.yaml.
             {{- $bankHolidays := .Values.api.bankHolidays | default dict }}

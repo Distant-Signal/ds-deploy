@@ -1656,7 +1656,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.42411885663-e38673a1a8a4020484a8679ecad88f8a74f9f655"
+    tag: "build.42418642520-65425ab1e83a80bbb70fcd7b286d56a5fdd42743"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1669,7 +1669,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:9a2873600f8dd673842803014071071144b12233c783e385d56e67902d3c0217"
+    digest: "sha256:1ce681348e6c95f7dae5276d7da0eb4d420fee5e5567e859a296405d54582502"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -2208,6 +2208,16 @@ api:
     # them, and the website doesn't offer them, until this is on. Off by
     # default.
     recurrence:
+      enabled: false
+    # -- The scheduling options' R3: a regular journey can run at a
+    # different time on some weekdays ("Fridays an hour earlier"), each
+    # with its own target and usual train. The api refuses them, and the
+    # website doesn't offer them, until this is on. Turn it on only once
+    # the notifier from ds-workers eac006c (core v0.13.0; #20 for the pick
+    # reminder's link, core v0.14.0) is deployed: an older notifier would
+    # mint the template's own legs and a weekday's legs into one journey.
+    # Needs an api from ds-api#33 (core v0.14.0). Off by default.
+    dayOverrides:
       enabled: false
   # -- Regular journeys, phase 5 (distant-signal's
   # docs/superpowers/specs/2026-11-06-regular-journeys-design.md §8): the
@@ -5410,10 +5420,10 @@ scheduleFeed:
     progressStallSecs: 1800
     image:
       repository: ghcr.io/distant-signal/images/schedule-ingest
-      tag: "build.42411885663-e38673a1a8a4020484a8679ecad88f8a74f9f655"
+      tag: "build.42418642520-65425ab1e83a80bbb70fcd7b286d56a5fdd42743"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: "sha256:d35fdc0c4a97dab7cea553aa18278dbd1d18c593a12b7b8441c98b208b695e7e"
+      digest: "sha256:96fb2a27d0c270b9915bf5d1885f915c444561f431c5b7cf65a5bb37c31db3b5"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
@@ -5680,10 +5690,10 @@ scheduleFeed:
     progressStallSecs: 7200
     image:
       repository: ghcr.io/distant-signal/images/schedule-reference
-      tag: "build.42411885663-e38673a1a8a4020484a8679ecad88f8a74f9f655"
+      tag: "build.42418642520-65425ab1e83a80bbb70fcd7b286d56a5fdd42743"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: "sha256:74d65ccc1cbe338a03967cb53e28e2005e00524e31af03fe1ab2c33710571a23"
+      digest: "sha256:4257418f70af5cf9306599facc41c393845baa9535d4fb635ff57874d540cde2"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
@@ -5968,10 +5978,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.42414618881-aa5c3abd35a002aa5d2364841f95e693fb09071a"
+    tag: "build.42423117538-d759a8ada1e9f2a0a58ba4740455f918d35e3983"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:c1c268d874be1f126d09a847152d0b04a9eca3e1521b191a2854865d9c8591ce"
+    digest: "sha256:0785af039ec02c7275c0d294556f164ba5e6104aae3284b5a4300d68e43dec14"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
