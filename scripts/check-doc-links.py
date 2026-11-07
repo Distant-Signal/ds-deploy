@@ -16,8 +16,11 @@ anchor names one of its headings (GitHub's heading slugs) or an explicit
 Each linked repository is a blobless, shallow clone of the linked ref into
 a temporary directory (the repositories are public, so no token), or, with
 --checkouts DIR, the checkout at DIR/<repo> as it stands (for working on
-several repositories at once). Exit 0 when every link resolves, 1 when one
-does not, 2 when a repository could not be fetched.
+several repositories at once). A link to this repository's own `main`
+reads this checkout as it stands: merging makes it `main`, so a change can
+add a runbook section and the promtool test whose `runbook_url` names it.
+Exit 0 when every link resolves, 1 when one does not, 2 when a repository
+could not be fetched.
 """
 
 import argparse
@@ -44,6 +47,18 @@ HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.+?)\s*#*\s*$")
 HTML_ANCHOR = re.compile(r"""<a\s[^>]*(?:name|id)=["']([^"']+)["']""")
 MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 GIT = shutil.which("git") or "git"
+# This repository and its default branch: links there read ROOT ([`is_own`]).
+OWN_REPO = "ds-deploy"
+OWN_REF = "main"
+
+
+def is_own(repo: str, ref: str) -> bool:
+    """Whether ``repo`` at ``ref`` is this repository's ``main``.
+
+    Read from this checkout rather than a clone: once the change merges,
+    this tree is ``main``.
+    """
+    return repo == OWN_REPO and ref == OWN_REF
 
 
 def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -211,6 +226,9 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as scratch:
         source_for: dict[tuple[str, str], Source] = {}
         for repo, ref in sorted({(link.repo, link.ref) for link in links}):
+            if is_own(repo, ref):
+                source_for[repo, ref] = Source(ROOT, None)
+                continue
             if args.checkouts is not None:
                 source_for[repo, ref] = Source(args.checkouts / repo, None)
                 continue

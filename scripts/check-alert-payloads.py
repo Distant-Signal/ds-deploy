@@ -105,6 +105,8 @@ RENDER_FLAGS = [
     "api.sso.redirectUrl=https://app.example.com/callback",
     "api.sso.postLoginRedirectUrl=https://app.example.com/",
     "metrics.prometheusRule.enabled=true",
+    # The bank holidays sync, for DistantSignalBankHolidaysStale.
+    "api.bankHolidays.enabled=true",
     "pollers.ldbws.enabled=true",
     "pollers.ldbws.baseUrl=https://ldbws.example.com",
     "pollers.incidents.enabled=true",

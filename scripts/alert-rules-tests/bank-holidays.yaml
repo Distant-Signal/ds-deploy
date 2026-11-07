@@ -1,0 +1,80 @@
+# promtool unit tests for DistantSignalBankHolidaysStale (regular journeys
+# phase 5; see recorded-alerts.yaml's header for how rules.yaml is
+# rendered, with api.bankHolidays.enabled): no good GOV.UK fetch for 72h,
+# the latest known holiday under 60 days away, or no fetch yet; for 2h.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Healthy: fetched every hour, holidays known 400 days ahead.
+  - interval: 1h
+    input_series:
+      - series: 'distant_signal_api_bank_holidays_last_success_seconds{namespace="distant-signal", pod="api"}'
+        values: '0+3600x80'
+      - series: 'distant_signal_api_bank_holidays_latest_date_seconds{namespace="distant-signal", pod="api", division="scotland"}'
+        values: '34560000x80'
+      - series: 'distant_signal_api_bank_holidays_latest_date_seconds{namespace="distant-signal", pod="api", division="england-and-wales"}'
+        values: '34560000x80'
+    alert_rule_test:
+      - eval_time: 79h
+        alertname: DistantSignalBankHolidaysStale
+        exp_alerts: []
+
+  # No good fetch since time 0: stale past 72h, firing 2h later.
+  - interval: 1h
+    input_series:
+      - series: 'distant_signal_api_bank_holidays_last_success_seconds{namespace="distant-signal", pod="api"}'
+        values: '0x80'
+      - series: 'distant_signal_api_bank_holidays_latest_date_seconds{namespace="distant-signal", pod="api", division="scotland"}'
+        values: '34560000x80'
+    alert_rule_test:
+      - eval_time: 73h
+        alertname: DistantSignalBankHolidaysStale
+        exp_alerts: []
+      - eval_time: 76h
+        alertname: DistantSignalBankHolidaysStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: bank holidays are stale or end within 60 days
+              description: "No good GOV.UK fetch in 72h, or the latest known holiday is near. Past it, regular journeys mint on bank holidays."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalbankholidaysstale
+
+  # Fetching fine, but one division's latest holiday is 50 days away.
+  - interval: 1h
+    input_series:
+      - series: 'distant_signal_api_bank_holidays_last_success_seconds{namespace="distant-signal", pod="api"}'
+        values: '0+3600x10'
+      - series: 'distant_signal_api_bank_holidays_latest_date_seconds{namespace="distant-signal", pod="api", division="england-and-wales"}'
+        values: '34560000x10'
+      - series: 'distant_signal_api_bank_holidays_latest_date_seconds{namespace="distant-signal", pod="api", division="northern-ireland"}'
+        values: '4320000x10'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: DistantSignalBankHolidaysStale
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: DistantSignalBankHolidaysStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: bank holidays are stale or end within 60 days
+              description: "No good GOV.UK fetch in 72h, or the latest known holiday is near. Past it, regular journeys mint on bank holidays."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalbankholidaysstale
+
+  # Enabled but never fetched (no gauge at all): fires after 2h.
+  - interval: 1h
+    input_series:
+      - series: 'up{namespace="distant-signal", pod="api"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: DistantSignalBankHolidaysStale
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: DistantSignalBankHolidaysStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: bank holidays are stale or end within 60 days
+              description: "No good GOV.UK fetch in 72h, or the latest known holiday is near. Past it, regular journeys mint on bank holidays."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalbankholidaysstale

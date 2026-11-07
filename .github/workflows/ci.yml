@@ -2351,6 +2351,26 @@ jobs:
           # Logins without name claims alert (the IdP's mapping broke).
           grep -q 'alert: DistantSignalLoginMissingNameClaims' <<<"${rule}"
           grep -q 'increase(distant_signal_api_login_missing_name_claims_total{namespace="[^"]*"}\[1h\])) >= 3$' <<<"${rule}"
+          # Bank holidays (regular journeys phase 5): off by default, so no
+          # alert; on, the stale alert renders, the api gets the sync's
+          # settings and its egress takes the GOV.UK URL's port.
+          if grep -q 'alert: DistantSignalBankHolidaysStale' <<<"${rule}"; then
+            echo "DistantSignalBankHolidaysStale renders with api.bankHolidays off" >&2
+            exit 1
+          fi
+          bh=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set metrics.prometheusRule.enabled=true \
+            --set api.bankHolidays.enabled=true \
+            --show-only templates/prometheusrule.yaml)
+          grep -q 'alert: DistantSignalBankHolidaysStale' <<<"${bh}"
+          grep -q 'distant_signal:bank_holidays_last_success_age_seconds:max{namespace="[^"]*"} > 259200$' <<<"${bh}"
+          grep -q 'distant_signal:bank_holidays_latest_date_ahead_seconds:min{namespace="[^"]*"} < 5184000$' <<<"${bh}"
+          bhapi=$(helm template distant-signal charts/distant-signal "${base[@]}" \
+            --set api.bankHolidays.enabled=true \
+            --show-only templates/api-deployment.yaml)
+          grep -A1 'name: BANK_HOLIDAYS_ENABLED$' <<<"${bhapi}" | grep -q 'value: "true"'
+          grep -A1 'name: BANK_HOLIDAYS_URL$' <<<"${bhapi}" | grep -q 'value: "https://www.gov.uk/bank-holidays.json"'
+          grep -A1 'name: BANK_HOLIDAYS_INTERVAL_HOURS$' <<<"${bhapi}" | grep -q 'value: "24"'
           # SVC-04/SVC-08: the poller rules render (as <fullname>-pollers)
           # once a poller is enabled.
           pollers=$(helm template distant-signal charts/distant-signal "${base[@]}" \
