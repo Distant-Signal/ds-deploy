@@ -258,6 +258,9 @@ tables:
   # notifier's mint through ds_store::recurrence::load; the api writes,
   # prunes and exports them.
   user_away_periods: {class: personal, grants: {api: SIUD, notifier: S}}
+  # Regular journeys' extra dates (R2): the api writes them, the
+  # notifier's mint reads them through ds_store::recurrence::load.
+  journey_template_extra_dates: {class: personal, grants: {api: SIUD, notifier: S}}
   # notifier: U on last_pushed_at only, stamped on each delivered push for
   # the Notifications page's device list (DS-153).
   push_subscriptions: {class: personal, grants: {api: SIUD, notifier: [SD, {privileges: U, columns: [last_pushed_at]}]}}
