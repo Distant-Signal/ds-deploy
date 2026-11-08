@@ -50,7 +50,9 @@ from `ci.yml` locally.
 pushes `ghcr.io/distant-signal/images/<service>:build.<run id>-<commit>`;
 a PR here bumps that image's `tag`, `digest` and `source` together in
 `charts/distant-signal/values.yaml` (`scripts/pin-images.py` writes all
-three from the registry; never hand-edit `source`), and a ds-core release bumps
+three from the registry; never hand-edit `source`; schedule-ingest and
+schedule-reference go in a PR of their own, never with the api, as their
+changes fall in the dtd-sftp deploy window: README.md), and a ds-core release bumps
 `core-version` with the `ds-migrate` image and the re-vendored access files
 (`charts/distant-signal/files/`, `scripts/render-redis-acl.py`). Renovate is
 installed but not running yet, so these bumps are made by hand until it is;

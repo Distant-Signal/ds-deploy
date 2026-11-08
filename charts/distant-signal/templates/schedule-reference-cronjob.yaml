@@ -30,7 +30,7 @@ alerts cover its runs.
 {{- $env := list (dict "name" "STORAGE_DIR" "value" "/data/schedule-feed") (dict "name" "SCHEDULE_FORWARD_PUBLISH_DAYS" "value" ($ref.forwardPublishDays | int | toString)) }}
 {{- if include "distant-signal.scheduleReferenceDbSink" . }}
 {{- $env = concat $env (include "distant-signal.databaseEnvFor" (dict "root" . "service" "schedule_reference") | fromYamlArray) }}
-{{- $env = concat $env (list (dict "name" "DATABASE_MAX_CONNECTIONS" "value" ($ref.ingest.database.maxConnections | int | toString)) (dict "name" "CORPUS_FALLBACK_ENABLED" "value" (.Values.api.corpusFallback.enabled | toString))) }}
+{{- $env = concat $env (list (dict "name" "DATABASE_MAX_CONNECTIONS" "value" ($ref.ingest.database.maxConnections | int | toString)) (dict "name" "CORPUS_FALLBACK_ENABLED" "value" (include "distant-signal.corpusFallbackEnabled" .))) }}
 {{- end }}
 {{- $env = concat $env (list (dict "name" "RUN_ONCE" "value" "true") (dict "name" "METRICS_ENABLED" "value" "false") (dict "name" "HEALTH_BIND_URL" "value" (printf "127.0.0.1:%d" (int $ref.healthPort))) (dict "name" "PROGRESS_STALL_SECS" "value" ($ref.progressStallSecs | toString)) (dict "name" "RUST_LOG" "value" (.Values.scheduleFeed.logLevel | toString))) }}
 {{- $volumes := list (dict "name" "data" "persistentVolumeClaim" (dict "claimName" (default (include "distant-signal.scheduleFeedFullname" .) .Values.scheduleFeed.persistence.existingClaim) "readOnly" true)) }}

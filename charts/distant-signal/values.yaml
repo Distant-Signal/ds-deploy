@@ -1648,6 +1648,37 @@ pollers:
     podSecurityContext: {}
 
 # ---------------------------------------------------------------------------
+# shared -- settings several components read, kept out of any one
+# component's block (DS-403), so editing one says what it restarts. Each was
+# an `api.*` key; the old key still works for one release
+# (templates/_helpers.tpl, "Values that left `api`").
+# ---------------------------------------------------------------------------
+shared:
+  # -- Network Rail CORPUS as a FALLBACK for the timetable-derived
+  # TIPLOC/STANOX->CRS lookups (CORPUS_FALLBACK_ENABLED; see ds-api's
+  # crates/api/src/data/corpus_crosswalk.rs). OFF by default. When on, a
+  # TIPLOC or STANOX the timetable crosswalk (tiploc_crs/stanox_crs) has no
+  # CRS for -- a station's platform/bay TIPLOCs, a station absent from the
+  # timetable -- resolves through the CORPUS-derived crosswalk, built with
+  # the conservative inference in reference-data/line-catalogue-validation.md;
+  # the timetable always wins a conflict. Does nothing until CORPUS has been
+  # loaded (scheduleFeed.corpus.enabled). Check `corpus_compare` (in the api
+  # image) before turning it on. Read by the api, schedule-reference (in
+  # schedulefeed, or its CronJob: the dtd-sftp deploy window), the TRUST
+  # consumers and the full-coverage consumer, so every one of them derives
+  # the same CRS; editing it restarts them all. Formerly
+  # `api.corpusFallback.enabled`.
+  corpusFallback:
+    enabled: false
+  journeyBreaks:
+    # -- The kill switch for mid-journey suggestions: the api's break sweep
+    # (`api.journeyBreaks`) and the notifier's suggestion pushes, so the two
+    # are on or off together. Off by default; with it off, "I missed this
+    # train", the alternatives sheet and the in-app banner still work,
+    # computed on request. Formerly `api.journeyBreaks.enabled`.
+    enabled: false
+
+# ---------------------------------------------------------------------------
 # api (crates/api/src/data/config.rs: ServiceArguments)
 # ---------------------------------------------------------------------------
 api:
@@ -1807,26 +1838,14 @@ api:
   # interval. Less than sessionTtlDays in hours. Matches the binary's own
   # default.
   sessionExtendThrottleHours: 24
-  # -- How often the reconciliation sweep re-attempts fixing a stuck
-  # tracked-train row -- see crates/api/src/data/config.rs's
-  # reconciliation_sweep_interval_secs doc. 2026-09-25 Signal Box Audit Low
-  # finding: declared with a working default but never wired into this
-  # chart, alongside the three tunables immediately below it.
-  reconciliationSweepIntervalSecs: 300
-  # -- Grace period (minutes) the reconciliation sweep's schedule-
-  # enrichment half waits past a candidate's true origin departure before
-  # attempting a CIF-only match -- see config.rs's own
-  # schedule_enrichment_grace_minutes doc. Same "declared but never wired"
-  # gap as reconciliationSweepIntervalSecs above.
-  scheduleEnrichmentGraceMinutes: 30
-  # -- How often the backlog-match sweep retries `attempt_backlog_match`
-  # against still-pending pins -- see config.rs's own
-  # backlog_match_sweep_interval_secs doc. Same "declared but never wired"
-  # gap as the two tunables above.
-  backlogMatchSweepIntervalSecs: 300
+  # The reconciliation and backlog-match sweeps' settings moved to
+  # `ingestWriter.loops` (DS-403); the api's loops read them there while
+  # `backgroundLoops` is on. The old `api.*` keys still work for one
+  # release (templates/_helpers.tpl, "Values that left `api`").
   # -- How often the session-cleanup sweep deletes expired `sessions` rows
-  # -- see config.rs's own session_cleanup_interval_secs doc. Same
-  # "declared but never wired" gap as the three tunables above.
+  # -- see config.rs's own session_cleanup_interval_secs doc. 2026-09-25
+  # Signal Box Audit Low finding: declared with a working default but never
+  # wired into this chart.
   sessionCleanupIntervalSecs: 3600
   # -- Run the api's background loops (API_BACKGROUND_LOOPS, ingest plan
   # 1B.7), as today: the schedule-match, reconciliation and backlog-match
@@ -1974,18 +1993,8 @@ api:
       user: {perMinute: 60, burst: 20}
       global: {perMinute: 1200, burst: 200}
       authFailure: {perMinute: 10, burst: 10}
-  # -- Network Rail CORPUS as a FALLBACK for the timetable-derived
-  # TIPLOC/STANOX->CRS lookups (CORPUS_FALLBACK_ENABLED; see
-  # crates/api/src/data/corpus_crosswalk.rs). OFF by default. When on, a
-  # TIPLOC or STANOX the timetable crosswalk (tiploc_crs/stanox_crs) has no
-  # CRS for -- a station's platform/bay TIPLOCs, a station absent from the
-  # timetable -- resolves through the CORPUS-derived crosswalk, built with
-  # the conservative inference in reference-data/line-catalogue-validation.md;
-  # the timetable always wins a conflict. Does nothing until CORPUS has been
-  # loaded (scheduleFeed.corpus.enabled). Check `corpus_compare` (in the api
-  # image) before turning it on.
-  corpusFallback:
-    enabled: false
+  # The CORPUS fallback (`corpusFallback`) moved to `shared.corpusFallback`
+  # (DS-403); `api.corpusFallback.enabled` still works for one release.
   # -- The transit networks `/public/transit` serves (API_TRANSIT_NETWORKS;
   # transit networks spec §11). Empty by default: every `/public/transit`
   # route answers 404 and the frontend hides its pages. List a network only
@@ -2170,11 +2179,10 @@ api:
   # §5.3, §6): the api's break sweep finds journeys that stopped working
   # (a cancelled or cut-short train, a connection missed on live times and
   # minimum change times) and plans alternatives, and the notifier pushes one
-  # suggestion notice per break. `enabled` is the kill switch for both, off
-  # by default; with it off, "I missed this train", the alternatives sheet
-  # and the in-app banner still work, computed on request.
+  # suggestion notice per break. The kill switch for both is
+  # `shared.journeyBreaks.enabled` (DS-403; `api.journeyBreaks.enabled`
+  # still works for one release). These are the sweep's own settings.
   journeyBreaks:
-    enabled: false
     # Sweep cadence; each tick holds an advisory lock, so one replica runs it.
     intervalSecs: 60
     # Most journeys evaluated per tick.
@@ -2309,29 +2317,10 @@ api:
   # with an image that has 1B.3 and an image that has `ds-migrate` (1B.1)
   # for the Job.
   migrateOnStartup: true
-  # Settings for the dedicated connection api migrates on at startup,
-  # before it binds (crates/ds-store/src/migrate.rs). It first drops any
-  # INVALID index a failed CREATE INDEX CONCURRENTLY left behind, so a retry
-  # rebuilds it instead of crash-looping on "relation already exists".
-  # The migrate hook Job (`migrate.job`) uses the same two settings.
-  migrations:
-    # -- lock_timeout: a DDL statement that cannot get its lock within this
-    # fails (and the pod restarts and retries) instead of queueing behind a
-    # long transaction -- and blocking every other query on that table
-    # behind its own lock request -- until the startup probe kills it.
-    # Also bounds a CREATE INDEX CONCURRENTLY's wait for old transactions.
-    lockTimeoutSecs: 10
-    # -- statement_timeout per migration statement. MUST stay below the
-    # startup probe budget (`probes.startup`, 450 x 2s = 900s) so a slow
-    # statement fails with a logged error rather than a SIGKILL. 240s was
-    # first chosen to fit under the old 300s budget; it is kept now that the
-    # budget is 900s because a single statement running 4+ minutes is itself
-    # a sign of a stuck or mis-planned migration worth failing loudly, and it
-    # leaves room for three such statements (plus lock waits) in one run
-    # before the probe could fire. It is per statement: several long ones
-    # can still add up past 900s. A migration that needs longer: raise this
-    # (and, if needed, the startup probe) together.
-    statementTimeoutSecs: 240
+  # The startup migrations' lock and statement timeouts moved to
+  # `migrate.lockTimeoutSecs` and `migrate.statementTimeoutSecs` (DS-403),
+  # which the migrate hook Job shares; `api.migrations.*` still works for
+  # one release.
   probes:
     # -- Path served by crates/api/src/routes/health.rs, nested under /public
     # by main.rs: the startup and liveness probes and the `helm test` pod.
@@ -2346,7 +2335,7 @@ api:
       # 450 x 2s = 900s (15 minutes) of headroom, matching the Postgres
       # startupProbe (`postgresql.probes.startup`, 90 x 10s): after a node
       # reboot api may be waiting on WAL redo before its migrations can even
-      # start. `api.migrations` above bounds each migration statement inside
+      # start. `migrate.statementTimeoutSecs` bounds each migration statement inside
       # it (240s statement_timeout, 10s lock_timeout). The api runs
       # sqlx::migrate!() BEFORE it binds its listener
       # (crates/api/src/main.rs:118), so /public/health does not answer at
@@ -2502,13 +2491,39 @@ migrate:
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-core
     pullPolicy: IfNotPresent
+  # Settings for the migrations' dedicated connection: the migrate hook
+  # Job's (`migrate.job`) and, while `api.migrateOnStartup` is on, the
+  # api's startup migration, before it binds (crates/ds-store/src/migrate.rs).
+  # It first drops any INVALID index a failed CREATE INDEX CONCURRENTLY left
+  # behind, so a retry rebuilds it instead of crash-looping on "relation
+  # already exists". Formerly `api.migrations.*`, which still works for one
+  # release (DS-403).
+  # -- lock_timeout: a DDL statement that cannot get its lock within this
+  # fails (and the pod restarts and retries) instead of queueing behind a
+  # long transaction -- and blocking every other query on that table
+  # behind its own lock request -- until the startup probe kills it.
+  # Also bounds a CREATE INDEX CONCURRENTLY's wait for old transactions.
+  lockTimeoutSecs: 10
+  # -- statement_timeout per migration statement. MUST stay below the
+  # api's startup probe budget (`api.probes.startup`, 450 x 2s = 900s) and
+  # `migrate.job.activeDeadlineSeconds`, so a slow statement fails with a
+  # logged error rather than a SIGKILL. 240s was first chosen to fit under
+  # the old 300s budget; it is kept now that the budget is 900s because a
+  # single statement running 4+ minutes is itself a sign of a stuck or
+  # mis-planned migration worth failing loudly, and it leaves room for three
+  # such statements (plus lock waits) in one run before the probe could
+  # fire. It is per statement: several long ones can still add up past
+  # 900s. A migration that needs longer: raise this (and, if needed, the
+  # startup probe) together.
+  statementTimeoutSecs: 240
   job:
     # -- Run the migrations in a hook Job.
     enabled: false
     # -- Command, in `migrate.image`. The default is
     # `ds-migrate run` (plan 1B.1). It reads MIGRATION_DATABASE_URL,
     # MIGRATION_LOCK_TIMEOUT_SECS and MIGRATION_STATEMENT_TIMEOUT_SECS
-    # (`api.migrations`) and RUST_LOG.
+    # (`migrate.lockTimeoutSecs`, `migrate.statementTimeoutSecs`) and
+    # RUST_LOG.
     command:
       - /usr/local/bin/ds-migrate
     # -- Arguments to `command`.
@@ -2523,7 +2538,7 @@ migrate:
     # still fail.
     connectDeadlineSecs: 120
     # -- Deadline for the whole Job, the Postgres wait included (spec: 900).
-    # Keep `api.migrations.statementTimeoutSecs` well below it.
+    # Keep `migrate.statementTimeoutSecs` well below it.
     activeDeadlineSeconds: 900
     # -- tracing-subscriber EnvFilter (RUST_LOG).
     logLevel: info
@@ -2648,11 +2663,24 @@ ingestWriter:
   loops:
     # -- Run the train-domain loops (INGEST_WRITER_LOOPS): schedule-match,
     # reconciliation, backlog-match, and the CORPUS crosswalk rebuild with
-    # its freshness gauge. Their intervals are the api's
-    # (`api.reconciliationSweepIntervalSecs`,
-    # `api.backlogMatchSweepIntervalSecs`,
-    # `api.scheduleEnrichmentGraceMinutes`), so the two cannot drift.
+    # its freshness gauge.
     enabled: false
+    # The loops' settings (DS-403: formerly `api.*`, which still works for
+    # one release). The api's own loops read them too while
+    # `api.backgroundLoops` is on, so the two cannot drift; editing them
+    # restarts both.
+    # -- How often the reconciliation sweep re-attempts fixing a stuck
+    # tracked-train row (RECONCILIATION_SWEEP_INTERVAL_SECS) -- see
+    # ds-api's crates/api/src/data/config.rs,
+    # reconciliation_sweep_interval_secs.
+    reconciliationSweepIntervalSecs: 300
+    # -- Grace period (minutes) the reconciliation sweep's schedule-
+    # enrichment half waits past a candidate's true origin departure before
+    # attempting a CIF-only match (SCHEDULE_ENRICHMENT_GRACE_MINUTES).
+    scheduleEnrichmentGraceMinutes: 30
+    # -- How often the backlog-match sweep retries `attempt_backlog_match`
+    # against still-pending pins (BACKLOG_MATCH_SWEEP_INTERVAL_SECS).
+    backlogMatchSweepIntervalSecs: 300
   # -- Each Redis ingest stream's mode (INGEST_WRITER_STREAMS; spec §10,
   # plan 3a.3): `off` (not read) or `apply`. Release B (ingest phase 5)
   # removed `shadow` (decode, validate, ack, write nothing), which only
@@ -3223,7 +3251,7 @@ notifier:
   # -- see config.rs's own auto_commit_lead_minutes doc.
   autoCommitLeadMinutes: 120
   # -- How often open journey breaks are checked for a suggestion notice
-  # (on only with api.journeyBreaks.enabled).
+  # (on only with shared.journeyBreaks.enabled).
   journeyBreaksPollIntervalSecs: 15
   # Regular journeys' leave-by reminders and morning summary
   # (distant-signal's docs/superpowers/specs/2026-11-06-regular-journeys-design.md
@@ -4330,7 +4358,7 @@ trustBacklogConsumer:
   # movement-events after the commit, and STANOX/CRS is reloaded from it,
   # as the narrow `distant_signal_trust_backlog` only
   # (`postgresql.roles.perService.trust_backlog.connect` is required; the
-  # render fails without it, security review H2). `api.corpusFallback.enabled`
+  # render fails without it, security review H2). `shared.corpusFallback.enabled`
   # is passed on so the STANOX/CRS reload matches the api's. Release B
   # (ingest phase 5) removed the `sink: http` path
   # (/private/trust-event-backlog, /private/train-reasons,

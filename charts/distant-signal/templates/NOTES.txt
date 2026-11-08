@@ -29,6 +29,18 @@ Reach the web UI:
   ############################################################################
 {{- end }}
 
+{{- with include "distant-signal.movedApiValuesSet" . | fromJsonArray }}
+
+  ############################################################################
+  # WARNING: these values are deprecated aliases (DS-403) and stop working in
+  # the next release; move each to its new key (templates/_helpers.tpl,
+  # "Values that left `api`"):
+  {{- range . }}
+  #   - {{ . }}
+  {{- end }}
+  ############################################################################
+{{- end }}
+
 Reach the api:
 {{- if and .Values.ingress.enabled .Values.ingress.api.enabled .Values.ingress.api.host }}
 

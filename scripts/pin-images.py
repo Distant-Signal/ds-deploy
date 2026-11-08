@@ -26,6 +26,20 @@ missing label, so this warns. When the image has an
 commit: anything else means TAG is not the build it names, and nothing is
 written. Only the `tag:`, `digest:` and `source:` lines change, so the
 comments and layout stay.
+
+The schedule-feed images (schedule-ingest and schedule-reference, the
+components.yaml `schedule-feed` group) move only when they change (DS-403).
+Any chart build that changes a schedule-feed object falls in the dtd-sftp
+deploy window (components.yaml's header), and ds-api builds them with the
+api from every commit, so:
+
+- a schedule-feed image whose digest at TAG is the one already pinned keeps
+  its pin, tag included (its images are reproducible: a build of unchanged
+  inputs has the same digest);
+- schedule-feed images are pinned in a run of their own, never with other
+  services, so an api release never carries them. --with-schedule-feed
+  allows the mix, for a release that needs both at once (a contract
+  migration's floor, say).
 """
 
 import argparse
@@ -75,6 +89,8 @@ GROUP_REPOSITORIES = {
 }
 # Images whose workload's component label is not the image's name.
 IMAGE_COMPONENTS = {"ds-migrate": "migrate", "schedule-ingest": "schedulefeed"}
+# The components.yaml group whose images move on their own (the docstring).
+SCHEDULE_FEED = "schedule-feed"
 
 MANIFEST_TYPES = (
     "application/vnd.oci.image.index.v1+json, "
@@ -105,6 +121,8 @@ class Pin:
     tag: str
     digest: str
     source: str
+    # Leave the map alone when it already pins this digest.
+    keep_if_unchanged: bool = False
 
 
 # --- the registry ---------------------------------------------------------
@@ -194,10 +212,16 @@ def resolve_with_retries(
 # --- the source -----------------------------------------------------------
 
 
+def group_of(service: str, components: Mapping[str, Any]) -> object:
+    """Return SERVICE's components.yaml group (None when it has none)."""
+    component = IMAGE_COMPONENTS.get(service, service)
+    return (components.get("components") or {}).get(component)
+
+
 def fallback_source(service: str, components: Mapping[str, Any]) -> str:
     """Return the repository components.yaml's group says builds SERVICE."""
     component = IMAGE_COMPONENTS.get(service, service)
-    group = (components.get("components") or {}).get(component)
+    group = group_of(service, components)
     if group not in GROUP_REPOSITORIES:
         msg = (
             f"{service}: no {SOURCE_LABEL} label, and component {component!r} "
@@ -230,7 +254,24 @@ def pin_for(
     if not SOURCE.match(source):
         msg = f"{service}: source {source!r} is not a Distant-Signal repository"
         raise PinError(msg)
-    return Pin(tag, image.digest, source), warnings
+    keep = group_of(service, components) == SCHEDULE_FEED
+    return Pin(tag, image.digest, source, keep_if_unchanged=keep), warnings
+
+
+def check_schedule_feed_alone(
+    services: Sequence[str], components: Mapping[str, Any]
+) -> None:
+    """Refuse a run that pins schedule-feed images with other services."""
+    feed = [s for s in services if group_of(s, components) == SCHEDULE_FEED]
+    others = [s for s in services if s not in feed]
+    if feed and others:
+        msg = (
+            f"{', '.join(feed)} (the {SCHEDULE_FEED} group) and "
+            f"{', '.join(others)} in one run: a chart build that changes "
+            f"{SCHEDULE_FEED} falls in the dtd-sftp deploy window, so pin its "
+            "images in a PR of their own (or pass --with-schedule-feed)"
+        )
+        raise PinError(msg)
 
 
 # --- values.yaml ----------------------------------------------------------
@@ -243,10 +284,14 @@ def set_value(line: str, pad: str, key: str, value: str) -> str:
     return f"{pad}{key}: {quote}{value}{quote}\n"
 
 
-def edit_block(lines: list[str], start: int, service: str, pin: Pin) -> int:
+def edit_block(
+    lines: list[str], start: int, service: str, pin: Pin, kept: list[str]
+) -> int:
     """Rewrite one image map's lines after its repository line (at START).
 
-    Returns the index of the first line after the map.
+    Returns the index of the first line after the map. A map that already
+    pins the digest of a `keep_if_unchanged` pin is left alone, and SERVICE
+    added to KEPT.
     """
     repository = REPOSITORY_LINE.match(lines[start])
     assert repository is not None  # noqa: S101  # the caller matched it
@@ -267,6 +312,10 @@ def edit_block(lines: list[str], start: int, service: str, pin: Pin) -> int:
     if missing:
         msg = f"{service}: no {' or '.join(sorted(missing))} line in its image map"
         raise PinError(msg)
+    pinned = lines[found["digest"]].split(":", 1)[1].strip().strip("'\"")
+    if pin.keep_if_unchanged and pinned == pin.digest:
+        kept.append(service)
+        return end
     pad = " " * width
     for key, value in (
         ("tag", pin.tag),
@@ -282,9 +331,13 @@ def edit_block(lines: list[str], start: int, service: str, pin: Pin) -> int:
     return end + 2
 
 
-def apply_pins(lines: list[str], pins: Mapping[str, Pin]) -> None:
-    """Write each service's pin into LINES (values.yaml's), in place."""
+def apply_pins(lines: list[str], pins: Mapping[str, Pin]) -> list[str]:
+    """Write each service's pin into LINES (values.yaml's), in place.
+
+    Returns the services left alone because their digest was unchanged.
+    """
     seen: set[str] = set()
+    kept: list[str] = []
     i = 0
     while i < len(lines):
         match = REPOSITORY_LINE.match(lines[i])
@@ -294,27 +347,32 @@ def apply_pins(lines: list[str], pins: Mapping[str, Pin]) -> None:
                 msg = f"{service}: more than one image map pins it"
                 raise PinError(msg)
             seen.add(service)
-            i = edit_block(lines, i, service, pins[service])
+            i = edit_block(lines, i, service, pins[service], kept)
         else:
             i += 1
     missing = sorted(pins.keys() - seen)
     if missing:
         msg = f"no image map for {', '.join(missing)}"
         raise PinError(msg)
+    return kept
 
 
 # --- the CLI --------------------------------------------------------------
 
 
-def run(
+def run(  # noqa: PLR0913  # the CLI's options, each a keyword
     values: Path,
     components_path: Path,
     tag: str,
     services: Sequence[str],
     fetch: Fetch = http_fetch,
+    *,
+    with_schedule_feed: bool = False,
 ) -> list[str]:
     """Pin SERVICES at TAG in VALUES; return the warnings. Raise PinError."""
     components = yaml.safe_load(components_path.read_text("utf-8")) or {}
+    if not with_schedule_feed:
+        check_schedule_feed_alone(services, components)
     pins: dict[str, Pin] = {}
     warnings: list[str] = []
     for service in dict.fromkeys(services):
@@ -322,8 +380,11 @@ def run(
         pins[service], found = pin_for(service, tag, image, components)
         warnings += found
     lines = values.read_text("utf-8").splitlines(keepends=True)
-    apply_pins(lines, pins)
+    kept = apply_pins(lines, pins)
     values.write_text("".join(lines), "utf-8")
+    warnings += [
+        f"{service}: digest unchanged at {tag}; kept its pin" for service in kept
+    ]
     return warnings
 
 
@@ -336,10 +397,22 @@ def main(argv: Sequence[str] | None = None, fetch: Fetch = http_fetch) -> int:
     parser.add_argument("--tag", required=True, help="build.<run id>-<commit>")
     parser.add_argument("--values", type=Path, default=VALUES)
     parser.add_argument("--components", type=Path, default=COMPONENTS)
+    parser.add_argument(
+        "--with-schedule-feed",
+        action="store_true",
+        help="allow schedule-feed images in a run with other services",
+    )
     parser.add_argument("services", nargs="+", metavar="SERVICE")
     args = parser.parse_args(argv)
     try:
-        warnings = run(args.values, args.components, args.tag, args.services, fetch)
+        warnings = run(
+            args.values,
+            args.components,
+            args.tag,
+            args.services,
+            fetch,
+            with_schedule_feed=args.with_schedule_feed,
+        )
     except PinError as error:
         print(f"error: {error}", file=sys.stderr)  # noqa: T201  # CLI output
         return 1

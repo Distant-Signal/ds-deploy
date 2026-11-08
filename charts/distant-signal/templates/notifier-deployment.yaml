@@ -158,10 +158,10 @@ with notifier.extraEnv, which replaces an entry of the same name.
             - name: AUTO_COMMIT_LEAD_MINUTES
               value: {{ .Values.notifier.autoCommitLeadMinutes | quote }}
             # Auto-suggest notices for broken journeys: the same kill switch
-            # as the api's break sweep (api.journeyBreaks.enabled), so the
+            # as the api's break sweep (shared.journeyBreaks.enabled), so the
             # two are on or off together.
             - name: JOURNEY_BREAK_NOTICES_ENABLED
-              value: {{ .Values.api.journeyBreaks.enabled | quote }}
+              value: {{ include "distant-signal.journeyBreaksEnabled" . | quote }}
             - name: JOURNEY_BREAKS_POLL_INTERVAL_SECS
               value: {{ .Values.notifier.journeyBreaksPollIntervalSecs | quote }}
             # Regular journeys' leave-by reminders and morning summary.

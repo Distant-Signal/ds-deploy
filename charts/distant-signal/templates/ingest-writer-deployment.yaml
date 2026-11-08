@@ -132,14 +132,15 @@ with ingestWriter.extraEnv, which replaces an entry of the same name.
                 fieldRef:
                   fieldPath: metadata.name
             {{- end }}
-            # The loops' settings, from the api's own values so the writer
-            # and the api's loops cannot drift apart during the cutover.
+            # The loops' settings (ingestWriter.loops), which the api's own
+            # loops read too while api.backgroundLoops is on, so the two
+            # cannot drift apart during the cutover.
             - name: RECONCILIATION_SWEEP_INTERVAL_SECS
-              value: {{ .Values.api.reconciliationSweepIntervalSecs | quote }}
+              value: {{ include "distant-signal.trainLoopSetting" (dict "root" . "key" "reconciliationSweepIntervalSecs") | quote }}
             - name: SCHEDULE_ENRICHMENT_GRACE_MINUTES
-              value: {{ .Values.api.scheduleEnrichmentGraceMinutes | quote }}
+              value: {{ include "distant-signal.trainLoopSetting" (dict "root" . "key" "scheduleEnrichmentGraceMinutes") | quote }}
             - name: BACKLOG_MATCH_SWEEP_INTERVAL_SECS
-              value: {{ .Values.api.backlogMatchSweepIntervalSecs | quote }}
+              value: {{ include "distant-signal.trainLoopSetting" (dict "root" . "key" "backlogMatchSweepIntervalSecs") | quote }}
             # Always rendered, "false" included: it decides whether the
             # binary starts its metrics listener.
             - name: METRICS_ENABLED

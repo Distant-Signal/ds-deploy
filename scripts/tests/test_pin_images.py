@@ -37,6 +37,7 @@ chart_pins = _load("chart_pins", SCRIPTS / "tests" / "test_chart_pins.py")
 COMMIT = "a" * 40
 TAG = f"build.123-{COMMIT}"
 BASE = "https://ghcr.io/v2/distant-signal/images"
+ZERO_DIGEST = "sha256:" + "0" * 64
 
 VALUES = """\
 pollers:
@@ -63,6 +64,13 @@ migrate:
     tag: v0.2.0
     digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     source: https://github.com/Distant-Signal/ds-core
+scheduleFeed:
+  ingest:
+    image:
+      repository: ghcr.io/distant-signal/images/schedule-ingest
+      tag: "build.1-0000000000000000000000000000000000000000"
+      digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      source: https://github.com/Distant-Signal/ds-api
 """
 
 
@@ -142,11 +150,13 @@ def labels(source: str | None, revision: str | None = None) -> dict[str, str]:
 class PinImagesTest(unittest.TestCase):
     """scripts/pin-images.py."""
 
-    def run_pin(self, registry: FakeRegistry, *services: str) -> tuple[int, str]:
+    def run_pin(
+        self, registry: FakeRegistry, *services: str, values_text: str = VALUES
+    ) -> tuple[int, str]:
         """Pin SERVICES at TAG in a copy of VALUES; return the exit code and file."""
         with tempfile.TemporaryDirectory() as tmp:
             values = pathlib.Path(tmp) / "values.yaml"
-            values.write_text(VALUES, "utf-8")
+            values.write_text(values_text, "utf-8")
             argv = ["--values", str(values), "--tag", TAG, *services]
             with unittest.mock.patch("sys.stderr"):
                 code = pin_images.main(argv, fetch=registry)
@@ -260,6 +270,75 @@ class PinImagesTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(text, VALUES)
         self.assertEqual(sum("/manifests/" in url for url in registry.urls), 2)
+
+    def test_moves_a_schedule_feed_pin_whose_digest_changed(self) -> None:
+        """A changed schedule-feed image is pinned as any other."""
+        registry = FakeRegistry(
+            {"schedule-ingest": labels("https://github.com/Distant-Signal/ds-api")}
+        )
+        code, text = self.run_pin(registry, "schedule-ingest")
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "      repository: ghcr.io/distant-signal/images/schedule-ingest\n"
+            f'      tag: "{TAG}"\n'
+            f'      digest: "{registry.digest("schedule-ingest")}"\n',
+            text,
+        )
+
+    def test_keeps_a_schedule_feed_pin_whose_digest_is_unchanged(self) -> None:
+        """The same digest at a newer build leaves the pin, tag included."""
+        registry = FakeRegistry(
+            {"schedule-ingest": labels("https://github.com/Distant-Signal/ds-api")}
+        )
+        digest = registry.digest("schedule-ingest")
+        values = VALUES.replace(
+            f'      digest: "{ZERO_DIGEST}"\n'
+            "      source: https://github.com/Distant-Signal/ds-api\n",
+            f'      digest: "{digest}"\n'
+            "      source: https://github.com/Distant-Signal/ds-api\n",
+        )
+        self.assertNotEqual(values, VALUES)
+        code, text = self.run_pin(registry, "schedule-ingest", values_text=values)
+        self.assertEqual(code, 0)
+        self.assertEqual(text, values)
+
+    def test_moves_another_services_tag_even_when_its_digest_is_unchanged(
+        self,
+    ) -> None:
+        """Only schedule-feed keeps its pin: the api's tag is release-order's rule 2."""
+        registry = FakeRegistry(
+            {"api": labels("https://github.com/Distant-Signal/ds-api")}
+        )
+        values = VALUES.replace(
+            f'    digest: "{ZERO_DIGEST}"\n    pullPolicy',
+            f'    digest: "{registry.digest("api")}"\n    pullPolicy',
+        )
+        self.assertNotEqual(values, VALUES)
+        code, text = self.run_pin(registry, "api", values_text=values)
+        self.assertEqual(code, 0)
+        self.assertIn(f'    tag: "{TAG}"\n', text)
+
+    def test_refuses_schedule_feed_with_other_services(self) -> None:
+        """schedule-feed's images go in a run (and a PR) of their own."""
+        registry = FakeRegistry(
+            {
+                "api": labels("https://github.com/Distant-Signal/ds-api"),
+                "schedule-ingest": labels("https://github.com/Distant-Signal/ds-api"),
+            }
+        )
+        code, text = self.run_pin(registry, "api", "schedule-ingest")
+        self.assertEqual(code, 1)
+        self.assertEqual(text, VALUES)
+        self.assertEqual(registry.urls, [], "refused before any registry read")
+        code, text = self.run_pin(
+            registry, "--with-schedule-feed", "api", "schedule-ingest"
+        )
+        self.assertEqual(code, 0)
+        self.assertIn(
+            f'      tag: "{TAG}"\n'
+            f'      digest: "{registry.digest("schedule-ingest")}"\n',
+            text,
+        )
 
     def test_reads_the_amd64_config_with_a_token(self) -> None:
         """The amd64 image's config is read, after the anonymous token."""

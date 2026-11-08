@@ -1588,7 +1588,7 @@ its sink and its reads). Takes (dict "root" $ "role" ... "corpus" bool
 {{- end }}
 {{- if .corpus }}
 - name: CORPUS_FALLBACK_ENABLED
-  value: {{ $root.Values.api.corpusFallback.enabled | toString | quote }}
+  value: {{ include "distant-signal.corpusFallbackEnabled" $root | quote }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -3971,4 +3971,95 @@ cuts the shutdown drain short). Takes (dict "key" <values key> "value"
 {{- fail (printf "%s.terminationGracePeriodSeconds is %s, but it must be at least 30: a shorter grace kills the process mid-drain (duplicates on the next start) and buys nothing." .key $v) -}}
 {{- end -}}
 {{- int $v -}}
+{{- end }}
+
+{{/*
+Values that left `api` (DS-403). Each was an `api.*` key that other
+components read too, so editing it rolled them: the ingest-writer's loops
+(the ingest group), schedulefeed and schedule-reference (schedule-feed, so
+the dtd-sftp deploy window), the TRUST consumers, the notifier and the
+migrate hook Job. Each now lives with what reads it:
+
+  api.corpusFallback.enabled           -> shared.corpusFallback.enabled
+  api.journeyBreaks.enabled            -> shared.journeyBreaks.enabled
+  api.reconciliationSweepIntervalSecs  -> ingestWriter.loops.reconciliationSweepIntervalSecs
+  api.scheduleEnrichmentGraceMinutes   -> ingestWriter.loops.scheduleEnrichmentGraceMinutes
+  api.backlogMatchSweepIntervalSecs    -> ingestWriter.loops.backlogMatchSweepIntervalSecs
+  api.migrations.lockTimeoutSecs       -> migrate.lockTimeoutSecs
+  api.migrations.statementTimeoutSecs  -> migrate.statementTimeoutSecs
+
+The old keys still work for one release, as deprecated aliases: values.yaml
+no longer sets them, so one that is set is the deployer's own, and it wins
+over the new key (so production's values render as before until they move).
+NOTES.txt lists any that are set. The release after, setting one fails the
+render.
+
+`distant-signal.movedValue` returns one value: the old key's, read with
+`dig` under `api`, when it is set, else NEW. Takes (dict "root" $ "old"
+(list "key" ...) "new" value), OLD one or two keys long (`dig` takes its
+keys as arguments, not a list, so each length is spelled out).
+*/}}
+{{- define "distant-signal.movedValue" -}}
+{{- $api := .root.Values.api | default dict -}}
+{{- $old := "" -}}
+{{- if eq (len .old) 1 -}}
+{{- $old = dig (index .old 0) nil $api -}}
+{{- else if eq (len .old) 2 -}}
+{{- $old = dig (index .old 0) (index .old 1) nil $api -}}
+{{- else -}}
+{{- fail (printf "distant-signal.movedValue: an old key path of %d segments" (len .old)) -}}
+{{- end -}}
+{{- if kindIs "invalid" $old -}}
+{{- .new -}}
+{{- else -}}
+{{- $old -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The deprecated `api.*` aliases above that are set, as a list of their
+paths (NOTES.txt warns about each). Takes the root context.
+*/}}
+{{- define "distant-signal.movedApiValuesSet" -}}
+{{- $api := .Values.api | default dict -}}
+{{- $set := list -}}
+{{- range $path := list (list "corpusFallback" "enabled") (list "journeyBreaks" "enabled") (list "reconciliationSweepIntervalSecs") (list "scheduleEnrichmentGraceMinutes") (list "backlogMatchSweepIntervalSecs") (list "migrations" "lockTimeoutSecs") (list "migrations" "statementTimeoutSecs") -}}
+{{- $v := "" -}}
+{{- if eq (len $path) 1 -}}
+{{- $v = dig (index $path 0) nil $api -}}
+{{- else -}}
+{{- $v = dig (index $path 0) (index $path 1) nil $api -}}
+{{- end -}}
+{{- if not (kindIs "invalid" $v) -}}
+{{- $set = append $set (printf "api.%s" (join "." $path)) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $set -}}
+{{- end }}
+
+{{/* shared.corpusFallback.enabled, or its deprecated api.* alias. */}}
+{{- define "distant-signal.corpusFallbackEnabled" -}}
+{{- include "distant-signal.movedValue" (dict "root" . "old" (list "corpusFallback" "enabled") "new" .Values.shared.corpusFallback.enabled) -}}
+{{- end }}
+
+{{/* shared.journeyBreaks.enabled, or its deprecated api.* alias. */}}
+{{- define "distant-signal.journeyBreaksEnabled" -}}
+{{- include "distant-signal.movedValue" (dict "root" . "old" (list "journeyBreaks" "enabled") "new" .Values.shared.journeyBreaks.enabled) -}}
+{{- end }}
+
+{{/*
+One of ingestWriter.loops' sweep settings, or its deprecated api.* alias.
+Takes (dict "root" $ "key" "reconciliationSweepIntervalSecs") (or
+scheduleEnrichmentGraceMinutes, backlogMatchSweepIntervalSecs).
+*/}}
+{{- define "distant-signal.trainLoopSetting" -}}
+{{- include "distant-signal.movedValue" (dict "root" .root "old" (list .key) "new" (index .root.Values.ingestWriter.loops .key)) -}}
+{{- end }}
+
+{{/*
+migrate.lockTimeoutSecs or migrate.statementTimeoutSecs, or its deprecated
+api.migrations alias. Takes (dict "root" $ "key" "lockTimeoutSecs").
+*/}}
+{{- define "distant-signal.migrationSetting" -}}
+{{- include "distant-signal.movedValue" (dict "root" .root "old" (list "migrations" .key) "new" (index .root.Values.migrate .key)) -}}
 {{- end }}
