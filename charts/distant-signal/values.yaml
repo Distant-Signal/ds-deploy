@@ -1687,7 +1687,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.42418642520-65425ab1e83a80bbb70fcd7b286d56a5fdd42743"
+    tag: "build.42437107800-579b92b197e2f175671e85ab4c944b3f0b554389"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1700,7 +1700,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:1ce681348e6c95f7dae5276d7da0eb4d420fee5e5567e859a296405d54582502"
+    digest: "sha256:a308fce2063322a789d0133a6683820562dd974771ae9fd315015c1d4403481b"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
