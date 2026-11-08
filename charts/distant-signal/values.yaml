@@ -2653,10 +2653,10 @@ ingestWriter:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/ingest-writer
-    tag: "build.42389548990-701202e299976c341bf8020f104fce28f0129ae0"
+    tag: "build.42437112227-9762f7132834d44be77ca69428329f3e45e1efb6"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:9423b791fc974ef9850a99960f4d1cfc3779404d966fb903519946f2e929e1f5"
+    digest: "sha256:ee9577dfe636222134e54da243838ab6b39e32b91fc17c26eb4ec52016aa8f65"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4068,10 +4068,10 @@ enricher:
 trustConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-consumer
-    tag: "build.42389548990-701202e299976c341bf8020f104fce28f0129ae0"
+    tag: "build.42437112227-9762f7132834d44be77ca69428329f3e45e1efb6"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:28f2797bced2abcac516488229da0283b9474d57754056a4105d8c49c9561060"
+    digest: "sha256:f10b714aa2a5c4ebc97140f0caac77370cd44536d2c44e7b61cb94c497195c0d"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4217,10 +4217,10 @@ trustConsumer:
 fullCoverageConsumer:
   image:
     repository: ghcr.io/distant-signal/images/full-coverage-consumer
-    tag: "build.42389548990-701202e299976c341bf8020f104fce28f0129ae0"
+    tag: "build.42437112227-9762f7132834d44be77ca69428329f3e45e1efb6"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:8bdf24f54003ad9b1e16202daa5e4a3cf0ba904049d3e1215dbe19b2995d5b06"
+    digest: "sha256:2a74d59f68dfe6299904622197a87f6e70f2677cdf402b30aa37640bb28dc17e"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4346,10 +4346,10 @@ fullCoverageConsumer:
 trustBacklogConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-backlog-consumer
-    tag: "build.42389548990-701202e299976c341bf8020f104fce28f0129ae0"
+    tag: "build.42437112227-9762f7132834d44be77ca69428329f3e45e1efb6"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:df24fe6b14cc2f66da599d500bc50ef882b7f0657fd9a51e3f3d72ddb60ab6dd"
+    digest: "sha256:4e0440928f958bb4ebcd7931270910c316d101b4f90eafee7a78d255243ab307"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4455,10 +4455,10 @@ movementRelay:
   enabled: true
   image:
     repository: ghcr.io/distant-signal/images/movement-relay
-    tag: "build.42389548990-701202e299976c341bf8020f104fce28f0129ae0"
+    tag: "build.42437112227-9762f7132834d44be77ca69428329f3e45e1efb6"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:f78613271fd146731a88e6ac9d6fde2ebe6ef2d17c2833d590f0832b2633dbd5"
+    digest: "sha256:747dd4b158ae9d6652463094968ad39d8e6959b7f6c41258e8a1e20d1bc6dede"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4582,9 +4582,9 @@ darwinRelay:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/darwin-relay
-    tag: "build.42389548990-701202e299976c341bf8020f104fce28f0129ae0"
+    tag: "build.42437112227-9762f7132834d44be77ca69428329f3e45e1efb6"
     # -- Content digest override (see api.image.digest).
-    digest: "sha256:d7a713c209fa8ae816d134545740529f82de61dde88f0ca1231cebcec7840c28"
+    digest: "sha256:3274d755f71740b694a0dc811992ccddd2fca27d51d342e7a23d5391afa71270"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
