@@ -5,6 +5,11 @@
 {{- /* redis.acl (docs/redis-acl.md): per-client ACL users from an
      --aclfile instead of --requirepass. */}}
 {{- $acl := include "distant-signal.redisAclEnabled" . }}
+{{- /* redis.acl.reload.mode inPlace (docs/redis-acl.md, "Reloading the
+     users in place"): the passwords come from Secret volumes, not env, so
+     nothing in this pod template depends on the users or their passwords,
+     and the redis-acl-reload sidecar ACL LOADs a changed users file. */}}
+{{- $inPlace := include "distant-signal.redisAclInPlace" . }}
 {{- $requirePass := and .Values.redis.auth.enabled .Values.redis.auth.requirePass (not $acl) }}
 apiVersion: apps/v1
 kind: Deployment
@@ -72,7 +77,12 @@ spec:
         {{- with .Values.redis.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        {{- if $acl }}
+        {{- if $inPlace }}
+        # The sidecar reloads a changed users file; only a new version of
+        # the script itself restarts Redis.
+        checksum/redis-acl-reload: {{ .Files.Get "files/redis-acl-reload.sh" | sha256sum }}
+        kubectl.kubernetes.io/default-container: redis
+        {{- else if $acl }}
         # A stage or user change rewrites the ACL ConfigMap; restart Redis
         # so the initContainer renders the new users.acl.
         checksum/redis-acl: {{ include "distant-signal.redisAclFile" . | trim | sha256sum }}
@@ -111,6 +121,22 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        {{- if $inPlace }}
+        # The passwords as files, which the kubelet updates in place (env
+        # would need a restart, and would name every user in this pod
+        # template).
+        - name: acl-secret
+          secret:
+            secretName: {{ .Values.redis.acl.existingSecret }}
+        {{- if include "distant-signal.redisAclDefaultUserOn" . }}
+        - name: acl-auth
+          secret:
+            secretName: {{ include "distant-signal.redisAuthSecretName" . }}
+            items:
+              - key: {{ include "distant-signal.redisAuthSecretKey" . }}
+                path: password
+        {{- end }}
+        {{- end }}
         {{- end }}
       {{- if $acl }}
       initContainers:
@@ -125,6 +151,18 @@ spec:
           imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
           securityContext:
             {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          {{- if $inPlace }}
+          # The same rendering and checks, from the Secret volumes.
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              umask 077
+              sh /etc/redis-acl-template/redis-acl-reload.sh render > /etc/redis-acl/users.acl
+          volumeMounts:
+            {{- include "distant-signal.redisAclReloadMounts" . | nindent 12 }}
+          {{- else }}
           command:
             - sh
             - -c
@@ -192,6 +230,7 @@ spec:
               readOnly: true
             - name: acl
               mountPath: /etc/redis-acl
+          {{- end }}
           resources:
             requests:
               cpu: 10m
@@ -330,6 +369,35 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+        {{- if $inPlace }}
+        # redis.acl.reload.mode inPlace: renders the users file again every
+        # intervalSeconds (from the ConfigMap and Secret volumes, which the
+        # kubelet updates) and, when it changed, swaps it in and sends ACL
+        # LOAD as ds-admin; a refused load puts the previous file back.
+        # It never exits, so it cannot make the pod unready.
+        - name: redis-acl-reload
+          image: {{ include "distant-signal.image" (dict "root" . "image" .Values.redis.image) | quote }}
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          securityContext:
+            {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          command:
+            - sh
+            - /etc/redis-acl-template/redis-acl-reload.sh
+            - watch
+          env:
+            - name: REDIS_PORT
+              value: {{ .Values.redis.service.port | quote }}
+            - name: RELOAD_INTERVAL
+              value: {{ .Values.redis.acl.reload.intervalSeconds | int | quote }}
+          volumeMounts:
+            {{- include "distant-signal.redisAclReloadMounts" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              memory: 32Mi
+        {{- end }}
       {{- with .Values.redis.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

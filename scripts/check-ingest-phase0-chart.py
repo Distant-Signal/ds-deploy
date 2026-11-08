@@ -37,7 +37,10 @@ Per-client Redis ACL users (`redis.acl`):
     with REDIS_USERNAME and its own REDIS_PASSWORD key; REDIS_URL stays
     credential-free;
   - the ConfigMap equals scripts/render-redis-acl.py's output for stage
-    narrow and each default-user setting, with and without redis.auth.
+    narrow and each default-user setting, with and without redis.auth;
+  - `reload.mode: restart` restarts Redis by checksum; `inPlace` renders
+    from Secret volumes, adds the redis-acl-reload sidecar and keeps the
+    Redis pod template unchanged when the users change.
 
 Security review render guards (2026-10-08):
   - M3: ACL users with `default` on refuse to render (without redis.auth
@@ -691,6 +694,142 @@ def check_optional_acl_users(c: Checker) -> None:
     )
 
 
+IN_PLACE = sets("redis.acl.reload.mode=inPlace")
+RELOAD_SCRIPT = CHART / "files" / "redis-acl-reload.sh"
+
+
+def awk_program(text: str) -> list[str]:
+    """Return the users-file awk program in `text`, one stripped line each."""
+    start = text.index("awk '\n") + len("awk '\n")
+    end = text.index("}'", start)
+    return [line.strip() for line in text[start:end].splitlines() if line.strip()]
+
+
+def pod_annotations(doc: Doc) -> dict[str, str]:
+    """Return a workload's pod template annotations."""
+    spec = cast("dict[str, object]", doc.get("spec") or {})
+    template = cast("dict[str, object]", spec.get("template") or {})
+    meta = cast("dict[str, object]", template.get("metadata") or {})
+    return cast("dict[str, str]", meta.get("annotations") or {})
+
+
+def check_acl_reload(c: Checker) -> None:
+    """Check redis.acl.reload: restart by checksum, or reload in place.
+
+    `restart` (the default) keeps the checksum/redis-acl annotation and no
+    sidecar. `inPlace` drops the checksum, mounts the users Secret as a
+    volume instead of per-user env, adds the redis-acl-reload sidecar and
+    puts the password map (one line per placeholder) and the script in the
+    ConfigMap, so a users-file change (an optional client, defaultUser)
+    changes the ConfigMap and not the Redis pod template. The script's
+    render uses the restart mode initContainer's awk program verbatim.
+    """
+    template = (CHART / "templates" / "redis-deployment.yaml").read_text("utf-8")
+    script = RELOAD_SCRIPT.read_text(encoding="utf-8")
+    c.check(
+        ok=awk_program(template) == awk_program(script),
+        message="files/redis-acl-reload.sh's awk differs from the initContainer's",
+    )
+    c.refuses(
+        "an unknown reload mode",
+        "redis.acl.reload.mode",
+        *sets("redis.acl.reload.mode=sometimes"),
+    )
+    c.refuses(
+        "a zero reload interval",
+        "redis.acl.reload.intervalSeconds",
+        *IN_PLACE,
+        *sets("redis.acl.reload.intervalSeconds=0"),
+    )
+
+    restart = deployment(c.docs(), "-redis")
+    annotations = pod_annotations(restart)
+    names = [str(x.get("name")) for x in containers(restart)]
+    c.check(
+        ok="checksum/redis-acl" in annotations and names == ["redis"],
+        message=f"reload restart: checksum and no sidecar ({names}, {annotations})",
+    )
+
+    docs = c.docs(*IN_PLACE)
+    redis = deployment(docs, "-redis")
+    annotations = pod_annotations(redis)
+    c.check(
+        ok="checksum/redis-acl" not in annotations
+        and "checksum/redis-acl-reload" in annotations
+        and annotations.get("kubectl.kubernetes.io/default-container") == "redis",
+        message=f"reload inPlace: pod annotations {annotations}",
+    )
+    by_container = {str(x.get("name")): x for x in containers(redis)}
+    sidecar = by_container.get("redis-acl-reload", {})
+    c.check(
+        ok=list(by_container)[:1] == ["redis"]
+        and cast("list[str]", sidecar.get("command") or [])[-1:] == ["watch"],
+        message=f"reload inPlace: containers {list(by_container)}",
+    )
+    inits = containers(redis, "initContainers")
+    init = inits[0] if inits else {}
+    mounts = {
+        str(m.get("name"))
+        for m in cast("list[dict[str, object]]", init.get("volumeMounts") or [])
+    }
+    c.check(
+        ok=not env(init) and "acl-secret" in mounts,
+        message=(
+            f"reload inPlace: the initContainer must read the Secret volume, "
+            f"not env ({sorted(env(init))}, {sorted(mounts)})"
+        ),
+    )
+    volumes = {
+        str(v.get("name")): v
+        for v in cast("list[dict[str, object]]", pod(redis).get("volumes") or [])
+    }
+    secret = cast(
+        "dict[str, object]", volumes.get("acl-secret", {}).get("secret") or {}
+    )
+    c.check(
+        ok=secret.get("secretName") == "example-redis-users" and "items" not in secret,
+        message=f"reload inPlace: the acl-secret volume {secret}",
+    )
+    cm = by_name(docs).get("ConfigMap/distant-signal-redis-acl", {})
+    data = cast("dict[str, str]", cm.get("data") or {})
+    placeholders = set(re.findall(r"\$\{([A-Z0-9_]+)\}", data.get("users.acl.tpl", "")))
+    mapped = {
+        line.split()[0]: line.split()[1]
+        for line in data.get("passwords", "").splitlines()
+        if line.strip()
+    }
+    c.check(
+        ok=placeholders == set(mapped)
+        and mapped.get("REDIS_ACL_PASSWORD_MOVEMENT_RELAY")
+        == "/etc/redis-acl-secret/movement-relay-password"
+        and mapped.get("REDIS_ACL_PASSWORD_DEFAULT")
+        == "/etc/redis-acl-secret/default-password",
+        message=(
+            f"reload inPlace: the password map must name every placeholder "
+            f"(missing {sorted(placeholders - set(mapped))}, "
+            f"extra {sorted(set(mapped) - placeholders)})"
+        ),
+    )
+    c.check(
+        ok=data.get("redis-acl-reload.sh", "").strip() == script.strip(),
+        message="reload inPlace: the ConfigMap must carry files/redis-acl-reload.sh",
+    )
+    # A users-file change reaches only the ConfigMap.
+    for label, args in (
+        (
+            "an optional client on",
+            sets("redis.acl.clients.pollerTransitMetrolink=true"),
+        ),
+        ("defaultUser off", (*ALL_CLIENTS, *sets("redis.acl.defaultUser=off"))),
+    ):
+        changed = differing(docs, c.docs(*IN_PLACE, *args))
+        c.check(
+            ok="Deployment/distant-signal-redis" not in changed
+            and "ConfigMap/distant-signal-redis-acl" in changed,
+            message=f"reload inPlace, {label}: changed {sorted(changed)}",
+        )
+
+
 REDIS_PORT = 6379
 HTTPS_PORT = 443
 POSTGRES_PORT = 5432
@@ -1143,6 +1282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_redis_users(c)
     check_redis_acl_file(c)
     check_optional_acl_users(c)
+    check_acl_reload(c)
     check_transit_producer(c)
     check_net_producer(c)
     check_tfl_producer(c)

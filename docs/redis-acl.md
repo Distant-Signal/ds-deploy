@@ -91,8 +91,11 @@ refused. Edit the template and that test together.
   whitespace, fails the pod instead of starting Redis with a broken file.
   Redis starts with `--aclfile` instead of `--requirepass`, and its probes
   (with `redis.probes.*.type: exec`; tcpSocket by default) run
-  `redis-cli --user ds-admin ping`. A pod annotation with the file's
-  checksum restarts Redis when the stage or the users change.
+  `redis-cli --user ds-admin ping`. How Redis picks up a change to the
+  users is `redis.acl.reload.mode`: by default (`restart`) a pod
+  annotation with the file's checksum restarts Redis when the stage or the
+  users change; with `inPlace` a sidecar reloads them without a restart
+  (see [Reloading the users in place](#reloading-the-users-in-place)).
 - **Clients.** `redis.acl.clients.<client>: true` gives that Deployment
   `REDIS_USERNAME` and `REDIS_PASSWORD` from `<user>-password`. The
   services combine them with `REDIS_URL` in
@@ -101,6 +104,83 @@ refused. Edit the template and that test together.
   changes.
 - `scripts/render-redis-acl.py` renders the same file outside Helm, for a
   staging Redis (`--passwords-from-env`).
+
+## Reloading the users in place
+
+`redis.acl.reload.mode` (values.yaml):
+
+- **`restart`** (the default): the Redis pod template carries
+  `checksum/redis-acl`, the users file's checksum, so any change to it (a
+  ds-core users-file change, `stage`, `defaultUser`, an optional client
+  turned on or off) restarts Redis: Recreate, about 4 s of AOF load, and
+  every stream client reconnects. The initContainer reads the passwords
+  from env, so a password change needs a restart too (Reloader or
+  `kubectl rollout restart`).
+- **`inPlace`**: no ACL change restarts Redis. The pod template no longer
+  depends on the users or their passwords:
+  - `redis.acl.existingSecret` is mounted as a volume
+    (`/etc/redis-acl-secret`; with `defaultUser: "on"` the `redis.auth`
+    key too, at `/etc/redis-auth/password`), and the ConfigMap gains a
+    password map (`passwords`: which file holds each
+    `${REDIS_ACL_PASSWORD_*}`) and the script,
+    `files/redis-acl-reload.sh`. The kubelet updates mounted ConfigMaps and
+    Secrets in place, within about a minute.
+  - The `redis-acl` initContainer runs the script's `render`: the same awk
+    program and checks as the restart mode's (CI checks they are
+    identical), from the files.
+  - A `redis-acl-reload` sidecar (the Redis image's `sh` and `awk`) runs
+    the script's `watch`: every `redis.acl.reload.intervalSeconds` (10) it
+    renders the file again and, when the result differs from the live
+    `users.acl`, swaps it in and sends `ACL LOAD` as `ds-admin`. It
+    authenticates with `ds-admin`'s password from the file Redis runs now,
+    then the Secret's current and `-previous` ones, so rotating `ds-admin`
+    reloads too.
+  - The pod template's only checksum is the script's
+    (`checksum/redis-acl-reload`): a new version of the script restarts
+    Redis once, as switching the mode does. `kubectl exec` defaults to the
+    `redis` container.
+
+`ACL LOAD` is all or nothing: if Redis refuses the new file (a rule this
+Valkey does not know, say), it keeps its current users ("no change to the
+previously active ACL rules was performed"), and the sidecar puts the
+previous file back, so a Redis restart loads what it runs now. A render
+that fails (a missing or empty `<user>-password` key, a password with
+whitespace) changes nothing either. Either way the sidecar logs the reason
+(`redis-acl-reload: ACL LOAD failed: ...` or `... the users do not render:
+...`) and retries, backing off to about five minutes; it never exits, so it
+cannot make the pod unready. On Valkey 8.1 (checked against the pinned
+image) clients stay connected through a reload, and their next command
+is checked against their new rights; a removed user's clients are
+disconnected.
+
+The safe fallbacks:
+
+- `kubectl -n distant-signal rollout restart deploy/distant-signal-redis`
+  renders the file from the same volumes at start, exactly as the sidecar
+  would;
+- `redis.acl.reload.mode: restart` puts back the checksum restart (one
+  restart to switch).
+
+Unlike `restart`, where a missing key fails the new Redis pod (and the
+Recreate strategy has already stopped the old one), a missing key here
+leaves Redis running its current users until the key arrives. But the
+initContainer refuses the same file, so fix it before Redis next restarts.
+
+A Helm post-upgrade hook Job was the alternative: it can't reach the
+rendered file (a memory emptyDir in the Redis pod), so it would have to
+replay every user with `ACL SETUSER`, keeping a second copy of the rules
+that drifts from the file Redis loads at its next start, and it would not
+see a Secret change made outside a release.
+
+**Ranma-Config.** Production's `redis.podAnnotations` has
+`reloader.stakater.com/auto: "true"` (checked 2026-11-08). Reloader's
+`auto` restarts the Deployment when any ConfigMap or Secret it references
+changes, mounted volumes included, so with `inPlace` it would still restart
+Redis on every users or password change. Switch the mode and drop that
+annotation in the same Ranma-Config change (one Redis restart for both).
+After a change, look for `redis-acl-reload:` in the Redis pod's logs
+(`kubectl -n distant-signal logs deploy/distant-signal-redis -c
+redis-acl-reload`) and check `ACL USERS`.
 
 ## Optional users: new producers that ship off
 
@@ -119,14 +199,18 @@ To turn one on (the transit networks' rollout, transit spec §15.1, and
 1. Add `<user>-password` to the users Secret (the SealedSecret in
    Ranma-Config), letters and digits only.
 2. Set `redis.acl.clients.<client>: true` in the same Ranma-Config change.
-3. Redis restarts once for the new users file: about 4 s of AOF load, with
-   the consumers retrying, as any Redis restart. If Reloader also restarts
-   Redis for the Secret change, that is a second restart in quick
-   succession. Verify `ACL USERS` lists the user.
+3. With `reload.mode: restart`, Redis restarts once for the new users
+   file: about 4 s of AOF load, with the consumers retrying, as any Redis
+   restart. If Reloader also restarts Redis for the Secret change, that is
+   a second restart in quick succession. With `inPlace`, the sidecar loads
+   the user once both the ConfigMap and the Secret key have reached the pod
+   (it logs `REDIS_ACL_PASSWORD_<USER> is empty` until the key does).
+   Verify `ACL USERS` lists the user.
 
-That is the operational cost of each new producer: one Redis restart when
-it is turned on. Turning the client off again removes the user (another
-restart); remove the Secret key after that.
+With `restart`, that is the operational cost of each new producer: one
+Redis restart when it is turned on. Turning the client off again removes
+the user (another restart, or a reload with `inPlace`, which disconnects
+its clients); remove the Secret key after that.
 
 `scripts/render-redis-acl.py --client <key>` renders an optional user
 outside Helm.
@@ -245,7 +329,7 @@ Exit: `CLIENT LIST` has no `user=default`, and `ACL LOG` is empty for 7
 days.
 
 **Rotating `default-password`:** put a new value in the Secret and restart
-Redis. No client uses this password, so nothing else needs to restart, and
+Redis (with `reload.mode: inPlace`, wait for the sidecar's reload instead). No client uses this password, so nothing else needs to restart, and
 no `-previous` key is needed.
 
 ### Ordering against the ingest streams (security review, 2026-10-08)
@@ -295,9 +379,11 @@ Each is one Redis restart (or one client restart for step 2).
 ### Rotation
 
 Add `<user>-password-previous` with the current password and put the new
-one in `<user>-password`. Reloader (or a `kubectl rollout restart`)
-restarts Redis, which then accepts both; restart the client; then remove
-`-previous` (another Redis restart).
+one in `<user>-password`. With `reload.mode: restart`, Reloader (or a
+`kubectl rollout restart`) restarts Redis, which then accepts both; with
+`inPlace` the sidecar reloads it within a minute or two (its log says
+`reloaded the ACL users`). Restart the client; then remove `-previous`
+(another Redis restart, or reload).
 
 ## Retired users
 
@@ -306,9 +392,9 @@ restarts Redis, which then accepts both; restart the client; then remove
   release B; poller-incidents publishes those entries as its own user.
   The api now has no Redis client, no `REDIS_*` env and no NetworkPolicy
   path to Redis, and `files/redis-users.acl.tpl` no longer lists `api`.
-  Removing the line changes the ACL ConfigMap, so **that release restarts
+  Removing the line changes the ACL ConfigMap, so **that release restarted
   Redis once** (`checksum/redis-acl`, about 4 s of AOF load; every stream
-  client reconnects). A leftover `redis.acl.clients.api` in values is
+  client reconnects; with `reload.mode: inPlace` it would be a reload). A leftover `redis.acl.clients.api` in values is
   ignored. After the release, Ranma may drop `api-password` from the
   users Secret; that Secret change makes Reloader restart Redis (and every
   client that reads the Secret) once more, so batch it with the next
