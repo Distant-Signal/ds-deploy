@@ -312,7 +312,10 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
             "api.sso.primarySubClaim", "distant-signal#192, ds-core v0.1.1"
         ),
     },
-    "darwin-relay": {"DARWIN_STREAM_MAXLEN": no_value("darwinRelay")},
+    "darwin-relay": {
+        "DARWIN_STREAM_MAXLEN": no_value("darwinRelay"),
+        "KAFKA_COMMIT_DELAY_SECS": no_value("darwinRelay"),
+    },
     "enricher": {
         "DATABASE_MAX_CONNECTIONS": POOL,
         "LLM_ADVERSARIAL_MODEL": optional("enricher.llm.adversarialModel"),
@@ -359,6 +362,7 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "LINES_DIR": LINES,
         "SCHEDULE_MATCH_INTERVAL_SECS": "the api's variable, unwired as the api's is",
     },
+    "movement-relay": {"KAFKA_COMMIT_DELAY_SECS": no_value("movementRelay")},
     "notifier": {"DATABASE_MAX_CONNECTIONS": POOL},
     "poller-incidents": {
         "INCIDENTS_ROW_HEARTBEAT": optional(
