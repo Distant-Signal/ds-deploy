@@ -4,7 +4,9 @@ Redis's users.acl, with ${REDIS_ACL_PASSWORD_<USER>} placeholders that the
 Redis pod's initContainer fills in from the per-user Secret. Renders
 nothing unless redis.acl.enabled and redis.enabled. The users and rights
 come from files/redis-users.acl.tpl; scripts/render-redis-acl.py renders
-the same file outside Helm (CI checks the two agree).
+the same file outside Helm (CI checks the two agree). With
+redis.acl.reload.mode inPlace it also holds the password map and
+files/redis-acl-reload.sh, which renders the file in the pod and reloads it.
 */}}
 {{- if and .Values.redis.enabled (include "distant-signal.redisAclEnabled" .) }}
 apiVersion: v1
@@ -16,4 +18,12 @@ metadata:
 data:
   users.acl.tpl: |
     {{- include "distant-signal.redisAclFile" . | trim | nindent 4 }}
+  {{- if include "distant-signal.redisAclInPlace" . }}
+  # redis.acl.reload.mode inPlace: which Secret-volume file holds each
+  # placeholder's password, and the script that renders and reloads them.
+  passwords: |
+    {{- include "distant-signal.redisAclPasswordFiles" . | trim | nindent 4 }}
+  redis-acl-reload.sh: |
+    {{- .Files.Get "files/redis-acl-reload.sh" | trim | nindent 4 }}
+  {{- end }}
 {{- end }}

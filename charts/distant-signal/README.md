@@ -711,7 +711,11 @@ With `redis.acl.enabled` (and the bundled Redis), an initContainer renders
 `redis.acl.existingSecret` (`<user>-password`, required), and Redis starts
 with `--aclfile` instead of `--requirepass`. `redis-cli` in the pod (the `exec` probes, `kubectl exec`) authenticates as
 `ds-admin`. `redis.acl.clients.<client>` gives that client `REDIS_USERNAME`
-and its own `REDIS_PASSWORD`.
+and its own `REDIS_PASSWORD`. By default any change to the users restarts
+Redis (a checksum on the pod); `redis.acl.reload.mode: inPlace` instead
+reads the passwords from the Secret as a volume and adds a
+`redis-acl-reload` sidecar that `ACL LOAD`s a changed file
+(docs/redis-acl.md, "Reloading the users in place").
 
 The four-step, no-downtime rollout (`stage: open`, then the clients one by
 one, then `stage: narrow`, then `defaultUser: "off"`), its checks and its
@@ -2342,6 +2346,8 @@ used for and why persistence defaults on.
 | `redis.acl.stage` | `open` | `open`: every existing client's user has `~* &* +@all` (step 1). |
 | `redis.acl.defaultUser` | `on` | `"on"`: the `default` user keeps today's password (redis.auth) and rights. |
 | `redis.acl.existingSecret` | `""` | Existing Secret (a SealedSecret in Ranma-Config) with one key per user: `<user>-password` (letters and digits only), for every user in files/redis-users.acl.tpl. |
+| `redis.acl.reload.mode` | `restart` | How Redis picks up a change to its users or their passwords. `restart`: the users file's checksum on the pod restarts Redis. `inPlace`: the passwords come from `existingSecret` mounted as a volume, and a `redis-acl-reload` sidecar renders the file again and sends `ACL LOAD` when it changed, keeping the previous users if Redis refuses it. Switching restarts Redis once (docs/redis-acl.md, "Reloading the users in place"). |
+| `redis.acl.reload.intervalSeconds` | `10` | `inPlace` only: seconds between the sidecar's renders (the kubelet takes up to about a minute to update a mounted ConfigMap or Secret). |
 | `redis.acl.clients.enricher` | `false` | enricher, as user `enricher`. |
 | `redis.acl.clients.movementRelay` | `false` | movement-relay, as user `movement-relay`. |
 | `redis.acl.clients.trustConsumer` | `false` | trust-consumer, as user `trust-consumer`. |

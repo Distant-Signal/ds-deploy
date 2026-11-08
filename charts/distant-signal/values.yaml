@@ -3437,6 +3437,23 @@ redis:
     # "on-unshared"`, also `default-password` (fresh, never given to a
     # client). Required.
     existingSecret: ""
+    reload:
+      # -- How Redis picks up a change to its users (a ds-core users-file
+      # change, `stage`, `defaultUser`, an optional client turned on or
+      # off, a password in `existingSecret`). `restart`: a checksum of the
+      # users file on the pod restarts Redis (about 4 s of AOF load, every
+      # client reconnects), and a password change needs a restart
+      # (Reloader or `kubectl rollout restart`). `inPlace`: the Redis pod
+      # reads the passwords from `existingSecret` mounted as a volume, and
+      # a `redis-acl-reload` sidecar renders the file again every
+      # `intervalSeconds` and sends `ACL LOAD` when it changed, keeping the
+      # previous users if Redis refuses it. Switching mode restarts Redis
+      # once (docs/redis-acl.md, "Reloading the users in place").
+      mode: restart
+      # -- `inPlace` only: seconds between the sidecar's renders. Kubernetes
+      # itself takes up to about a minute to update a mounted ConfigMap or
+      # Secret.
+      intervalSeconds: 10
     # -- Which clients connect as their own user (`REDIS_USERNAME` and
     # their own `REDIS_PASSWORD` from `existingSecret`) instead of
     # `default` (step 2). Needs `enabled`.

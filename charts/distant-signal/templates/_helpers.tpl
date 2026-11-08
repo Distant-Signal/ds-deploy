@@ -497,6 +497,9 @@ Validates the values.
 {{- if not (has (toString $acl.stage) (list "open" "narrow")) -}}
 {{- fail (printf "redis.acl.stage must be open or narrow, not %q." (toString $acl.stage)) -}}
 {{- end -}}
+{{- if not (has (toString ($acl.reload | default dict).mode) (list "restart" "inPlace")) -}}
+{{- fail (printf "redis.acl.reload.mode must be restart or inPlace, not %q." (toString ($acl.reload | default dict).mode)) -}}
+{{- end -}}
 {{- if and (include "distant-signal.redisAclDefaultUserOn" .) (not .Values.redis.auth.enabled) -}}
 {{- fail "redis.acl.enabled with redis.acl.defaultUser on needs redis.auth.enabled: without it `default` stays passwordless with ~* &* +@all, and any pod that reaches Redis bypasses every ACL user (security review M3). Turn redis.auth on first (its password becomes default's), or set redis.acl.defaultUser: \"on-unshared\" (default gets its own password, docs/redis-acl.md step 4)." -}}
 {{- end -}}
@@ -660,6 +663,63 @@ user default reset off
 {{- fail (printf "files/redis-users.acl.tpl: user %s has unknown kind %q" $user $kind) }}
 {{- end }}
 user {{ $user }} reset on >${{ printf "{%s}" $var }} >${{ printf "{%s_PREVIOUS}" $var }} {{ $rights }}
+{{- end }}
+{{- end }}
+
+{{/*
+True (non-empty) with the ACL users on and `redis.acl.reload.mode:
+inPlace`: the Redis pod reads the passwords from Secret volumes instead of
+env, and its redis-acl-reload sidecar `ACL LOAD`s a changed users file, so
+no ACL change restarts Redis (docs/redis-acl.md, "Reloading the users in
+place").
+*/}}
+{{- define "distant-signal.redisAclInPlace" -}}
+{{- if and (include "distant-signal.redisAclEnabled" .) (eq (toString .Values.redis.acl.reload.mode) "inPlace") -}}
+{{- if lt (int .Values.redis.acl.reload.intervalSeconds) 1 -}}
+{{- fail (printf "redis.acl.reload.intervalSeconds must be a whole number of seconds, at least 1, not %v." .Values.redis.acl.reload.intervalSeconds) -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+redis.acl.reload.mode inPlace: the password map of
+files/redis-acl-reload.sh, one "<placeholder variable> <file>" per line:
+every ${REDIS_ACL_PASSWORD_*} of distant-signal.redisAclFile and the file
+in the Redis pod's Secret volumes that holds it. A missing file is an empty
+password (dropped for a *_PREVIOUS, an error otherwise).
+*/}}
+{{- define "distant-signal.redisAclPasswordFiles" -}}
+{{- if include "distant-signal.redisAclDefaultUserUnshared" . }}
+REDIS_ACL_PASSWORD_DEFAULT /etc/redis-acl-secret/default-password
+{{- else if include "distant-signal.redisAclDefaultUserOn" . }}
+REDIS_ACL_PASSWORD_DEFAULT /etc/redis-auth/password
+{{- end }}
+{{- range $line := include "distant-signal.redisAclUserLines" . | trim | splitList "\n" }}
+{{- $user := index (regexSplit "\\s+" $line 2) 0 }}
+{{- $var := include "distant-signal.redisAclPasswordVar" $user }}
+{{ $var }} /etc/redis-acl-secret/{{ $user }}-password
+{{ $var }}_PREVIOUS /etc/redis-acl-secret/{{ $user }}-password-previous
+{{- end }}
+{{- end }}
+
+{{/*
+redis.acl.reload.mode inPlace: the volume mounts of the Redis pod's
+redis-acl initContainer and redis-acl-reload sidecar. Takes root.
+*/}}
+{{- define "distant-signal.redisAclReloadMounts" -}}
+- name: acl-template
+  mountPath: /etc/redis-acl-template
+  readOnly: true
+- name: acl
+  mountPath: /etc/redis-acl
+- name: acl-secret
+  mountPath: /etc/redis-acl-secret
+  readOnly: true
+{{- if include "distant-signal.redisAclDefaultUserOn" . }}
+- name: acl-auth
+  mountPath: /etc/redis-auth
+  readOnly: true
 {{- end }}
 {{- end }}
 
