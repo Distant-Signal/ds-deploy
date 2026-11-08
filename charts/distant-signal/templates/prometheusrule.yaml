@@ -57,12 +57,12 @@ so that clause fired on every rollout.
 {{- $archiveExpiryOn := and ($rule.archiveExpiry).enabled .Values.archive.enabled (.Values.archive.expiry).enabled }}
 {{- $postgresDownOn := ($rule.postgresDown).enabled }}
 {{- $apiDbDownOn := ($rule.apiDatabaseDown).enabled }}
-{{- $consumerApiOn := ($rule.consumerApiErrors).enabled }}
+{{- $consumerDbOn := ($rule.consumerDbErrors).enabled }}
 {{- $cyclesOn := ($rule.cycleStalled).enabled }}
 {{- $api5xxOn := ($rule.api5xx).enabled }}
 {{- $schemaGateOn := ($rule.schemaGateWaiting).enabled }}
 {{- $imagePullOn := and ($rule.statefulImagePull).enabled (or .Values.postgresql.enabled .Values.redis.enabled) }}
-{{- $healthOn := or $postgresDownOn $apiDbDownOn $schemaGateOn $consumerApiOn $cyclesOn $api5xxOn $imagePullOn }}
+{{- $healthOn := or $postgresDownOn $apiDbDownOn $schemaGateOn $consumerDbOn $cyclesOn $api5xxOn $imagePullOn }}
 {{- $tokenExchangeOn := and ($rule.enricherTokenExchange).enabled (include "distant-signal.enricherWif" .) }}
 {{- $enricherBatching := or (eq ((.Values.enricher.llm.batch).sweepMode | default "sync") "batch") (ne ((.Values.enricher.llm.batch).mode | default "normal") "normal") }}
 {{- $enricherBatchesOn := and ($rule.enricherBatches).enabled $enricherBatching }}
@@ -230,7 +230,7 @@ spec:
             runbook_url: {{ printf "%s#distantsignalschemagatewaiting" $runbook | quote }}
         {{- end }}
         {{- end }}
-        {{- with $rule.consumerApiErrors }}
+        {{- with $rule.consumerDbErrors }}
         {{- if .enabled }}
         {{- /*
         2026-10-01: trust-consumer failed GET /private/tracked-trains about
@@ -242,21 +242,23 @@ spec:
         rejections --
         registered at 0 at startup; each crate's
         API_CALL_OPERATIONS lists the same operations, which
-        scripts/check-config-defaults-chart.py checks against this list. Summed per consumer (not per operation), so an api outage
-        is at most three alerts in one notification.
+        scripts/check-config-defaults-chart.py checks against this list. Summed per consumer (not per operation), so a database outage
+        is at most three alerts in one notification. Named
+        DistantSignalConsumerApiCallsFailing until the reads and writes
+        moved from the api to Postgres.
         */}}
         {{- $consumers := list
           (list "trust_consumer" "trust-consumer" "reload_tracked_trains|reload_stanox_crs|startup_reference_load|db_write")
           (list "trust_backlog_consumer" "trust-backlog-consumer" "reload_stanox_crs|db_write|db_write_reasons")
           (list "full_coverage_consumer" "full-coverage-consumer" "reload_line_population_fetch|reload_stanox_crs") }}
-        - record: distant_signal:consumer_api_errors:increase
+        - record: distant_signal:consumer_db_errors:increase
           expr: |
             {{- range $i, $c := $consumers }}
-            {{ if $i }}or {{ end }}label_replace(sum by (namespace) (increase(distant_signal_{{ index $c 0 }}_errors_total{namespace="{{ $ns }}", operation=~"{{ index $c 2 }}"}[{{ $rule.consumerApiErrors.window }}])), "consumer", "{{ index $c 1 }}", "", "")
+            {{ if $i }}or {{ end }}label_replace(sum by (namespace) (increase(distant_signal_{{ index $c 0 }}_errors_total{namespace="{{ $ns }}", operation=~"{{ index $c 2 }}"}[{{ $rule.consumerDbErrors.window }}])), "consumer", "{{ index $c 1 }}", "", "")
             {{- end }}
-        - alert: DistantSignalConsumerApiCallsFailing
+        - alert: DistantSignalConsumerDbCallsFailing
           expr: |
-            distant_signal:consumer_api_errors:increase{namespace="{{ $ns }}"} >= {{ .minErrors }}
+            distant_signal:consumer_db_errors:increase{namespace="{{ $ns }}"} >= {{ .minErrors }}
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -266,7 +268,7 @@ spec:
           annotations:
             summary: "{{ "{{ $labels.consumer }}" }} keeps failing its reads or writes"
             description: "{{ "{{ $value | humanize }}" }} failed reads or writes in {{ .window }}, for {{ .for }}: its data is not landing. Check Postgres and the consumer's log."
-            runbook_url: {{ printf "%s#distantsignalconsumerapicallsfailing" $runbook | quote }}
+            runbook_url: {{ printf "%s#distantsignalconsumerdbcallsfailing" $runbook | quote }}
         {{- end }}
         {{- end }}
         {{- with $rule.api5xx }}

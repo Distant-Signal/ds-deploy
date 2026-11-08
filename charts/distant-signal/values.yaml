@@ -6667,13 +6667,13 @@ metrics:
       enabled: true
       for: 10m
       severity: critical
-    # DistantSignalConsumerApiCallsFailing: trust-consumer,
+    # DistantSignalConsumerDbCallsFailing: trust-consumer,
     # trust-backlog-consumer or full-coverage-consumer failed at least
-    # minErrors reads or writes (the direct writes, the tracked-trains /
+    # minErrors Postgres reads or writes (the direct writes, the tracked-trains /
     # population / stanox reloads; *_errors_total by operation; the api
     # POSTs went with release B) within `window`, continuously for `for`, so
     # a short blip (a database restart) does not fire.
-    consumerApiErrors:
+    consumerDbErrors:
       enabled: true
       window: 5m
       minErrors: 3

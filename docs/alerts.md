@@ -143,15 +143,18 @@ lacks, as `PRIVILEGE on table[.column]`).
    service's `DATABASE_URL`, makes the same check from outside the service
    and exits once it passes.
 
-### DistantSignalConsumerApiCallsFailing
+### DistantSignalConsumerDbCallsFailing
 
-A TRUST consumer keeps failing its reads or writes: at least
-`consumerApiErrors.minErrors` failures within `window`, continuously for
-`for` (`distant_signal:consumer_api_errors:increase`, one series per
+A TRUST consumer keeps failing its Postgres reads or writes: at least
+`consumerDbErrors.minErrors` failures within `window`, continuously for
+`for` (`distant_signal:consumer_db_errors:increase`, one series per
 consumer). The consumers' `*_ready` gauges only follow their Redis
 connection, so on 2026-10-01 trust-consumer failed
 `GET /private/tracked-trains` about 23,600 times, and trust-backlog-consumer
-about 2,200 POSTs, without an alert.
+about 2,200 POSTs, without an alert. Until 2026-11 this alert was
+`DistantSignalConsumerApiCallsFailing` (values `consumerApiErrors`, record
+`distant_signal:consumer_api_errors:increase`), from when those reads and
+writes were api calls.
 
 The operations counted (`distant_signal_<consumer>_errors_total{operation}`):
 
