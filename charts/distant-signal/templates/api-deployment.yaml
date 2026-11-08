@@ -361,11 +361,13 @@ with api.extraEnv, which replaces an entry of the same name.
             - name: DATABASE_MAX_CONNECTIONS
               value: {{ include "distant-signal.apiMaxConnections" . | quote }}
             # The dedicated startup migration connection; see
-            # api.migrations in values.yaml and crates/ds-store/src/migrate.rs.
+            # migrate.lockTimeoutSecs and migrate.statementTimeoutSecs in
+            # values.yaml (shared with the migrate Job) and
+            # crates/ds-store/src/migrate.rs.
             - name: MIGRATION_LOCK_TIMEOUT_SECS
-              value: {{ .Values.api.migrations.lockTimeoutSecs | int | quote }}
+              value: {{ include "distant-signal.migrationSetting" (dict "root" . "key" "lockTimeoutSecs") | int | quote }}
             - name: MIGRATION_STATEMENT_TIMEOUT_SECS
-              value: {{ .Values.api.migrations.statementTimeoutSecs | int | quote }}
+              value: {{ include "distant-signal.migrationSetting" (dict "root" . "key" "statementTimeoutSecs") | int | quote }}
             - name: INTERNAL_OAUTH_ISSUER_URL
               value: {{ .Values.api.internalOauth.issuerUrl | quote }}
             - name: INTERNAL_OAUTH_CLIENT_ID
@@ -376,9 +378,9 @@ with api.extraEnv, which replaces an entry of the same name.
             # use since release B removed /private (ingest phase 5).
             - name: INTERNAL_OAUTH_GROUP_MCP
               value: {{ .Values.api.internalOauth.groups.mcp | default "" | quote }}
-            # Off by default -- see api.corpusFallback in values.yaml.
+            # Off by default -- see shared.corpusFallback in values.yaml.
             - name: CORPUS_FALLBACK_ENABLED
-              value: {{ .Values.api.corpusFallback.enabled | toString | quote }}
+              value: {{ include "distant-signal.corpusFallbackEnabled" . | quote }}
             # The transit networks /public/transit serves (empty: every
             # route 404s and the frontend hides the pages).
             - name: API_TRANSIT_NETWORKS
@@ -590,9 +592,10 @@ with api.extraEnv, which replaces an entry of the same name.
                   optional: true
             {{- end }}
             # Mid-journey changes: the break sweep and its suggestions --
-            # see api.journeyBreaks in values.yaml.
+            # see api.journeyBreaks and shared.journeyBreaks.enabled (the
+            # kill switch, shared with the notifier) in values.yaml.
             - name: JOURNEY_BREAKS_ENABLED
-              value: {{ .Values.api.journeyBreaks.enabled | quote }}
+              value: {{ include "distant-signal.journeyBreaksEnabled" . | quote }}
             - name: JOURNEY_BREAKS_INTERVAL_SECS
               value: {{ .Values.api.journeyBreaks.intervalSecs | quote }}
             - name: JOURNEY_BREAKS_MAX_JOURNEYS_PER_TICK
@@ -696,13 +699,14 @@ with api.extraEnv, which replaces an entry of the same name.
             # since the code-level default (matching the value below) still
             # applies. schedule_match_interval_secs is the one sibling
             # field deliberately NOT wired here -- see its own doc comment
-            # in config.rs for why.
+            # in config.rs for why. The first three are the ingest-writer's
+            # (ingestWriter.loops), whose loops replace these.
             - name: RECONCILIATION_SWEEP_INTERVAL_SECS
-              value: {{ .Values.api.reconciliationSweepIntervalSecs | quote }}
+              value: {{ include "distant-signal.trainLoopSetting" (dict "root" . "key" "reconciliationSweepIntervalSecs") | quote }}
             - name: SCHEDULE_ENRICHMENT_GRACE_MINUTES
-              value: {{ .Values.api.scheduleEnrichmentGraceMinutes | quote }}
+              value: {{ include "distant-signal.trainLoopSetting" (dict "root" . "key" "scheduleEnrichmentGraceMinutes") | quote }}
             - name: BACKLOG_MATCH_SWEEP_INTERVAL_SECS
-              value: {{ .Values.api.backlogMatchSweepIntervalSecs | quote }}
+              value: {{ include "distant-signal.trainLoopSetting" (dict "root" . "key" "backlogMatchSweepIntervalSecs") | quote }}
             - name: SESSION_CLEANUP_INTERVAL_SECS
               value: {{ .Values.api.sessionCleanupIntervalSecs | quote }}
             {{- if not .Values.api.backgroundLoops }}

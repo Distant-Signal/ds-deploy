@@ -82,7 +82,8 @@
       "enabled": false,
     },
     {
-      // All service images in one PR, renovate/ds-images, automerged when
+      // All service images but schedule-feed's (below) in one PR,
+      // renovate/ds-images, automerged when
       // every check is green (decision 13): the ordering checks and the
       // config defaults contract run against the new digests. The human
       // gate is Ranma-Config's chart PR, filed to deploy-bringer.
@@ -98,6 +99,34 @@
         // org.opencontainers.image.source label names.
         "`{{{depName}}}`: {{#if sourceUrl}}{{{sourceUrl}}}/compare/{{{replace '^build\\.\\d+-' '' currentValue}}}...{{{replace '^build\\.\\d+-' '' newValue}}}{{else}}no source label on the image{{/if}}",
       ],
+    },
+    {
+      // The schedule-feed images (schedule-ingest, schedule-reference) in
+      // their own PR, renovate/ds-schedule-feed, once a week (DS-403). Any
+      // chart build that changes a schedule-feed object falls in the
+      // dtd-sftp deploy window (charts/distant-signal/components.yaml), and
+      // ds-api builds these with the api from every commit: their digests
+      // stay put while their inputs do (reproducible images), but every
+      // Cargo.lock change, a ds-core bump above all, moves them. In
+      // ds-images they would put every api release in the window. Weekly,
+      // after Monday's lock file maintenance and runtime rebuild, so
+      // schedulefeed rolls at most once a week; a fix that can't wait goes
+      // through the Dependency Dashboard ("Awaiting Schedule") or by hand
+      // (scripts/pin-images.py, in a PR of their own). An image a week
+      // behind the api is safe: the schema gate passes on a database
+      // migrated past it (expand-only), and release-order.py's contract rule
+      // holds the ds-core PR until it catches up. Listed after ds-images, so
+      // this rule's group wins.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": [
+        "ghcr.io/distant-signal/images/schedule-ingest",
+        "ghcr.io/distant-signal/images/schedule-reference",
+      ],
+      "enabled": true,
+      "groupName": "ds-schedule-feed",
+      "groupSlug": "ds-schedule-feed",
+      "schedule": ["* 4-9 * * 2"],
+      "automerge": true,
     },
     {
       // ds-core: the core-version file and the ds-migrate image move

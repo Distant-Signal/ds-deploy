@@ -1859,9 +1859,9 @@ own transaction with `SET LOCAL`:
 | Retention prunes | 600s |
 | Archive batches | 600s, plus 15min idle-in-transaction |
 
-api migrates at startup on its own connection, with
-`api.migrations.lockTimeoutSecs` (10) and
-`api.migrations.statementTimeoutSecs` (240, well below the 900s startup-probe
+api migrates at startup (and the migrate hook Job migrates) on its own
+connection, with `migrate.lockTimeoutSecs` (10) and
+`migrate.statementTimeoutSecs` (240, well below the 900s startup-probe
 budget). Before it migrates, it drops any INVALID index that a failed
 `CREATE INDEX CONCURRENTLY` left behind.
 
@@ -1872,8 +1872,8 @@ budget). Before it migrates, it drops any INVALID index that a failed
 | `databasePool.acquireTimeoutSecs` | `5` | How long to wait for a free pool connection. |
 | `databasePool.startupConnectTimeoutSecs` | `15` | `DATABASE_STARTUP_CONNECT_TIMEOUT_SECS`: the first connect's budget for connects that never reach Postgres (a new pod's NetworkPolicy lag), retried quietly before they warn. `acquireTimeoutSecs` is unchanged. `0` turns it off. |
 | `api.database.maxConnections` | `50` | api pool size per replica. Pools total api 50 per replica + aggregator 10 + notifier 5 + enricher 5 = 70 at one api replica, plus every poller and consumer pool, against the chart's `postgresql.config.max_connections` of 200. Each extra api replica (and a RollingUpdate surge pod) adds 50; the render fails when the total no longer fits, so raise `postgresql.config.max_connections` (restart; check memory) or lower this. |
-| `api.migrations.lockTimeoutSecs` | `10` | `lock_timeout` for startup migrations. |
-| `api.migrations.statementTimeoutSecs` | `240` | `statement_timeout` for each startup migration statement. Keep it below the startup probe budget. |
+| `migrate.lockTimeoutSecs` | `10` | `lock_timeout` for the migrate Job's and the api's startup migrations. Formerly `api.migrations.lockTimeoutSecs`. |
+| `migrate.statementTimeoutSecs` | `240` | `statement_timeout` for each migration statement. Keep it below the api's startup probe budget and `migrate.job.activeDeadlineSeconds`. Formerly `api.migrations.statementTimeoutSecs`. |
 
 #### pgBackRest (point-in-time recovery)
 
@@ -1954,6 +1954,29 @@ Used only when `postgresql.enabled` is `false`.
 | `externalDatabase.existingSecret` | `""` | Pre-existing Secret holding the whole connection URL (preferred). |
 | `externalDatabase.existingSecretUrlKey` | `database-url` | Key within `externalDatabase.existingSecret`. |
 
+### shared
+
+Settings several components read, so they belong to none of them
+(DS-403): editing one restarts every reader, which its row names.
+
+| Key | Default | Description |
+|---|---|---|
+| `shared.corpusFallback.enabled` | `false` | Use Network Rail CORPUS as a fallback for TIPLOC/STANOX→CRS lookups the timetable has no CRS for; the timetable always wins a conflict. Does nothing until CORPUS is loaded (`scheduleFeed.corpus.enabled`). Review `corpus_compare` (in the api image) first. Read by the api, schedule-reference (schedulefeed or its CronJob, so the `dtd-sftp` deploy window), trust-consumer, trust-backlog-consumer and full-coverage-consumer. Formerly `api.corpusFallback.enabled`. |
+| `shared.journeyBreaks.enabled` | `false` | Kill switch for mid-journey suggestions: the api's break sweep (`api.journeyBreaks`) and the notifier's suggestion pushes (docs/journey-breaks.md). Off, the in-app banner and sheet still work. Formerly `api.journeyBreaks.enabled`. |
+
+**Deprecated aliases.** Until the next release the old keys still work,
+and win over the new ones when set (so existing values render unchanged);
+`helm install`/`upgrade` prints a warning naming each one set, and the
+release after, setting one fails the render:
+
+- `api.corpusFallback.enabled` is now `shared.corpusFallback.enabled`
+- `api.journeyBreaks.enabled` is now `shared.journeyBreaks.enabled`
+- `api.reconciliationSweepIntervalSecs` is now `ingestWriter.loops.reconciliationSweepIntervalSecs`
+- `api.scheduleEnrichmentGraceMinutes` is now `ingestWriter.loops.scheduleEnrichmentGraceMinutes`
+- `api.backlogMatchSweepIntervalSecs` is now `ingestWriter.loops.backlogMatchSweepIntervalSecs`
+- `api.migrations.lockTimeoutSecs` is now `migrate.lockTimeoutSecs`
+- `api.migrations.statementTimeoutSecs` is now `migrate.statementTimeoutSecs`
+
 ### api
 
 | Key | Default | Description |
@@ -2030,9 +2053,6 @@ Used only when `postgresql.enabled` is `false`.
 | `api.probes.liveness.periodSeconds` | `10` | Liveness probe period. |
 | `api.probes.liveness.failureThreshold` | `3` | Liveness probe failures allowed. |
 | `api.probes.liveness.timeoutSeconds` | `3` | Liveness probe timeout. |
-| `api.reconciliationSweepIntervalSecs` | `300` | How often the reconciliation sweep retries fixing a stuck tracked-train row. |
-| `api.scheduleEnrichmentGraceMinutes` | `30` | How long past a train's origin departure the reconciliation sweep waits before trying a schedule-only match. |
-| `api.backlogMatchSweepIntervalSecs` | `300` | How often still-pending pins are matched against the TRUST event backlog. |
 | `api.sessionCleanupIntervalSecs` | `3600` | How often expired sessions are deleted; the personal-data retention limits below run on the same sweep. |
 | `api.backgroundLoops` | `true` | Run the api's background loops, as today: the schedule-match, reconciliation and backlog-match sweeps, the CORPUS crosswalk check at startup, and the session cleanup. The first four take the ingest-writer's advisory locks, on one of the api pool's own connections. `false` renders `API_BACKGROUND_LOOPS=false`: set it a release after `ingestWriter.loops.enabled`, with `apiMaintenance.enabled`. See [Migrations, maintenance and the ingest-writer](#migrations-maintenance-and-the-ingest-writer-optional). |
 | `api.pastTravelRetentionDays` | `548` | Days after the travel date that tracked trains, tickets, journeys and template skip markers are kept (18 months). `0` disables. See `docs/personal-data-retention.md`. |
@@ -2045,7 +2065,6 @@ Used only when `postgresql.enabled` is `false`.
 | `api.timeouts.requestTimeoutSecs` | `30` | Public requests still running after this get a 408. |
 | `api.timeouts.headerReadTimeoutSecs` | `10` | Disconnect an HTTP/1 client that has not sent its full headers within this. |
 | `api.timeouts.unavailableRetryAfterSecs` | `30` | `Retry-After` (seconds, 1-3600) on a 503. A route that cannot reach the database answers `503 {"error":"service_unavailable","retryable":true}` instead of a 500. |
-| `api.corpusFallback.enabled` | `false` | Use Network Rail CORPUS as a fallback for TIPLOC/STANOX→CRS lookups the timetable has no CRS for; the timetable always wins a conflict. Does nothing until CORPUS is loaded (`scheduleFeed.corpus.enabled`). Review `corpus_compare` (in the api image) first. |
 | `api.scheduleProvisionalAfterDays` | `7` | Days after today a service date's timetable counts as firm (`SCHEDULE_PROVISIONAL_AFTER_DAYS`, 0-60). Train search, `/Train/by-uid` and `/Trips/plan` report a later date as `provisional: true`, because late STP changes (engineering works) can still land. |
 | `api.tripPlanGraphCache.dates` | `2` | Service dates whose connections graph `/Trips/plan` keeps built (about 27.5 MB each for rail, 44 MB with Metrolink and `tfl`; the prewarm keeps both built). The interned stop and trip codes are never freed: watch `api_trip_plan_interned_codes` level off. `0` disables the cache. |
 | `api.tripPlanGraphCache.maxAgeSecs` | `21600` | Rebuild a cached graph after this long even with no new schedule publish or transit feed (both rebuild it at once): a safety net for a publish cycle that failed a product and wrote no marker, and for reference data no marker covers. `600` until DS-225. |
@@ -2064,7 +2083,6 @@ Used only when `postgresql.enabled` is `false`.
 | `api.tripPlanLive.maxTrains` | `60` | Most trains whose live data one request reads. |
 | `api.tripPlanLive.inSearch` | `true` | Run every search on today's TRUST delays and cancellations (all trains TRUST knows to be cancelled, cut short or running late), so the planner finds the quickest route on live times and never plans a change that is impossible on them. `false`: plan on the timetable first and let only the bounded re-plans see live data. |
 | `api.tripPlanLive.snapshotTtlSeconds` | `30` | How long one service date's snapshot of that TRUST state is reused before it is read and built again. |
-| `api.journeyBreaks.enabled` | `false` | Kill switch for mid-journey suggestions: the api's break sweep and the notifier's suggestion pushes (docs/journey-breaks.md). Off, the in-app banner and sheet still work. |
 | `api.journeyBreaks.intervalSecs` | `60` | Break sweep cadence; each tick holds an advisory lock, so one api replica runs it. |
 | `api.journeyBreaks.maxJourneysPerTick` | `200` | Most journeys the sweep evaluates per tick. |
 | `api.journeyBreaks.suggestionsMaxAgeSecs` | `120` | Stored suggestions older than this are re-planned when opened. |
@@ -2150,7 +2168,10 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 |---|---|---|
 | `ingestWriter.enabled` | `false` | Deploy the ingest-writer (one replica, `Recreate`). Needs its image (plan 1B.6). |
 | `ingestWriter.image` | `ghcr.io/distant-signal/images/ingest-writer`, tag `""` (appVersion), digest `""`, `IfNotPresent` | Image; same shape as `api.image`. |
-| `ingestWriter.loops.enabled` | `false` | Run the train-domain loops (`INGEST_WRITER_LOOPS`) with the api's intervals. |
+| `ingestWriter.loops.enabled` | `false` | Run the train-domain loops (`INGEST_WRITER_LOOPS`). |
+| `ingestWriter.loops.reconciliationSweepIntervalSecs` | `300` | How often the reconciliation sweep retries fixing a stuck tracked-train row. The api's loops read it too while `api.backgroundLoops` is on. Formerly `api.reconciliationSweepIntervalSecs`. |
+| `ingestWriter.loops.scheduleEnrichmentGraceMinutes` | `30` | How long past a train's origin departure the reconciliation sweep waits before trying a schedule-only match. Read as `reconciliationSweepIntervalSecs`. Formerly `api.scheduleEnrichmentGraceMinutes`. |
+| `ingestWriter.loops.backlogMatchSweepIntervalSecs` | `300` | How often still-pending pins are matched against the TRUST event backlog. Read as `reconciliationSweepIntervalSecs`. Formerly `api.backlogMatchSweepIntervalSecs`. |
 | `ingestWriter.streams.station-samples` | `apply` | Mode of `ds:ingest:station-samples` (`INGEST_WRITER_STREAMS`): `off` (not read) or `apply` (release B removed `shadow`; the render refuses it). Any stream not `off` gives the writer `REDIS_URL`, its Redis user (`redis.acl.clients.ingestWriter`) and the NetworkPolicy paths to Redis. The writer refuses a stream it has no handlers for yet (plan 3a.6). An enabled producer of the stream needs it on `apply` (the render fails otherwise); any stream not `off` needs the Redis ACL (stage `narrow`, `defaultUser: "on-unshared"` or `"off"` for `apply`). |
 | `ingestWriter.streams.full-coverage` | `apply` | Mode of `ds:ingest:full-coverage`, as `station-samples` (handlers: plan 3a.6). Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), as `station-samples`. |
 | `ingestWriter.streams.tfl` | `apply` | Mode of `ds:ingest:tfl`, as `station-samples` (handlers: plan 3c). `apply` needs `postgresql.roles.perService.writer.connect` (security review M4: `line_status`'s row policy binds only the writer's own role; the render fails otherwise). Default since release A (2026-10-09; docs/ingest-phase5-runbook.md, "Release A"), as `station-samples`. |
@@ -2295,7 +2316,7 @@ twice.
 | `notifier.templateMintEveningHour` | `18` | The London hour (0-23) from which the sweep also mints tomorrow's regular journeys, so they show the evening before (`TEMPLATE_MINT_EVENING_HOUR`). `24` turns it off. |
 | `notifier.predictedStartPollIntervalSecs` | `60` | Cadence of the predicted-late-start check (DS-127): one push per subscriber for a high-confidence predicted late start at or above `trainDelayThresholdMinutes`, sharing the delay pushes' state; an open journey break on the train sends its suggestion push instead. `0` turns it off. |
 | `notifier.autoCommitLeadMinutes` | `120` | Lead time, in minutes, for the commit check on `auto`-mode journey legs. |
-| `notifier.journeyBreaksPollIntervalSecs` | `15` | How often open journey breaks are checked for a suggestion push (only with `api.journeyBreaks.enabled`). |
+| `notifier.journeyBreaksPollIntervalSecs` | `15` | How often open journey breaks are checked for a suggestion push (only with `shared.journeyBreaks.enabled`). |
 | `notifier.leaveReminders.enabled` | `false` | Send regular journeys' leave-by reminders and morning summaries (`LEAVE_REMINDERS_ENABLED`). Turn on only after an iPhone home-screen web app test. |
 | `notifier.leaveReminders.pollIntervalSecs` | `60` | How often today's regular journeys are checked for a leave-by, seconds (`LEAVE_REMINDERS_POLL_INTERVAL_SECS`). |
 | `notifier.leaveReminders.maxPushesPerOccurrence` | `3` | The most regular-journey pushes one day gets: the pick-your-train reminder, the leave-by and its moves (`LEAVE_REMINDERS_MAX_PUSHES_PER_OCCURRENCE`). |

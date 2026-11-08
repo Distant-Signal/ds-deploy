@@ -211,6 +211,13 @@ jobs:
       - name: every rendered object maps to a component group
         run: uv run --no-sync scripts/check-components-chart.py
 
+      # DS-403: the seven values that left `api` (shared.*,
+      # ingestWriter.loops.*, migrate.*) change exactly their readers'
+      # objects, and each old api.* key, a deprecated alias for one
+      # release, renders the same as its new key and wins beside it.
+      - name: moved values reach exactly their readers
+        run: uv run --no-sync scripts/check-shared-values-chart.py
+
       # The Redis NetworkPolicy admits exactly the workloads whose env has
       # REDIS_URL, rendered with every Redis client on (and with none of the
       # optional ones): darwin-relay shipped without its entry and every

@@ -36,6 +36,21 @@ signing identity is
    that PR, [`sync-core.yml`](.github/workflows/sync-core.yml) commits the
    re-vendored `ds-core` access files as the `ds-deploy-sync` GitHub App,
    and both PRs are set to automerge when every check passes.
+
+   The schedule-feed images (`schedule-ingest`, `schedule-reference`) are
+   the exception. A chart build that changes any schedule-feed object falls
+   in the `dtd-sftp` deploy window
+   ([`components.yaml`](charts/distant-signal/components.yaml)), and ds-api
+   builds them with the api from every commit, so they move on their own:
+   pin them in a PR of their own, never with the api (`pin-images.py`
+   refuses the mix unless given `--with-schedule-feed`), and merge it
+   after the api release in flight has deployed. Their images are
+   reproducible, so a build whose inputs didn't change has the pinned
+   digest and `pin-images.py` keeps the pin; what moves them is their own
+   code or a `Cargo.lock` change (a ds-core bump, lock file maintenance,
+   the weekly runtime rebuild). Renovate gives them their own
+   `renovate/ds-schedule-feed` PR, opened on Tuesday mornings (UTC), so
+   schedulefeed rolls at most once a week.
 3. The merge pushes a new chart build. Ranma-Config's Renovate files that
    build as a deploy request, and a person approves it.
 
