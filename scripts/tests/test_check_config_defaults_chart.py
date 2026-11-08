@@ -231,7 +231,7 @@ def prometheus_rule(expr: str) -> Doc:
     return {
         "kind": "PrometheusRule",
         "spec": {
-            "groups": [{"rules": [{"record": cdc.CONSUMER_API_ERRORS, "expr": expr}]}]
+            "groups": [{"rules": [{"record": cdc.CONSUMER_DB_ERRORS, "expr": expr}]}]
         },
     }
 

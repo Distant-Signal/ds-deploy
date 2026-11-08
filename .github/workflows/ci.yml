@@ -2316,10 +2316,10 @@ jobs:
             --show-only templates/prometheusrule.yaml)
           grep -q 'pg_up{namespace="[^"]*", job="pg"}' <<<"${selected_pg}"
           grep -q 'min by (namespace) (distant_signal_api_db_up{namespace="[^"]*"}) == 0$' <<<"${rule}"
-          # The three consumers' failed api calls (one recorded series each).
+          # The three consumers' failed Postgres reads and writes (one recorded series each).
           n_api=$(grep -c 'label_replace(sum by (namespace) (increase(distant_signal_[a-z_]*_errors_total{namespace="[^"]*", operation=~"[a-z_|]*"}\[5m\])), "consumer"' <<<"${rule}" || true)
-          [[ "${n_api}" -eq 3 ]] || { echo "expected 3 consumer api-error clauses, got ${n_api}" >&2; exit 1; }
-          grep -q 'alert: DistantSignalConsumerApiCallsFailing' <<<"${rule}"
+          [[ "${n_api}" -eq 3 ]] || { echo "expected 3 consumer db-error clauses, got ${n_api}" >&2; exit 1; }
+          grep -q 'alert: DistantSignalConsumerDbCallsFailing' <<<"${rule}"
           # No successful aggregator / notifier cycle for 15m.
           grep -q 'time() - max by (namespace, cycle) (distant_signal_aggregator_last_success_timestamp_seconds{namespace="[^"]*"}) > 900$' <<<"${rule}"
           grep -q 'distant_signal_notifier_last_success_timestamp_seconds{namespace="[^"]*", cycle!="template_sweep"}) > 900$' <<<"${rule}"

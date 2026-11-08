@@ -40,7 +40,7 @@ that run the image's own entrypoint (no `command:`) are compared. Checks:
     with both values. So a default changed on either side alone fails here
     and gets a decision;
   - contract: each `contract` key the services print has its check
-    (CONTRACT_CHECKS): the operations DistantSignalConsumerApiCallsFailing
+    (CONTRACT_CHECKS): the operations DistantSignalConsumerDbCallsFailing
     sums, values.yaml's per-stream alert caps, each service's Postgres role
     under per-service roles, and the probe paths a service needs;
   - coverage: every service renders in the `every workload` render.
@@ -411,8 +411,8 @@ OVERRIDES: Mapping[tuple[str, str], tuple[str, str]] = {
     ("trust-consumer", "REDIS_URL"): REDIS,
 }
 
-# The PrometheusRule record DistantSignalConsumerApiCallsFailing alerts on.
-CONSUMER_API_ERRORS = "distant_signal:consumer_api_errors:increase"
+# The PrometheusRule record DistantSignalConsumerDbCallsFailing alerts on.
+CONSUMER_DB_ERRORS = "distant_signal:consumer_db_errors:increase"
 OPERATIONS = re.compile(
     r'operation=~"(?P<ops>[^"]*)"\}[^\n]*?"consumer", "(?P<consumer>[^"]+)"'
 )
@@ -603,14 +603,14 @@ def overridden(
 
 
 def consumer_operations(docs: Sequence[Doc]) -> dict[str, set[str]]:
-    """Return each consumer's operations in the CONSUMER_API_ERRORS record."""
+    """Return each consumer's operations in the CONSUMER_DB_ERRORS record."""
     for doc in docs:
         if doc.get("kind") != "PrometheusRule":
             continue
         for group in as_list(as_map(doc.get("spec")).get("groups")):
             for rule in as_list(as_map(group).get("rules")):
                 r = as_map(rule)
-                if r.get("record") == CONSUMER_API_ERRORS:
+                if r.get("record") == CONSUMER_DB_ERRORS:
                     return {
                         m["consumer"]: set(m["ops"].split("|"))
                         for m in OPERATIONS.finditer(str(r.get("expr", "")))
@@ -642,7 +642,7 @@ def check_api_call_operations(
     want = {str(v) for v in as_list(value)}
     if ops.get(service) != want:
         yield (
-            f"{service}: {CONSUMER_API_ERRORS} sums operations "
+            f"{service}: {CONSUMER_DB_ERRORS} sums operations "
             f"{sorted(ops.get(service, set()))}, but {service}'s "
             f"API_CALL_OPERATIONS are {sorted(want)} (templates/prometheusrule.yaml)"
         )

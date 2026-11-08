@@ -80,16 +80,16 @@ tests:
         values: '0+10x45'
     alert_rule_test:
       - eval_time: 14m
-        alertname: DistantSignalConsumerApiCallsFailing
+        alertname: DistantSignalConsumerDbCallsFailing
         exp_alerts: []
       - eval_time: 20m
-        alertname: DistantSignalConsumerApiCallsFailing
+        alertname: DistantSignalConsumerDbCallsFailing
         exp_alerts:
           - exp_labels: {severity: warning, namespace: distant-signal, consumer: trust-consumer}
             exp_annotations:
               summary: trust-consumer keeps failing its reads or writes
               description: "5 failed reads or writes in 5m, for 10m: its data is not landing. Check Postgres and the consumer's log."
-              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalconsumerdbcallsfailing
   # Ingest plan 3b.2: the direct writes count too.
   # trust-backlog-consumer's db_write fails once a minute from 5m (fires
   # after 10m of it); trust-consumer's db_write fails for only 4 minutes.
@@ -101,16 +101,16 @@ tests:
         values: '0x5 0+30x4 120x36'
     alert_rule_test:
       - eval_time: 14m
-        alertname: DistantSignalConsumerApiCallsFailing
+        alertname: DistantSignalConsumerDbCallsFailing
         exp_alerts: []
       - eval_time: 20m
-        alertname: DistantSignalConsumerApiCallsFailing
+        alertname: DistantSignalConsumerDbCallsFailing
         exp_alerts:
           - exp_labels: {severity: warning, namespace: distant-signal, consumer: trust-backlog-consumer}
             exp_annotations:
               summary: trust-backlog-consumer keeps failing its reads or writes
               description: "5 failed reads or writes in 5m, for 10m: its data is not landing. Check Postgres and the consumer's log."
-              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalconsumerapicallsfailing
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalconsumerdbcallsfailing
   # The aggregator's last success stops at 600s (10m); 15m later it fires.
   # The notifier's line_status loop is healthy; its hourly template_sweep
   # is old but left out; its skip_check loop never succeeded after a start
