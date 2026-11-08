@@ -2925,7 +2925,7 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: "build.42415074037-7756d596ba158c9282b5aff9f64c50203ccdd99c"
+    tag: "build.42431239522-e03f37b0010f13f9fdc2b551c69c0f93018f0495"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:50d2b7bd648fea6172f66abdfeb571db9991e6402dd4881a222c4c54ac8e5a9f"
@@ -3195,7 +3195,7 @@ notifier:
   progressStallSecs: 900
   image:
     repository: ghcr.io/distant-signal/images/notifier
-    tag: "build.42415074037-7756d596ba158c9282b5aff9f64c50203ccdd99c"
+    tag: "build.42431239522-e03f37b0010f13f9fdc2b551c69c0f93018f0495"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
     digest: "sha256:6a405938cbc26caf216b89df9c9d66306b64bf791b4dfd652af6904aba9886f1"
@@ -3775,10 +3775,10 @@ enricher:
     type: Recreate
   image:
     repository: ghcr.io/distant-signal/images/enricher
-    tag: "build.42415074037-7756d596ba158c9282b5aff9f64c50203ccdd99c"
+    tag: "build.42431239522-e03f37b0010f13f9fdc2b551c69c0f93018f0495"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:9a0e68de23a8da7725b71324f510a76f2d4f3f34e60ad8f898ab8e49ccb9e51e"
+    digest: "sha256:86975ee82e0b9ed6a176e9b2ab831b7f2d7b665715fd24fc19582408aed627cf"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
