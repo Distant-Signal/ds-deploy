@@ -2243,6 +2243,16 @@ api:
     # How old the last good fetch may get before the next; a failed fetch
     # is retried after 50 minutes. At least 1.
     intervalHours: 24
+  # -- The journey calendar feed (DS-414, ds-api's docs/calendar-feed.md): a
+  # user can make a secret `.ics` link to subscribe to their saved and
+  # repeating journeys in a calendar app, with a Delay Repay claim reminder
+  # after a late journey. Off by default: the routes answer 404 and the
+  # website doesn't offer it. Needs an api build that includes ds-api#37
+  # (the api reads `CALENDAR_FEED_ENABLED`; an older api ignores it). No
+  # migration and no egress. The /privacy page's "Once it is available"
+  # wording should be dropped when this goes live.
+  calendarFeed:
+    enabled: false
   # -- Live arrivals on the /tfl/stops/{id} page (DS-136,
   # GET /public/tfl/stops/{id}/arrivals): the api asks TfL's Unified API
   # (`StopPoint/{id}/Arrivals`) on demand and keeps each stop's answer for
