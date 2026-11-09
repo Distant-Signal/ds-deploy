@@ -3273,6 +3273,14 @@ notifier:
     # -- The most Web Push TTL a leave-by is sent with, seconds; it is never
     # kept past 5 minutes after the leave-by either (LEAVE_REMINDERS_TTL_SECS).
     ttlSecs: 900
+    # -- Also remind (and list in the morning summary) a remind-me regular
+    # journey whose train nobody has picked yet, from the api plan sweep's
+    # suggestion: the usual train, or the usual operator's nearest one
+    # (LEAVE_REMINDERS_USUAL_TRAIN_ENABLED). Needs `enabled`, the api plan
+    # sweep and a notifier image with the setting (ds-workers, DS-425). Off
+    # by default: it adds a push per regular journey per day for users who
+    # never tracked a train (the leave-by had never fired for them).
+    usualTrainEnabled: false
   # Web Push worker pool (services review SVC-02): cycles only decide and
   # enqueue; these workers send. See crates/notifier/src/push_queue.rs.
   push:
@@ -7031,24 +7039,37 @@ metrics:
       minDrops: 5
       for: 0m
       severity: warning
-    # notifier_forward_queue is not archived and nothing deletes a row the
-    # notifier has read: a row goes only when the aggregator prunes its
-    # trains row (ON DELETE CASCADE), so the table holds about
-    # aggregator.trainsRetentionDays of signals (decision 2026-10-08).
-    # DistantSignalNotifierForwardQueueRetentionOverdue: the oldest row
-    # (distant_signal_notifier_forward_queue_oldest_age_seconds) is older
-    # than the longer of aggregator.trainsRetentionDays and
+    # notifier_forward_queue is not archived. The notifier deletes the rows
+    # it has consumed once they are a day old (DS-425; before that nothing
+    # deleted a row once read and the table held about
+    # aggregator.trainsRetentionDays of signals, decision 2026-10-08), and
+    # the gauges count only the rows it has not consumed yet.
+    # DistantSignalNotifierForwardQueueRetentionOverdue: the oldest
+    # unconsumed row (distant_signal_notifier_forward_queue_oldest_age_seconds)
+    # is older than the longer of aggregator.trainsRetentionDays and
     # untrackedTrainsRetentionDays plus `retentionGraceDays`, for
-    # `retentionFor`: the trains prune is not running or not reaching it. A
-    # train is pruned on the day after its service_date leaves the window,
-    # and its signals are written within about a day of that service_date,
-    # so a healthy oldest row stays under retention + 1 day; 2 days of grace
-    # leaves a day of slack.
-    # DistantSignalNotifierForwardQueueLarge: more than `maxRows` rows
-    # (distant_signal_notifier_forward_queue_rows) for `largeFor`. Production
-    # held 315 rows for a full retention window (2026-10-09), so 50000 means
-    # a producer is flooding the queue, or tracked trains have grown enough
-    # to revisit archiving it; raise it as tracked trains grow.
+    # `retentionFor`: the forward-queue loop has not consumed it, or the
+    # trains prune is not removing it.
+    # DistantSignalNotifierForwardQueueLarge: more than `maxRows` unconsumed
+    # rows (distant_signal_notifier_forward_queue_rows) for `largeFor`.
+    # Production held 315 rows for a full retention window (2026-10-09), so
+    # 50000 means the forward-queue loop is behind or a producer is flooding
+    # the queue.
+    # DistantSignalNotifierLeaveByUnreachable (DS-425): at least one of
+    # today's remind-me regular journeys with a usual (or closest) train
+    # suggested, a station buffer and leave-by reminders on, whose train
+    # nobody has picked, can get no leave-by reminder
+    # (distant_signal_notifier_leave_reminder_unreachable_occurrences): with
+    # notifier.leaveReminders.usualTrainEnabled off that is every such
+    # journey, with it on one whose suggested train is cancelled. It stays
+    # for `for`: the gauge is today's count, so a morning's worth means the
+    # reminders never had a chance. Off by default, and only with
+    # notifier.leaveReminders.enabled; turn it on with usualTrainEnabled to
+    # see the journeys the flag still can't reach.
+    notifierLeaveByUnreachable:
+      enabled: false
+      for: 3h
+      severity: warning
     notifierForwardQueue:
       enabled: true
       retentionGraceDays: 2

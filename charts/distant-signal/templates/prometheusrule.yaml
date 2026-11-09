@@ -50,6 +50,7 @@ so that clause fired on every rollout.
 {{- $anyOn := or $movementOn $rule.enricherErrors.enabled $rule.componentMemory.enabled $fcwOn $pipelineOn $sftpOn $bucketOn }}
 {{- $notifierDroppedOn := ($rule.notifierPushDropped).enabled }}
 {{- $forwardQueueOn := ($rule.notifierForwardQueue).enabled }}
+{{- $leaveByUnreachableOn := and ($rule.notifierLeaveByUnreachable).enabled .Values.notifier.leaveReminders.enabled }}
 {{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
 {{- $signupSpikeOn := ($rule.userSignupSpike).enabled }}
 {{- $missingNamesOn := ($rule.loginMissingNameClaims).enabled }}
@@ -78,7 +79,7 @@ so that clause fired on every rollout.
 {{- $poolTimeoutsOn := ($rule.dbPoolAcquireTimeouts).enabled }}
 {{- $directWritesOn := ($rule.directWritesFailing).enabled }}
 {{- $feedMarkerOn := and ($rule.scheduleFeedMarkerStale).enabled .Values.scheduleFeed.enabled }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $archiveAlertOn $signupSpikeOn $missingNamesOn $bankHolidaysOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $leaveByUnreachableOn $archiveAlertOn $signupSpikeOn $missingNamesOn $bankHolidaysOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
 {{- $archiveHealthOn := and .Values.archive.enabled (or ($rule.archiveStale).enabled ($rule.archiveBatchChurn).enabled) }}
 {{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled }}
 {{- $darwinOn := and ($rule.darwinRelay).enabled .Values.darwinRelay.enabled }}
@@ -1088,9 +1089,10 @@ spec:
     - name: distant-signal.notifier-forward-queue
       rules:
         {{- /*
-        notifier_forward_queue is left unarchived (decision 2026-10-08), and
-        a row leaves only when the aggregator prunes its trains row (ON
-        DELETE CASCADE). The notifier samples the table after every
+        notifier_forward_queue is left unarchived (decision 2026-10-08). The
+        notifier deletes the rows it has consumed once a day old (DS-425),
+        and a row also goes when the aggregator prunes its trains row (ON
+        DELETE CASCADE). It samples the unconsumed rows after every
         forward-queue cycle (15s); both gauges are registered at 0.
         */}}
         - alert: DistantSignalNotifierForwardQueueRetentionOverdue
@@ -1104,7 +1106,7 @@ spec:
             {{- end }}
           annotations:
             summary: "notifier forward queue holds a row {{ "{{ $value | humanizeDuration }}" }} old"
-            description: "Over the {{ $retentionDays }}-day trains retention + {{ .retentionGraceDays }} days: the aggregator's trains prune is not removing it."
+            description: "Over the {{ $retentionDays }}-day trains retention + {{ .retentionGraceDays }} days: the forward-queue loop has not consumed it, or the trains prune is not removing it."
             runbook_url: {{ printf "%s#distantsignalnotifierforwardqueueretentionoverdue" $runbook | quote }}
         - alert: DistantSignalNotifierForwardQueueLarge
           expr: |
@@ -1117,8 +1119,34 @@ spec:
             {{- end }}
           annotations:
             summary: "notifier forward queue holds {{ "{{ $value | humanize }}" }} rows"
-            description: "Over {{ int .maxRows }}. It keeps a trains retention window of signals: a producer is flooding it, or it has outgrown being unarchived."
+            description: "Over {{ int .maxRows }}. Unconsumed rows: the forward-queue loop is behind, or a producer is flooding it."
             runbook_url: {{ printf "%s#distantsignalnotifierforwardqueuelarge" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $leaveByUnreachableOn }}
+    {{- with $rule.notifierLeaveByUnreachable }}
+    - name: distant-signal.notifier-leave-by
+      rules:
+        {{- /*
+        DS-425: a remind-me regular journey's train leg stays unmatched until
+        the owner tracks a train, and the leave-by reminder never fired for
+        one (notifier_leave_reminder_total stayed 0). The notifier counts
+        today's such journeys that can get no reminder and sets the gauge
+        every leave-by cycle (60s); it is registered at 0.
+        */}}
+        - alert: DistantSignalNotifierLeaveByUnreachable
+          expr: |
+            max by (namespace) (distant_signal_notifier_leave_reminder_unreachable_occurrences{namespace="{{ $ns }}"}) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $value | humanize }}" }} regular journeys today can get no leave-by reminder"
+            description: "Remind-me journeys with a usual train suggested and no train picked, for which the notifier cannot send a leave-by reminder. The runbook covers why."
+            runbook_url: {{ printf "%s#distantsignalnotifierleavebyunreachable" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $rolloutStuckOn }}

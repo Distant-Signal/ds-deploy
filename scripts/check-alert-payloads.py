@@ -105,6 +105,10 @@ RENDER_FLAGS = [
     "api.sso.redirectUrl=https://app.example.com/callback",
     "api.sso.postLoginRedirectUrl=https://app.example.com/",
     "metrics.prometheusRule.enabled=true",
+    # DistantSignalNotifierLeaveByUnreachable (off by default, only with the
+    # leave-by reminders).
+    "notifier.leaveReminders.enabled=true",
+    "metrics.prometheusRule.notifierLeaveByUnreachable.enabled=true",
     # The bank holidays sync, for DistantSignalBankHolidaysStale.
     "api.bankHolidays.enabled=true",
     "pollers.ldbws.enabled=true",
