@@ -31,23 +31,27 @@ kubectl -n distant-signal create secret generic webhook-secret-keys \
   --from-literal=webhook-secret-keys="${KEY}"
 ```
 
-For a sealed secret, seal the same value byte for byte (`--from-file`, no
-trailing newline), then set in the chart's values:
+In production the Secret is a SealedSecret named `webhook-secret-keys`, key
+`webhook-secret-keys`, in `distant-signal`: seal the value byte for byte
+(`--from-file`, no trailing newline). Then set in the chart's values:
 
 ```yaml
 api:
   webhooks:
     secretKeys:
       existingSecret: webhook-secret-keys
+      existingSecretKey: webhook-secret-keys
 notifier:
   webhooks:
     secretKeys:
       existingSecret: webhook-secret-keys
+      existingSecretKey: webhook-secret-keys
 ```
 
-Turn on, in this order, once ds-core v0.15.0 is migrated: `notifier.webhooks`
-(with `networkPolicy.egress.enabled`), then `api.webhooks`. Check the logs for
-`webhook secret keys loaded` (it lists key ids only) in both.
+Turn on, in this order, once ds-core v0.14.2 or later is migrated:
+`notifier.webhooks` (with `networkPolicy.egress.enabled`), then
+`api.webhooks`. Check the logs for `webhook secret keys loaded` (it lists key
+ids only) in both.
 
 ## Rotate
 

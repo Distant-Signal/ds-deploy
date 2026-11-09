@@ -2232,7 +2232,7 @@ api:
   # notification settings. Off by default: the routes answer 404 and the
   # website doesn't offer them. The notifier delivers only with
   # notifier.webhooks.enabled; turn that on first (nothing is stored until
-  # users add destinations, and ds-core's webhook_destinations table, v0.15.0
+  # users add destinations, and ds-core's webhook_destinations table, v0.14.2
   # or later, must be migrated).
   webhooks:
     enabled: false
