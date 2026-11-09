@@ -633,6 +633,10 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ dig "url" "https://www.gov.uk/bank-holidays.json" $bankHolidays | quote }}
             - name: BANK_HOLIDAYS_INTERVAL_HOURS
               value: {{ dig "intervalHours" 24 $bankHolidays | quote }}
+            # The journey calendar feed (.ics link) -- see api.calendarFeed in
+            # values.yaml.
+            - name: CALENDAR_FEED_ENABLED
+              value: {{ dig "calendarFeed" "enabled" false .Values.api | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see api.fullCoverageEnabledDefault's own comment in values.yaml.
             # The binary defaults to false, the chart value to true; it must be
