@@ -620,6 +620,10 @@ with api.extraEnv, which replaces an entry of the same name.
             # api.regularJourneys.dayOverrides in values.yaml.
             - name: REGULAR_JOURNEY_DAY_OVERRIDES_ENABLED
               value: {{ dig "dayOverrides" "enabled" false .Values.api.regularJourneys | quote }}
+            # Outbound webhooks (DS-415) -- see api.webhooks in values.yaml.
+            - name: WEBHOOKS_ENABLED
+              value: {{ dig "webhooks" "enabled" false .Values.api | quote }}
+            {{- include "distant-signal.webhookSecretKeysEnv" (dict "cfg" (dig "webhooks" "secretKeys" dict .Values.api)) | nindent 12 }}
             # Regular journeys: the GOV.UK bank holidays sync -- see
             # api.bankHolidays in values.yaml.
             {{- $bankHolidays := .Values.api.bankHolidays | default dict }}
