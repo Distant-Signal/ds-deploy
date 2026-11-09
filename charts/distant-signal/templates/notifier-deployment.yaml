@@ -178,6 +178,8 @@ with notifier.extraEnv, which replaces an entry of the same name.
             # Regular journeys' leave-by reminders and morning summary.
             - name: LEAVE_REMINDERS_ENABLED
               value: {{ .Values.notifier.leaveReminders.enabled | quote }}
+            - name: LEAVE_REMINDERS_USUAL_TRAIN_ENABLED
+              value: {{ .Values.notifier.leaveReminders.usualTrainEnabled | default false | quote }}
             - name: LEAVE_REMINDERS_POLL_INTERVAL_SECS
               value: {{ .Values.notifier.leaveReminders.pollIntervalSecs | int | quote }}
             - name: LEAVE_REMINDERS_MAX_PUSHES_PER_OCCURRENCE
