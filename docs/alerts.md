@@ -741,13 +741,21 @@ every forward-queue cycle) is older than the longer of
 `aggregator.trainsRetentionDays` and `untrackedTrainsRetentionDays`, plus
 `notifierForwardQueue.retentionGraceDays` (30 + 2 days by default).
 
-Nothing deletes a forward-queue row once the notifier has read it, and the
-table is not archived (decision 2026-10-08): a row goes only when the
-aggregator prunes its `trains` row, through `ON DELETE CASCADE`. A train is
-pruned on the day after its `service_date` leaves the retention window, and
-its signals are written within about a day of that date, so a healthy oldest
-row is under retention + 1 day. An older one means the trains prune is not
-removing it:
+Since DS-425 the notifier deletes the forward-queue rows it has consumed
+(at or below its `notifier_forward_queue` cursor) once they are a day old,
+and both gauges (`notifier_forward_queue_rows`,
+`notifier_forward_queue_oldest_age_seconds`) count only the rows above the
+cursor. Before that nothing deleted a row once read: it went only when the
+aggregator pruned its `trains` row, through `ON DELETE CASCADE`, so the
+oldest-row age read about 30 days with every row consumed. The table is not
+archived (decision 2026-10-08).
+
+An unconsumed row older than the retention window therefore means the
+forward-queue loop has not advanced its cursor past it for that long, or the
+trains prune removed nothing for a row of a train that is still running. The
+loop itself is covered by
+[DistantSignalNotifierCycleFailing](#distantsignalnotifiercyclefailing); look
+at its cursor and at the prune:
 
 1. [DistantSignalRetentionStepFailing](#distantsignalretentionstepfailing)
    for `task="trains"`, or
@@ -756,7 +764,11 @@ removing it:
 2. With the cold archive on in `retain` mode, a failing upload stops the
    trains prune at that batch
    ([DistantSignalArchiveUploadFailures](#distantsignalarchiveuploadfailures)).
-3. Otherwise compare the row's train with the prune's cutoff:
+3. Check the cursor (`SELECT * FROM notifier_cursor WHERE name =
+   'notifier_forward_queue'`) against the oldest row, and that the notifier
+   role may delete from the table (`distant_signal_notifier_forward_queue_pruned_total`
+   rising, no "could not prune" warnings in its log: ds-core's grants).
+4. Otherwise compare the row's train with the prune's cutoff:
 
    ```sql
    SELECT q.id, q.created_at, t.service_date,
@@ -773,13 +785,51 @@ removing it:
 
 `notifier_forward_queue` holds more than `notifierForwardQueue.maxRows`
 rows (`notifier_forward_queue_rows`; 50000 by default) for `largeFor`.
-Production held 315 rows for a full 30-day window on 2026-10-09, all for
-tracked trains. Rows stay for the trains retention window whether or not the
-notifier has read them, so this is either a producer writing far more
-signals than usual (trust-consumer, through its DB sink: check `GROUP BY trains_id` for one train
-with thousands of rows, or many rows with no `dedup_key`), or tracked trains
-have grown enough that the table should be pruned or archived on its own
-schedule. Raise `maxRows` only after ruling out the first.
+The gauge counts only rows the notifier has not consumed yet (above its
+cursor), so this is a backlog: the forward-queue loop is behind or stopped
+([DistantSignalNotifierCycleFailing](#distantsignalnotifiercyclefailing)), or
+a producer is writing far more signals than usual (trust-consumer, through
+its DB sink: check `GROUP BY trains_id` for one train with thousands of
+rows, or many rows with no `dedup_key`). Raise `maxRows` only after ruling
+both out.
+
+### DistantSignalNotifierLeaveByUnreachable
+
+Off by default (`notifierLeaveByUnreachable.enabled`, and only with
+`notifier.leaveReminders.enabled`). At least one of today's remind-me
+regular journeys has a usual (or closest) train suggested by the api plan
+sweep, a station buffer and leave-by reminders on, and no train picked, and
+the notifier can send it no leave-by reminder
+(`notifier_leave_reminder_unreachable_occurrences`, set every leave-by cycle,
+for `for`, 3h by default).
+
+Background (DS-425): a remind-me occurrence's train leg stays unmatched
+until its owner taps "Track this train", and until then the leave-by had no
+time, so `notifier_leave_reminder_total` stayed 0 for every result while the
+journeys were evaluated every day. Two reasons now keep a reminder from
+being possible:
+
+1. `notifier.leaveReminders.usualTrainEnabled` is off (the default), so the
+   notifier skips the suggestion-based leave-by. Turn it on once the notifier
+   image has LEAVE_REMINDERS_USUAL_TRAIN_ENABLED and the pick reminder's
+   new text has been seen in a real push.
+2. It is on and the leave-by is still none: the suggested train is
+   cancelled in live data (`train_current_state`), which is right, since the
+   plan sweep will replace the suggestion or the break path takes over.
+   Check the journey:
+
+   ```sql
+   SELECT j.id, j.regular_plan_status, j.regular_plan ->> 'reason' AS reason,
+          j.regular_plan -> 'choice' ->> 'departure' AS departure
+     FROM journeys j
+    WHERE j.source_template_id IS NOT NULL
+      AND j.regular_plan_status = 'suggested'
+      AND EXISTS (SELECT 1 FROM journey_legs l WHERE l.journey_id = j.id
+                  AND l.service_date = CURRENT_DATE AND l.train_subscription_id IS NULL);
+   ```
+
+The `best` suggestion (the usual train doesn't run and nothing is near it)
+never has a leave-by and is not counted.
 
 ## ingest rollouts
 

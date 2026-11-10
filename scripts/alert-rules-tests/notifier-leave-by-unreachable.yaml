@@ -1,0 +1,44 @@
+# promtool unit tests for DistantSignalNotifierLeaveByUnreachable (see
+# recorded-alerts.yaml's header for how rules.yaml is rendered). Off by
+# default and only with notifier.leaveReminders.enabled; this test renders
+# it on. The notifier sets the gauge every leave-by cycle (60s) to today's
+# count of remind-me journeys with a usual train suggested that can get no
+# reminder, and registers it at 0. Fires above 0 for 3h.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Healthy: none unreachable.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_notifier_leave_reminder_unreachable_occurrences{namespace="distant-signal", pod="a"}'
+        values: '0x240'
+    alert_rule_test:
+      - eval_time: 240m
+        alertname: DistantSignalNotifierLeaveByUnreachable
+        exp_alerts: []
+  # One journey unreachable for 2 hours then picked: quiet. For the whole
+  # morning: pending, then fires after 3h.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_notifier_leave_reminder_unreachable_occurrences{namespace="distant-signal", pod="a"}'
+        values: '1x120 0x120'
+    alert_rule_test:
+      - eval_time: 240m
+        alertname: DistantSignalNotifierLeaveByUnreachable
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_notifier_leave_reminder_unreachable_occurrences{namespace="distant-signal", pod="a"}'
+        values: '1x240'
+    alert_rule_test:
+      - eval_time: 179m
+        alertname: DistantSignalNotifierLeaveByUnreachable
+        exp_alerts: []
+      - eval_time: 181m
+        alertname: DistantSignalNotifierLeaveByUnreachable
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: 1 regular journeys today can get no leave-by reminder
+              description: "Remind-me journeys with a usual train suggested and no train picked, for which the notifier cannot send a leave-by reminder. The runbook covers why."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalnotifierleavebyunreachable
