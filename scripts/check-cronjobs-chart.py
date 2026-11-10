@@ -93,6 +93,7 @@ FOREIGN = ("distant-signal-pgbackrest-",)
 # can't silently shrink what this checks.
 EXPECTED = (
     "distant-signal-api-maintenance",
+    "distant-signal-bank-holidays",
     "distant-signal-pgbackrest-full",
     "distant-signal-pgbackrest-diff",
     "distant-signal-pgbackrest-check",
@@ -153,6 +154,8 @@ TFL_DAILY = sets(
 )
 EVERYTHING = sets(
     "apiMaintenance.enabled=true",
+    "api.bankHolidays.enabled=true",
+    "api.bankHolidays.cronjob.enabled=true",
     "postgresql.pgbackrest.enabled=true",
     "postgresql.pgbackrest.image.repository=registry.example.com/postgres-pgbackrest",
     "postgresql.pgbackrest.image.tag=pg18.6-pgbackrest2.59.1-tini0.19.0",

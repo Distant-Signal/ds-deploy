@@ -3114,6 +3114,89 @@ jobs:
             fail "the CronJob's pool must count in the INF-7 budget"
           fi
 
+      # api.bankHolidays.cronjob (off by default; docs/scheduled-jobs.md,
+      # "bank-holidays"): the bank holidays fetch as a Forbid-concurrency
+      # CronJob running the api image's bank_holidays_sync as the api role,
+      # admitted to Postgres, with egress to Postgres, DNS and the url's
+      # port, and the api's own loop switched off in the same render.
+      - name: helm template (bank-holidays CronJob)
+        run: |
+          set -euo pipefail
+          base=(
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set networkPolicy.enabled=true --set networkPolicy.egress.enabled=true
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          doc() { awk -v k="$1" -v n="$2" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: " k "\n" && $0 ~ "\n  name: " n "\n" {print}'; }
+          bh=(--set api.bankHolidays.enabled=true)
+          on=("${bh[@]}" --set api.bankHolidays.cronjob.enabled=true)
+
+          # Off (the default), and with only the feature on: no CronJob, and
+          # the api's loop is not switched off.
+          out=$(render)
+          [[ -z "$(doc CronJob distant-signal-bank-holidays <<<"${out}")" ]] || fail "off must render no bank-holidays CronJob"
+          if grep -q 'bank-holidays$' <<<"${out}"; then fail "off must render nothing of the bank-holidays CronJob"; fi
+          out=$(render "${bh[@]}")
+          [[ -z "$(doc CronJob distant-signal-bank-holidays <<<"${out}")" ]] || fail "cronjob off must render no CronJob"
+          offapi=$(render "${bh[@]}" --show-only templates/api-deployment.yaml)
+          grep -A1 'name: BANK_HOLIDAYS_LOOP_ENABLED$' <<<"${offapi}" | grep -q 'value: "true"' \
+            || fail "the api's loop must stay on unless the CronJob is"
+
+          # The CronJob without the feature is refused.
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set api.bankHolidays.cronjob.enabled=true >/dev/null 2>&1; then
+            fail "api.bankHolidays.cronjob.enabled without api.bankHolidays.enabled must fail"
+          fi
+
+          out=$(render "${on[@]}")
+          cj=$(doc CronJob distant-signal-bank-holidays <<<"${out}")
+          [[ -n "${cj}" ]] || fail "no bank-holidays CronJob rendered"
+          for want in 'schedule: "40 */6 * * *"' 'timeZone: "Etc/UTC"' 'concurrencyPolicy: Forbid' \
+              '- /usr/local/bin/bank_holidays_sync' 'image: "ghcr.io/distant-signal/images/api@sha256:' \
+              'backoffLimit: 2' 'readOnlyRootFilesystem: true'; do
+            grep -q -F -- "${want}" <<<"${cj}" || fail "bank-holidays CronJob lacks: ${want}"
+          done
+          grep -A1 'name: BANK_HOLIDAYS_URL$' <<<"${cj}" | grep -q 'value: "https://www.gov.uk/bank-holidays.json"' \
+            || fail "the CronJob must read the api's bank holidays url"
+          grep -A1 'name: BANK_HOLIDAYS_CONNECT_DEADLINE_SECS$' <<<"${cj}" | grep -q 'value: "120"' \
+            || fail "the CronJob must set BANK_HOLIDAYS_CONNECT_DEADLINE_SECS=120 by default"
+
+          # The api's loop is switched off by the same value; its own egress
+          # rule for the url is then not rendered (the CronJob has one).
+          onapi=$(render "${on[@]}" --show-only templates/api-deployment.yaml)
+          grep -A1 'name: BANK_HOLIDAYS_LOOP_ENABLED$' <<<"${onapi}" | grep -q 'value: "false"' \
+            || fail "the CronJob on must switch the api's loop off"
+
+          pg=$(doc NetworkPolicy distant-signal-postgres <<<"${out}")
+          grep -q -- '- bank-holidays$' <<<"${pg}" || fail "Postgres must admit the CronJob"
+          eg=$(doc NetworkPolicy distant-signal-bank-holidays <<<"${out}")
+          grep -q 'port: 5432' <<<"${eg}" || fail "the CronJob must be allowed out to Postgres"
+          grep -q 'cidr: 0.0.0.0/0' <<<"${eg}" || fail "the CronJob must be allowed out to the internet (GOV.UK)"
+          grep -q 'port: 443' <<<"${eg}" || fail "the CronJob must be allowed out on the url's port"
+
+          # The api role, as api-maintenance: app until perService.api.connect.
+          # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
+          grep -q 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${cj}" || fail "the CronJob must connect as app"
+          cj=$(render "${on[@]}" --set postgresql.roles.perService.api.connect=true \
+            --show-only templates/bank-holidays-cronjob.yaml)
+          # shellcheck disable=SC2016 # as above
+          grep -q 'postgres://distant_signal_api:\$(PGPASSWORD)@' <<<"${cj}" || fail "api.connect: the CronJob must connect as the api role"
+
+          # Its 2 connections count in the app role's limit (75 -> 77), as
+          # api-maintenance's do.
+          grep -q "'--variable=app_connection_limit=77'" <<<"${out}" || fail "the CronJob's pool must count in the app role's limit"
+
       # postgresql.pgbackrest (docs/postgres-pitr.md). Off (the default)
       # must render nothing of it: the Postgres pod stays exactly as before.
       # On, it must swap the image, add the archiving settings, take every

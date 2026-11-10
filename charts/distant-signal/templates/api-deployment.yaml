@@ -629,6 +629,13 @@ with api.extraEnv, which replaces an entry of the same name.
             {{- $bankHolidays := .Values.api.bankHolidays | default dict }}
             - name: BANK_HOLIDAYS_ENABLED
               value: {{ dig "enabled" false $bankHolidays | quote }}
+            # false once the bank-holidays CronJob fetches instead
+            # (api.bankHolidays.cronjob.enabled): the api then runs no fetch
+            # loop and no lock, only the gauges. An api image from before
+            # BANK_HOLIDAYS_LOOP_ENABLED ignores it, and its loop and the
+            # CronJob overlap harmlessly (idempotent).
+            - name: BANK_HOLIDAYS_LOOP_ENABLED
+              value: {{ ternary "false" "true" (eq (include "distant-signal.bankHolidaysCronJobOn" .) "true") | quote }}
             - name: BANK_HOLIDAYS_URL
               value: {{ dig "url" "https://www.gov.uk/bank-holidays.json" $bankHolidays | quote }}
             - name: BANK_HOLIDAYS_INTERVAL_HOURS

@@ -2260,6 +2260,54 @@ api:
     # How old the last good fetch may get before the next; a failed fetch
     # is retried after 50 minutes. At least 1.
     intervalHours: 24
+    # -- Run the fetch as a CronJob instead of the api's in-process loop
+    # (docs/scheduled-jobs.md, "bank-holidays"). The loop's advisory lock is
+    # held by the old pod at a rollout's first tick, so the loop is unowned
+    # for up to an hour and DistantSignalWriterLoopUnowned fires; a CronJob
+    # has no lock. `enabled: true` renders the CronJob and sets the api's
+    # BANK_HOLIDAYS_LOOP_ENABLED=false in the same release (the api then
+    # only refreshes its gauges from the table). Needs `enabled` above and
+    # api + CronJob images that have the `bank_holidays_sync` binary and
+    # BANK_HOLIDAYS_LOOP_ENABLED (ds-api's bank-holidays one-shot): pin them
+    # before this. Same Postgres role as the api (api.connect). Off by
+    # default.
+    cronjob:
+      enabled: false
+      # Every six hours. The binary fetches only when the last success is
+      # `intervalHours` old and the last attempt over 50 minutes old, so
+      # GOV.UK is fetched about daily and a failed fetch is retried at the
+      # next run.
+      schedule: "40 */6 * * *"
+      timeZone: Etc/UTC
+      # The api image's one-shot binary.
+      command:
+        - /usr/local/bin/bank_holidays_sync
+      args: []
+      database:
+        # DATABASE_MAX_CONNECTIONS (counted in the connection budgets).
+        maxConnections: 2
+        # BANK_HOLIDAYS_CONNECT_DEADLINE_SECS: how long a run retries its
+        # first connection before failing. At least 1.
+        connectDeadlineSecs: 120
+      startingDeadlineSeconds: 600
+      # The 30 s fetch timeout and the connect deadline fit well inside.
+      backoffLimit: 2
+      activeDeadlineSeconds: 600
+      successfulJobsHistoryLimit: 1
+      failedJobsHistoryLimit: 3
+      ttlSecondsAfterFinished: 86400
+      logLevel: info
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+          ephemeral-storage: 16Mi
+        limits:
+          memory: 128Mi
+          ephemeral-storage: 256Mi
+      podSecurityContext: {}
+      nodeSelector: {}
+      tolerations: []
   # -- The journey calendar feed (DS-414, ds-api's docs/calendar-feed.md): a
   # user can make a secret `.ics` link to subscribe to their saved and
   # repeating journeys in a calendar app, with a Delay Repay claim reminder

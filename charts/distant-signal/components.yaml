@@ -44,7 +44,7 @@ groups:
     ConfigMap, ServiceAccount and NetworkPolicies they use.
   migrate: The ds-core migrate hook Job and its NetworkPolicies.
   roles: The Postgres per-service roles setup hook Job and its ConfigMaps.
-  api: The api, its Service and source-images ConfigMap, and the api-maintenance CronJob.
+  api: The api, its Service and source-images ConfigMap, and the api-maintenance and bank-holidays CronJobs.
   frontend: The frontend.
   workers: The aggregator, the enricher and the notifier.
   data-stores: The bundled Postgres and Redis, and Postgres's pgBackRest jobs.
@@ -78,6 +78,7 @@ components:
   postgres-roles: roles
   api: api
   api-maintenance: api
+  bank-holidays: api
   frontend: frontend
   aggregator: workers
   enricher: workers

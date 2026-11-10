@@ -52,6 +52,10 @@ spec:
                   # The api-maintenance CronJob (api-maintenance-cronjob.yaml).
                   - api-maintenance
                   {{- end }}
+                  {{- if include "distant-signal.bankHolidaysCronJobOn" . }}
+                  # The bank-holidays CronJob (bank-holidays-cronjob.yaml).
+                  - bank-holidays
+                  {{- end }}
                   {{- if .Values.ingestWriter.enabled }}
                   # The ingest-writer (ingest-writer-deployment.yaml).
                   - ingest-writer
@@ -354,8 +358,9 @@ spec:
 {{- if dig "tflArrivals" "enabled" true .Values.api }}
 {{- $apiIdpUrls = append $apiIdpUrls (dig "tflArrivals" "baseUrl" "https://api.tfl.gov.uk" .Values.api) }}
 {{- end }}
-{{- /* Regular journeys phase 5: the api fetches GOV.UK's bank holidays. */}}
-{{- if dig "bankHolidays" "enabled" false .Values.api }}
+{{- /* Regular journeys phase 5: the api fetches GOV.UK's bank holidays
+(unless the bank-holidays CronJob does: it has its own egress policy). */}}
+{{- if and (dig "bankHolidays" "enabled" false .Values.api) (not (include "distant-signal.bankHolidaysCronJobOn" .)) }}
 {{- $apiIdpUrls = append $apiIdpUrls (dig "bankHolidays" "url" "https://www.gov.uk/bank-holidays.json" .Values.api) }}
 {{- end }}
 {{- range (dig "delegated" "clients" list .Values.api | default list) }}
@@ -534,6 +539,16 @@ this file's changes are applied.
 */}}
 {{- if .Values.apiMaintenance.enabled }}
 {{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" $root "component" "api-maintenance" "deps" (dict "postgres" true)) }}
+---
+{{ . }}
+{{- end }}
+{{- end }}
+{{- /* The bank-holidays CronJob (api.bankHolidays.cronjob): Postgres, DNS and
+the bank holidays url's host (the public internet, on the url's port), as
+the api's own rule has for the loop it replaces. */}}
+{{- if include "distant-signal.bankHolidaysCronJobOn" . }}
+{{- $bhUrl := dig "url" "https://www.gov.uk/bank-holidays.json" (.Values.api.bankHolidays | default dict) }}
+{{- with include "distant-signal.jobEgressNetworkPolicy" (dict "root" $root "component" "bank-holidays" "deps" (dict "postgres" true) "internet" true "urls" (list $bhUrl)) }}
 ---
 {{ . }}
 {{- end }}

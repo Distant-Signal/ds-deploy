@@ -106,6 +106,8 @@ EVERYTHING = (
         "devAuthentik.enabled=true",
         "migrate.job.enabled=true",
         "apiMaintenance.enabled=true",
+        "api.bankHolidays.enabled=true",
+        "api.bankHolidays.cronjob.enabled=true",
         "postgresql.roles.setupJob.enabled=true",
         "postgresql.roles.initScript=false",
         "postgresql.pgbackrest.enabled=true",
@@ -135,6 +137,7 @@ EXPECTED_IN_EVERYTHING = (
     "Job/distant-signal-migrate",
     "Job/distant-signal-postgres-roles-setup",
     "CronJob/distant-signal-api-maintenance jobTemplate",
+    "CronJob/distant-signal-bank-holidays jobTemplate",
     "CronJob/distant-signal-pgbackrest-full jobTemplate",
 )
 

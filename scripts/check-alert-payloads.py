@@ -167,6 +167,7 @@ RENDER_FLAGS = [
     # A CronJob of the chart's own, for the scheduled-jobs group's failure
     # and staleness rules.
     "apiMaintenance.enabled=true",
+    "api.bankHolidays.cronjob.enabled=true",
 ]
 
 # Renders beside the RENDER_FLAGS one, for rules that replace others under
