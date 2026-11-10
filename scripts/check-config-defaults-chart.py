@@ -311,6 +311,7 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "SSO_PRIMARY_SUB_CLAIM": ahead_of_image(
             "api.sso.primarySubClaim", "distant-signal#192, ds-core v0.1.1"
         ),
+        "WEBHOOK_SECRET_KEYS": optional("api.webhooks.secretKeys.existingSecret"),
     },
     "darwin-relay": {
         "DARWIN_STREAM_MAXLEN": no_value("darwinRelay"),
@@ -363,7 +364,11 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "SCHEDULE_MATCH_INTERVAL_SECS": "the api's variable, unwired as the api's is",
     },
     "movement-relay": {"KAFKA_COMMIT_DELAY_SECS": no_value("movementRelay")},
-    "notifier": {"DATABASE_MAX_CONNECTIONS": POOL},
+    "notifier": {
+        "DATABASE_MAX_CONNECTIONS": POOL,
+        "WEBHOOK_SECRET_KEYS": optional("notifier.webhooks.secretKeys.existingSecret"),
+        "WEBHOOK_SITE_URL": optional("notifier.webhooks.siteUrl"),
+    },
     "poller-incidents": {
         "INCIDENTS_ROW_HEARTBEAT": optional(
             "pollers.incidents.ingest.rowHeartbeat=false"
