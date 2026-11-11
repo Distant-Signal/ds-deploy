@@ -3,7 +3,8 @@
 # is rendered, with ingestWriter.enabled and ingestWriter.loops.enabled).
 # Defaults: loop stale over 1800s (ingest_dedup_prune 9000s, canary left
 # out) for 10m; loop unowned for 15m (ingest_dedup_prune 75m); apply
-# writes nothing over 15m for 5m (not ds:ingest:reference); source stale
+# writes nothing over 15m for 5m (not ds:ingest:reference, ioi-nir or
+# ioi-gtfs, the once-a-day snapshots); source stale
 # per source for 10m.
 rule_files: [rules.yaml]
 evaluation_interval: 1m
@@ -95,7 +96,7 @@ tests:
   # Apply writes nothing. station-samples: applied every minute, rows
   # written until 10m, then none: 0 written over 15m from 25m, firing from
   # 30m. tfl: written every apply. reference: nothing written (the daily
-  # TOC list unchanged) but excluded.
+  # TOC list unchanged) but excluded, as are ioi-nir and ioi-gtfs.
   - interval: 1m
     input_series:
       - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:station-samples", schema="station-samples", outcome="applied"}'
@@ -109,6 +110,15 @@ tests:
       - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:reference", schema="tocs", outcome="applied"}'
         values: '0+1x40'
       - series: 'distant_signal_ingest_stream_row_writes_total{namespace="distant-signal", pod="w", stream="ds:ingest:reference", schema="tocs", outcome="written"}'
+        values: '0x40'
+      # The once-a-day catalogues: applied, rows unchanged: excluded.
+      - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-nir", schema="ioi-nir", outcome="applied"}'
+        values: '0+1x40'
+      - series: 'distant_signal_ingest_stream_row_writes_total{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-nir", schema="ioi-nir", outcome="written"}'
+        values: '0x40'
+      - series: 'distant_signal_ingest_stream_consumed_total{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-gtfs", schema="ioi-gtfs", outcome="applied"}'
+        values: '0+1x40'
+      - series: 'distant_signal_ingest_stream_row_writes_total{namespace="distant-signal", pod="w", stream="ds:ingest:ioi-gtfs", schema="ioi-gtfs", outcome="written"}'
         values: '0x40'
     alert_rule_test:
       - eval_time: 27m

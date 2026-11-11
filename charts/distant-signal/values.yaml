@@ -6546,10 +6546,20 @@ metrics:
     # unchanged, or refused by the ordering guard as older), for `for`.
     # excludeStreams: streams whose snapshots legitimately change nothing
     # (the daily TOC list on ds:ingest:reference).
+    # dailySnapshotStreams: streams that carry one snapshot a day (the
+    # island-of-Ireland catalogues: poller-nir-stations on ds:ingest:ioi-nir,
+    # poller-irish-rail-gtfs on ds:ingest:ioi-gtfs). Their entries apply a
+    # few times a day and usually change no row, so a window as short as
+    # `window` would fire after every post; any window long enough to span a
+    # post would fire all day. They are left out here and covered by
+    # DistantSignalIngestSourceStale on their island_of_ireland_*_gtfs and
+    # *_nir freshness sources (ingestSourceStale.maxAgeSeconds), which still
+    # catches a feed that stops landing. Added to excludeStreams' regex.
     ingestApplyWritesNothing:
       enabled: true
       window: 15m
       excludeStreams: ["ds:ingest:reference"]
+      dailySnapshotStreams: ["ds:ingest:ioi-nir", "ds:ingest:ioi-gtfs"]
       for: 5m
       severity: warning
     # DistantSignalIngestSourceStale: an ingest_freshness row
