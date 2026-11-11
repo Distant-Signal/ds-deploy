@@ -129,6 +129,8 @@ EVERYTHING = sets(
     "scheduleFeed.sftp.authMethod=password",
     "migrate.job.enabled=true",
     "apiMaintenance.enabled=true",
+    "api.bankHolidays.enabled=true",
+    "api.bankHolidays.cronjob.enabled=true",
 )
 EGRESS = sets(
     "networkPolicy.egress.enabled=true", "networkPolicy.egress.internetPorts={443}"

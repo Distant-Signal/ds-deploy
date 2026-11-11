@@ -1228,9 +1228,9 @@ app.connectionLimitSlack.
 {{- $total = add $total (include "distant-signal.servicePool" (dict "root" $root "service" $service)) -}}
 {{- end -}}
 {{- end -}}
-{{- /* The api-maintenance CronJob connects as the api does. */ -}}
+{{- /* The api-maintenance and bank-holidays CronJobs connect as the api does. */ -}}
 {{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "api")) -}}
-{{- $total = add $total (include "distant-signal.apiMaintenancePool" $root) -}}
+{{- $total = add $total (include "distant-signal.apiMaintenancePool" $root) (include "distant-signal.bankHolidaysPool" $root) -}}
 {{- end -}}
 {{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "writer")) -}}
 {{- $total = add $total (include "distant-signal.ingestWriterPool" $root) -}}
@@ -1981,6 +1981,42 @@ when apiMaintenance.enabled, else 0. Takes root.
 {{- end }}
 
 {{/*
+"true" when the bank holidays fetch runs as the `bank-holidays` CronJob
+(api.bankHolidays.cronjob.enabled), which also switches the api's own loop off
+(BANK_HOLIDAYS_LOOP_ENABLED=false). Needs api.bankHolidays.enabled: the
+CronJob alone would fetch for a feature that is off, so the render refuses.
+Takes root.
+*/}}
+{{- define "distant-signal.bankHolidaysCronJobOn" -}}
+{{- $bh := .Values.api.bankHolidays | default dict -}}
+{{- if (dig "cronjob" "enabled" false $bh) -}}
+{{- if not (dig "enabled" false $bh) -}}
+{{- fail "api.bankHolidays.cronjob.enabled needs api.bankHolidays.enabled: the CronJob is the fetch for that feature." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+The bank-holidays CronJob's name (its Jobs append "-<minutes>").
+*/}}
+{{- define "distant-signal.bankHolidaysFullname" -}}
+{{- printf "%s-bank-holidays" (include "distant-signal.fullname" .) | trunc 52 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
+The bank-holidays CronJob's pool (api.bankHolidays.cronjob.database.maxConnections)
+when it renders, else 0. Takes root.
+*/}}
+{{- define "distant-signal.bankHolidaysPool" -}}
+{{- if include "distant-signal.bankHolidaysCronJobOn" . -}}
+{{- int (dig "cronjob" "database" "maxConnections" 2 (.Values.api.bankHolidays | default dict)) -}}
+{{- else -}}
+0
+{{- end -}}
+{{- end }}
+
+{{/*
 The api's DATABASE_MAX_CONNECTIONS: perService.api.maxConnections while the
 api connects as its own role, else api.database.maxConnections.
 */}}
@@ -2014,7 +2050,7 @@ a moment. Takes (dict "root" $ "service" ...).
 {{- $limit -}}
 {{- else if eq .service "api" -}}
 {{- $pool := int $cfg.maxConnections -}}
-{{- add (mul (add (int $root.Values.api.replicaCount) 1) $pool) 2 (include "distant-signal.apiMaintenancePool" $root) -}}
+{{- add (mul (add (int $root.Values.api.replicaCount) 1) $pool) 2 (include "distant-signal.apiMaintenancePool" $root) (include "distant-signal.bankHolidaysPool" $root) -}}
 {{- else -}}
 {{- /* The writer's and schedule-reference's servicePool already count
 their lock sessions, so they too get the +1 every role has for a probe or
@@ -2333,6 +2369,8 @@ before (a Job serves nothing). `hook` (optional) makes it a Helm hook
 created before that hook Job (weight -10). `name` (optional) replaces the
 default name, <fullname>-<component>. Takes (dict "root" $ "component"
 "migrate" "deps" (dict "postgres" true) "hook" "pre-install,pre-upgrade").
+`internet` (optional) adds the public internet rule, on the ports of `urls`
+(distant-signal.internetPorts), as an api's `internet` and `urls` do.
 */}}
 {{- define "distant-signal.jobEgressNetworkPolicy" -}}
 {{- $root := .root -}}
@@ -2356,7 +2394,7 @@ spec:
   policyTypes:
     - Egress
   egress:
-    {{- include "distant-signal.egressRules" (dict "root" $root "component" .component "deps" .deps "internet" false) | nindent 4 }}
+    {{- include "distant-signal.egressRules" (dict "root" $root "component" .component "deps" .deps "internet" (.internet | default false) "urls" (.urls | default list)) | nindent 4 }}
 {{- end -}}
 {{- end }}
 
@@ -2377,6 +2415,9 @@ their own failure and staleness alerts. Takes root.
 {{- $names := list -}}
 {{- if .Values.apiMaintenance.enabled -}}
 {{- $names = append $names (include "distant-signal.apiMaintenanceFullname" .) -}}
+{{- end -}}
+{{- if include "distant-signal.bankHolidaysCronJobOn" . -}}
+{{- $names = append $names (include "distant-signal.bankHolidaysFullname" .) -}}
 {{- end -}}
 {{- $root := . -}}
 {{- range $name, $poller := .Values.pollers -}}
@@ -3415,7 +3456,7 @@ this chart can render, so a typo cannot silently drop a rule. Takes
 {{- define "distant-signal.npComponent" -}}
 {{- $root := .root -}}
 {{- $all := $root.Values.networkPolicy.components | default dict -}}
-{{- $known := list "api" "frontend" "aggregator" "enricher" "notifier" "postgres" "redis" "schedulefeed" "schedulefeed-sftp" "trust-consumer" "trust-backlog-consumer" "full-coverage-consumer" "movement-relay" "darwin-relay" "poller-irish-rail-gtfs" "poller-irish-rail-live" "poller-nir-stations" "poller-transit-schedule" "postgres-roles" "migrate" "api-maintenance" "ingest-writer" -}}
+{{- $known := list "api" "frontend" "aggregator" "enricher" "notifier" "postgres" "redis" "schedulefeed" "schedulefeed-sftp" "trust-consumer" "trust-backlog-consumer" "full-coverage-consumer" "movement-relay" "darwin-relay" "poller-irish-rail-gtfs" "poller-irish-rail-live" "poller-nir-stations" "poller-transit-schedule" "postgres-roles" "migrate" "api-maintenance" "bank-holidays" "ingest-writer" -}}
 {{- range $name, $_ := $root.Values.pollers -}}
 {{- $known = append $known (printf "poller-%s" $name) -}}
 {{- end -}}

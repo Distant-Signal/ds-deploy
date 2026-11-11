@@ -1,0 +1,111 @@
+{{- /*
+The bank holidays fetch as a CronJob (api.bankHolidays.cronjob in values.yaml;
+docs/scheduled-jobs.md, "bank-holidays"). Renders nothing unless
+api.bankHolidays.cronjob.enabled (which needs api.bankHolidays.enabled).
+
+Runs the api image's `bank_holidays_sync` binary (ds-api's
+crates/api/src/bin/bank_holidays_sync.rs): fetch GOV.UK's bank holidays if
+the last good fetch is old enough, apply them, exit non-zero if the fetch
+failed. The api's own loop is switched off by the same value
+(BANK_HOLIDAYS_LOOP_ENABLED=false in api-deployment.yaml): the loop's
+advisory lock is held by an old pod at a rollout's first tick, which leaves
+the loop unowned and fires DistantSignalWriterLoopUnowned.
+
+It connects as the api does (distant-signal.databaseEnvFor "api": the api's
+own role, which already has SIU on bank_holidays_sync and SIUD on
+bank_holidays), its pool counts in the connection budget, and its
+NetworkPolicy allows Postgres, DNS and the url's host on the url's port.
+*/}}
+{{- if include "distant-signal.bankHolidaysCronJobOn" . }}
+{{- $bh := .Values.api.bankHolidays }}
+{{- $m := $bh.cronjob }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "distant-signal.bankHolidaysFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "bank-holidays") | nindent 4 }}
+spec:
+  schedule: {{ $m.schedule | quote }}
+  # Explicit, never the node's local zone (chart README, "Scheduled jobs and
+  # time zones"; CI checks every CronJob has one).
+  timeZone: {{ required "api.bankHolidays.cronjob.timeZone is required" $m.timeZone | quote }}
+  # One run at a time: a slow fetch is skipped, not doubled.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ int64 $m.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ int64 $m.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ int64 $m.failedJobsHistoryLimit }}
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "distant-signal.podLabels" (dict "root" . "component" "bank-holidays") | nindent 8 }}
+    spec:
+      backoffLimit: {{ int64 $m.backoffLimit }}
+      activeDeadlineSeconds: {{ int64 $m.activeDeadlineSeconds }}
+      {{- include "distant-signal.scheduledJobFailurePolicy" "bank-holidays" | nindent 6 }}
+      {{- if not (kindIs "invalid" $m.ttlSecondsAfterFinished) }}
+      # The TTL controller deletes each finished Job (and its pod) this long
+      # after it ends, on top of the history limits above. CronJobs only:
+      # the Helm hook Jobs (migrate, roles setup) keep their hook delete
+      # policy.
+      ttlSecondsAfterFinished: {{ int64 $m.ttlSecondsAfterFinished }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "distant-signal.podLabels" (dict "root" . "component" "bank-holidays") | nindent 12 }}
+        spec:
+          serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- include "distant-signal.podSecurityContext" (dict "override" $m.podSecurityContext) | nindent 12 }}
+          # A new pod's connects are refused until its NetworkPolicy rules
+          # exist; wait here, not in the app (distant-signal.waitForPostgresContainer).
+          initContainers:
+            {{- include "distant-signal.waitForDependencyContainers" (dict "root" . "env" (include "distant-signal.databaseEnvFor" (dict "root" . "service" "api") | fromYamlArray)) | trim | nindent 12 }}
+          containers:
+            - name: bank-holidays
+              image: {{ include "distant-signal.image" (dict "root" . "image" .Values.api.image) | quote }}
+              imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+              command:
+                {{- toYaml $m.command | nindent 16 }}
+              {{- with $m.args }}
+              args:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              env:
+                {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "api") | nindent 16 }}
+                - name: DATABASE_MAX_CONNECTIONS
+                  value: {{ $m.database.maxConnections | int | quote }}
+                - name: BANK_HOLIDAYS_CONNECT_DEADLINE_SECS
+                  value: {{ $m.database.connectDeadlineSecs | int | quote }}
+                - name: BANK_HOLIDAYS_ENABLED
+                  value: "true"
+                # The loop's own settings, from the api's values so the
+                # CronJob and the api cannot drift apart.
+                - name: BANK_HOLIDAYS_URL
+                  value: {{ dig "url" "https://www.gov.uk/bank-holidays.json" $bh | quote }}
+                - name: BANK_HOLIDAYS_INTERVAL_HOURS
+                  value: {{ dig "intervalHours" 24 $bh | quote }}
+                - name: RUST_LOG
+                  value: {{ $m.logLevel | quote }}
+              securityContext:
+                {{- include "distant-signal.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 16 }}
+              {{- with $m.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+          {{- with $m.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $m.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

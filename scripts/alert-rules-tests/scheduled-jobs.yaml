@@ -225,3 +225,31 @@ tests:
               summary: Job pod distant-signal-migrate-64bcz Pending for over 15m
               description: "It can't be scheduled (no room for its requests) or its image won't pull. The Job's deadline counts this time."
               runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalscheduledjobpending
+
+  # The bank-holidays CronJob runs every six hours (21600s). Its last
+  # success was at 0: 1.5 x 21600s is 9h; past it from 9h01m, plus 10m of
+  # `for`, it fires at 9h11m.
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="distant-signal", cronjob="distant-signal-bank-holidays"}'
+        values: '0x700'
+      - series: 'kube_cronjob_created{namespace="distant-signal", cronjob="distant-signal-bank-holidays"}'
+        values: '0x700'
+      - series: 'kube_cronjob_status_last_schedule_time{namespace="distant-signal", cronjob="distant-signal-bank-holidays"}'
+        values: '0x700'
+      - series: 'kube_cronjob_next_schedule_time{namespace="distant-signal", cronjob="distant-signal-bank-holidays"}'
+        values: '21600x700'
+      - series: 'kube_cronjob_spec_suspend{namespace="distant-signal", cronjob="distant-signal-bank-holidays"}'
+        values: '0x700'
+    alert_rule_test:
+      - eval_time: 9h5m
+        alertname: DistantSignalScheduledJobStale
+        exp_alerts: []
+      - eval_time: 9h12m
+        alertname: DistantSignalScheduledJobStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, cronjob: distant-signal-bank-holidays}
+            exp_annotations:
+              summary: "CronJob distant-signal-bank-holidays: no success for 9h 12m 0s"
+              description: "Over 1.5x its schedule interval: its runs fail, are skipped (Forbid, a missed start) or never schedule."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalscheduledjobstale

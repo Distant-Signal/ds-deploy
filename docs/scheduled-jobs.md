@@ -6,6 +6,7 @@ one goes wrong. Alerts: [scheduled jobs](alerts.md#scheduled-jobs).
 | CronJob | What it runs | Values |
 |---|---|---|
 | `<fullname>-api-maintenance` | The api image's `maintenance` binary: one pass of the session, dead-link, retention and delegated-access sweeps. | `apiMaintenance` |
+| `<fullname>-bank-holidays` (only with `api.bankHolidays.cronjob.enabled`) | The api image's `bank_holidays_sync` binary: one GOV.UK bank holidays fetch when the last good one is a day old, applied to `bank_holidays`. Every six hours. Replaces the api's in-process loop. | `api.bankHolidays.cronjob` ([below](#bank-holidays)) |
 | `<fullname>-pgbackrest-{full,diff,check,verify}` | `kubectl exec` of pgBackRest in the Postgres pod. | `postgresql.pgbackrest.backup` ([Postgres PITR](postgres-pitr.md)) |
 | `<fullname>-poller-tocs` (only with `pollers.tocs.mode: cronjob`) | poller-tocs, once: one fetch of the TOC list onto `ds:ingest:reference`. 04:40 UTC. | `pollers.tocs.cron` |
 | `<fullname>-poller-stations` (only with `pollers.stations.mode: cronjob`) | poller-stations, once: one fetch of the stations feed, written to Postgres in one transaction. 04:20 UTC. | `pollers.stations.cron` |
@@ -346,6 +347,68 @@ Deployment returns and waits out what is left of its day from the same
 cursor, so it doesn't re-fetch. Nothing else changes: the stream, the
 writer, the Redis user and the database are the same either way.
 
+## bank-holidays
+
+`api.bankHolidays.cronjob.enabled` moves the bank holidays fetch (ds-api's
+`bank_holidays_sync`) out of the api and into a CronJob.
+
+**Why.** The api's loop takes an advisory lock (`dslpbhol`) on a pool
+connection and wakes hourly. At a rollout the old pod still holds the lock
+at the new pod's first tick, so nobody runs the loop until the next tick, an
+hour later, and `DistantSignalWriterLoopUnowned` and `DistantSignalWriterLoopStale`
+(which cover every loop with a lock session) fire. The CronJob has no lock.
+
+**What runs.** The api image's `/usr/local/bin/bank_holidays_sync`: it
+reads `bank_holidays_sync`, and fetches `api.bankHolidays.url` only if the
+last success is `intervalHours` old and the last attempt is over 50
+minutes old (the loop's rule), so a run every six hours fetches about daily
+and retries a failure at the next run. It applies a plausible response in
+one transaction, records the attempt, and exits non-zero if the fetch failed
+or the response was implausible (the stored holidays are unchanged). Run
+one by hand with `kubectl create job --from=cronjob/<fullname>-bank-holidays
+<name>`, and add `--force` to `args` to fetch regardless of the last success.
+
+**Role and network.** The api's database role (`postgresql.roles.perService.api.connect`,
+else the app role): ds-core's `db-grants.yaml` gives the api `SIU` on
+`bank_holidays_sync` and `SIUD` on `bank_holidays`, which is everything the
+sync touches, and no other service writes them, so no new role or grant
+is needed. A `narrow` role of its own would only drop the api's other
+grants (sessions, user data) from a pod that has internet egress; it would
+cost a role, a secret and a grants change in ds-core, and `api-maintenance`
+already runs as the api role. Its NetworkPolicy (`<fullname>-bank-holidays`)
+allows DNS, Postgres and the public internet on the port of
+`api.bankHolidays.url` (443); Postgres admits its `bank-holidays` component
+label. With the CronJob on, the api's own internet rule for the URL is not
+rendered.
+
+**Switching over.** The same value turns the api's loop off
+(`BANK_HOLIDAYS_LOOP_ENABLED=false`). The api then runs no fetch loop and
+takes no lock; each replica only refreshes the two gauges from the table
+every hour, so `DistantSignalBankHolidaysStale` keeps measuring the table.
+The loop alerts need no change: they are plain comparisons on
+`distant_signal_loop_*` series, and the loop's series disappear with the
+last old pod. Order:
+
+1. ds-api release with the binary and the switch (the switch defaults to
+   `true`: nothing changes), pinned by ds-deploy's api image.
+2. Set `api.bankHolidays.cronjob.enabled: true` in the Ranma-Config values
+   (needs `api.bankHolidays.enabled`) and release. The CronJob and the api's
+   `BANK_HOLIDAYS_LOOP_ENABLED=false` arrive together. During the rollout an
+   old pod's loop and the CronJob may both fetch: harmless, the apply is one
+   transaction and idempotent.
+3. Check `kubectl get cronjob`, a first Job's log (`bank holidays are fresh`
+   or `bank holidays synced`) and that `distant_signal_api_bank_holidays_last_success_seconds`
+   is still advancing after the next fetch is due.
+
+**Rollback.** Set `api.bankHolidays.cronjob.enabled: false`: the CronJob
+goes and the api's loop is back (`BANK_HOLIDAYS_LOOP_ENABLED=true`) on the
+rolling release. Nothing is lost in between: the holidays are about
+two years ahead, and the table keeps what was stored.
+
+**Alerts.** The generic [scheduled jobs](alerts.md#scheduled-jobs) alerts
+cover it (`DistantSignalScheduledJobFailed`, `DistantSignalScheduledJobStale`,
+`OOMKilled`, `Pending`); `DistantSignalBankHolidaysStale` covers the data.
+
 ## Alerts
 
 From kube-state-metrics, in the `<fullname>-scheduled-jobs` PrometheusRule
@@ -390,7 +453,7 @@ Each CronJob has its own switch (`apiMaintenance.enabled`,
 `postgresql.pgbackrest.backup.suspend`, `pollers.tocs.mode`,
 `pollers.stations.mode`, `pollers.tfl.stops.mode`,
 `pollerTransitSchedule.networks.<network>.timetableMode`,
-`scheduleFeed.reference.mode`).
+`scheduleFeed.reference.mode`, `api.bankHolidays.cronjob.enabled`).
 Setting a transit network back to `deployment` returns its Deployment to
 both loops; the timetable waits out its day from the stream cursor. The
 failure policy, the replacement policy and the TTLs need no rollback of
