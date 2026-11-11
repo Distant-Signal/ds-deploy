@@ -109,6 +109,10 @@ with frontend.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.inactiveAccountRetentionDays | int | toString | quote }}
             - name: RETENTION_REGULAR_JOURNEY_DAYS
               value: {{ .Values.api.regularJourneyRetentionDays | int | toString | quote }}
+            # The Recently deleted grace period, validated (7 to 31) like the
+            # api's own copy of it.
+            - name: RETENTION_RECENTLY_DELETED_DAYS
+              value: {{ include "distant-signal.recentlyDeletedRetentionDays" . | quote }}
             {{- if .Values.railMcp.enabled }}
             # The in-app chat's link to the separately-deployed derived MCP
             # service -- absent, correctly, when railMcp is disabled. Only
