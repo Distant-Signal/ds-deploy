@@ -147,9 +147,9 @@ postgresql:
   # holds one connection for its whole run, and the daily check or a
   # restore-time `stanza-create` can overlap it).
   connectionBudget:
-    # -- Clients deployed outside this chart that connect as the app role:
-    # Ranma-Config's postgres-exporter (1) and its nightly `pg_dump` CronJob
-    # (1, a single-job dump).
+    # -- Clients deployed outside this chart: Ranma-Config's
+    # postgres-exporter (1) and its nightly `pg_dump` CronJob (1, a
+    # single-job dump).
     externalClients: 2
     # -- Interactive `kubectl exec ... psql` sessions to keep room for.
     adminSessions: 3
@@ -159,7 +159,8 @@ postgresql:
   # superuser, for humans only. The roles and what they may do:
   #   owner    -- owns schema public and every table; api's migrations
   #               (MIGRATION_DATABASE_URL) and nothing else.
-  #   app      -- DML only; every pool (api, aggregator, enricher, notifier).
+  #   <service> -- one narrow role per service (`perService` below; the
+  #               shared DML-only `app` role was dropped in release E).
   #   exporter -- pg_monitor; Ranma-Config's postgres-exporter.
   #   dump     -- pg_read_all_data; Ranma-Config's nightly pg_dump.
   #   backup   -- pgBackRest's backup functions; the pgBackRest CronJobs.
@@ -170,10 +171,11 @@ postgresql:
   # Each password works like `auth.password`:
   # `password`, else `existingSecret`/`existingSecretPasswordKey`, else
   # generated into the chart's Secret under the default key name. The same
-  # percent-encoding caveat applies to the owner's and the app's.
+  # percent-encoding caveat applies to the owner's.
   roles:
-    # -- Connect the api pools and every worker as `app`, api's migrations
-    # as `owner`, and the pgBackRest CronJobs as `backup`. The roles must
+    # -- Connect the api pools and every worker as their own per-service
+    # role (`perService`, which must be on), api's migrations as `owner`,
+    # and the pgBackRest CronJobs as `backup`. The roles must
     # exist first (`setupJob`, or `initScript` on a new cluster). Does not
     # restart Postgres on its own (`initScript` does).
     enabled: false
@@ -237,24 +239,6 @@ postgresql:
       # -- CONNECTION LIMIT. Empty: api.replicaCount + 2 (one migration
       # connection per api pod, plus room for a hand-run migration or psql).
       connectionLimit: ""
-    app:
-      # -- Role name the services connect as.
-      username: distant_signal_app
-      # -- Password. Generated when empty (and no `existingSecret`).
-      password: ""
-      # -- Read the password from this pre-existing Secret instead.
-      existingSecret: ""
-      # -- Key within `existingSecret` (and in the chart's Secret).
-      existingSecretPasswordKey: postgres-app-password
-      # -- CONNECTION LIMIT. Empty: the chart's own pools (api
-      # maxConnections x replicaCount, aggregator 10, notifier 5, enricher
-      # 5, archive 2 when enabled) plus `connectionLimitSlack`. This is
-      # what makes `superuser_reserved_connections` and the admin sessions a
-      # real reserve: the services can never take more.
-      connectionLimit: ""
-      # -- Added to the computed CONNECTION LIMIT, for one-off binaries
-      # (backfills) run as the app role.
-      connectionLimitSlack: 5
     exporter:
       # -- Role name for postgres-exporter (pg_monitor).
       username: distant_signal_exporter
@@ -297,24 +281,23 @@ postgresql:
       database: postgres
     # Stage 0b (docs/postgres-app-role.md; ingest architecture phase 0b):
     # one Postgres role per service, so pg_stat_statements and
-    # pg_stat_activity attribute every query to its service. OFF by
-    # default: nothing below renders and the chart output is unchanged.
-    # The roles and their grants are defined in files/db-grants.yaml (the
-    # role names come from there); for now each is a member of `app` with
-    # no grants of its own, so nothing changes functionally.
+    # pg_stat_activity attribute every query to its service, and each holds
+    # exactly its own grants. OFF by default (a quick-start install without
+    # `roles` connects as the bootstrap superuser): nothing below renders
+    # and the chart output is unchanged. With `roles.enabled` this must be
+    # on: there is no shared role to fall back to. The roles and their
+    # grants are defined in files/db-grants.yaml (the role names come from
+    # there).
     perService:
       # -- Create the per-service roles: the setup Job (and, on a new
       # cluster, `initScript`) also runs files/postgres-grants.sql. Needs
-      # `setupJob.enabled`. No service changes until its `connect` below.
+      # `setupJob.enabled`. Every service connects as its own role (release E
+      # removed the per-service `connect` switches and the shared `app` role).
       enabled: false
       api:
-        # -- Connect the api pools as `distant_signal_api` instead of `app`
-        # (needs `enabled` here and `roles.enabled`). The api's migrations
-        # stay on `owner`.
-        connect: false
-        # -- The api pool size (DATABASE_MAX_CONNECTIONS) while `connect` is
-        # on, instead of `api.database.maxConnections` (spec §6.6: 16; the
-        # observed peak is 6).
+        # -- The api pool size (DATABASE_MAX_CONNECTIONS) while the api
+        # connects as its own role, instead of `api.database.maxConnections`
+        # (spec §6.6: 16; the observed peak is 6).
         maxConnections: 16
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
@@ -330,8 +313,6 @@ postgresql:
         # deadlock").
         connectionLimit: ""
       aggregator:
-        # -- Connect the aggregator as `distant_signal_aggregator`.
-        connect: false
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -342,8 +323,6 @@ postgresql:
         # pool when `archive.enabled`, plus 1.
         connectionLimit: ""
       enricher:
-        # -- Connect the enricher as `distant_signal_enricher`.
-        connect: false
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -354,8 +333,6 @@ postgresql:
         # any `enricher.updateStrategy` surge) plus 1.
         connectionLimit: ""
       notifier:
-        # -- Connect the notifier as `distant_signal_notifier`.
-        connect: false
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -365,15 +342,6 @@ postgresql:
         # -- CONNECTION LIMIT. Empty: its pool (5) plus 1.
         connectionLimit: ""
       writer:
-        # -- Connect the ingest-writer (`ingestWriter`, which must be
-        # enabled) as `distant_signal_writer` (plan 1B.9). The role is
-        # created with the others whenever `enabled` is on, unused until
-        # then.
-        # Default true since release A (2026-10-09): it takes effect only
-        # while the component is deployed, and then needs `perService.enabled`,
-        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
-        # fails otherwise rather than fall back to the app role.
-        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -386,15 +354,6 @@ postgresql:
         # overlap (pool 6, limit 8).
         connectionLimit: ""
       schedule_ingest:
-        # -- Connect schedule-ingest (`scheduleFeed`) as `distant_signal_schedule_ingest` (plan 2d.2): a
-        # narrow role, not a member of `app`, holding only the CORPUS and
-        # feed-marker grants (files/db-grants.yaml). Created with the others
-        # whenever `enabled` is on, unused until then.
-        # Default true since release A (2026-10-09): it takes effect only
-        # while the component is deployed, and then needs `perService.enabled`,
-        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
-        # fails otherwise rather than fall back to the app role.
-        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -406,16 +365,6 @@ postgresql:
         # §6.6: pool 1, limit 2).
         connectionLimit: ""
       schedule_reference:
-        # -- Connect schedule-reference (`scheduleFeed`) as
-        # `distant_signal_schedule_reference` (plan 2a). That role is
-        # narrow (files/db-grants.yaml): not a member of the app role,
-        # exactly the spec §6.4 grants. Created with the others whenever
-        # `enabled` is on, unused until then.
-        # Default true since release A (2026-10-09): it takes effect only
-        # while the component is deployed, and then needs `perService.enabled`,
-        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
-        # fails otherwise rather than fall back to the app role.
-        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -427,15 +376,6 @@ postgresql:
         # 1 (spec §6.6: pool 3, limit 4).
         connectionLimit: ""
       stations:
-        # -- Connect poller-stations (`pollers.stations`) as `distant_signal_stations` (plan
-        # 2b.3). The role is narrow, not a member of `app`: SELECT, INSERT
-        # and UPDATE on `stations` and `ingest_freshness` only. It is created
-        # with the others whenever `enabled` is on, unused until then.
-        # Default true since release A (2026-10-09): it takes effect only
-        # while the component is deployed, and then needs `perService.enabled`,
-        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
-        # fails otherwise rather than fall back to the app role.
-        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -446,15 +386,6 @@ postgresql:
         # (`pollers.stations.ingest.database.maxConnections`, 1) plus 1.
         connectionLimit: ""
       incidents:
-        # -- Connect poller-incidents as `distant_signal_incidents` (ingest
-        # plan 2c.3; a `narrow` role: exactly its grants in
-        # files/db-grants.yaml, no app membership). Off with the poller
-        # enabled, the render fails (security review H2).
-        # Default true since release A (2026-10-09): it takes effect only
-        # while the component is deployed, and then needs `perService.enabled`,
-        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
-        # fails otherwise rather than fall back to the app role.
-        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -466,15 +397,6 @@ postgresql:
         # (spec §6.6: 3).
         connectionLimit: ""
       trust_backlog:
-        # -- Connect trust-backlog-consumer as `distant_signal_trust_backlog` (plan 3b.2). A
-        # narrow role, not a member of `app`: the backlog, shared-movement
-        # and reasons writes and the STANOX/CRS read only. Created with the
-        # others whenever `enabled` is on, unused until then.
-        # Default true since release A (2026-10-09): it takes effect only
-        # while the component is deployed, and then needs `perService.enabled`,
-        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
-        # fails otherwise rather than fall back to the app role.
-        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -489,16 +411,6 @@ postgresql:
         # docs/ingest-phase5-runbook.md "Rollout deadlock").
         connectionLimit: ""
       trust_consumer:
-        # -- Connect trust-consumer as `distant_signal_trust_consumer` (plans 3b.4, D1, and 4.4). A
-        # narrow role, not a member of `app`: the train-event,
-        # forward-signal and outbox writes, SELECT only on
-        # train_subscriptions, and the phase 4 reads. Created with the others whenever
-        # `enabled` is on, unused until then.
-        # Default true since release A (2026-10-09): it takes effect only
-        # while the component is deployed, and then needs `perService.enabled`,
-        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
-        # fails otherwise rather than fall back to the app role.
-        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -512,16 +424,6 @@ postgresql:
         # `trustConsumer.updateStrategy` surge) plus 1.
         connectionLimit: ""
       full_coverage_ro:
-        # -- Connect full-coverage-consumer's direct reads as
-        # `distant_signal_full_coverage_ro` (ingest plan 4.7). A narrow,
-        # read-only role, not a member of `app`: SELECT on the line
-        # populations and STANOX/CRS only. Created with the others whenever
-        # `enabled` is on, unused until then.
-        # Default true since release A (2026-10-09): it takes effect only
-        # while the component is deployed, and then needs `perService.enabled`,
-        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
-        # fails otherwise rather than fall back to the app role.
-        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -535,17 +437,6 @@ postgresql:
         # (spec §6.6: 3).
         connectionLimit: ""
       ldbws_ro:
-        # -- Connect poller-ldbws's direct sample-station read as
-        # `distant_signal_ldbws_ro` (ingest plan 4.7). A narrow, read-only
-        # role, not a member of `app`: SELECT on the views
-        # `ingest_sample_station_pins` and `ingest_custom_line_stations`
-        # only, never the personal tables behind them. Created with the
-        # others whenever `enabled` is on, unused until then.
-        # Default true since release A (2026-10-09): it takes effect only
-        # while the component is deployed, and then needs `perService.enabled`,
-        # `postgresql.roles.enabled` and `setupJob.enabled`; the render
-        # fails otherwise rather than fall back to the app role.
-        connect: true
         # -- Password. Generated when empty (and no `existingSecret`).
         password: ""
         # -- Read the password from this pre-existing Secret instead.
@@ -1123,7 +1014,7 @@ pollers:
     # Ingest architecture phase 2c (docs/superpowers/plans/2026-10-06-ingest-architecture-plan.md):
     # each snapshot is written to Postgres directly and incident-text-changed
     # is XADDed from the poller. Renders DATABASE_URL (the incidents role;
-    # `postgresql.roles.perService.incidents.connect` is required, the
+    # `postgresql.roles.perService.incidents` is required, the
     # render fails without it: security review H2), REDIS_URL (the
     # `poller-incidents` ACL user with `redis.acl.clients.pollerIncidents`),
     # and Postgres and Redis egress and admission. Release B (ingest phase
@@ -1175,7 +1066,7 @@ pollers:
     # Ingest architecture plan 2b: the parsed feed is written to Postgres
     # directly and the startup cursor read from `ingest_freshness`, as the
     # narrow `distant_signal_stations` only
-    # (`postgresql.roles.perService.stations.connect` is required; the
+    # (`postgresql.roles.perService.stations` is required; the
     # render fails without it, security review H2). Needs
     # `ingestWriter.enabled` and `ingestWriter.loops.enabled`: the writer's
     # 10-minute CORPUS crosswalk loop rebuilds the crosswalk (plan 2b.2).
@@ -1614,7 +1505,7 @@ pollers:
     # poller from the line catalogue in its image and the views
     # `ingest_custom_line_stations` and `ingest_sample_station_pins`, as the
     # read-only `distant_signal_ldbws_ro` only
-    # (`postgresql.roles.perService.ldbws_ro.connect` is required; the
+    # (`postgresql.roles.perService.ldbws_ro` is required; the
     # render fails without it, security review H2), the two knobs above
     # included. Release B (ingest phase 5) removed the `source: http` path.
     internalReads:
@@ -2642,8 +2533,8 @@ migrate:
 # in the api image at `command`: until then every run fails. Rollout
 # (release N+2): enable this together with API_BACKGROUND_LOOPS=false
 # (plan 1B.7); both sweeps are idempotent, so running both for a while is
-# harmless. It connects as the api does (its own role with
-# `postgresql.roles.perService.api.connect`), and its pool counts in the
+# harmless. It connects as the api does (its own role,
+# `postgresql.roles.perService.api`), and its pool counts in the
 # connection budgets.
 apiMaintenance:
   # -- Run the CronJob.
@@ -2717,9 +2608,8 @@ apiMaintenance:
 # N+1): `enabled` and `loops.enabled`; then, a release later,
 # API_BACKGROUND_LOOPS=false on the api (plan 1B.7). Every loop takes a
 # Postgres advisory lock, so the writer and the api never run the same
-# sweep at once. It connects as the app role (or the bootstrap user), or as
-# `distant_signal_writer` with `postgresql.roles.perService.writer.connect`;
-# its pool counts in the connection budgets. NetworkPolicy: the monitoring
+# sweep at once. It connects as `distant_signal_writer` (the role
+# `postgresql.roles.perService.enabled` creates); its pool counts in the connection budgets. NetworkPolicy: the monitoring
 # namespace to its metrics port, the health port as for every worker,
 # egress to Postgres (Redis joins in phase 3). Alert:
 # DistantSignalIngestWriterDown (metrics.prometheusRule.ingestWriterDown).
@@ -2768,7 +2658,7 @@ ingestWriter:
   # `redis.acl.enabled`, `redis.acl.stage: narrow` and
   # `redis.acl.clients.ingestWriter`; any `apply` also needs
   # `redis.acl.defaultUser: "off"` or `"on-unshared"` (H3); `tfl: apply` needs
-  # `postgresql.roles.perService.writer.connect`, as `line_status`'s row
+  # `postgresql.roles.perService.writer`, as `line_status`'s row
   # policy binds only the writer's own role (M4).
   streams:
     # The four producer streams (poller-ldbws, full-coverage-consumer,
@@ -2779,7 +2669,7 @@ ingestWriter:
     reference: apply
     # poller-tfl's daily stops job (pollers.tfl.stops; off by default):
     # ds:ingest:tfl-stops (tfl-stops, tfl-line-routes). `apply` needs
-    # postgresql.roles.perService.writer.connect, as tfl does (the
+    # postgresql.roles.perService.writer, as tfl does (the
     # writer's ingest_freshness row policy binds its own role).
     tfl-stops: "off"
     # One stream per island-of-Ireland poller (security review H1,
@@ -2796,12 +2686,12 @@ ingestWriter:
     # default): ds:ingest:transit-metrolink (pollerTransitSchedule's
     # metrolink network: transit-timetable, transit-timetable-commit,
     # transit-situations, which also writes the network's line_status rows).
-    # `apply` needs postgresql.roles.perService.writer.connect, as tfl
+    # `apply` needs postgresql.roles.perService.writer, as tfl
     # does (the writer's ingest_freshness row policy binds its own role).
     transit-metrolink: "off"
     # darwin-relay's Darwin Push Port batches (DS-152; off by default):
     # ds:ingest:darwin (darwin-pushport). `apply` needs
-    # postgresql.roles.perService.writer.connect, as tfl does (the writer's
+    # postgresql.roles.perService.writer, as tfl does (the writer's
     # ingest_freshness row policy binds its own role), and darwinRelay
     # needs it on `apply`.
     darwin: "off"
@@ -4207,7 +4097,7 @@ trustConsumer:
   # and forward signals are written to Postgres directly in one
   # transaction, XACKing movement-events after the commit, as the narrow
   # `distant_signal_trust_consumer` only
-  # (`postgresql.roles.perService.trust_consumer.connect` is required; the
+  # (`postgresql.roles.perService.trust_consumer` is required; the
   # render fails without it, security review H2). Needs
   # `ingestWriter.enabled` and `ingestWriter.loops.enabled` (the render
   # fails otherwise): the events that change a subscription (resolutions,
@@ -4345,7 +4235,7 @@ fullCoverageConsumer:
   # Ingest architecture plan 4.3/4.7: the reference data (one version
   # query per reload, then only the changed populations, and `stanox_crs`)
   # is read directly as the read-only `distant_signal_full_coverage_ro`
-  # only (`postgresql.roles.perService.full_coverage_ro.connect` is
+  # only (`postgresql.roles.perService.full_coverage_ro` is
   # required; the render fails without it, security review H2); the api's
   # CORPUS fallback is passed on. Release B (ingest phase 5) removed the
   # `source: http` path (/private/schedule-line-population,
@@ -4468,7 +4358,7 @@ trustBacklogConsumer:
   # and reason codes are written to Postgres directly, XACKing
   # movement-events after the commit, and STANOX/CRS is reloaded from it,
   # as the narrow `distant_signal_trust_backlog` only
-  # (`postgresql.roles.perService.trust_backlog.connect` is required; the
+  # (`postgresql.roles.perService.trust_backlog` is required; the
   # render fails without it, security review H2). `shared.corpusFallback.enabled`
   # is passed on so the STANOX/CRS reload matches the api's. Release B
   # (ingest phase 5) removed the `sink: http` path
@@ -4683,7 +4573,7 @@ movementRelay:
 #
 # Off by default. Switching on (docs/darwin-pushport.md): the ingest-writer
 # must apply the stream (`ingestWriter.streams.darwin: apply`, which needs
-# `postgresql.roles.perService.writer.connect`), and the relay needs its
+# `postgresql.roles.perService.writer`), and the relay needs its
 # own Redis user (`redis.acl.clients.darwinRelay`, an `optional` ACL user:
 # the `darwin-relay-password` key of `redis.acl.existingSecret`; turning it
 # on restarts Redis once). The render fails otherwise.
@@ -5608,7 +5498,7 @@ scheduleFeed:
     # The ingest container records each feed delivery and loads each CORPUS
     # extract into Postgres directly (ingest architecture plan 2d), as the
     # narrow `distant_signal_schedule_ingest` only
-    # (`postgresql.roles.perService.schedule_ingest.connect` is required,
+    # (`postgresql.roles.perService.schedule_ingest` is required,
     # the render fails without it, security review H2). The CORPUS
     # freshness gauge and the post-load comparison come from the
     # ingest-writer's CORPUS loop, so run `ingestWriter` with its loops.
@@ -5920,7 +5810,7 @@ scheduleFeed:
     # The products go to Postgres directly through `ds_store` (ingest
     # architecture plan 2a): the container gets `DATABASE_URL` (as
     # `distant_signal_schedule_reference` only:
-    # `postgresql.roles.perService.schedule_reference.connect` is required,
+    # `postgresql.roles.perService.schedule_reference` is required,
     # the render fails without it, security review H2), the schedulefeed
     # pod may reach Postgres (NetworkPolicy), and it waits for the schema
     # gate before its first poll. Release B (ingest phase 5) removed the

@@ -49,10 +49,10 @@ Security review render guards (2026-10-08):
     incident-text-changed, full-coverage-consumer, an island-of-Ireland
     poller) refuses to render without its own user, and renders as it; a
     writer stream on `apply` refuses while `default` is on;
-  - H2: every narrow-role component refuses to render without its
-    `perService.<role>.connect`, and renders connecting as its own role;
-  - M4: `ingestWriter.streams.tfl: apply` refuses without
-    `perService.writer.connect`.
+  - H2: every narrow-role component refuses to render without
+    `perService.enabled`, and renders connecting as its own role;
+  - M4: `ingestWriter.streams.tfl: apply` refuses without the same (release
+    E removed the per-service `connect` switches and the shared app role).
 
 Release D: a writer stream in `shadow` refuses to render; a leftover
 retired `ingest.sink` or `internalReads.source` is ignored, and no
@@ -123,7 +123,6 @@ def sets(*pairs: str) -> tuple[str, ...]:
 
 
 SERVICES = ("api", "aggregator", "enricher", "notifier")
-ALL_CONNECT = sets(*(f"postgresql.roles.perService.{s}.connect=true" for s in SERVICES))
 AUTH = sets("redis.auth.enabled=true", "redis.auth.existingSecret=redis-auth")
 # ci/ingest-prereqs.yaml's redis.acl clients: key -> (Deployment suffix, ACL user).
 CLIENTS = {
@@ -355,12 +354,10 @@ def check_roles_setup(c: Checker) -> None:
     for needle in (
         "postgres-roles.sql",
         "postgres-grants.sql",
-        "'--variable=app=distant_signal_app'",
         "'--variable=api_connection_limit=34'",
         "'--variable=aggregator_connection_limit=11'",
         "'--variable=enricher_connection_limit=6'",
         "'--variable=notifier_connection_limit=6'",
-        "'--variable=app_connection_limit=75'",
         "'--variable=writer_connection_limit=8'",
         "'--variable=trust_consumer_connection_limit=3'",
         "'--variable=trust_backlog_connection_limit=4'",
@@ -389,9 +386,9 @@ def check_roles_setup(c: Checker) -> None:
 
 
 def check_roles_connect(c: Checker) -> None:
-    """`connect` moves exactly that service; the producers are always on theirs."""
+    """Every service connects as its own role (release E: no shared app role)."""
     base = c.docs()
-    docs = c.docs(*ALL_CONNECT)
+    docs = base
     for service in SERVICES:
         url = value(main_env(docs, f"-{service}").get("DATABASE_URL"))
         c.check(
@@ -414,22 +411,6 @@ def check_roles_connect(c: Checker) -> None:
         ),
         message="api migrations must stay on the owner role",
     )
-    _, out = c.render(*ALL_CONNECT)
-    c.check(
-        ok="'--variable=app_connection_limit=5'" in out,
-        message="app's computed limit must drop to its slack (5) once all connect",
-    )
-    one = c.docs(*sets("postgresql.roles.perService.notifier.connect=true"))
-    diffs = differing(base, one)
-    moved = sorted(k for k in diffs if k.startswith("Deployment/"))
-    c.check(
-        ok=moved == ["Deployment/distant-signal-notifier"],
-        message=f"notifier.connect must move only the notifier, moved {moved}",
-    )
-    c.check(
-        ok=value(main_env(one, "-api").get("DATABASE_MAX_CONNECTIONS")) == "50",
-        message="the api pool must stay 50 until the api connects as its own role",
-    )
     for suffix, role in (
         ("-trust-consumer", "trust_consumer"),
         ("-trust-backlog-consumer", "trust_backlog"),
@@ -451,7 +432,6 @@ HUGE_API_LIMIT = 999
 def check_roles_budget(c: Checker) -> None:
     """Role limits must fit the 197 non-superuser slots (max_connections 200)."""
     _, out = c.render(
-        *ALL_CONNECT,
         *sets(f"postgresql.roles.perService.api.connectionLimit={HUGE_API_LIMIT}"),
     )
     found = re.search(r"sum to (\d+)", out)
@@ -465,7 +445,6 @@ def check_roles_budget(c: Checker) -> None:
     fits = 197 - rest
     for api_limit, ok in ((fits + 1, False), (fits, True)):
         code, out = c.render(
-            *ALL_CONNECT,
             *sets(f"postgresql.roles.perService.api.connectionLimit={api_limit}"),
             "--show-only",
             "templates/api-deployment.yaml",
@@ -1022,15 +1001,6 @@ def check_net_producer(c: Checker) -> None:
         *NET_ON,
         *sets("redis.acl.clients.pollerTransitNet=false"),
     )
-    c.refuses(
-        "M4: transit-net apply as the app role",
-        "ingestWriter.streams.transit-net: apply needs",
-        *sets(
-            "ingestWriter.streams.tfl=off",
-            "ingestWriter.streams.transit-net=apply",
-            "postgresql.roles.perService.writer.connect=false",
-        ),
-    )
     # NetworkPolicy: a port-limited internet rule gains FTP's 21 (the
     # passive data ports need internetPorts [] for the component; the
     # runbook says so).
@@ -1102,15 +1072,6 @@ def check_tfl_producer(c: Checker) -> None:
         *TFL_ON,
         *sets("redis.acl.clients.pollerTransitTfl=false"),
     )
-    c.refuses(
-        "M4: transit-tfl apply as the app role",
-        "ingestWriter.streams.transit-tfl: apply needs",
-        *sets(
-            "ingestWriter.streams.tfl=off",
-            "ingestWriter.streams.transit-tfl=apply",
-            "postgresql.roles.perService.writer.connect=false",
-        ),
-    )
 
 
 def renders(c: Checker, label: str, *args: str) -> None:
@@ -1180,9 +1141,8 @@ def check_narrow_role_guards(c: Checker) -> None:
         ("scheduleFeed.reference", SCHEDULE_FEED, "schedule_reference"),
     )
     for label, args, service in components:
-        needle = f"perService.{service}.connect"
-        off = sets(f"postgresql.roles.perService.{service}.connect=false")
-        c.refuses(f"H2: {label} not as its role", needle, *args, *off)
+        off = sets("postgresql.roles.perService.enabled=false")
+        c.refuses(f"H2: {label} without the roles", "perService.enabled", *args, *off)
         docs = c.docs(*args)
         role = f"distant_signal_{service}"
         urls = [
@@ -1197,20 +1157,9 @@ def check_narrow_role_guards(c: Checker) -> None:
             message=f"H2: {label}: no container connects as {role}",
         )
     c.refuses(
-        "M4: tfl apply as the app role",
-        "perService.writer.connect",
-        *sets("postgresql.roles.perService.writer.connect=false"),
-    )
-    # The same for a transit network's stream (transit spec §0): the
-    # writer's ingest_freshness row policy binds its own role only.
-    c.refuses(
-        "M4: transit-metrolink apply as the app role",
-        "ingestWriter.streams.transit-metrolink: apply needs",
-        *sets(
-            "ingestWriter.streams.tfl=off",
-            "ingestWriter.streams.transit-metrolink=apply",
-            "postgresql.roles.perService.writer.connect=false",
-        ),
+        "M4: tfl apply without the per-service roles",
+        "perService.enabled",
+        *sets("postgresql.roles.perService.enabled=false"),
     )
     renders(
         c,

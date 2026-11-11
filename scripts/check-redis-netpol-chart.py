@@ -82,7 +82,6 @@ BASE = (
 # producer) its stream applied, as scripts/check-alert-payloads.py does.
 # Add a new Redis client here and to EXPECTED_CLIENTS.
 EVERYTHING = sets(
-    "postgresql.roles.perService.writer.connect=true",
     "pollers.incidents.enabled=true",
     "pollers.incidents.baseUrl=https://incidents.example.com",
     "pollers.stations.enabled=true",

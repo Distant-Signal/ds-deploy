@@ -886,10 +886,10 @@ def check_reference_sink(c: Checker) -> None:
     """schedule-reference and schedule-ingest write Postgres, each as its role."""
     # Security review H2: each connects only as its narrow role.
     for role in ("schedule_reference", "schedule_ingest"):
-        off = f"postgresql.roles.perService.{role}.connect=false"
+        off = "postgresql.roles.perService.enabled=false"
         code, out = c.render(*ON, "--set", off)
         c.check(
-            ok=code != 0 and f"perService.{role}.connect" in out,
+            ok=code != 0 and "perService.enabled" in out,
             message=f"{role} without its role: rendered, or failed without naming it",
         )
     docs = c.docs(*ON, *NETPOL)

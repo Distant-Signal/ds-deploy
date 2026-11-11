@@ -515,17 +515,13 @@ jobs:
             fail "a leftover retired switch must render no INGEST_SINK or *_SOURCE"
           fi
 
-          # A direct producer never falls back to the app role.
+          # A direct producer or reader has no shared role to fall back to
+          # (release E): without the per-service roles the render fails.
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if err=$(render "${all[@]}" --set postgresql.roles.perService.incidents.connect=false 2>&1 >/dev/null); then
-            fail "pollers.incidents without its connect must fail the render"
+          if err=$(render "${all[@]}" --set postgresql.roles.perService.enabled=false 2>&1 >/dev/null); then
+            fail "the direct producers and readers without the per-service roles must fail the render"
           fi
-          grep -qF 'postgresql.roles.perService.incidents.connect: true' <<<"${err}" || fail "unexpected error: ${err}"
-          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if err=$(render "${all[@]}" --set postgresql.roles.perService.full_coverage_ro.connect=false 2>&1 >/dev/null); then
-            fail "fullCoverageConsumer's db reads without their connect must fail the render"
-          fi
-          grep -qF 'postgresql.roles.perService.full_coverage_ro.connect: true' <<<"${err}" || fail "unexpected error: ${err}"
+          grep -qF 'postgresql.roles.perService.enabled' <<<"${err}" || fail "unexpected error: ${err}"
 
           # defaultUser on-unshared and the disabled island-of-Ireland pollers: no user
           # needed (the render above). Enabled, each needs its own.
@@ -867,10 +863,10 @@ jobs:
           grep -q 'sizeLimit: 1Gi' <<<"${out}"
           grep -q 'memory: 5Gi' <<<"${out}"
           # Without postgresql.config, max_connections is Postgres's 100:
-          # the app role's limit comes down so the role limits still fit.
+          # the api's pool comes down so the role limits still fit.
           bare=$(helm template distant-signal charts/distant-signal "${base[@]}" \
             --set postgresql.config=null --set postgresql.shm.enabled=false \
-            --set postgresql.roles.app.connectionLimit=60)
+            --set postgresql.roles.perService.api.maxConnections=8)
           if grep -E -q 'args:|/dev/shm|name: dshm' <<<"${bare}"; then
             echo "postgres config/shm rendered despite being disabled" >&2; exit 1
           fi
@@ -1436,11 +1432,11 @@ jobs:
           render --set redis.auth.enabled=true --set networkPolicy.enabled=true >/dev/null
 
       # postgresql.roles (docs/postgres-app-role.md), on in every install
-      # since release B (ingest phase 5; ci/ingest-prereqs.yaml): the api,
-      # aggregator, enricher and notifier pools are the app role until their
-      # own connect, the ingest components are their own roles, api migrates
-      # as the owner, the pgBackRest CronJobs run as the backup role, and
-      # without initScript the Postgres pod gets no initdb script.
+      # since release B (ingest phase 5; ci/ingest-prereqs.yaml): every
+      # service connects as its own role (release E dropped the shared app
+      # role), api migrates as the owner, the pgBackRest CronJobs run as the
+      # backup role, and without initScript the Postgres pod gets no initdb
+      # script.
       - name: helm template (postgres roles)
         run: |
           set -euo pipefail
@@ -1474,7 +1470,6 @@ jobs:
             fail "postgresql.roles off must fail the render (the release B preflight)"
           fi
           on=$(render "${pgbackrest[@]}" --set networkPolicy.enabled=true \
-            --set postgresql.roles.app.existingSecret=pg-roles \
             --set postgresql.roles.owner.existingSecret=pg-roles)
           # The DATABASE_URL / MIGRATION_DATABASE_URL values of every container.
           on_urls=$(grep -A1 -E 'name: (MIGRATION_)?DATABASE_URL$' <<<"${on}")
@@ -1482,13 +1477,22 @@ jobs:
             fail "no service may connect as the superuser"
           fi
           # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax matched literally, not a shell expansion
-          n_app=$(grep -c 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${on_urls}" || true)
-          [[ "${n_app}" -eq 4 ]] || fail "api, aggregator, enricher and notifier must connect as the app role"
+          if grep -q 'postgres://distant_signal_app:' <<<"${on_urls}"; then
+            fail "no service may connect as the dropped app role (release E)"
+          fi
+          for svc in api aggregator enricher notifier; do
+            # shellcheck disable=SC2016 # as above
+            grep -q "postgres://distant_signal_${svc}:\$(PGPASSWORD)@" <<<"${on_urls}" \
+              || fail "${svc} must connect as its own role"
+          done
+          if grep -q 'postgres-app-password' <<<"${on}"; then
+            fail "nothing may read the dropped app role's Secret key (release E)"
+          fi
           # shellcheck disable=SC2016 # "$(PG_MIGRATION_PASSWORD)" is Kubernetes env-var syntax, matched literally
           n_owner=$(grep -c 'postgres://distant_signal_owner:\$(PG_MIGRATION_PASSWORD)@' <<<"${on_urls}" || true)
           [[ "${n_owner}" -eq 1 ]] || fail "only api's MIGRATION_DATABASE_URL may be the owner role"
-          grep -A4 'name: PGPASSWORD$' <<<"${on}" | grep -q 'key: postgres-app-password' \
-            || fail "PGPASSWORD must come from the app role's Secret key"
+          grep -A4 'name: PGPASSWORD$' <<<"${on}" | grep -q 'key: postgres-api-password' \
+            || fail "PGPASSWORD must come from the service role's Secret key"
           grep -A3 'name: PG_MIGRATION_PASSWORD$' <<<"${on}" | grep -q 'name: pg-roles' \
             || fail "PG_MIGRATION_PASSWORD must come from roles.owner.existingSecret"
           n_cron=$(grep -c -- '- "PGBACKREST_PG1_USER=distant_signal_backup"' <<<"${on}" || true)
@@ -1498,8 +1502,8 @@ jobs:
           # "helm template (migrate hook Job)").
           grep -q 'helm.sh/hook: post-install,post-upgrade' <<<"${on}" \
             || fail "without migrate.job the setup Job must be a post-install,post-upgrade hook"
-          grep -q "'--variable=app_connection_limit=75'" <<<"${on}" \
-            || fail "app CONNECTION LIMIT must default to the chart's pools (50 + 10 + 5 + 5) + 5"
+          grep -q "'--variable=api_connection_limit=34'" <<<"${on}" \
+            || fail "api CONNECTION LIMIT must default to (replicas + 1) x its pool (16) + 2"
           grep -q "'--variable=owner_connection_limit=3'" <<<"${on}" \
             || fail "owner CONNECTION LIMIT must default to api.replicaCount + 2"
           grep -q 'mountPath: /docker-entrypoint-initdb.d' <<<"${on}" || fail "initScript must mount the initdb script"
@@ -1508,7 +1512,7 @@ jobs:
           grep -q 'name: distant-signal-postgres-from-postgres-roles$' <<<"${np}" \
             || fail "the setup Job must be allowed into Postgres"
           secret=$(render --set postgresql.roles.setupJob.enabled=true --show-only templates/secret.yaml)
-          for key in owner app exporter dump backup; do
+          for key in owner exporter dump backup; do
             grep -q "  postgres-${key}-password: " <<<"${secret}" || fail "chart-generated postgres-${key}-password missing"
           done
           job=$(render --set postgresql.roles.setupJob.enabled=true \
@@ -1552,12 +1556,17 @@ jobs:
             fail "initScript=false must leave the initdb script off the StatefulSet"
           fi
 
-          limit=$(render --set postgresql.roles.enabled=true --set postgresql.roles.app.connectionLimit=40)
-          grep -q "'--variable=app_connection_limit=40'" <<<"${limit}" || fail "an explicit connectionLimit must win"
+          limit=$(render --set postgresql.roles.enabled=true --set postgresql.roles.owner.connectionLimit=40)
+          grep -q "'--variable=owner_connection_limit=40'" <<<"${limit}" || fail "an explicit connectionLimit must win"
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if render --set postgresql.roles.enabled=true --set postgresql.roles.app.connectionLimit=lots \
+          if render --set postgresql.roles.enabled=true --set postgresql.roles.owner.connectionLimit=lots \
               >/dev/null 2>&1; then
             fail "a non-numeric connectionLimit must fail the render"
+          fi
+          # Release E: the setup script drops the retired app role, so the Job
+          # gets neither its password nor its variables.
+          if grep -q -E 'DS_PG_APP_PASSWORD|variable=app' <<<"${on}"; then
+            fail "the setup Job must not pass the dropped app role's password or name"
           fi
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
           if render --set postgresql.enabled=false --set externalDatabase.url=postgres://x@db/ds \
@@ -1889,27 +1898,28 @@ jobs:
           grep -q '^    type: Recreate$' <<<"${out}" || fail "the default strategy must stay Recreate"
           if grep -q 'rollingUpdate:' <<<"${out}"; then fail "Recreate must render no rollingUpdate"; fi
 
-          out=$(render "${job[@]}" --set api.strategy.type=RollingUpdate --set api.database.maxConnections=35)
+          out=$(render "${job[@]}" --set api.strategy.type=RollingUpdate --set postgresql.roles.perService.api.maxConnections=35)
           grep -q '^    type: RollingUpdate$' <<<"${out}" || fail "RollingUpdate must render"
           grep -A2 'rollingUpdate:' <<<"${out}" | grep -q 'maxSurge: 1' || fail "maxSurge must be 1"
           grep -A2 'rollingUpdate:' <<<"${out}" | grep -q 'maxUnavailable: 0' || fail "maxUnavailable must be 0"
 
           # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
           {
-            if render --set api.strategy.type=RollingUpdate --set api.database.maxConnections=35 >/dev/null 2>&1; then
+            if render --set api.strategy.type=RollingUpdate --set postgresql.roles.perService.api.maxConnections=35 >/dev/null 2>&1; then
               fail "RollingUpdate while the api migrates at startup must fail the render"
             fi
             if render --set migrate.job.enabled=true --set api.strategy.type=RollingUpdate \
-                --set api.database.maxConnections=35 >/dev/null 2>&1; then
+                --set postgresql.roles.perService.api.maxConnections=35 >/dev/null 2>&1; then
               fail "RollingUpdate with the Job but migrateOnStartup still true must fail the render"
             fi
             if render "${job[@]}" --set api.strategy.type=Rolling >/dev/null 2>&1; then
               fail "an unknown strategy type must fail the render"
             fi
             # 2 pods x 86 + 21 other pools + 5 reserved = 198 > 197 (max_connections
-            # 200 less 3 superuser-reserved); x 85 = 196 fits.
+            # 200 less 3 superuser-reserved); x 85 = 196 fits. (The role limits'
+            # own budget fails first in this render, which is also a refusal.)
             if render "${job[@]}" --set api.strategy.type=RollingUpdate \
-                --set api.database.maxConnections=86 >/dev/null 2>&1; then
+                --set postgresql.roles.perService.api.maxConnections=86 >/dev/null 2>&1; then
               fail "the surge pod's pool must count in the connection budget"
             fi
           }
@@ -1927,7 +1937,7 @@ jobs:
           grep -q '^      terminationGracePeriodSeconds: 35$' <<<"${out}" || fail "terminationGracePeriodSeconds must be 35"
           grep -A1 'name: API_SHUTDOWN_DRAIN_SECS$' <<<"${out}" | grep -q 'value: "20"' || fail "API_SHUTDOWN_DRAIN_SECS must be 20"
           if grep -q 'minReadySeconds:' <<<"${out}"; then fail "Recreate must render no minReadySeconds"; fi
-          out=$(render "${job[@]}" --set api.strategy.type=RollingUpdate --set api.database.maxConnections=35)
+          out=$(render "${job[@]}" --set api.strategy.type=RollingUpdate --set postgresql.roles.perService.api.maxConnections=35)
           grep -q '^  minReadySeconds: 10$' <<<"${out}" || fail "RollingUpdate must render minReadySeconds 10"
           out=$(render --set api.shutdown.preStopSleepSecs=0)
           if grep -q 'preStop:' <<<"${out}"; then fail "preStopSleepSecs 0 must drop the hook"; fi
@@ -1935,7 +1945,7 @@ jobs:
           # 2+ replicas: with one, NotReady on a DB blip empties the Service.
           out=$(render)
           grep -A1 'name: API_READINESS_CHECKS_DB$' <<<"${out}" | grep -q 'value: "false"' || fail "API_READINESS_CHECKS_DB must default to false"
-          out=$(render --set api.readiness.checkDatabase=true --set api.replicaCount=2 --set api.database.maxConnections=35)
+          out=$(render --set api.readiness.checkDatabase=true --set api.replicaCount=2 --set postgresql.roles.perService.api.maxConnections=35)
           grep -A1 'name: API_READINESS_CHECKS_DB$' <<<"${out}" | grep -q 'value: "true"' || fail "checkDatabase must render API_READINESS_CHECKS_DB true"
           # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
           {
@@ -2586,19 +2596,22 @@ jobs:
           # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
           grep -q 'postgres://distant_signal_writer:\$(PGPASSWORD)@' <<<"${dep}" \
             || fail "the ingest-writer must connect as distant_signal_writer"
-          # Security review M4: tfl on apply needs the writer's own role.
+          # Security review M4: tfl on apply needs the writer's own role,
+          # and there is no shared role to run it as.
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if err=$(render --set postgresql.roles.perService.writer.connect=false 2>&1 >/dev/null); then
-            fail "the writer as the app role with tfl on apply must fail the render"
+          if err=$(render --set postgresql.roles.perService.enabled=false 2>&1 >/dev/null); then
+            fail "the writer without the per-service roles with tfl on apply must fail the render"
           fi
-          grep -qF 'perService.writer.connect' <<<"${err}" || fail "unexpected error: ${err}"
+          grep -qF 'perService.enabled' <<<"${err}" || fail "unexpected error: ${err}"
 
       # INF-7: with the bundled Postgres, api replicas x pool plus the other
       # pools must fit in max_connections - 3, or rendering fails. Since
       # release B every install has the per-service roles, whose CONNECTION
-      # LIMITs have a budget of their own (the app role's computed limit
-      # grows with the api's pool); app's limit is pinned here so that the
-      # pool budget is the one tested.
+      # LIMITs have a budget of their own (the api's limit grows with its
+      # pool); every role's limit is pinned to 1 here (`low`) so that the pool
+      # budget is the one tested. The api's pool is
+      # postgresql.roles.perService.api.maxConnections (release E: it always
+      # connects as its own role).
       - name: helm template (Postgres connection budget)
         run: |
           set -euo pipefail
@@ -2614,16 +2627,22 @@ jobs:
             --set api.sso.clientSecret=test-secret
             --set api.sso.redirectUrl=https://app.example.com/callback
             --set api.sso.postLoginRedirectUrl=https://app.example.com/
-            --set postgresql.roles.app.connectionLimit=60
             --show-only templates/api-deployment.yaml
           )
+          low=(--set postgresql.roles.owner.connectionLimit=1)
+          for role in api aggregator enricher notifier writer schedule_ingest schedule_reference \
+              stations incidents trust_backlog trust_consumer full_coverage_ro ldbws_ro; do
+            low+=(--set "postgresql.roles.perService.${role}.connectionLimit=1")
+          done
+          base+=("${low[@]}")
           if helm template distant-signal charts/distant-signal "${base[@]}" \
-              --set api.replicaCount=2 --set postgresql.config.max_connections=100 > /dev/null 2>&1; then
+              --set api.replicaCount=2 --set postgresql.config.max_connections=100 \
+              --set postgresql.roles.perService.api.maxConnections=50 > /dev/null 2>&1; then
             echo "2 api replicas x 50 must exceed a max_connections of 100" >&2; exit 1
           fi
           helm template distant-signal charts/distant-signal "${base[@]}" \
             --set api.replicaCount=2 --set postgresql.config.max_connections=100 \
-            --set api.database.maxConnections=25 > /dev/null
+            --set postgresql.roles.perService.api.maxConnections=25 > /dev/null
           helm template distant-signal charts/distant-signal "${base[@]}" \
             --set api.replicaCount=2 > /dev/null
           # R-048: the budget also reserves postgresql.connectionBudget
@@ -2632,20 +2651,21 @@ jobs:
           # full-coverage consumers' included), so at the default
           # max_connections of 200 api may have 197 - 35 - 5 = 157.
           helm template distant-signal charts/distant-signal "${base[@]}" \
-            --set api.database.maxConnections=157 > /dev/null
+            --set postgresql.roles.perService.api.maxConnections=157 > /dev/null
           if helm template distant-signal charts/distant-signal "${base[@]}" \
-              --set api.database.maxConnections=158 > /dev/null 2>&1; then
+              --set postgresql.roles.perService.api.maxConnections=158 > /dev/null 2>&1; then
             echo "158 + 35 + 5 reserved must exceed 197" >&2; exit 1
           fi
           if helm template distant-signal charts/distant-signal "${base[@]}" \
-              --set api.database.maxConnections=150 \
+              --set postgresql.roles.perService.api.maxConnections=150 \
               --set postgresql.connectionBudget.adminSessions=20 > /dev/null 2>&1; then
             echo "postgresql.connectionBudget.adminSessions must count" >&2; exit 1
           fi
-          # Without the pin, the role limits fail first (app's computed limit).
-          if helm template distant-signal charts/distant-signal "${base[@]}" \
-              --set postgresql.roles.app.connectionLimit= --set api.database.maxConnections=150 > /dev/null 2>&1; then
-            echo "the role limits must fail the render once app's computed limit exceeds the budget" >&2; exit 1
+          # Without the pin, the role limits fail first (the api's computed limit).
+          unpinned=("${base[@]:0:${#base[@]}-${#low[@]}}")
+          if helm template distant-signal charts/distant-signal "${unpinned[@]}" \
+              --set postgresql.roles.perService.api.maxConnections=150 > /dev/null 2>&1; then
+            echo "the role limits must fail the render once the api's computed limit exceeds the budget" >&2; exit 1
           fi
           pgbackrest=(
             --set postgresql.pgbackrest.enabled=true
@@ -2657,9 +2677,9 @@ jobs:
             --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds
           )
           helm template distant-signal charts/distant-signal "${base[@]}" "${pgbackrest[@]}" \
-            --set api.database.maxConnections=155 > /dev/null
+            --set postgresql.roles.perService.api.maxConnections=155 > /dev/null
           if helm template distant-signal charts/distant-signal "${base[@]}" "${pgbackrest[@]}" \
-              --set api.database.maxConnections=156 > /dev/null 2>&1; then
+              --set postgresql.roles.perService.api.maxConnections=156 > /dev/null 2>&1; then
             echo "pgBackRest must reserve 2 connections" >&2; exit 1
           fi
 
@@ -3094,23 +3114,24 @@ jobs:
           eg=$(doc NetworkPolicy distant-signal-api-maintenance <<<"${out}")
           grep -q 'port: 5432' <<<"${eg}" || fail "the CronJob must be allowed out to Postgres"
 
-          # The api role: its own with perService.api.connect, else app (the
-          # roles are on in every install since release B).
+          # The api role: its own (the roles are on in every install since
+          # release B, and the shared app role is gone since release E).
           cj=$(render "${on[@]}" --show-only templates/api-maintenance-cronjob.yaml)
           # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
-          grep -q 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${cj}" || fail "the CronJob must connect as app"
-          cj=$(render "${on[@]}" --set postgresql.roles.perService.api.connect=true \
-            --show-only templates/api-maintenance-cronjob.yaml)
-          # shellcheck disable=SC2016 # as above
-          grep -q 'postgres://distant_signal_api:\$(PGPASSWORD)@' <<<"${cj}" || fail "api.connect: the CronJob must connect as the api role"
-          # Its 2 connections count: the app limit 75 -> 77, and (app's limit
-          # pinned, so the pool budget is the one tested) the INF-7 budget
-          # 157 -> 155.
-          grep -q "'--variable=app_connection_limit=77'" <<<"${out}" || fail "the CronJob's pool must count in the app role's limit"
-          pinned=(--set postgresql.roles.app.connectionLimit=60)
-          render "${on[@]}" "${pinned[@]}" --set api.database.maxConnections=155 >/dev/null
+          grep -q 'postgres://distant_signal_api:\$(PGPASSWORD)@' <<<"${cj}" || fail "the CronJob must connect as the api role"
+          # Its 2 connections count in the api role's limit (the 3 of 16 x 2
+          # pods + 2 is 34, plus the CronJob's pool) and (every role limit
+          # pinned to 1, so the pool budget is the one tested) the INF-7
+          # budget 157 -> 155.
+          grep -q "'--variable=api_connection_limit=36'" <<<"${out}" || fail "the CronJob's pool must count in the api role's limit"
+          pinned=(--set postgresql.roles.owner.connectionLimit=1)
+          for role in api aggregator enricher notifier writer schedule_ingest schedule_reference \
+              stations incidents trust_backlog trust_consumer full_coverage_ro ldbws_ro; do
+            pinned+=(--set "postgresql.roles.perService.${role}.connectionLimit=1")
+          done
+          render "${on[@]}" "${pinned[@]}" --set postgresql.roles.perService.api.maxConnections=155 >/dev/null
           # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
-          if render "${on[@]}" "${pinned[@]}" --set api.database.maxConnections=156 >/dev/null 2>&1; then
+          if render "${on[@]}" "${pinned[@]}" --set postgresql.roles.perService.api.maxConnections=156 >/dev/null 2>&1; then
             fail "the CronJob's pool must count in the INF-7 budget"
           fi
 
@@ -3187,17 +3208,14 @@ jobs:
           grep -q 'cidr: 0.0.0.0/0' <<<"${eg}" || fail "the CronJob must be allowed out to the internet (GOV.UK)"
           grep -q 'port: 443' <<<"${eg}" || fail "the CronJob must be allowed out on the url's port"
 
-          # The api role, as api-maintenance: app until perService.api.connect.
+          # The api role, as api-maintenance: with postgresql.roles (release E)
+          # every service connects as its own role.
           # shellcheck disable=SC2016 # "$(PGPASSWORD)" is Kubernetes env-var syntax, matched literally
-          grep -q 'postgres://distant_signal_app:\$(PGPASSWORD)@' <<<"${cj}" || fail "the CronJob must connect as app"
-          cj=$(render "${on[@]}" --set postgresql.roles.perService.api.connect=true \
-            --show-only templates/bank-holidays-cronjob.yaml)
-          # shellcheck disable=SC2016 # as above
-          grep -q 'postgres://distant_signal_api:\$(PGPASSWORD)@' <<<"${cj}" || fail "api.connect: the CronJob must connect as the api role"
+          grep -q 'postgres://distant_signal_api:\$(PGPASSWORD)@' <<<"${cj}" || fail "the CronJob must connect as the api role"
 
-          # Its 2 connections count in the app role's limit (75 -> 77), as
+          # Its 2 connections count in the api role's limit (34 -> 36), as
           # api-maintenance's do.
-          grep -q "'--variable=app_connection_limit=77'" <<<"${out}" || fail "the CronJob's pool must count in the app role's limit"
+          grep -q "'--variable=api_connection_limit=36'" <<<"${out}" || fail "the CronJob's pool must count in the api role's limit"
 
       # postgresql.pgbackrest (docs/postgres-pitr.md). Off (the default)
       # must render nothing of it: the Postgres pod stays exactly as before.
