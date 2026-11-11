@@ -1954,10 +1954,28 @@ to see which: [archiving is failing](postgres-pitr.md#archiving-is-failing),
 
 ### DistantSignalPgBackRestBackupFailed
 
-A full or diff backup Job failed within `recentJobWindow`. WAL archiving is
-separate and may still be working; the restore window keeps growing from the
-last good backup. Read the Job's log and re-run it with
-`kubectl create job --from=cronjob/...`.
+A full, diff or expire Job failed within `recentJobWindow`. WAL archiving is
+separate and may still be working. After a failed full or diff the restore
+window keeps growing from the last good backup. After a failed expire the
+backups are fine and only the repository keeps more than
+`repo.retentionFull` (the next daily expire catches up). Read the Job's log
+and re-run it with `kubectl create job --from=cronjob/...`.
+
+The backups run with `--no-expire-auto`, so retention is the expire
+CronJob's job and an expire failure can't repeat a backup.
+
+### DistantSignalPgBackRestJobPodFailed
+
+A pod of a pgBackRest Job failed within `recentJobWindow` and the Job retried
+(`kube_pod_status_phase{phase="Failed"}` for a pod `kube_pod_owner` ties to a
+`<release>-pgbackrest-*` Job). When the Job's own alert
+(`DistantSignalPgBackRestBackupFailed` or `CheckFailed`) isn't firing, a retry
+succeeded, so nothing is lost, but something failed first: a Thoth outage, a
+dropped `kubectl exec` stream, a lock held by another command. Read the failed
+pod's log (`kubectl logs <pod>`; failed pods stay until the Job's
+`ttlSecondsAfterFinished`). A `kubectl exec` stream that dies mid-backup
+(exit 2) makes the retry run a new backup: look at `pgbackrest info` for
+extra fulls.
 
 ### DistantSignalPgBackRestBackupStale
 

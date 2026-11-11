@@ -32,9 +32,18 @@ waiting 13.5-27 minutes for spread ones (see the value's comment).
 {{- if ne (toString $pb.backup.startFast) "false" }}
 {{- $backupOpts = append $backupOpts "--start-fast" }}
 {{- end }}
+{{- /*
+--no-expire-auto: a backup does not run `expire` itself. Its expire step
+timing out against S3 failed the whole Job, and the retry then took another
+full backup (three fulls in one run, 2026-11-08). Retention is the expire
+CronJob's work instead: idempotent, with its own retries, so a failed
+expire never repeats a backup, and a failed backup is still a failed Job.
+*/}}
+{{- $backupOpts = append $backupOpts "--no-expire-auto" }}
 {{- $jobs := list
   (dict "suffix" "full" "schedule" $pb.backup.fullSchedule "command" (concat $backupOpts (list "--type=full" "backup")))
   (dict "suffix" "diff" "schedule" $pb.backup.diffSchedule "command" (concat $backupOpts (list "--type=diff" "backup")))
+  (dict "suffix" "expire" "schedule" $pb.backup.expireSchedule "command" (list "pgbackrest" "--log-level-console=info" "expire"))
   (dict "suffix" "check" "schedule" $pb.backup.checkSchedule "command" (list "pgbackrest-daily-check" "--no-verify"))
 }}
 {{- with $pb.backup.verifySchedule }}

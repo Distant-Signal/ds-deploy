@@ -1899,11 +1899,12 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.backup.fullSchedule` | `0 5 * * 0` | Weekly full backup (Sunday 05:00 UTC). |
 | `postgresql.pgbackrest.backup.diffSchedule` | `0 5 * * 1-6` | Differential backup the other days (05:00 UTC). |
 | `postgresql.pgbackrest.backup.checkSchedule` | `0 7 * * *` | Daily `check` and WAL gap check (07:00 UTC, after the backup). |
+| `postgresql.pgbackrest.backup.expireSchedule` | `30 6 * * *` | Daily `pgbackrest expire` CronJob (06:30 UTC, between the backups and the check). The full and diff backups run with `--no-expire-auto`, so a failed expire is retried on its own and never repeats a backup. |
 | `postgresql.pgbackrest.backup.verifySchedule` | `0 8 * * 0` | Weekly `pgbackrest verify` CronJob (Sunday 08:00 UTC, after the full backup). It reads the whole repository back. Empty renders no verify CronJob. |
 | `postgresql.pgbackrest.backup.startFast` | `true` | Pass `--start-fast` to the full and diff backups, so `pg_backup_start` forces an immediate checkpoint. Off, it waits for the timed checkpoint under way and then a new spread one: 13.5-27 minutes as an `active` superuser query, which trips a long-running-query alert. Costs one burst of up to `shared_buffers` of writes at 05:00 UTC. |
 | `postgresql.pgbackrest.backup.suspend` | `false` | Suspend the CronJobs (archiving continues). |
 | `postgresql.pgbackrest.backup.activeDeadlineSeconds` | `21600` | Kill a backup or check Job that runs longer. |
-| `postgresql.pgbackrest.backup.backoffLimit` | `1` | Retries of a failed Job. A retried backup resumes. |
+| `postgresql.pgbackrest.backup.backoffLimit` | `1` | Retries of a failed Job (also the expire Job's). A retried backup resumes. |
 | `postgresql.pgbackrest.backup.startingDeadlineSeconds` | `3600` | Skip a run that can't start within this long of its time. |
 | `postgresql.pgbackrest.backup.ttlSecondsAfterFinished` | `259200` | The Jobs' `ttlSecondsAfterFinished`: a finished Job and its pod are deleted three days after it ends (longer than the alerts' `recentJobWindow`). null leaves them to the history limits. |
 | `postgresql.pgbackrest.backup.image.repository` / `.tag` / `.pullPolicy` | `registry.k8s.io/kubectl`, `v1.36.5@sha256:…`, `IfNotPresent` | The image the CronJobs run `kubectl exec` from. Keep it within one minor version of the cluster. |
@@ -3479,7 +3480,8 @@ recording rules (`distant_signal:*`) in the same group, so the alert's
 | `DistantSignalDirectWritesFailing` | warning | A direct writer's writes of one operation (`db_writes_total{operation}`) all failed (`timeout`, `transient`, `rejected`; no `ok`) over 15m, for 30m. |
 | `DistantSignalScheduleFeedMarkerStale` | warning | The newest CIF delivery whose feed marker landed (`schedule_feed_last_ingest_delivered_at_seconds`) is over 30h old, for 15m. |
 | `DistantSignalPgBackRestCheckFailed` | critical | The daily pgBackRest check Job or the weekly verify Job failed within 26h: archiving is broken, `verify` found a bad file, or WAL is missing (a PITR gap). This group renders only with `postgresql.pgbackrest.enabled`, in a separate `<fullname>-pgbackrest` PrometheusRule (`metrics.prometheusRule.pgbackrest`), and reads kube-state-metrics and postgres_exporter series rather than this chart's own. Runbook: `docs/postgres-pitr.md`. |
-| `DistantSignalPgBackRestBackupFailed` | warning | A full or diff backup Job failed within 26h. |
+| `DistantSignalPgBackRestBackupFailed` | warning | A full, diff or expire Job failed within 26h. |
+| `DistantSignalPgBackRestJobPodFailed` | warning | A pod of a pgBackRest Job failed within 26h and the Job retried (even if a retry then succeeded). |
 | `DistantSignalPgBackRestBackupStale` | warning | No full or diff backup CronJob success (`kube_cronjob_status_last_successful_time`) for 30h, for 10m. |
 | `DistantSignalPgBackRestFullBackupStale` | warning | No full backup success for 8d, for 10m. |
 | `DistantSignalPgBackRestArchiveFailing` | warning | postgres_exporter's `pg_stat_archiver_failed_count` rose over 15m, for 10m. |

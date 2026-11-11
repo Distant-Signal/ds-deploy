@@ -97,6 +97,7 @@ EXPECTED = (
     "distant-signal-pgbackrest-full",
     "distant-signal-pgbackrest-diff",
     "distant-signal-pgbackrest-check",
+    "distant-signal-pgbackrest-expire",
     "distant-signal-pgbackrest-verify",
     "distant-signal-poller-tocs",
     "distant-signal-poller-stations",

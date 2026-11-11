@@ -53,7 +53,7 @@ spec:
         */}}
         - record: distant_signal:pgbackrest_job_failed:recent
           expr: |
-            max by (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(check|verify|full|diff)-[0-9]+", condition="true"} == 1)
+            max by (namespace, job_name) (kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(check|verify|full|diff|expire)-[0-9]+", condition="true"} == 1)
             and on (namespace, job_name)
             (time() - kube_job_status_start_time{namespace="{{ $ns }}"} < {{ include "distant-signal.durationSeconds" .recentJobWindow }})
         - alert: DistantSignalPgBackRestCheckFailed
@@ -71,7 +71,7 @@ spec:
             runbook_url: {{ printf "%s#distantsignalpgbackrestcheckfailed" $runbook | quote }}
         - alert: DistantSignalPgBackRestBackupFailed
           expr: |
-            distant_signal:pgbackrest_job_failed:recent{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(full|diff)-[0-9]+"}
+            distant_signal:pgbackrest_job_failed:recent{namespace="{{ $ns }}", job_name=~"{{ $cronjob }}-(full|diff|expire)-[0-9]+"}
           for: 0m
           labels:
             severity: {{ .severity }}
@@ -80,8 +80,37 @@ spec:
             {{- end }}
           annotations:
             summary: "pgBackRest backup failed ({{ "{{ $labels.job_name }}" }})"
-            description: "The restore window keeps growing from the last good backup. WAL archiving is separate and may still work."
+            description: "A full, diff or expire Job failed. A failed backup leaves the restore window growing; a failed expire only the repository. WAL archiving is separate."
             runbook_url: {{ printf "%s#distantsignalpgbackrestbackupfailed" $runbook | quote }}
+        {{- /*
+        A pod that failed under a retrying Job: restartPolicy Never keeps the
+        Failed pod until the Job goes (ttlSecondsAfterFinished), so one that
+        started within recentJobWindow is a retry that happened, whether
+        or not the Job then succeeded. kube_pod_owner names the Job a pod
+        belongs to.
+        */}}
+        - record: distant_signal:pgbackrest_job_pod_failed:recent
+          expr: |
+            count by (namespace, owner_name) (
+              (kube_pod_status_phase{namespace="{{ $ns }}", phase="Failed"} == 1)
+              * on (namespace, pod) group_left (owner_name)
+              kube_pod_owner{namespace="{{ $ns }}", owner_kind="Job", owner_name=~"{{ $cronjob }}-(full|diff|expire|check|verify)-[0-9]+"}
+              and on (namespace, pod)
+              (time() - kube_pod_created{namespace="{{ $ns }}"} < {{ include "distant-signal.durationSeconds" .recentJobWindow }})
+            )
+        - alert: DistantSignalPgBackRestJobPodFailed
+          expr: |
+            distant_signal:pgbackrest_job_pod_failed:recent{namespace="{{ $ns }}"} > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "pgBackRest Job pod failed ({{ "{{ $labels.owner_name }}" }})"
+            description: "A pod of this Job failed, so the Job retried. If the Job's own alert isn't firing, a retry succeeded: read the failed pod's log."
+            runbook_url: {{ printf "%s#distantsignalpgbackrestjobpodfailed" $runbook | quote }}
         - alert: DistantSignalPgBackRestBackupStale
           expr: |
             time() - max by (namespace) (kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob=~"{{ $cronjob }}-(full|diff)"}) > {{ include "distant-signal.durationSeconds" .backupMaxAge }}

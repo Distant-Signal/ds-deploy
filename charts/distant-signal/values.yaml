@@ -869,6 +869,16 @@ postgresql:
       # -- Daily `pgbackrest check` and WAL gap check (07:00 UTC), two hours
       # after the backup starts so a Sunday full has finished.
       checkSchedule: "0 7 * * *"
+      # -- Daily `pgbackrest expire` (06:30 UTC): applies
+      # `repo.retentionFull`. The full and diff backups run with
+      # `--no-expire-auto`, so an expire that fails (S3 timing out) is a
+      # failed expire Job, retried on its own, and never repeats a backup.
+      # It sits after the 05:00 backups and before the 07:00 check (the
+      # check's WAL gap test reads what expire leaves). If a backup is still
+      # running, expire can't take pgBackRest's lock and the Job retries
+      # with backoff; if it never gets through, the next day's run
+      # catches up (expire is idempotent).
+      expireSchedule: "30 6 * * *"
       # -- Weekly `pgbackrest verify` (Sunday 08:00 UTC, after the full
       # backup and the check): reads the whole repository back, decrypting
       # and checksumming every file, so roughly the repository's size in
@@ -891,7 +901,8 @@ postgresql:
       suspend: false
       # -- Kill a backup or check Job that runs longer than this.
       activeDeadlineSeconds: 21600
-      # -- Retries of a failed Job (a retried backup resumes).
+      # -- Retries of a failed Job (a retried backup resumes). Also bounds
+      # the expire Job's retries.
       backoffLimit: 1
       # -- A run that can't start within this many seconds of its time is
       # skipped.
@@ -6269,8 +6280,11 @@ metrics:
     # weekly verify Job failed within `recentJobWindow`: archiving is
     # broken, `verify` found a
     # bad file, or WAL is missing (a PITR gap, e.g. dropped at queueMax).
-    # DistantSignalPgBackRestBackupFailed: a full or diff backup Job failed
+    # DistantSignalPgBackRestBackupFailed: a full, diff or expire Job failed
     # within `recentJobWindow`.
+    # DistantSignalPgBackRestJobPodFailed: a pod of any pgBackRest Job
+    # failed within `recentJobWindow`, even if a retry then succeeded (the
+    # Job-level alerts above only see a Job that failed outright).
     # DistantSignalPgBackRestBackupStale: no full or diff backup succeeded
     # for `backupMaxAge`; DistantSignalPgBackRestFullBackupStale: no full
     # backup for `fullBackupMaxAge`. Both read kube-state-metrics' CronJob
