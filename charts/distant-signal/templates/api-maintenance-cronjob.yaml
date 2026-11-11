@@ -91,6 +91,11 @@ spec:
                   value: {{ .Values.api.inactiveAccountRetentionDays | quote }}
                 - name: REGULAR_JOURNEY_RETENTION_DAYS
                   value: {{ .Values.api.regularJourneyRetentionDays | quote }}
+                # Recently deleted journeys: the hourly sweep runs here too.
+                - name: RECENTLY_DELETED_ENABLED
+                  value: {{ dig "recentlyDeleted" "enabled" false .Values.api | quote }}
+                - name: RECENTLY_DELETED_RETENTION_DAYS
+                  value: {{ include "distant-signal.recentlyDeletedRetentionDays" . | quote }}
                 # Delegated access: how long a revoked grant is kept.
                 - name: DELEGATED_REVOKED_GRANT_RETENTION_DAYS
                   value: {{ dig "delegated" "revokedGrantRetentionDays" 365 .Values.api | quote }}

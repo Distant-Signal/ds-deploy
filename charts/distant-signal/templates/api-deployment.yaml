@@ -645,6 +645,12 @@ with api.extraEnv, which replaces an entry of the same name.
             # values.yaml.
             - name: CALENDAR_FEED_ENABLED
               value: {{ dig "calendarFeed" "enabled" false .Values.api | quote }}
+            # Recently deleted journeys -- see api.recentlyDeleted in values.yaml.
+            # The api validates the retention at startup (7 to 31 days).
+            - name: RECENTLY_DELETED_ENABLED
+              value: {{ dig "recentlyDeleted" "enabled" false .Values.api | quote }}
+            - name: RECENTLY_DELETED_RETENTION_DAYS
+              value: {{ include "distant-signal.recentlyDeletedRetentionDays" . | quote }}
             # Global override for LineDefinition.full_coverage_enabled --
             # see api.fullCoverageEnabledDefault's own comment in values.yaml.
             # The binary defaults to false, the chart value to true; it must be
