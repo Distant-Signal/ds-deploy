@@ -3145,9 +3145,11 @@ jobs:
           # Off (the default), and with only the feature on: no CronJob, and
           # the api's loop is not switched off.
           out=$(render)
+          # shellcheck disable=SC2310,SC2312 # doc is a pure awk filter; an empty result is the assertion
           [[ -z "$(doc CronJob distant-signal-bank-holidays <<<"${out}")" ]] || fail "off must render no bank-holidays CronJob"
           if grep -q 'bank-holidays$' <<<"${out}"; then fail "off must render nothing of the bank-holidays CronJob"; fi
           out=$(render "${bh[@]}")
+          # shellcheck disable=SC2310,SC2312 # doc is a pure awk filter; an empty result is the assertion
           [[ -z "$(doc CronJob distant-signal-bank-holidays <<<"${out}")" ]] || fail "cronjob off must render no CronJob"
           offapi=$(render "${bh[@]}" --show-only templates/api-deployment.yaml)
           grep -A1 'name: BANK_HOLIDAYS_LOOP_ENABLED$' <<<"${offapi}" | grep -q 'value: "true"' \
