@@ -766,26 +766,27 @@ key> "what" <the values that need it, for the message>).
 
 {{/*
 Security review H2 (2026-10-08): a component with a narrow Postgres role
-(files/db-grants.yaml) connects as that role or not at all, never as the
-shared app role or the superuser. Renders nothing; fails unless
-postgresql.roles.perService.<service>.connect is on (whose own checks,
-distant-signal.perServiceConnects, need postgresql.roles.enabled and
-perService.enabled). Reads the value only, so the sink helpers that
-perServiceConnects itself calls can use it. Takes (dict "root" $ "service"
-<perService key> "what" <the values that need it, for the message>).
+(files/db-grants.yaml) connects as that role or not at all, never as a
+shared role (the app role was dropped in release E) or the superuser.
+Renders nothing; fails unless postgresql.roles.enabled and
+postgresql.roles.perService.enabled are on (the roles' own setup Job
+requirement is checked by distant-signal.perServiceEnabled). Reads values
+only, so the sink helpers that perServiceConnects itself calls can use it.
+Takes (dict "root" $ "service" <perService key> "what" <the values that
+need it, for the message>).
 */}}
 {{- define "distant-signal.requireNarrowRole" -}}
-{{- $cfg := get .root.Values.postgresql.roles.perService .service | default dict -}}
-{{- if not $cfg.connect -}}
-{{- fail (printf "%s needs postgresql.roles.perService.%s.connect (with postgresql.roles.enabled, setupJob.enabled and perService.enabled): a narrow-role component never falls back to the shared app role or the superuser (security review H2)." .what .service) -}}
+{{- if not (and .root.Values.postgresql.roles.enabled .root.Values.postgresql.roles.perService.enabled) -}}
+{{- fail (printf "%s needs postgresql.roles.enabled, postgresql.roles.setupJob.enabled and postgresql.roles.perService.enabled: every component connects as its own Postgres role, never as a shared role or the superuser (security review H2; the shared app role was dropped in release E)." .what) -}}
 {{- end -}}
 {{- end }}
 
 {{/*
 The components that have a narrow Postgres role and connect only as it
 (distant-signal.requireNarrowRole): their perService keys, space-separated.
-The writer is not here: it may still run as app until its tfl stream applies
-(distant-signal.ingestWriterStreams, security review M4).
+The writer is not here only because distant-signal.perServiceConnects
+handles it with them (it is also always on); it has no sink helper that
+needs the check.
 */}}
 {{- define "distant-signal.narrowOnlyServices" -}}
 stations incidents schedule_ingest schedule_reference trust_backlog trust_consumer full_coverage_ro ldbws_ro
@@ -1028,16 +1029,14 @@ a password it never sees, so a password containing @ : / ? # [ ] % must be
 percent-encoded by the operator. Generated passwords use randAlphaNum, so
 the default path is never affected.
 */}}
-{{- define "distant-signal.databaseEnv" -}}
-{{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "") -}}
-{{- end }}
-
 {{/*
-distant-signal.databaseEnv for one service: takes (dict "root" $ "service"
-"api"|"aggregator"|"enricher"|"notifier"). With
-postgresql.roles.perService.<service>.connect (Stage 0b) the service
-connects as its own role from files/db-grants.yaml; otherwise exactly as
-distant-signal.databaseEnv.
+The DATABASE_URL (and its PGPASSWORD) of one service: takes (dict "root" $
+"service" <perService key>). With the bundled Postgres and
+postgresql.roles.enabled the service connects as its own role from
+files/db-grants.yaml; there is no shared role to fall back to (the app
+role was dropped in release E), so a missing perService.enabled fails the
+render. Without roles (a quick-start install) it connects as the bootstrap
+superuser, as it always did; an external database takes its own URL.
 */}}
 {{- define "distant-signal.databaseEnvFor" -}}
 {{- $service := .service -}}
@@ -1046,17 +1045,15 @@ distant-signal.databaseEnv.
 {{- end -}}
 {{- with .root -}}
 {{- if .Values.postgresql.enabled -}}
-{{- /* With postgresql.roles.enabled, the non-superuser app role. */}}
+{{- /* Without postgresql.roles.enabled, the bootstrap superuser. */}}
 {{- $user := .Values.postgresql.auth.username -}}
 {{- $secretName := include "distant-signal.postgresSecretName" . -}}
 {{- $secretKey := include "distant-signal.postgresSecretPasswordKey" . -}}
 {{- if include "distant-signal.postgresRolesEnabled" . -}}
-{{- $user = .Values.postgresql.roles.app.username -}}
-{{- $secretName = include "distant-signal.postgresRoleSecretName" (dict "root" . "role" "app") -}}
-{{- $secretKey = include "distant-signal.postgresRoleSecretKey" (dict "root" . "role" "app") -}}
+{{- if not (and $service (include "distant-signal.perServiceConnects" (dict "root" . "service" $service))) -}}
+{{- fail (printf "the %q service has no Postgres role to connect as: postgresql.roles.enabled needs postgresql.roles.perService.enabled and a perService role for each service that connects (the shared app role was dropped in release E)." $service) -}}
 {{- end -}}
-{{- if and $service (include "distant-signal.perServiceConnects" (dict "root" . "service" $service)) -}}
-{{- /* Stage 0b: the service's own role (a member of app). */}}
+{{- /* The service's own role (files/db-grants.yaml). */}}
 {{- $user = include "distant-signal.perServiceRoleName" (dict "root" . "service" $service) -}}
 {{- $secretName = include "distant-signal.perServiceSecretName" (dict "root" . "service" $service) -}}
 {{- $secretKey = include "distant-signal.perServiceSecretKey" (dict "root" . "service" $service) -}}
@@ -1156,7 +1153,7 @@ It falls back to post-upgrade (the old order) when pre-upgrade cannot work:
 {{- if and (not $late) $live -}}
 {{- $data := default (dict) (get $live "data") -}}
 {{- $refs := list (list (include "distant-signal.postgresSecretName" .) (include "distant-signal.postgresSecretPasswordKey" .)) -}}
-{{- range $role := list "owner" "app" "exporter" "dump" "backup" -}}
+{{- range $role := list "owner" "exporter" "dump" "backup" -}}
 {{- $refs = append $refs (list (include "distant-signal.postgresRoleSecretName" (dict "root" $ "role" $role)) (include "distant-signal.postgresRoleSecretKey" (dict "root" $ "role" $role))) -}}
 {{- end -}}
 {{- if include "distant-signal.perServiceEnabled" . -}}
@@ -1188,7 +1185,7 @@ true
 
 {{/*
 Secret name / key of one role's password. Takes (dict "root" $ "role"
-"owner"|"app"|"exporter"|"dump"|"backup"). Same three-way shape as auth.password:
+"owner"|"exporter"|"dump"|"backup"). Same three-way shape as auth.password:
 the role's existingSecret, else the chart's Secret.
 */}}
 {{- define "distant-signal.postgresRoleSecretName" -}}
@@ -1203,10 +1200,7 @@ the role's existingSecret, else the chart's Secret.
 
 {{/*
 A role's CONNECTION LIMIT. Takes (dict "root" $ "role" ...). An empty
-owner/app value is computed: the owner gets api.replicaCount + 2; the app
-gets the chart's pools (the same ones the api-deployment.yaml budget check
-counts, without the migration connection, which is the owner's) plus
-app.connectionLimitSlack.
+owner value is computed: api.replicaCount + 2.
 */}}
 {{- define "distant-signal.postgresRoleConnectionLimit" -}}
 {{- $root := .root -}}
@@ -1219,25 +1213,6 @@ app.connectionLimitSlack.
 {{- $limit -}}
 {{- else if eq .role "owner" -}}
 {{- add (int $root.Values.api.replicaCount) 2 -}}
-{{- else if eq .role "app" -}}
-{{- /* Stage 0b: a service connecting as its own role no longer counts
-     against app. */ -}}
-{{- $total := int $role.connectionLimitSlack -}}
-{{- range $service := list "api" "aggregator" "enricher" "notifier" -}}
-{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" $service)) -}}
-{{- $total = add $total (include "distant-signal.servicePool" (dict "root" $root "service" $service)) -}}
-{{- end -}}
-{{- end -}}
-{{- /* The api-maintenance and bank-holidays CronJobs connect as the api does. */ -}}
-{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "api")) -}}
-{{- $total = add $total (include "distant-signal.apiMaintenancePool" $root) (include "distant-signal.bankHolidaysPool" $root) -}}
-{{- end -}}
-{{- if not (include "distant-signal.perServiceConnects" (dict "root" $root "service" "writer")) -}}
-{{- $total = add $total (include "distant-signal.ingestWriterPool" $root) -}}
-{{- end -}}
-{{- /* Every other ingest component connects only as its own narrow role
-     (distant-signal.requireNarrowRole): none counts against app. */ -}}
-{{- $total -}}
 {{- else -}}
 {{- fail (printf "postgresql.roles.%s.connectionLimit must be set." .role) -}}
 {{- end -}}
@@ -1249,7 +1224,7 @@ psql's \getenv.
 */}}
 {{- define "distant-signal.postgresRolesPasswordEnv" -}}
 {{- $root := . -}}
-{{- range $role := list "owner" "app" "exporter" "dump" "backup" }}
+{{- range $role := list "owner" "exporter" "dump" "backup" }}
 - name: {{ printf "DS_PG_%s_PASSWORD" (upper $role) }}
   valueFrom:
     secretKeyRef:
@@ -1275,7 +1250,7 @@ objects move to the owner role.
 {{- define "distant-signal.postgresRolesPsqlVariables" -}}
 {{- $roles := .Values.postgresql.roles -}}
 --variable=old_owner={{ .Values.postgresql.auth.username }}
-{{- range $role := list "owner" "app" "exporter" "dump" "backup" }}
+{{- range $role := list "owner" "exporter" "dump" "backup" }}
 --variable={{ $role }}={{ (get $roles $role).username }}
 --variable={{ $role }}_connection_limit={{ include "distant-signal.postgresRoleConnectionLimit" (dict "root" $ "role" $role) }}
 {{- end }}
@@ -1348,19 +1323,27 @@ true
 
 {{/*
 True (non-empty) when the service connects as its own role. Takes (dict
-"root" $ "service" "api"|...). A `connect` the component does not use is
+"root" $ "service" "api"|...). Always on since release E dropped the shared
+app role (there is no `connect` switch): the writer and every component in
+distant-signal.narrowOnlyServices need roles.enabled and perService.enabled
+whenever the component is deployed (the render fails otherwise, never a
+fallback), and api, aggregator, enricher and notifier connect as their own
+role whenever roles.enabled is on (without roles, a quick-start install
+connects as the bootstrap superuser). A component that is not deployed is
 not a connection (distant-signal.perServiceRoleUsed).
 */}}
 {{- define "distant-signal.perServiceConnects" -}}
-{{- $cfg := get .root.Values.postgresql.roles.perService .service -}}
-{{- if and $cfg.connect (include "distant-signal.perServiceRoleUsed" .) -}}
+{{- if include "distant-signal.perServiceRoleUsed" . -}}
+{{- $must := or (eq .service "writer") (has .service (include "distant-signal.narrowOnlyServices" .root | splitList " ")) -}}
+{{- if or $must (include "distant-signal.postgresRolesEnabled" .root) -}}
 {{- if not (include "distant-signal.perServiceEnabled" .root) -}}
-{{- fail (printf "postgresql.roles.perService.%s.connect needs postgresql.roles.perService.enabled (which creates the role) first." .service) -}}
+{{- fail (printf "the %s service needs postgresql.roles.perService.enabled (which creates its role): the shared app role was dropped in release E, so every service connects as its own role." .service) -}}
 {{- end -}}
 {{- if not (include "distant-signal.postgresRolesEnabled" .root) -}}
-{{- fail (printf "postgresql.roles.perService.%s.connect needs postgresql.roles.enabled: the per-service roles are members of the app role." .service) -}}
+{{- fail (printf "the %s service needs postgresql.roles.enabled: every service connects as its own role (the shared app role was dropped in release E)." .service) -}}
 {{- end -}}
 true
+{{- end -}}
 {{- end -}}
 {{- end }}
 
@@ -1516,7 +1499,7 @@ trustConsumer.internalReads.database.maxConnections. Takes root.
 Ingest architecture phase 4 (plan 4.7): the internal readers read their
 reference data from Postgres directly, each with a pool of
 `internalReads.database.maxConnections`, as its read-only role
-(postgresql.roles.perService.<role>.connect). The readers, by their
+(postgresql.roles.perService.<role>). The readers, by their
 db-grants.yaml role: full_coverage_ro (fullCoverageConsumer), ldbws_ro
 (pollers.ldbws), trust_consumer (trustConsumer; the role is plan 3b's, and
 its reads share the sink's one pool: distant-signal.trustConsumerPool).
@@ -1707,20 +1690,6 @@ other than off or apply (release B removed shadow). Takes root.
 {{- $items = append $items (printf "%s:%s" $name (toString $mode)) -}}
 {{- end -}}
 {{- end -}}
-{{- if and (eq (toString (get .Values.ingestWriter.streams "tfl")) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" . "service" "writer"))) -}}
-{{- fail "ingestWriter.streams.tfl: apply needs postgresql.roles.perService.writer.connect (security review M4): line_status's row policy (source = 'tfl') applies to the writer's own role only. As the app role the writer could write the aggregator's lines too." -}}
-{{- end -}}
-{{- if and (eq (toString (get .Values.ingestWriter.streams "tfl-stops")) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" . "service" "writer"))) -}}
-{{- fail "ingestWriter.streams.tfl-stops: apply needs postgresql.roles.perService.writer.connect (as tfl, security review M4): the writer's ingest_freshness row policy (source tfl-stops) binds its own role only. As the app role it could write any feed's freshness." -}}
-{{- end -}}
-{{- if and (eq (toString (get .Values.ingestWriter.streams "darwin")) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" . "service" "writer"))) -}}
-{{- fail "ingestWriter.streams.darwin: apply needs postgresql.roles.perService.writer.connect (as tfl, security review M4): the writer's ingest_freshness row policy (source darwin-pushport) binds its own role only. As the app role it could write any feed's freshness." -}}
-{{- end -}}
-{{- range $name, $mode := .Values.ingestWriter.streams -}}
-{{- if and (hasPrefix "transit-" $name) (eq (toString $mode) "apply") (not (include "distant-signal.perServiceConnects" (dict "root" $ "service" "writer"))) -}}
-{{- fail (printf "ingestWriter.streams.%s: apply needs postgresql.roles.perService.writer.connect (as tfl, security review M4): the writer's row policies (ingest_freshness's transit sources, line_status from batch 4) bind its own role only. As the app role it could write any feed's freshness." $name) -}}
-{{- end -}}
-{{- end -}}
 {{- join "," $items -}}
 {{- end }}
 
@@ -1803,23 +1772,12 @@ templates/zz-ingest-sink-preflight.yaml. Takes root.
 {{- $streamed = append $streamed (dict "client" (index $p 0) "stream" (index $p 1) "key" (index $p 0)) -}}
 {{- end -}}
 {{- end -}}
-{{- /* Postgres: every direct writer connects as its own narrow role. */ -}}
+{{- /* Postgres: every direct writer and reader connects as its own narrow
+     role, always (release E: the perService.<role>.connect switches are gone); the roles
+     themselves are required below. */ -}}
 {{- range $d := $db -}}
-{{- if not (get $v.postgresql.roles.perService $d.svc | default dict).connect -}}
-{{- $missing = append $missing (printf "postgresql.roles.perService.%s.connect: true (%s writes Postgres directly; security review H2)" $d.svc $d.key) -}}
-{{- end -}}
 {{- if and (has $d.svc (list "stations" "trust_consumer")) (not (and $v.ingestWriter.enabled $v.ingestWriter.loops.enabled)) -}}
 {{- $missing = append $missing "ingestWriter.enabled: true and ingestWriter.loops.enabled: true (pollers.stations and trustConsumer need its CORPUS crosswalk and train_event_outbox loops; plans 2b.2 and 3b.3)" -}}
-{{- end -}}
-{{- end -}}
-{{- /* The internal readers (phase 4), each as its own role:
-     full_coverage_ro, ldbws_ro and trust_consumer (whose reads share its
-     sink's role and pool, plan 4.4). */ -}}
-{{- range $role := list "full_coverage_ro" "ldbws_ro" "trust_consumer" -}}
-{{- $key := include "distant-signal.internalReadsValuesKey" $role -}}
-{{- $deployed := ternary ($v.pollers.ldbws | default dict).enabled true (eq $role "ldbws_ro") -}}
-{{- if and $deployed (not (get $v.postgresql.roles.perService $role | default dict).connect) -}}
-{{- $missing = append $missing (printf "postgresql.roles.perService.%s.connect: true (%s reads Postgres directly; security review H2)" $role $key) -}}
 {{- end -}}
 {{- end -}}
 {{- /* Redis: the writer applies what the stream producers XADD. */ -}}
@@ -1836,9 +1794,6 @@ templates/zz-ingest-sink-preflight.yaml. Takes root.
 {{- end -}}
 {{- if $v.ingestWriter.enabled -}}
 {{- $narrowFor = append $narrowFor "redis.acl.clients.ingestWriter" -}}
-{{- if and (eq (toString (get $v.ingestWriter.streams "tfl")) "apply") (not $v.postgresql.roles.perService.writer.connect) -}}
-{{- $missing = append $missing "postgresql.roles.perService.writer.connect: true (ingestWriter.streams.tfl: apply; security review M4)" -}}
-{{- end -}}
 {{- end -}}
 {{- if not $v.postgresql.enabled -}}
 {{- $missing = append $missing "the bundled Postgres (postgresql.enabled: true): an external database gets no per-service roles" -}}
@@ -2060,22 +2015,22 @@ brief overlap: pool + lock + 1. */ -}}
 {{- end }}
 
 {{/*
-psql --variable arguments for files/postgres-grants.sql, one per line: the
-app role's name and each per-service role's CONNECTION LIMIT. (The role
-names are db-grants.yaml's own defaults.)
+psql --variable arguments for files/postgres-grants.sql, one per line:
+each per-service role's CONNECTION LIMIT. (The role names are
+db-grants.yaml's own defaults.)
 */}}
 {{- define "distant-signal.postgresGrantsPsqlVariables" -}}
---variable=app={{ .Values.postgresql.roles.app.username }}
-{{- range $service := include "distant-signal.perServiceKeys" $ | splitList " " }}
-{{- $_ := include "distant-signal.perServiceRoleName" (dict "root" $ "service" $service) }}
+{{- range $i, $service := include "distant-signal.perServiceKeys" $ | splitList " " -}}
+{{- if $i }}{{ "\n" }}{{ end -}}
+{{- $_ := include "distant-signal.perServiceRoleName" (dict "root" $ "service" $service) -}}
 --variable={{ $service }}_connection_limit={{ include "distant-signal.perServiceConnectionLimit" (dict "root" $ "service" $service) }}
-{{- end }}
+{{- end -}}
 {{- end }}
 
 {{/*
 Stage 0b connection budget (spec §6.6; extends INF-7 in
 api-deployment.yaml): with postgresql.roles.perService.enabled, the
-CONNECTION LIMITs of every role a client can actually use -- owner, app,
+CONNECTION LIMITs of every role a client can actually use -- owner,
 exporter, dump, backup and each per-service role a service connects as --
 must fit max_connections minus the 3 superuser_reserved_connections. A
 per-service role nothing connects as yet is not counted. Renders nothing;
@@ -2091,7 +2046,7 @@ fails the render instead. Takes root.
 {{- end -}}
 {{- $total := 0 -}}
 {{- $parts := list -}}
-{{- range $role := list "owner" "app" "exporter" "dump" "backup" -}}
+{{- range $role := list "owner" "exporter" "dump" "backup" -}}
 {{- $limit := int (include "distant-signal.postgresRoleConnectionLimit" (dict "root" $ "role" $role)) -}}
 {{- $total = add $total $limit -}}
 {{- $parts = append $parts (printf "%s %d" $role $limit) -}}

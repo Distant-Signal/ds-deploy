@@ -11,8 +11,8 @@ session_cleanup_sweep_loop keeps running until API_BACKGROUND_LOOPS=false
 harmless.
 
 It connects as the api does (distant-signal.databaseEnvFor "api": the api's
-own role with postgresql.roles.perService.api.connect, else the app role or
-the bootstrap user), and its pool counts in the connection budget.
+own role with postgresql.roles.enabled, else the bootstrap user), and its
+pool counts in the connection budget.
 */}}
 {{- if .Values.apiMaintenance.enabled }}
 {{- $m := .Values.apiMaintenance }}

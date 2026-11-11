@@ -85,8 +85,6 @@ ARGS = (
     "ingestWriter.streams.darwin=apply",
     "--set",
     "redis.acl.clients.darwinRelay=true",
-    "--set",
-    "postgresql.roles.perService.writer.connect=true",
 )
 COMPONENT = "app.kubernetes.io/component"
 # Kubernetes' default Deployment strategy.

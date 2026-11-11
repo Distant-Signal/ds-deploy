@@ -192,7 +192,7 @@ workerHealth.pollerReadyFallbackSecs is set). */}}
             {{- if include "distant-signal.pollerSinkDb" (dict "root" $root "name" $name "poller" $poller) }}
             # Ingest architecture phase 2 (stations, incidents): the poller
             # writes Postgres directly, as its own role
-            # (postgresql.roles.perService.<name>.connect).
+            # (postgresql.roles.perService.<name>).
             {{- include "distant-signal.databaseEnvFor" (dict "root" $root "service" $name) | nindent 12 }}
             - name: DATABASE_MAX_CONNECTIONS
               value: {{ $poller.ingest.database.maxConnections | int | quote }}

@@ -173,10 +173,10 @@ postgresql:
     storageClass: fast-ssd
   # Since release A (2026-10-09) the direct (db) producers connect only as
   # their own narrow roles (docs/postgres-app-role.md): the separate roles,
-  # the setup Job that creates them, and the per-service roles (each
-  # producer's `connect` is already on by default). Their passwords are
-  # generated into the chart's Secret unless you set each role's
-  # existingSecret.
+  # the setup Job that creates them, and the per-service roles (every
+  # service connects as its own role; the shared `app` role was dropped in
+  # release E). Their passwords are generated into the chart's Secret
+  # unless you set each role's existingSecret.
   roles:
     enabled: true
     setupJob:

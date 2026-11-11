@@ -134,11 +134,6 @@ EVERY = (
     *REQUIRED,
     *sets(
         "metrics.prometheusRule.enabled=true",
-        "postgresql.roles.perService.writer.connect=true",
-        "postgresql.roles.perService.api.connect=true",
-        "postgresql.roles.perService.aggregator.connect=true",
-        "postgresql.roles.perService.enricher.connect=true",
-        "postgresql.roles.perService.notifier.connect=true",
         "api.backgroundLoops=false",
         "api.migrateOnStartup=false",
         "migrate.job.enabled=true",
@@ -406,6 +401,9 @@ OVERRIDES: Mapping[tuple[str, str], tuple[str, str]] = {
     # Darwin-timestamp guards discard) over a silent gap.
     ("darwin-relay", "KAFKA_AUTO_OFFSET_RESET"): ("earliest", "latest"),
     ("api", "FULL_COVERAGE_ENABLED_DEFAULT"): ("true", "false"),
+    # The api's own role's pool (perService.api.maxConnections, spec §6.6;
+    # the observed peak is 6), where the code's default is the shared pool.
+    ("api", "DATABASE_MAX_CONNECTIONS"): ("16", "50"),
     ("full-coverage-consumer", "FULL_COVERAGE_LINE_MEMBERSHIP"): ("scope", "legacy"),
     ("full-coverage-consumer", "REDIS_URL"): REDIS,
     ("ingest-writer", "INGEST_WRITER_LOOPS"): ("true", "false"),

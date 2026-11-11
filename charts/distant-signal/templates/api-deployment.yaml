@@ -57,9 +57,10 @@ surge); plus
 postgresql.connectionBudget (clients outside this chart, such as the
 postgres-exporter and pg_dump, and admin psql sessions) and 2 for pgBackRest
 when postgresql.pgbackrest.enabled. The total must fit in max_connections
-minus Postgres's 3 superuser_reserved_connections. The app role is itself a
-superuser, so those 3 are only extra headroom, not a protected admin
-reserve: the admin sessions are counted explicitly instead.
+minus Postgres's 3 superuser_reserved_connections. Without
+postgresql.roles the services connect as the bootstrap superuser, so those 3
+are only extra headroom, not a protected admin reserve: the admin sessions
+are counted explicitly instead.
 max_connections is postgresql.config.max_connections when set, else
 Postgres's own default of 100. An external database is not checked: its
 limit is unknown here.
@@ -348,7 +349,7 @@ with api.extraEnv, which replaces an entry of the same name.
             {{- if include "distant-signal.apiMigratesOnStartup" . }}
             {{- with include "distant-signal.migrationDatabaseEnv" . }}
             # postgresql.roles.enabled: the migrations connect as the schema
-            # owner, the pools above as the DML-only app role.
+            # owner, the pools above as the api's own role.
             {{- . | nindent 12 }}
             {{- end }}
             {{- else }}

@@ -4,9 +4,11 @@ hook Job that runs it on an existing cluster. Both render nothing unless
 postgresql.roles.initScript (with roles.enabled) or roles.setupJob.enabled.
 
 files/postgres-roles.sql is idempotent: it creates or updates the owner,
-app, exporter, dump and backup roles, moves schema public and everything
+exporter, dump and backup roles, moves schema public and everything
 in it from auth.username (the bootstrap superuser) to the owner, and
-grants the app role DML only.
+drops the retired shared app role (distant_signal_app, release E) when it
+still exists: it refuses while a session is connected as it or while it
+owns an object.
 
 Hook order (docs/postgres-app-role.md "Hook order"). On an upgrade the
 setup Job is a pre-upgrade hook, weight 0: after the migrate hook Job

@@ -4,6 +4,13 @@ Status: **implemented, off by default** (`postgresql.roles` in the chart;
 Train Register R-048 follow-up, 2026-10-01). This page is the design and
 the rollout runbook.
 
+**Release E (ingest phase 5, DS-118): the shared `distant_signal_app` role
+is gone.** Every service connects as its own per-service role (Stage 0b,
+below), with exactly its own grants; the setup Job drops the app role when
+it still exists. Where this page says "the app role" below, it describes
+the history (Stages A to C and 0b ran on it); "Release E: dropping the app
+role" at the end is the current procedure.
+
 ## Why
 
 The bundled Postgres had one role, `distant_signal`
@@ -30,7 +37,7 @@ LIMIT`:
 | Role (default name) | Used by | Privileges | Connection limit (default) |
 |---|---|---|---|
 | `distant_signal_owner` | api's migrations only (`MIGRATION_DATABASE_URL`) | Owns schema `public` and every table, sequence, view and function in it; `pg_read_all_stats` | `api.replicaCount` + 2 (3) |
-| `distant_signal_app` | api pools, aggregator, enricher, notifier (`DATABASE_URL`) | `CONNECT`; `USAGE` on `public`; `SELECT, INSERT, UPDATE, DELETE` on every table; `USAGE, SELECT, UPDATE` on every sequence; `EXECUTE` on the owner's functions; `SELECT` only on `_sqlx_migrations`; the same via `ALTER DEFAULT PRIVILEGES FOR ROLE distant_signal_owner` | the chart's pools + 5 (75) |
+| `distant_signal_app` (**dropped in release E**) | was: api pools, aggregator, enricher, notifier (`DATABASE_URL`) | was: `CONNECT`; `USAGE` on `public`; `SELECT, INSERT, UPDATE, DELETE` on every table; `USAGE, SELECT, UPDATE` on every sequence; `EXECUTE` on the owner's functions; `SELECT` only on `_sqlx_migrations`; the same via `ALTER DEFAULT PRIVILEGES FOR ROLE distant_signal_owner` | was: the chart's pools + 5 (75) |
 | `distant_signal_exporter` | Ranma-Config's postgres-exporter | `pg_monitor` | 3 |
 | `distant_signal_dump` | Ranma-Config's nightly `pg_dump` | `pg_read_all_data` | 2 |
 | `distant_signal_backup` | the pgBackRest CronJobs | `EXECUTE` on `pg_backup_start(text, boolean)`, `pg_backup_stop(boolean)`, `pg_switch_wal()`, `pg_create_restore_point(text)` (in `postgres` and `distant_signal`); `pg_read_all_settings`; `pg_checkpoint` | 4 |
@@ -542,15 +549,15 @@ reads and writes (M2).
 
 Every component whose role is narrow (schedule_reference, schedule_ingest,
 stations, incidents, trust_backlog, trust_consumer, full_coverage_ro,
-ldbws_ro) fails the render on its db sink or db source unless its
-`perService.<role>.connect` is on: it connects as its own role or not at
-all, never as `distant_signal_app` or the superuser. So the Stage 0b
-switches (`roles.enabled`, `setupJob.enabled`, `perService.enabled`) and
-the role's `connect` go in the same values change as (or before) the
-sink flip. The ingest-writer may still run as app, except that
-`ingestWriter.streams.tfl: apply` needs `perService.writer.connect` (M4):
-`line_status`'s row policy binds the writer's own role only. The table is
-in the chart README ("Per-service Postgres roles").
+ldbws_ro) fails the render on its db sink or db source unless the Stage 0b
+switches (`roles.enabled`, `setupJob.enabled`, `perService.enabled`) are
+on: it connects as its own role or not at all, never as a shared role or
+the superuser. Since release E this holds for every service (the writer
+and api, aggregator, enricher and notifier included) and the per-service
+`connect` switches no longer exist: `ingestWriter.streams.tfl: apply`
+(M4: `line_status`'s row policy binds the writer's own role only) and the
+rest need no extra value. The table is in the chart README ("Per-service
+Postgres roles").
 
 ### pg_stat_statements
 
@@ -720,3 +727,77 @@ default privileges granted when the migrator created it.
   owner and the migrator/publish tests as the app role.
 - `helm template (postgres roles)` in CI checks the wiring, and that the
   default render is unchanged.
+
+## Release E: dropping the app role
+
+Status: **prepared, not released** (ingest phase 5, DS-118 and DS-445).
+Release D (2026-10-28) narrowed the api, aggregator, enricher and notifier
+roles out of `distant_signal_app`, so nothing has used it since the phase 0b
+flips (2026-10-21). Release E removes it.
+
+**What changes**
+
+- ds-core's `access/postgres-roles.sql` no longer creates or grants the app
+  role (no `app` password, connection limit or privileges). Step 4 retires
+  it instead: when the role exists, it **refuses** (the run, and so the
+  chart's pre-upgrade setup Job and the upgrade, fail with nothing changed)
+  while any session is connected as it (`pg_stat_activity`) or while it
+  owns any object in any database (`pg_shdepend`); otherwise it runs
+  `DROP OWNED BY` (its table, sequence and function grants in this
+  database, its `CONNECT` on the database, and any default privileges that
+  name it) and `DROP ROLE` (which removes its memberships). The role owns
+  nothing (the owner role owns everything since Stage A), so no
+  `REASSIGN OWNED` is needed; the refusal is the safety net. A cluster that
+  never had the role, or has already dropped it, does nothing.
+- `access/postgres-grants.sql` loses its `observed` memberships and the
+  `app_revokes` step; `db-grants.yaml` loses `observed` and `app_revokes`.
+- The chart always connects each service as its own role: the
+  `perService.<role>.connect` switches, `postgresql.roles.app` (name,
+  password, Secret, limit, slack) and the `app` fallback of the database
+  env helper are gone; `postgresql.roles.enabled` without
+  `perService.enabled` fails the render. The setup Job no longer reads the
+  `distant-signal-postgres-app` Secret.
+
+**Before the release (Ranma, read-only checks)**: `pg_stat_activity` has
+shown no `usename = 'distant_signal_app'` for at least 7 days
+(`sum(pg_stat_activity_count{usename="distant_signal_app"})` in Prometheus;
+the postgres-exporter omits a user with no sessions); no Deployment or
+CronJob references the app Secret key (`postgres-app-password`) except the
+old chart's setup Job; `pg_shdepend` shows the role owning nothing.
+
+**Order**
+
+1. ds-core: merge the release E change, then cut the release (a patch or
+   minor: it changes `db-grants.yaml` and the roles scripts, no migration).
+2. ds-deploy: bump `core-version` (`scripts/sync-core.py` vendors the new
+   access files), merge the chart change, then the chart is built and filed
+   as a deploy request as usual.
+3. Ranma-Config: bump the chart. Its `postgresql.roles.app` block and the
+   `connect: true` lines of api, aggregator, enricher and notifier can go in
+   the same change (they are ignored by the new chart). **Do not delete the
+   `distant-signal-postgres-app` SealedSecret yet.**
+4. After the deploy has rolled out and the setup Job has completed (it ran
+   as a pre-upgrade hook), verify: `\du distant_signal_app` finds nothing,
+   every service is Ready, no SQLSTATE 42501 in the service logs, the
+   outbox is empty.
+5. Ranma-Config: delete the `distant-signal-postgres-app` SealedSecret
+   (`distant-signal-postgres-roles-sealed.yaml`). Deleting it earlier would
+   break the old chart's setup Job (it reads the Secret) if a rollback were
+   needed.
+
+**Point of no return**: the upgrade whose setup Job drops the role (step 3's
+deploy). `DROP OWNED BY` and `DROP ROLE` are not transactionally
+reversible in effect once committed: the role, its password and its grants
+are gone. Everything before it (steps 1 and 2, the PRs) is reversible, and
+the chart before it still works with the role present.
+
+**Rollback** after the drop: the old chart alone does not bring the role
+back (the previous ds-core's `postgres-roles.sql` does recreate and re-grant
+it, with its password from the `distant-signal-postgres-app` Secret). To
+restore it, restore that SealedSecret and `postgresql.roles.app` in
+Ranma-Config and pin the previous chart. The services only need it if a
+`perService.<role>.connect` is off (it is on for every service in
+production), so each one must be back on `app` before anything depends on
+it. Because every service already connects as its own role, the realistic
+fix for a service that fails after the drop is its own role's grants
+(`db-grants.yaml`, a ds-core release), not the shared role.

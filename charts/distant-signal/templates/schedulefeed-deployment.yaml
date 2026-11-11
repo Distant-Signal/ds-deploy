@@ -222,7 +222,7 @@ spec:
               value: {{ .Values.scheduleFeed.reference.forwardPublishDays | int | quote }}
             {{- if include "distant-signal.scheduleReferenceDbSink" . }}
             # Its connection, as distant_signal_schedule_reference
-            # (postgresql.roles.perService.schedule_reference.connect). Only
+            # (postgresql.roles.perService.schedule_reference). Only
             # this container gets it (spec §9.2); the CORPUS fallback flag
             # is the api's too (shared.corpusFallback), so the line
             # population's train summaries derive exactly as the api derives
@@ -505,7 +505,7 @@ scheduleFeed.ingest.extraEnv by distant-signal.mergeEnv (an extraEnv entry repla
             {{- if include "distant-signal.scheduleIngestSinkDb" . }}
             # Ingest architecture plan 2d: the feed markers and CORPUS loads
             # go to Postgres directly, as the schedule_ingest role
-            # (postgresql.roles.perService.schedule_ingest.connect; the
+            # (postgresql.roles.perService.schedule_ingest; the
             # render fails without it).
             {{- include "distant-signal.databaseEnvFor" (dict "root" . "service" "schedule_ingest") | nindent 12 }}
             - name: DATABASE_MAX_CONNECTIONS

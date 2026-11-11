@@ -88,7 +88,6 @@ BASE = (
     "--set",
     "networkPolicy.egress.internetPorts={443}",
 )
-WRITER_ROLE = ("--set", "postgresql.roles.perService.writer.connect=true")
 ON = (
     "--set",
     "darwinRelay.enabled=true",
@@ -96,7 +95,6 @@ ON = (
     "ingestWriter.streams.darwin=apply",
     "--set",
     "redis.acl.clients.darwinRelay=true",
-    *WRITER_ROLE,
 )
 ALERTS = {"DistantSignalDarwinPushPortStale", "DistantSignalDarwinConsumerLagHigh"}
 
@@ -281,14 +279,13 @@ def check_guards(helm: str, fail: list[str]) -> None:
             "darwinRelay.enabled=true",
             "--set",
             "ingestWriter.streams.darwin=apply",
-            *WRITER_ROLE,
         ),
         "a batch shorter than the budget": (*ON, "--set", "darwinRelay.batchMaxSecs=5"),
-        "darwin apply without the writer's role": (
+        "darwin apply without the per-service roles": (
             "--set",
             "ingestWriter.streams.darwin=apply",
             "--set",
-            "postgresql.roles.perService.writer.connect=false",
+            "postgresql.roles.perService.enabled=false",
         ),
     }
     for what, args in cases.items():
