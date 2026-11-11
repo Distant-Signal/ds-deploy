@@ -8,7 +8,7 @@
 --   psql -X -v ON_ERROR_STOP=1 -d distant_signal \
 --     -v old_owner=distant_signal \
 --     -v owner=distant_signal_owner -v owner_connection_limit=4 \
---     -v app=distant_signal_app -v app_connection_limit=97 \
+--     -v app=distant_signal_app \
 --     -v exporter=distant_signal_exporter -v exporter_connection_limit=3 \
 --     -v dump=distant_signal_dump -v dump_connection_limit=2 \
 --     -v backup=distant_signal_backup -v backup_connection_limit=4 \
@@ -16,14 +16,15 @@
 --     -f postgres-roles.sql
 --
 -- Passwords come from the environment, never the command line (psql's
--- \getenv): DS_PG_OWNER_PASSWORD, DS_PG_APP_PASSWORD,
--- DS_PG_EXPORTER_PASSWORD, DS_PG_DUMP_PASSWORD, DS_PG_BACKUP_PASSWORD. All
--- five are required. (pgBackRest itself connects over the local socket,
--- which the official image trusts, so it never sends the backup role's
--- password; the password is defence in depth for any network login.)
+-- \getenv): DS_PG_OWNER_PASSWORD, DS_PG_EXPORTER_PASSWORD,
+-- DS_PG_DUMP_PASSWORD, DS_PG_BACKUP_PASSWORD. All four are required.
+-- (pgBackRest itself connects over the local socket, which the official
+-- image trusts, so it never sends the backup role's password; the password
+-- is defence in depth for any network login.) `app` is the name of the
+-- retired shared role (step 4): it has no password and is never created.
 --
 -- What it does, in the application database, in ONE transaction:
---   1. Creates or updates the five roles: LOGIN, NOSUPERUSER, NOCREATEDB,
+--   1. Creates or updates the four roles: LOGIN, NOSUPERUSER, NOCREATEDB,
 --      NOCREATEROLE, NOREPLICATION, NOBYPASSRLS (BYPASSRLS for the dump
 --      role, see below), the given CONNECTION LIMIT and password. Refuses a name that is the superuser itself or
 --      any other existing superuser, so a typo can never demote an admin.
@@ -38,12 +39,17 @@
 --      image's bootstrap superuser, and Postgres refuses to reassign its
 --      objects ("required by the database system"). Fails if anything in
 --      public is still owned by `old_owner` afterwards.
---   4. App role: CONNECT, USAGE on public, SELECT/INSERT/UPDATE/DELETE on
---      every table (no TRUNCATE, REFERENCES or TRIGGER: no service uses
---      them), USAGE/SELECT/UPDATE on every sequence, EXECUTE on the
---      owner's functions (analyze_publish_keys), read-only on
---      _sqlx_migrations, and the same through ALTER DEFAULT PRIVILEGES FOR
---      ROLE owner, so every table a later migration creates is covered.
+--   4. Retires the app role (distant_signal_app, release E of ingest phase
+--      5; every service has its own role in postgres-grants.sql). When it
+--      exists: refuses to go on while any session of it is open, then
+--      DROP OWNED BY it (its grants in this database and on the database
+--      itself, and any default privileges naming it) and DROP ROLE, which
+--      also removes its memberships. It refuses too when it owns an object
+--      (nothing does since the 2026-10-08 role split: the owner role owns
+--      everything), so it never drops data. A cluster that never had it, or
+--      that already dropped it, does nothing. Hard to undo: restoring it
+--      means recreating the role by hand and re-granting every table, which
+--      only the old release's script did (docs/postgres-app-role.md).
 --   5. Backup role: EXECUTE on pg_backup_start, pg_backup_stop,
 --      pg_switch_wal and pg_create_restore_point, granted in this database
 --      and in `backup_database` (function grants are per database, and
@@ -52,7 +58,7 @@
 --   6. CREATE EXTENSION IF NOT EXISTS pg_stat_statements, best effort, so
 --      the owner role (which may not create it) finds it on a new cluster.
 --   7. The application database: no CONNECT or TEMPORARY for PUBLIC, so
---      only roles granted CONNECT (the five here, and each per-service role
+--      only roles granted CONNECT (the four here, and each per-service role
 --      in the per-service grants script) may log in to it, and none may create
 --      temporary tables (no service does); no EXECUTE for PUBLIC on the
 --      functions the owner creates later (security review L5).
@@ -97,10 +103,6 @@ SET log_statement = none;
 \else
 \set owner_connection_limit 4
 \endif
-\if :{?app_connection_limit}
-\else
-\set app_connection_limit 97
-\endif
 \if :{?exporter_connection_limit}
 \else
 \set exporter_connection_limit 3
@@ -119,17 +121,12 @@ SET log_statement = none;
 \endif
 
 \getenv owner_password DS_PG_OWNER_PASSWORD
-\getenv app_password DS_PG_APP_PASSWORD
 \getenv exporter_password DS_PG_EXPORTER_PASSWORD
 \getenv dump_password DS_PG_DUMP_PASSWORD
 \getenv backup_password DS_PG_BACKUP_PASSWORD
 \if :{?owner_password}
 \else
 \set owner_password ''
-\endif
-\if :{?app_password}
-\else
-\set app_password ''
 \endif
 \if :{?exporter_password}
 \else
@@ -157,12 +154,10 @@ SELECT
     set_config('ds_roles.dump', :'dump', true),
     set_config('ds_roles.backup', :'backup', true),
     set_config('ds_roles.owner_password', :'owner_password', true),
-    set_config('ds_roles.app_password', :'app_password', true),
     set_config('ds_roles.exporter_password', :'exporter_password', true),
     set_config('ds_roles.dump_password', :'dump_password', true),
     set_config('ds_roles.backup_password', :'backup_password', true),
     set_config('ds_roles.owner_connection_limit', :'owner_connection_limit', true),
-    set_config('ds_roles.app_connection_limit', :'app_connection_limit', true),
     set_config('ds_roles.exporter_connection_limit', :'exporter_connection_limit', true),
     set_config('ds_roles.dump_connection_limit', :'dump_connection_limit', true),
     set_config('ds_roles.backup_connection_limit', :'backup_connection_limit', true)
@@ -186,15 +181,15 @@ BEGIN
         SELECT v.kind, current_setting('ds_roles.' || v.kind) AS name,
                current_setting('ds_roles.' || v.kind || '_password') AS password,
                current_setting('ds_roles.' || v.kind || '_connection_limit') AS connection_limit
-        FROM (VALUES ('owner'), ('app'), ('exporter'), ('dump'), ('backup')) AS v(kind)
+        FROM (VALUES ('owner'), ('exporter'), ('dump'), ('backup')) AS v(kind)
     LOOP
-        IF r.name = '' OR r.name = old_owner OR r.name = current_user THEN
+        IF r.name = '' OR r.name = old_owner OR r.name = current_user
+           OR r.name = current_setting('ds_roles.app') THEN
             RAISE EXCEPTION 'the % role name % must be a new, separate role', r.kind, r.name;
         END IF;
         IF (SELECT count(*) FROM (VALUES
-                (current_setting('ds_roles.owner')), (current_setting('ds_roles.app')),
-                (current_setting('ds_roles.exporter')), (current_setting('ds_roles.dump')),
-                (current_setting('ds_roles.backup'))) AS n(name)
+                (current_setting('ds_roles.owner')), (current_setting('ds_roles.exporter')),
+                (current_setting('ds_roles.dump')), (current_setting('ds_roles.backup'))) AS n(name)
             WHERE n.name = r.name) > 1 THEN
             RAISE EXCEPTION 'the role name % is used for more than one role', r.name;
         END IF;
@@ -362,13 +357,52 @@ BEGIN
 END
 $ownership$;
 
--- 4. App role privileges, 5. backup functions (this database).
-\echo '== postgres-roles.sql: 4, 5, 7. privileges'
+-- 4. Retire the app role (release E of ingest phase 5).
+\echo '== postgres-roles.sql: 4. retire the app role'
+DO $retire$
+DECLARE
+    app text := current_setting('ds_roles.app');
+    app_oid oid := (SELECT oid FROM pg_roles WHERE rolname = current_setting('ds_roles.app'));
+    sessions int;
+    owned text;
+BEGIN
+    IF app_oid IS NULL THEN
+        RETURN;
+    END IF;
+    -- Nothing may still be connected as it: dropping the role would not end
+    -- those sessions, only leave them running as a role that no longer
+    -- exists, and a service that reconnects would fail. Fail the run (and,
+    -- in the chart, the upgrade) instead.
+    SELECT count(*) INTO sessions FROM pg_stat_activity WHERE usename = app;
+    IF sessions > 0 THEN
+        RAISE EXCEPTION 'refusing to drop %: % session(s) are still connected as it', app, sessions;
+    END IF;
+    -- DROP OWNED BY would drop what it owns. Nothing may (the owner role owns
+    -- everything since the role split), in any database: pg_shdepend is
+    -- cluster-wide.
+    SELECT string_agg(format('%s %s in database %s', d.classid::regclass, d.objid, d.dbid), ', ')
+        INTO owned
+        FROM pg_shdepend d
+        WHERE d.refclassid = 'pg_authid'::regclass AND d.refobjid = app_oid AND d.deptype = 'o';
+    IF owned IS NOT NULL THEN
+        RAISE EXCEPTION 'refusing to drop %: it owns %', app, owned;
+    END IF;
+    -- Its grants in this database and on the database itself, and any default
+    -- privileges naming it. The roles that used its grants each have their
+    -- own (postgres-grants.sql).
+    EXECUTE format('DROP OWNED BY %I', app);
+    -- A grant in another database makes this fail with a clear error (the
+    -- run rolls back); it also removes the role's memberships.
+    EXECUTE format('DROP ROLE %I', app);
+    RAISE NOTICE 'dropped the app role %', app;
+END
+$retire$;
+
+-- 5. Backup functions (this database), 7. the database and schema.
+\echo '== postgres-roles.sql: 5, 7. privileges'
 DO $privileges$
 DECLARE
     owner_role text := current_setting('ds_roles.owner');
-    app text := current_setting('ds_roles.app');
-    r record;
 BEGIN
     -- 7. Only the roles granted CONNECT below (and each per-service role,
     -- the per-service grants script) may connect; nobody gets TEMPORARY. The backup
@@ -376,40 +410,16 @@ BEGIN
     -- not affected.
     EXECUTE format('REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC',
         current_database());
-    EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I, %I, %I, %I, %I',
-        current_database(), owner_role, app,
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I, %I, %I, %I',
+        current_database(), owner_role,
         current_setting('ds_roles.exporter'), current_setting('ds_roles.dump'),
         current_setting('ds_roles.backup'));
     REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-    EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', app);
 
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %I', app);
-    EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO %I', app);
-    -- The owner's functions only: GRANT ... ON ALL FUNCTIONS would also
-    -- hand out pg_stat_statements_reset().
-    FOR r IN
-        SELECT p.oid::regprocedure AS name
-        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p')
-          AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = owner_role)
-    LOOP
-        EXECUTE format('GRANT EXECUTE ON ROUTINE %s TO %I', r.name, app);
-    END LOOP;
-    -- The migration history is the owner's business.
-    IF to_regclass('public._sqlx_migrations') IS NOT NULL THEN
-        EXECUTE format('REVOKE INSERT, UPDATE, DELETE ON public._sqlx_migrations FROM %I', app);
-    END IF;
-
-    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public '
-                   'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', owner_role, app);
-    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public '
-                   'GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I', owner_role, app);
-    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public '
-                   'GRANT EXECUTE ON ROUTINES TO %I', owner_role, app);
     -- 7. A function the owner creates is not executable by PUBLIC (the
-    -- Postgres default): only by the roles granted it (app above, a
-    -- per-service role through the per-service grants script). A SECURITY DEFINER
-    -- one runs with the owner's rights.
+    -- Postgres default): only by the roles granted it (a per-service role
+    -- through the per-service grants script). A SECURITY DEFINER one runs
+    -- with the owner's rights.
     EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I '
                    'REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC', owner_role);
 

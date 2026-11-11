@@ -30,15 +30,11 @@
 #
 # Roles (spec §6.3). `status`:
 #   planned   not created yet; its grants below are the design target.
-#   observed  phase 0b: a LOGIN role that is a member of the shared app role
-#             (distant_signal_app) and has no grants of its own. It
-#             inherits app's privileges but may not SET ROLE to it (WITH
-#             INHERIT TRUE, SET FALSE; Postgres 16+). Nothing changes
-#             functionally; pg_stat_statements and pg_stat_activity now
-#             attribute each service's queries to it.
-#   narrow    no longer a member of the app role: exactly the grants below
-#             (phases 2 to 5, each starting from the observe-role-usage.py
-#             report).
+#   narrow    a LOGIN role holding exactly the grants below (phases 2 to 5,
+#             each starting from the observe-role-usage.py report).
+# There is no `observed` status and no shared app role any more: release E
+# (ingest phase 5) dropped distant_signal_app (postgres-roles.sql), after
+# release D (2026-10-28) had narrowed its last members.
 # `connection_limit` is the spec §6.6 target. The chart passes the limit it
 # computes from the service's real pool instead (values.yaml
 # postgresql.roles.perService), and its render-time budget check sums those.
@@ -72,7 +68,7 @@ budget:
   superuser_reserved_connections: 3
 
 # Roles postgres-roles.sql manages (docs/postgres-app-role.md), counted in
-# the budget only. The app role is retired in phase 5.
+# the budget only.
 other_roles:
   owner: {name: distant_signal_owner, connection_limit: 2}
   exporter: {name: distant_signal_exporter, connection_limit: 3}
@@ -120,9 +116,9 @@ roles:
     name: distant_signal_writer
     # Created from 1B.9 on, used once the chart's ingestWriter connects as
     # it (postgresql.roles.perService.writer.connect). Narrow since the
-    # 2026-10-08 security review (M1): as an observed member of app it
-    # could `SET ROLE` to app and shed line_status's RESTRICTIVE
-    # ds_grants_writer policy. Its grants below are every table its
+    # 2026-10-08 security review (M1): as an observed member of the (since
+    # dropped) app role it could `SET ROLE` to app and shed line_status's
+    # RESTRICTIVE ds_grants_writer policy. Its grants below are every table its
     # handlers, loops (schedule-match, reconciliation, backlog-match, CORPUS
     # crosswalk, train_event_outbox) and dedup run, minus the unused ones
     # (L3); read_shared covers the schedule products the sweeps read.
@@ -401,8 +397,8 @@ tables:
   # prunes and reads it.
   planner_snapshots: {class: internal, grants: {api: SIUD}}
   # The publish staging keys (UNLOGGED). Only schedule-reference's publish
-  # uses them, as schedule_reference; the app role lost them in release B
-  # (app_revokes below), with the api's /private publish routes.
+  # uses them, as schedule_reference; the app role lost them in release B,
+  # with the api's /private publish routes.
   schedule_calling_points_full_publish_keys: {class: internal, grants: {schedule_reference: SID}}
   schedule_destination_departures_publish_keys: {class: internal, grants: {schedule_reference: SID}}
 
@@ -611,26 +607,12 @@ functions:
   # Postgres 16 lets only the owner ANALYZE (MAINTAIN is 17+).
   "analyze_transit_networks()": {grants: [writer]}
 
-# What the app role (distant_signal_app, and so every observed role, which
-# inherits from it) loses: every privilege on `tables`, EXECUTE on
-# `functions`. postgres-roles.sql grants app DML on every table and EXECUTE
-# on every routine on each run; postgres-grants.sql, run right after it,
-# revokes these again. Each must be listed above, and no observed role may
-# be granted it. Release B (ingest phase 5, 2026-10-12): app held these only
-# for the api's /private schedule publish routes (/schedule-calling-points-full,
-# /schedule-destination-departures), which are gone; schedule-reference
-# publishes as schedule_reference, with its own grants above. The wider
-# narrowing of app's members is step 5.5 (docs/ingest-phase5-runbook.md).
-app_revokes:
-  tables: [schedule_calling_points_full_publish_keys, schedule_destination_departures_publish_keys]
-  functions: ["analyze_publish_keys(text)"]
-
 # Row-level restrictions (spec §6.4, decision D10): table -> {role: SQL
 # condition}. Each becomes a RESTRICTIVE policy `ds_grants_<role>` on the
 # table for that role (if created), FOR ALL commands, with the condition as
 # both USING and WITH CHECK: the role sees and writes only those rows,
 # whatever else it is granted. A policy binds the role a session runs as,
-# so a role that could `SET ROLE` to another (the app role, a group) would
+# so a role that could `SET ROLE` to another (a group) would
 # shed it: every membership the generated SQL grants is SET FALSE, and a
 # role with a row policy should be narrow (as the writer is since the
 # 2026-10-08 security review, M1). Its connection must also be that role:
