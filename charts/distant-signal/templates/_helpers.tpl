@@ -4081,3 +4081,18 @@ api.migrations alias. Takes (dict "root" $ "key" "lockTimeoutSecs").
 {{- define "distant-signal.migrationSetting" -}}
 {{- include "distant-signal.movedValue" (dict "root" .root "old" (list "migrations" .key) "new" (index .root.Values.migrate .key)) -}}
 {{- end }}
+
+{{/*
+The recently deleted journeys retention in days (RECENTLY_DELETED_RETENTION_DAYS,
+ds-api#45). The api stops at startup on a value outside 7 to 31, enabled or
+not, so the chart refuses to render one. Used by the api Deployment and the
+api-maintenance CronJob.
+*/}}
+{{- define "distant-signal.recentlyDeletedRetentionDays" -}}
+{{- $raw := dig "recentlyDeleted" "retentionDays" 7 .Values.api -}}
+{{- $days := int $raw -}}
+{{- if or (lt $days 7) (gt $days 31) (ne (toString $days) (toString (int64 $raw))) -}}
+{{- fail (printf "api.recentlyDeleted.retentionDays must be a whole number of days from 7 to 31, got %v." $raw) -}}
+{{- end -}}
+{{- $days -}}
+{{- end -}}

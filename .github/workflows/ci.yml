@@ -3217,6 +3217,59 @@ jobs:
           # api-maintenance's do.
           grep -q "'--variable=api_connection_limit=36'" <<<"${out}" || fail "the CronJob's pool must count in the api role's limit"
 
+      # api.recentlyDeleted (ds-api#45): off by default and 7 days; the same
+      # two settings reach the api Deployment and the api-maintenance CronJob
+      # (the hourly sweep runs in both); a retention outside 7 to 31 (or not a
+      # whole number) fails the render, as the api would stop at startup.
+      - name: helm template (recently deleted journeys)
+        run: |
+          set -euo pipefail
+          base=(
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set apiMaintenance.enabled=true
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          doc() { awk -v k="$1" -v n="$2" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: " k "\n" && $0 ~ "\n  name: " n "\n" {print}'; }
+          want() { # <rendered yaml> <name> <value> <what>
+            grep -A1 "name: $2\$" <<<"$1" | grep -q "value: \"$3\"" || fail "$4: $2 must be $3"
+          }
+          # shellcheck disable=SC2310,SC2312 # doc is a pure awk filter
+          check() { # <extra helm args...>: expect <enabled> <days> on both workloads
+            local en=$1 days=$2
+            shift 2
+            local out api cj
+            out=$(render "$@")
+            api=$(doc Deployment distant-signal-api <<<"${out}")
+            cj=$(doc CronJob distant-signal-api-maintenance <<<"${out}")
+            [[ -n "${api}" && -n "${cj}" ]] || fail "api Deployment and api-maintenance CronJob must render"
+            want "${api}" RECENTLY_DELETED_ENABLED "${en}" "api"
+            want "${api}" RECENTLY_DELETED_RETENTION_DAYS "${days}" "api"
+            want "${cj}" RECENTLY_DELETED_ENABLED "${en}" "api-maintenance"
+            want "${cj}" RECENTLY_DELETED_RETENTION_DAYS "${days}" "api-maintenance"
+          }
+
+          check false 7
+          check true 7 --set api.recentlyDeleted.enabled=true
+          check true 31 --set api.recentlyDeleted.enabled=true --set api.recentlyDeleted.retentionDays=31
+          check false 14 --set api.recentlyDeleted.retentionDays=14
+          # shellcheck disable=SC2310 # render failing is the assertion
+          for bad in 6 32 0 -1 8.5 abc; do
+            if render --set "api.recentlyDeleted.retentionDays=${bad}" >/dev/null 2>&1; then
+              fail "api.recentlyDeleted.retentionDays=${bad} must fail to render"
+            fi
+          done
+
       # postgresql.pgbackrest (docs/postgres-pitr.md). Off (the default)
       # must render nothing of it: the Postgres pod stays exactly as before.
       # On, it must swap the image, add the archiving settings, take every
