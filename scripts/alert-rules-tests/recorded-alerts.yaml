@@ -278,8 +278,62 @@ tests:
           - exp_labels: {severity: warning, namespace: distant-signal, job_name: distant-signal-pgbackrest-full-29000001}
             exp_annotations:
               summary: pgBackRest backup failed (distant-signal-pgbackrest-full-29000001)
-              description: "The restore window keeps growing from the last good backup. WAL archiving is separate and may still work."
+              description: "A full, diff or expire Job failed. A failed backup leaves the restore window growing; a failed expire only the repository. WAL archiving is separate."
               runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpgbackrestbackupfailed
       - eval_time: 26h
         alertname: DistantSignalPgBackRestCheckFailed
+        exp_alerts: []
+
+  # pgBackRest: a failed pod of a Job that then succeeded (the 2026-11-08
+  # incident) fires the pod alert but no Job-level one; an expire Job that
+  # failed outright fires BackupFailed; a failed pod older than 26h, a
+  # running pod and a pod of another Job are ignored.
+  - interval: 1h
+    input_series:
+      - series: 'kube_pod_status_phase{namespace="distant-signal", pod="distant-signal-pgbackrest-full-29901900-aaaaa", phase="Failed"}'
+        values: '1x30'
+      - series: 'kube_pod_owner{namespace="distant-signal", pod="distant-signal-pgbackrest-full-29901900-aaaaa", owner_kind="Job", owner_name="distant-signal-pgbackrest-full-29901900", owner_is_controller="true"}'
+        values: '1x30'
+      - series: 'kube_pod_created{namespace="distant-signal", pod="distant-signal-pgbackrest-full-29901900-aaaaa"}'
+        values: '3600x30'
+      # Its successful sibling: Running/Succeeded never counts.
+      - series: 'kube_pod_status_phase{namespace="distant-signal", pod="distant-signal-pgbackrest-full-29901900-bbbbb", phase="Succeeded"}'
+        values: '1x30'
+      - series: 'kube_pod_owner{namespace="distant-signal", pod="distant-signal-pgbackrest-full-29901900-bbbbb", owner_kind="Job", owner_name="distant-signal-pgbackrest-full-29901900", owner_is_controller="true"}'
+        values: '1x30'
+      - series: 'kube_pod_created{namespace="distant-signal", pod="distant-signal-pgbackrest-full-29901900-bbbbb"}'
+        values: '7200x30'
+      # Failed pod of another Job: not ours.
+      - series: 'kube_pod_status_phase{namespace="distant-signal", pod="distant-signal-poller-tocs-1-ccccc", phase="Failed"}'
+        values: '1x30'
+      - series: 'kube_pod_owner{namespace="distant-signal", pod="distant-signal-poller-tocs-1-ccccc", owner_kind="Job", owner_name="distant-signal-poller-tocs-1", owner_is_controller="true"}'
+        values: '1x30'
+      - series: 'kube_pod_created{namespace="distant-signal", pod="distant-signal-poller-tocs-1-ccccc"}'
+        values: '3600x30'
+      # A Job that failed outright: its expire Job is a BackupFailed.
+      - series: 'kube_job_failed{namespace="distant-signal", job_name="distant-signal-pgbackrest-expire-29902000", condition="true"}'
+        values: '1x30'
+      - series: 'kube_job_status_start_time{namespace="distant-signal", job_name="distant-signal-pgbackrest-expire-29902000"}'
+        values: '3600x30'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: DistantSignalPgBackRestJobPodFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, owner_name: distant-signal-pgbackrest-full-29901900}
+            exp_annotations:
+              summary: pgBackRest Job pod failed (distant-signal-pgbackrest-full-29901900)
+              description: "A pod of this Job failed, so the Job retried. If the Job's own alert isn't firing, a retry succeeded: read the failed pod's log."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpgbackrestjobpodfailed
+      # The Job succeeded on retry: no Job-level backup alert for the full.
+      - eval_time: 2h
+        alertname: DistantSignalPgBackRestBackupFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, job_name: distant-signal-pgbackrest-expire-29902000}
+            exp_annotations:
+              summary: pgBackRest backup failed (distant-signal-pgbackrest-expire-29902000)
+              description: "A full, diff or expire Job failed. A failed backup leaves the restore window growing; a failed expire only the repository. WAL archiving is separate."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpgbackrestbackupfailed
+      # The pod is over 26h old by then.
+      - eval_time: 28h
+        alertname: DistantSignalPgBackRestJobPodFailed
         exp_alerts: []

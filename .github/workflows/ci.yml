@@ -1492,7 +1492,7 @@ jobs:
           grep -A3 'name: PG_MIGRATION_PASSWORD$' <<<"${on}" | grep -q 'name: pg-roles' \
             || fail "PG_MIGRATION_PASSWORD must come from roles.owner.existingSecret"
           n_cron=$(grep -c -- '- "PGBACKREST_PG1_USER=distant_signal_backup"' <<<"${on}" || true)
-          [[ "${n_cron}" -eq 4 ]] || fail "all four pgBackRest CronJobs must run as the backup role"
+          [[ "${n_cron}" -eq 5 ]] || fail "all five pgBackRest CronJobs must run as the backup role"
           # Without migrate.job the api migrates at startup, so the setup Job
           # must follow the rollout (the pre-upgrade order is checked in
           # "helm template (migrate hook Job)").
@@ -3038,9 +3038,9 @@ jobs:
             --set postgresql.pgbackrest.repo.s3.bucket=test-bucket
             --set postgresql.pgbackrest.repo.s3.existingSecret=pgbackrest-creds
           )
-          render "${pgbackrest[@]}" | check "pgBackRest enabled" 4
+          render "${pgbackrest[@]}" | check "pgBackRest enabled" 5
           render "${pgbackrest[@]}" --set postgresql.pgbackrest.backup.verifySchedule= \
-            | check "pgBackRest enabled, no weekly verify" 3
+            | check "pgBackRest enabled, no weekly verify" 4
           render --set apiMaintenance.enabled=true | check "apiMaintenance enabled" 1
 
       # Ingest plan 1B.8: apiMaintenance (off by default) is an hourly
@@ -3342,14 +3342,21 @@ jobs:
             || fail "the daily check must skip verify (the weekly verify CronJob runs it)"
           verify_job=$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: distant-signal-pgbackrest-verify\n" {print}' <<<"${jobs}")
           grep -q -- '- "verify"' <<<"${verify_job}" || fail "the weekly verify CronJob must run pgbackrest verify"
+          expire_job=$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: distant-signal-pgbackrest-expire\n" {print}' <<<"${jobs}")
+          grep -q -- '- "expire"' <<<"${expire_job}" || fail "the expire CronJob must run pgbackrest expire"
+          for kind in full diff; do
+            backup_job=$(awk -v n="distant-signal-pgbackrest-${kind}" 'BEGIN{RS="\n---\n"} $0 ~ "\n  name: " n "\n" {print}' <<<"${jobs}")
+            grep -q -- '- "--no-expire-auto"' <<<"${backup_job}" \
+              || fail "the ${kind} backup must run with --no-expire-auto (expire is its own CronJob)"
+          done
 
           rule=$(render "${on[@]}" --namespace distant-signal \
             --show-only templates/pgbackrest-prometheusrule.yaml)
           names=$(sed -n 's/^ *- alert: *//p' <<<"${rule}")
           n_alerts=$(grep -c . <<<"${names}" || true)
-          [[ "${n_alerts}" -eq 6 ]] || fail "expected 6 pgBackRest alerts, got: ${names}"
+          [[ "${n_alerts}" -eq 7 ]] || fail "expected 7 pgBackRest alerts, got: ${names}"
           if bad=$(grep -v '^DistantSignal' <<<"${names}"); then fail "alert names must start with DistantSignal: ${bad}"; fi
-          grep -q 'kube_job_failed{namespace="distant-signal", job_name=~"distant-signal-pgbackrest-(check|verify|full|diff)-\[0-9\]+", condition="true"}' <<<"${rule}" \
+          grep -q 'kube_job_failed{namespace="distant-signal", job_name=~"distant-signal-pgbackrest-(check|verify|full|diff|expire)-\[0-9\]+", condition="true"}' <<<"${rule}" \
             || fail "the recorded failed-Job series must match every pgBackRest CronJob's Jobs"
           grep -q 'distant_signal:pgbackrest_job_failed:recent{namespace="distant-signal", job_name=~"distant-signal-pgbackrest-(check|verify)-\[0-9\]+"}' <<<"${rule}" \
             || fail "the check alert must match the check and verify CronJobs' Jobs"
