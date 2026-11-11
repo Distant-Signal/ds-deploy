@@ -1001,8 +1001,18 @@ handlers wrote no row (`ingest_stream_row_writes_total{outcome="written"}`
 did not move), for `for`. Every row was unchanged or refused by the ordering
 guard as older than the stored one, so the stream is acknowledged but
 Postgres is not changing. `ds:ingest:reference` (the daily TOC list, which
-usually changes nothing) is excluded (`excludeStreams`). A stream whose
-handlers do not record `row_writes` never fires.
+usually changes nothing) is excluded (`excludeStreams`). So are the
+once-a-day catalogue streams (`dailySnapshotStreams`, default
+`ds:ingest:ioi-nir` from poller-nir-stations and `ds:ingest:ioi-gtfs`): they
+apply a couple of entries a day whose rows are normally unchanged, so this
+alert would fire for 15 to 20 minutes after every post, and a window long
+enough to span a post would fire all day. A feed that stops posting or
+stops landing is caught by `DistantSignalIngestSourceStale` on
+`island_of_ireland_*_nir` and `island_of_ireland_*_gtfs` instead (2 days, see
+`ingestSourceStale.maxAgeSeconds`). A stream whose handlers do not record
+`row_writes` never fires. To add another once-a-day stream, list it in
+`dailySnapshotStreams` and make sure it has a freshness source in
+`ingestSourceStale.maxAgeSeconds`.
 
 1. `ingest_stream_row_writes_total{stream, outcome="skipped"}` rising: the
    guard refuses the rows. A producer's clock behind the stored rows' times

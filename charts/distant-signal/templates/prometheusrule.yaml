@@ -1593,8 +1593,11 @@ spec:
         a replay). Both per stream. row_writes_total exists only on a
         handler that records it, so a stream without it never fires.
         excludeStreams: streams whose snapshots legitimately change nothing
-        (the daily TOC list).
+        (the daily TOC list). dailySnapshotStreams: once-a-day catalogue
+        streams whose unchanged rows are normal; left out the same way and
+        watched by DistantSignalIngestSourceStale on their freshness rows.
         */}}
+        {{- $skipStreams := concat (.excludeStreams | default list) (.dailySnapshotStreams | default list) }}
         - record: distant_signal:ingest_stream_applied_entries:increase
           expr: |
             sum by (namespace, stream) (increase(distant_signal_ingest_stream_consumed_total{namespace="{{ $ns }}", outcome=~"applied|rejected"}[{{ .window }}]))
@@ -1603,7 +1606,7 @@ spec:
             sum by (namespace, stream) (increase(distant_signal_ingest_stream_row_writes_total{namespace="{{ $ns }}", outcome="written"}[{{ .window }}]))
         - alert: DistantSignalIngestApplyWritesNothing
           expr: |
-            distant_signal:ingest_stream_rows_written:increase{namespace="{{ $ns }}"{{ with .excludeStreams }}, stream!~"{{ join "|" . }}"{{ end }}} == 0
+            distant_signal:ingest_stream_rows_written:increase{namespace="{{ $ns }}"{{ with $skipStreams }}, stream!~"{{ join "|" . }}"{{ end }}} == 0
             and on (namespace, stream)
             distant_signal:ingest_stream_applied_entries:increase{namespace="{{ $ns }}"} > 0
           for: {{ .for }}
