@@ -2210,7 +2210,7 @@ jobs:
           # The legal pages' operator details (frontend.legal.*): none by
           # default, so the pages stay 404 until set; each non-empty value
           # becomes its LEGAL_* env.
-          if grep -q 'name: LEGAL_\(OPERATOR_NAME\|CONTACT_EMAIL\|SSO_LOG_RETENTION\|LAST_UPDATED\|ICO_REGISTRATION\|MINIMUM_AGE\)' <<<"${fe}"; then
+          if grep -q 'name: LEGAL_\(OPERATOR_NAME\|CONTACT_EMAIL\|SSO_LOG_RETENTION\|LAST_UPDATED\|ICO_REGISTRATION\|MINIMUM_AGE\|HOSTING_PROVIDER\)' <<<"${fe}"; then
             fail "frontend.legal.* must render no LEGAL_* env by default"
           fi
           fe_legal=$(render --show-only templates/frontend-deployment.yaml \
@@ -2219,10 +2219,12 @@ jobs:
             --set frontend.legal.ssoLogRetention="30 days" \
             --set frontend.legal.lastUpdated="1 November 2026" \
             --set frontend.legal.icoRegistration=ZA000000 \
-            --set frontend.legal.minimumAge=16)
+            --set frontend.legal.minimumAge=16 \
+            --set frontend.legal.hostingProvider="Example Hosting")
           for pair in LEGAL_OPERATOR_NAME:Example LEGAL_CONTACT_EMAIL:legal@example.com \
             "LEGAL_SSO_LOG_RETENTION:30 days" "LEGAL_LAST_UPDATED:1 November 2026" \
-            LEGAL_ICO_REGISTRATION:ZA000000 LEGAL_MINIMUM_AGE:16; do
+            LEGAL_ICO_REGISTRATION:ZA000000 LEGAL_MINIMUM_AGE:16 \
+            "LEGAL_HOSTING_PROVIDER:Example Hosting"; do
             grep -A1 "name: ${pair%%:*}\$" <<<"${fe_legal}" | grep -q "value: \"${pair#*:}\"" \
               || fail "frontend.legal.* must render ${pair%%:*}=${pair#*:}"
           done
@@ -3329,7 +3331,14 @@ jobs:
             want "${api}" RECENTLY_DELETED_RETENTION_DAYS "${days}" "api"
             want "${cj}" RECENTLY_DELETED_ENABLED "${en}" "api-maintenance"
             want "${cj}" RECENTLY_DELETED_RETENTION_DAYS "${days}" "api-maintenance"
-            want "$(doc Deployment distant-signal-frontend <<<"${out}")" RETENTION_RECENTLY_DELETED_DAYS "${days}" "frontend"
+            fe=$(doc Deployment distant-signal-frontend <<<"${out}")
+            if [[ "${en}" == true ]]; then
+              want "${fe}" RETENTION_RECENTLY_DELETED_DAYS "${days}" "frontend"
+            elif grep -q "name: RETENTION_RECENTLY_DELETED_DAYS" <<<"${fe}"; then
+              # Off: the api deletes at once, so the frontend must get no grace
+              # period to put on the privacy notice.
+              fail "frontend: RETENTION_RECENTLY_DELETED_DAYS must be absent while api.recentlyDeleted.enabled is false"
+            fi
           }
 
           check false 7

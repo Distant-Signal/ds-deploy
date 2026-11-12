@@ -2230,7 +2230,7 @@ api:
   # drift; `retentionDays` must be 7 to 31 (the api refuses to start on any
   # other value, so the chart fails to render instead). Mention it on the
   # /privacy page before turning it on. The frontend gets `retentionDays` too
-  # (RETENTION_RECENTLY_DELETED_DAYS), so the privacy notice states it.
+  # (RETENTION_RECENTLY_DELETED_DAYS) only while `enabled` is true, so the privacy notice states it only then.
   recentlyDeleted:
     enabled: false
     retentionDays: 7
@@ -6151,6 +6151,11 @@ frontend:
     # -- Optional. Minimum age to create an account, 13 to 21. Empty means
     # the frontend's default, 18.
     minimumAge: ""
+    # -- Optional. Who provides the servers the login service and database
+    # run on, if a third party does (a processor the privacy notice should
+    # name), e.g. "Example Hosting Ltd". Empty leaves the line out. Up to
+    # 100 characters, no < or >.
+    hostingProvider: ""
   extraEnv: []
   # A Next.js server render process -- Node's heap dominates, and it is
   # fairly insensitive to load here because the heavy lifting is api's.
