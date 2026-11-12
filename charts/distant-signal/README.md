@@ -739,6 +739,8 @@ Deployments, then upgrade with `requirePass=true`.
 
 ## Redis ACL users (optional)
 
+A fresh install needs the users Secret before anything renders: [docs/first-install.md](../../docs/first-install.md), step 3.2, has every key and a recipe.
+
 Off by default (`redis.acl.enabled: false`); with it off nothing below
 renders. It builds on `redis.auth`: each client gets its own Redis user
 with only the commands and keys it needs, and the shared `default` user can
@@ -787,6 +789,8 @@ writer always applies, so the ACL at its last step is a prerequisite of
 every install (see "Release B" below).
 
 ## Per-service Postgres roles (optional)
+
+A fresh install gets these roles from the initdb hook and the setup Job; [docs/first-install.md](../../docs/first-install.md) lists the passwords' Secrets, the order things happen in and how to check them.
 
 Off by default (`postgresql.roles.perService.enabled: false`). Stage 0b of
 `docs/postgres-app-role.md`: on top of `postgresql.roles`, every service
