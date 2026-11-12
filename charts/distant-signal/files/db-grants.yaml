@@ -275,7 +275,13 @@ tables:
   # grant_created web push and records it in push_notified_at.
   delegated_grants: {class: personal, grants: {api: SIUD, notifier: [{privileges: S, columns: [id, user_id, client_display_name, scopes, created_at, revoked_at, push_notified_at]}, {privileges: U, columns: [push_notified_at]}]}}
   delegated_grant_confirmations: {class: personal, grants: {api: SIUD}}
-  delegated_deletions: {class: personal, grants: {api: SIUD}}
+  # What a deleted journey was, so it can be saved again: a connected app's
+  # deletes (client = the app, kept 30 days) and, with the api's
+  # RECENTLY_DELETED_ENABLED, the user's own (client = 'web', kept
+  # RECENTLY_DELETED_RETENTION_DAYS, 7 by default). The api records, lists
+  # and deletes rows and never updates one; the users(id) ON UPDATE CASCADE
+  # needs no grant.
+  delegated_deletions: {class: personal, grants: {api: SID}}
   journey_idempotency_keys: {class: personal, grants: {api: SIUD}}
   # Personal API tokens (docs/specs/personal-api-tokens.md): created,
   # checked and revoked by the api. The notifier sends the token_created

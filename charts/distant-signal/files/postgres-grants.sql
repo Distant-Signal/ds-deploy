@@ -656,7 +656,6 @@ BEGIN
         ('delegated_grant_confirmations', 'api', 'DELETE', ''),
         ('delegated_deletions', 'api', 'SELECT', ''),
         ('delegated_deletions', 'api', 'INSERT', ''),
-        ('delegated_deletions', 'api', 'UPDATE', ''),
         ('delegated_deletions', 'api', 'DELETE', ''),
         ('journey_idempotency_keys', 'api', 'SELECT', ''),
         ('journey_idempotency_keys', 'api', 'INSERT', ''),
