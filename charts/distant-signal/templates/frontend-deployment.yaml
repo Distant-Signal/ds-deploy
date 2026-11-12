@@ -98,6 +98,36 @@ with frontend.extraEnv, which replaces an entry of the same name.
             # per request, so no image rebuild is needed to flip it.
             - name: LEGAL_PAGES_PUBLISHED
               value: {{ .Values.frontend.legalPagesPublished | toString | quote }}
+            # frontend/lib/legal.ts: the operator's details for those pages
+            # (frontend.legal.*), read per request. An empty value is left
+            # out, which the frontend reads as unset (pages stay 404, or
+            # the default minimum age of 18).
+            {{- with .Values.frontend.legal }}
+            {{- with .operatorName }}
+            - name: LEGAL_OPERATOR_NAME
+              value: {{ . | toString | quote }}
+            {{- end }}
+            {{- with .contactEmail }}
+            - name: LEGAL_CONTACT_EMAIL
+              value: {{ . | toString | quote }}
+            {{- end }}
+            {{- with .ssoLogRetention }}
+            - name: LEGAL_SSO_LOG_RETENTION
+              value: {{ . | toString | quote }}
+            {{- end }}
+            {{- with .lastUpdated }}
+            - name: LEGAL_LAST_UPDATED
+              value: {{ . | toString | quote }}
+            {{- end }}
+            {{- with .icoRegistration }}
+            - name: LEGAL_ICO_REGISTRATION
+              value: {{ . | toString | quote }}
+            {{- end }}
+            {{- with .minimumAge }}
+            - name: LEGAL_MINIMUM_AGE
+              value: {{ . | toString | quote }}
+            {{- end }}
+            {{- end }}
             # frontend/lib/legal.ts retentionPolicy(): the privacy notice
             # states the api's own retention settings, so they are copied
             # from the api values rather than set twice (LEG-28, DQ7).

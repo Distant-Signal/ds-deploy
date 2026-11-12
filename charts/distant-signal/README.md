@@ -2841,7 +2841,13 @@ rows are duplicates, which the writer's Darwin-timestamp guards discard.
 | `frontend.probes.liveness.timeoutSeconds` | `3` | Liveness probe timeout. |
 | `frontend.siteUrl` | `""` | The deployment's public origin (e.g. `https://rail.example.com`), used for share and invite links and same-origin checks. Set it in production. Empty derives it from `ingress.frontend.host` when this chart's ingress publishes the frontend. |
 | `frontend.apiBaseUrl` | `""` | Override `API_BASE_URL`. Empty uses the in-cluster api Service. |
-| `frontend.legalPagesPublished` | `false` | Publish the DRAFT legal pages (`/privacy`, `/terms`, `/cookies`, `/contact`) and their footer links. Off by default: the text needs the operator's and a lawyer's review, and the operator values in `frontend/lib/legal.ts` must be filled in first. Even when `true`, the pages stay 404 while any placeholder is left in that file. `/attribution` is always public. |
+| `frontend.legalPagesPublished` | `false` | Publish the DRAFT legal pages (`/privacy`, `/terms`, `/cookies`, `/contact`) and their footer links. Off by default: the text needs the operator's and a lawyer's review, and the required `frontend.legal` values must be set first. Even when `true`, the pages stay 404 while any required `frontend.legal` value is empty or invalid. `/attribution` is always public. See `docs/legal-pages.md`. |
+| `frontend.legal.operatorName` | `""` | Required for the legal pages (`LEGAL_OPERATOR_NAME`): the data controller, an individual's name or a trading name. Up to 100 characters, no `<` or `>`. |
+| `frontend.legal.contactEmail` | `""` | Required (`LEGAL_CONTACT_EMAIL`): a monitored inbox for privacy requests, content reports and accessibility requests. |
+| `frontend.legal.ssoLogRetention` | `""` | Required (`LEGAL_SSO_LOG_RETENTION`): how long the sign-in service keeps its event logs, as the privacy notice words it, e.g. `30 days`. Up to 60 characters. |
+| `frontend.legal.lastUpdated` | `""` | Required (`LEGAL_LAST_UPDATED`): the date the text was last reviewed, `D Month YYYY` (e.g. `1 November 2026`). Set it when the pages go live. |
+| `frontend.legal.icoRegistration` | `""` | Optional (`LEGAL_ICO_REGISTRATION`): the ICO data protection fee registration number. Empty leaves the line out of the privacy notice. |
+| `frontend.legal.minimumAge` | `""` | Optional (`LEGAL_MINIMUM_AGE`): minimum age to create an account, 13 to 21. Empty means the frontend's default, 18. |
 | `frontend.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `frontend.resources` | requests `100m`/`256Mi`, limit `768Mi` | Container resource requests/limits. |
 | `frontend.nodeSelector` | `{}` | Pod node selector. |

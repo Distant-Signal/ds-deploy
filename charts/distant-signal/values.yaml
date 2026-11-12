@@ -6111,12 +6111,39 @@ frontend:
   # -- Publish the DRAFT legal pages (/privacy, /terms, /cookies, /contact)
   # and their footer links. Off by default: the text is a draft that needs
   # the operator's and a lawyer's review, and the operator values in
-  # frontend/lib/legal.ts must be filled in first. Even when true, the
-  # pages stay 404 while any placeholder is left in that file. /attribution
-  # is always public. To review the drafts on a staging install, add
+  # frontend.legal below must be set first. Even when true, the pages stay
+  # 404 while any required frontend.legal value is empty or invalid.
+  # /attribution is always public. To review the drafts on a staging install, add
   # LEGAL_PAGES_PREVIEW=true through frontend.extraEnv (never in production:
   # it renders them with a "draft" banner, placeholders and all).
   legalPagesPublished: false
+  # The operator's own details for the legal pages, rendered as LEGAL_* env
+  # the frontend reads per request (frontend/lib/legal.ts,
+  # docs/legal-pages.md): no image rebuild, and none of it is in source.
+  # The four required values default to empty, which keeps the pages 404
+  # even with legalPagesPublished true. A value the frontend rejects (bad
+  # email, unparseable date) is treated as unset. Empty values are not
+  # rendered as env at all.
+  legal:
+    # -- Required. The data controller: an individual's name or a trading
+    # name, e.g. "Example Operator". Up to 100 characters, no < or >.
+    operatorName: ""
+    # -- Required. A monitored inbox for privacy requests, content reports
+    # and accessibility requests, e.g. "legal@example.com".
+    contactEmail: ""
+    # -- Required. How long the sign-in service (Authentik) keeps its event
+    # logs, including login IP addresses, as the privacy notice words it,
+    # e.g. "30 days". Up to 60 characters.
+    ssoLogRetention: ""
+    # -- Required. Date the operator last reviewed the text, "D Month YYYY",
+    # e.g. "1 November 2026". Set it when the pages go live.
+    lastUpdated: ""
+    # -- Optional. The ICO data protection fee registration number, if one
+    # is held. Empty leaves the ICO line out of the privacy notice.
+    icoRegistration: ""
+    # -- Optional. Minimum age to create an account, 13 to 21. Empty means
+    # the frontend's default, 18.
+    minimumAge: ""
   extraEnv: []
   # A Next.js server render process -- Node's heap dominates, and it is
   # fairly insensitive to load here because the heavy lifting is api's.
