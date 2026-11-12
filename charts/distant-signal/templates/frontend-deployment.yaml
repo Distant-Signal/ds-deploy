@@ -127,6 +127,10 @@ with frontend.extraEnv, which replaces an entry of the same name.
             - name: LEGAL_MINIMUM_AGE
               value: {{ . | toString | quote }}
             {{- end }}
+            {{- with .hostingProvider }}
+            - name: LEGAL_HOSTING_PROVIDER
+              value: {{ . | toString | quote }}
+            {{- end }}
             {{- end }}
             # frontend/lib/legal.ts retentionPolicy(): the privacy notice
             # states the api's own retention settings, so they are copied
@@ -139,10 +143,14 @@ with frontend.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.inactiveAccountRetentionDays | int | toString | quote }}
             - name: RETENTION_REGULAR_JOURNEY_DAYS
               value: {{ .Values.api.regularJourneyRetentionDays | int | toString | quote }}
+            {{- if eq (toString (dig "recentlyDeleted" "enabled" false .Values.api)) "true" }}
             # The Recently deleted grace period, validated (7 to 31) like the
-            # api's own copy of it.
+            # api's own copy of it. Only while api.recentlyDeleted.enabled is
+            # true: with it off the api deletes at once, and the privacy
+            # notice must not describe a grace period (absent = no sentence).
             - name: RETENTION_RECENTLY_DELETED_DAYS
               value: {{ include "distant-signal.recentlyDeletedRetentionDays" . | quote }}
+            {{- end }}
             {{- if .Values.railMcp.enabled }}
             # The in-app chat's link to the separately-deployed derived MCP
             # service -- absent, correctly, when railMcp is disabled. Only

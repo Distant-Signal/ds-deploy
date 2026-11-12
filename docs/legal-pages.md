@@ -17,12 +17,13 @@ frontend:
     lastUpdated: "1 November 2026"     # required, "D Month YYYY"; set on go-live
     icoRegistration: ""                # optional; empty leaves the line out
     minimumAge: ""                     # optional, 13 to 21; empty means 18
+    hostingProvider: ""                # optional; who hosts the servers, if a third party
 ```
 
 The chart renders each non-empty value as an env var on the frontend
 Deployment (`LEGAL_OPERATOR_NAME`, `LEGAL_CONTACT_EMAIL`,
 `LEGAL_SSO_LOG_RETENTION`, `LEGAL_LAST_UPDATED`, `LEGAL_ICO_REGISTRATION`,
-`LEGAL_MINIMUM_AGE`) next to `LEGAL_PAGES_PUBLISHED`. The frontend reads them
+`LEGAL_MINIMUM_AGE`, `LEGAL_HOSTING_PROVIDER`) next to `LEGAL_PAGES_PUBLISHED`. The frontend reads them
 per request, so a change needs a rollout of the frontend pods but no image
 rebuild.
 
