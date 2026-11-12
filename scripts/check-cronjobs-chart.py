@@ -8,7 +8,7 @@ Renders the chart with every CronJob on (api-maintenance, the pgBackRest
 ones) and checks each CronJob (docs/scheduled-jobs.md):
 
   - `spec.timeZone` is set and names a zone in tzdata (without one the
-    schedule follows the node's local zone: mine-bringer runs at UTC+2);
+    schedule follows the node's local zone: production runs at UTC+2);
   - `concurrencyPolicy: Forbid` and a `startingDeadlineSeconds`;
   - its Job sets `backoffLimit`, `activeDeadlineSeconds` and
     `ttlSecondsAfterFinished`, and its pod `restartPolicy: Never`;

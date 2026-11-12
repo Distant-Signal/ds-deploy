@@ -44,7 +44,7 @@ Decisions (2026-10-26):
 | --- | --- | --- |
 | Postgres image (`postgresql.pgbackrest.image.tag`, Ranma-Config `clusters/base/apps/distant-signal.yaml`) | `pg16.15-pgbackrest2.59.1-tini0.19.0@sha256:dafa2a90…` | `pg18.6-pgbackrest2.59.3-tini0.19.0@sha256:<Forgejo digest>` |
 | Chart default `postgresql.image.tag` (used only with pgBackRest off) | `16.15-trixie` | `18.6-trixie` (this repo, already on `main`) |
-| Nightly `pg_dump` CronJob `distant-signal-postgres-backup` (Ranma-Config `clusters/mine-bringer/apps/distant-signal.yaml`) | `postgres:16@sha256:1a6ab3f5…` | `postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6`. A 16 `pg_dump` refuses an 18 server ("server version mismatch"), so this moves in the same change. |
+| Nightly `pg_dump` CronJob `distant-signal-postgres-backup` (Ranma-Config `clusters/<cluster>/apps/distant-signal.yaml`) | `postgres:16@sha256:1a6ab3f5…` | `postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6`. A 16 `pg_dump` refuses an 18 server ("server version mismatch"), so this moves in the same change. |
 | pgBackRest repository | stanza `ds`, archive id `16-1` | same stanza, plus db 2 / archive id `18-2` after `stanza-upgrade`. The 16 backups and WAL stay until retention expires them. |
 | Data checksums (`SHOW data_checksums`) | `off` | `on` (enabled on the new 18 cluster by `pg_checksums --enable` before its first start; the 16 directory stays `off`) |
 | Data directory | `/var/lib/postgresql/data/pgdata` (16) | `/var/lib/postgresql/data/pgdata` (18); the 16 one kept as `/var/lib/postgresql/data/pgdata16-old` for 7 days |
@@ -145,7 +145,7 @@ Days before:
    (`clusters/base/apps/distant-signal.yaml`), and the
    `distant-signal-postgres-backup` CronJob's image to
    `postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6`
-   (`clusters/mine-bringer/apps/distant-signal.yaml`). Its comment about
+   (`clusters/<cluster>/apps/distant-signal.yaml`). Its comment about
    the client image matching the server's major changes with it.
 3. **Pull access.** The upgrade Job pulls from Forgejo with the
    `forgejo-distant-signal-pull` Secret, which the Postgres pod already

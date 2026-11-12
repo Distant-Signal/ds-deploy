@@ -221,7 +221,7 @@ Postgres admits it, and its egress policy allows Postgres and DNS only),
 mounting the schedulefeed PVC **read-only** at `/data/schedule-feed`, as
 the container did. The PVC is ReadWriteOnce, which binds it to one node,
 not one pod: the schedulefeed-sftp pod already shares it that way. In
-production it is `local-path` on the single node `mine-bringer`, its PV
+production it is `local-path` on the single node, its PV
 pinned there by node affinity (checked 2026-11-01), so the CronJob's pods
 land beside the others. On a multi-node cluster pin them together
 (`scheduleFeed.nodeSelector`/`affinity` apply to the CronJob too).
