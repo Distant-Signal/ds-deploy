@@ -1103,15 +1103,15 @@ Every CronJob this chart renders sets `spec.timeZone` explicitly, and CI
 (`.github/workflows/ci.yml`, helm-lint job, "every CronJob sets timeZone")
 fails any render that has a CronJob without one, or with a zone name that
 tzdata doesn't know. Without the field, a schedule is read in the node's
-local zone, which belongs to the host rather than the cluster. On
-mine-bringer the node runs at UTC+2, so a job commented "02:00 UTC" really
+local zone, which belongs to the host rather than the cluster. In
+production the node runs at UTC+2, so a job commented "02:00 UTC" really
 ran at 00:00 UTC.
 
 - Backups and maintenance use `Etc/UTC`, so they have no DST jumps.
 - Jobs tied to the GB rail day use `Europe/London`, and keep their schedules
   out of 01:00–02:59 local, where DST transitions skip or repeat a run.
 
-Start backup schedules at or after 03:00 UTC (mine-bringer's own backups
+Start backup schedules at or after 03:00 UTC (the production cluster's own backups
 occupy 03:00–04:15, so the pgBackRest jobs start at 05:00). The nightly schedule
 ingest takes deliveries between 22:00 and 01:30 and runs whole-day
 publishes, the heaviest WAL and CPU bursts of the day, and 03:00 UTC is
@@ -1920,7 +1920,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `postgresql.pgbackrest.stanza` | `ds` | pgBackRest stanza name. |
 | `postgresql.pgbackrest.processMax` | `2` | Parallel processes for async archive-push, backup and restore. |
-| `postgresql.pgbackrest.repo.path` | `""` | **Required when enabled**: absolute repository path in the bucket, e.g. `/mine-bringer/pgbackrest/distant-signal`. `expire` deletes under it only. |
+| `postgresql.pgbackrest.repo.path` | `""` | **Required when enabled**: absolute repository path in the bucket, e.g. `/prod-cluster/pgbackrest/distant-signal`. `expire` deletes under it only. |
 | `postgresql.pgbackrest.repo.retentionFullType` | `time` | `time`: keep what's needed to restore to any point in the last `retentionFull` days. `count`: keep that many full backups. |
 | `postgresql.pgbackrest.repo.retentionFull` | `7` | Days (or full backups). Backups hold personal data until they expire, so keep it short. |
 | `postgresql.pgbackrest.repo.bundle` | `true` | Bundle small files into fewer repository objects. |
@@ -2343,7 +2343,7 @@ default; nothing here is rendered unless `archive.enabled` is `true`.
 | `archive.expiry.retentionDays` | `730` | Keep objects whose key `service_date` is at most this many rail days old. Anything under 90 fails the render and the aggregator's startup; that floor is fixed in code. |
 | `archive.expiry.intervalSecs` | `86400` | Seconds between expiry runs; the first runs at aggregator startup. |
 | `archive.expiry.maxDeletesPerRun` | `20000` | Most objects one run deletes (or would delete), oldest date first. Hitting it bumps `aggregator_archive_expiry_cap_reached_total`. |
-| `archive.expiry.protectedPrefixes` | `[]` | `ARCHIVE_PROTECTED_PREFIXES`: key prefixes the archive prefix must never equal, contain or sit inside (e.g. `mine-bringer/backups/`). The aggregator refuses to start on an overlap. |
+| `archive.expiry.protectedPrefixes` | `[]` | `ARCHIVE_PROTECTED_PREFIXES`: key prefixes the archive prefix must never equal, contain or sit inside (e.g. `prod-cluster/backups/`). The aggregator refuses to start on an overlap. |
 
 ### notifier
 

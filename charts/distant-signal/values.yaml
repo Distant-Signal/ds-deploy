@@ -521,7 +521,7 @@ postgresql:
   # "15min"). Set a key to null to drop it and fall back to Postgres's own
   # default; set `config: {}` to drop them all.
   #
-  # These defaults are the production (mine-bringer) settings, SIZED FOR
+  # These defaults are the production (production) settings, SIZED FOR
   # THE DEFAULT 5Gi MEMORY LIMIT in `resources` below: if you change that
   # limit, scale shared_buffers (~20-25% of it) and effective_cache_size
   # (~70% of it) with it. Rough budget at 5Gi: 1GB shared_buffers + 32MB
@@ -780,7 +780,7 @@ postgresql:
     processMax: 2
     repo:
       # -- REQUIRED when enabled: the repository's absolute path in the
-      # bucket, e.g. /mine-bringer/pgbackrest/distant-signal. pgBackRest's
+      # bucket, e.g. /prod-cluster/pgbackrest/distant-signal. pgBackRest's
       # `expire` deletes under this path only. Keep it outside every other
       # job's prefix, so neither side's pruning can touch the other.
       path: ""
@@ -797,7 +797,7 @@ postgresql:
       bundle: true
       s3:
         # -- REQUIRED when enabled: the S3 endpoint host (no scheme), e.g.
-        # ra.tail3e0c1e.ts.net. It is also the TLS name that is verified.
+        # s3.example.ts.net. It is also the TLS name that is verified.
         endpoint: ""
         # -- Port of the endpoint.
         port: 443
@@ -862,7 +862,7 @@ postgresql:
       timeZone: Etc/UTC
       # -- Weekly full backup (Sunday 05:00 UTC): clear of the nightly
       # schedule ingest (chart README, "Scheduled jobs and time zones") and
-      # of mine-bringer's other backups, the last of which starts at 04:15.
+      # of the production cluster's other backups, the last of which starts at 04:15.
       fullSchedule: "0 5 * * 0"
       # -- Differential backup on the other days (05:00 UTC).
       diffSchedule: "0 5 * * 1-6"
@@ -911,7 +911,7 @@ postgresql:
       # and its pod: three days, longer than the alerts'
       # `metrics.prometheusRule.pgbackrest.recentJobWindow` (26h), so a
       # failure still alerts. Without it every finished pod stayed until the
-      # history limits pushed it out (twelve on mine-bringer, 2026-10-31).
+      # history limits pushed it out (twelve in production, 2026-10-31).
       # null leaves them to the history limits.
       ttlSecondsAfterFinished: 259200
       # -- The image the CronJobs run `kubectl exec` from. Digest-pinned in
@@ -1046,7 +1046,7 @@ pollers:
     # Fetches and diffs one RDM incident feed per tick.
     #
     # Limit trimmed from 256Mi to 128Mi 2026-09-26: live `kubectl top` on
-    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # the production cluster showed steady-state usage in the 5-13Mi
     # range across all 5 pollers -- 256Mi was ~20-50x that. Halved rather
     # than sized to the snapshot, since these are event-driven workloads
     # that can spike under a burst of incoming messages.
@@ -1149,7 +1149,7 @@ pollers:
     # ingest body.
     #
     # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
-    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # the production cluster showed steady-state usage in the 5-13Mi
     # range across all 5 pollers -- 384Mi was ~30-75x that. Halved rather
     # than sized to the snapshot, since these are event-driven workloads
     # that can spike under a burst of incoming messages.
@@ -1298,7 +1298,7 @@ pollers:
     # One TfL line-status JSON document per tick.
     #
     # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
-    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # the production cluster showed steady-state usage in the 5-13Mi
     # range across all 5 pollers -- 384Mi was ~30-75x that. Halved rather
     # than sized to the snapshot, since these are event-driven workloads
     # that can spike under a burst of incoming messages.
@@ -1392,7 +1392,7 @@ pollers:
     # The smallest poller in the chart: a short operator list per tick.
     #
     # Limit trimmed from 256Mi to 128Mi 2026-09-26: live `kubectl top` on
-    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # the production cluster showed steady-state usage in the 5-13Mi
     # range across all 5 pollers -- 256Mi was ~20-50x that. Halved rather
     # than sized to the snapshot, since these are event-driven workloads
     # that can spike under a burst of incoming messages.
@@ -1533,7 +1533,7 @@ pollers:
     # largest bodies any RDM poller handles.
     #
     # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on
-    # the mine-bringer cluster showed steady-state usage in the 5-13Mi
+    # the production cluster showed steady-state usage in the 5-13Mi
     # range across all 5 pollers -- 384Mi was ~30-75x that. Halved rather
     # than sized to the snapshot, since these are event-driven workloads
     # that can spike under a burst of incoming messages.
@@ -1828,7 +1828,7 @@ api:
     # POST /delegated-grants/revoke for this client). For example:
     #   - name: ds-mcp
     #     displayName: Distant Signal assistant
-    #     issuerUrl: https://sso.cursed.solutions/application/o/distant-signal-api/
+    #     issuerUrl: https://sso.example.com/application/o/distant-signal-api/
     #     audience: distant-signal-api
     #     maxScopes: [journeys:read, journeys:write, journeys:delete]
     #     enabled: true
@@ -3057,7 +3057,7 @@ aggregator:
   # line_status/history rows in flight at a time.
   #
   # Limit trimmed from 768Mi to 384Mi 2026-09-26: live `kubectl top` on the
-  # mine-bringer cluster showed steady-state usage of ~22Mi -- 768Mi was
+  # the production cluster showed steady-state usage of ~22Mi -- 768Mi was
   # ~35x that. Halved rather than sized to the snapshot, since this is an
   # event-driven workload that can spike under a burst of upstream changes.
   resources:
@@ -3147,7 +3147,7 @@ archive:
   # than the current rail day (02:00 Europe/London) minus retentionDays.
   # Anything else is counted and logged, never deleted. The chart and the
   # binary also refuse an archive.s3.prefix with fewer than two path
-  # segments (e.g. mine-bringer/distant-signal-archive).
+  # segments (e.g. prod-cluster/distant-signal-archive).
   expiry:
     enabled: false
     # -- Log and count what would be deleted
@@ -3167,7 +3167,7 @@ archive:
     maxDeletesPerRun: 20000
     # -- Key prefixes the archive prefix must never equal, contain or sit
     # inside (ARCHIVE_PROTECTED_PREFIXES), e.g. the backups sharing the
-    # same S3 key: [mine-bringer/backups/, mine-bringer/pgbackrest/]. The
+    # same S3 key: [prod-cluster/backups/, prod-cluster/pgbackrest/]. The
     # aggregator refuses to start on an overlap. No commas inside an entry.
     protectedPrefixes: []
 
@@ -4058,7 +4058,7 @@ enricher:
   # both numbers are small.
   #
   # Limit trimmed from 512Mi to 256Mi 2026-09-26: live `kubectl top` on the
-  # mine-bringer cluster showed steady-state usage of ~6Mi -- 512Mi was
+  # the production cluster showed steady-state usage of ~6Mi -- 512Mi was
   # ~85x that. Halved rather than sized to the snapshot, since this is an
   # event-driven workload that can spike under a burst of incidents.
   #
@@ -4220,7 +4220,7 @@ trustConsumer:
   # is why its request is one of the larger ones.
   #
   # Limit trimmed from 768Mi to 384Mi 2026-09-26: live `kubectl top` on the
-  # mine-bringer cluster showed steady-state usage of ~7Mi -- 768Mi was
+  # the production cluster showed steady-state usage of ~7Mi -- 768Mi was
   # ~100x that. Halved rather than sized to the snapshot, since this is an
   # event-driven workload that can spike under a burst of movement events.
   resources:
@@ -4448,7 +4448,7 @@ trustBacklogConsumer:
   # them on. The backlog itself lives in Redis, not in this process.
   #
   # Limit trimmed from 512Mi to 256Mi 2026-09-26: live `kubectl top` on the
-  # mine-bringer cluster showed steady-state usage of ~8Mi -- 512Mi was
+  # the production cluster showed steady-state usage of ~8Mi -- 512Mi was
   # ~64x that. Halved rather than sized to the snapshot, since this is an
   # event-driven workload that can spike under a burst of backlog entries.
   resources:
@@ -4577,7 +4577,7 @@ movementRelay:
   # plus librdkafka's fetch buffers.
   #
   # Limit trimmed from 384Mi to 192Mi 2026-09-26: live `kubectl top` on the
-  # mine-bringer cluster showed steady-state usage of ~7Mi -- 384Mi was
+  # the production cluster showed steady-state usage of ~7Mi -- 384Mi was
   # ~55x that. Halved rather than sized to the snapshot, since this is an
   # event-driven workload that can spike under a burst of movement events.
   resources:
@@ -5475,7 +5475,7 @@ scheduleFeed:
     # it holds no application state at all.
     #
     # Limit trimmed from 256Mi to 128Mi 2026-09-26: live `kubectl top` on the
-    # mine-bringer cluster showed steady-state usage of ~33Mi -- 256Mi was
+    # the production cluster showed steady-state usage of ~33Mi -- 256Mi was
     # ~8x that. Halved rather than sized to the snapshot, since a large CIF
     # delivery can legitimately spike this.
     resources:
@@ -5549,7 +5549,7 @@ scheduleFeed:
     # much closer to the sftp container than to `reference` below.
     #
     # Limit trimmed from 512Mi to 256Mi 2026-09-26: live `kubectl top` on the
-    # mine-bringer cluster showed steady-state usage of ~5Mi -- 512Mi was
+    # the production cluster showed steady-state usage of ~5Mi -- 512Mi was
     # ~100x that. Halved rather than sized to the snapshot, since a large
     # CIF delivery can legitimately spike this.
     resources:
@@ -5874,7 +5874,7 @@ scheduleFeed:
     # loudly, it just leaves the product stale until the next delivery.
     #
     # Request raised from 1Gi to 2.25Gi 2026-09-26: live `kubectl top` on
-    # the mine-bringer cluster showed steady-state usage of 2208-2565Mi --
+    # the production cluster showed steady-state usage of 2208-2565Mi --
     # this is documented, expected behavior (the whole-network CIF parse
     # plus its several derived in-memory products), not a leak, but a 1Gi
     # request against ~2.2-2.5Gi real usage badly understated this pod's
@@ -6273,7 +6273,7 @@ metrics:
     # networkPolicy.enabled's identical reasoning: many clusters don't have
     # Prometheus Operator installed, and rendering a CRD that doesn't exist
     # would fail `helm install` outright rather than degrade gracefully.
-    # Not purely theoretical: at least one real cluster (mine-bringer, via
+    # Not purely theoretical: at least one real cluster (production, via
     # Ranma-Config) does run Prometheus Operator and flips this to true in
     # its own values overlay -- see
     # docs/superpowers/specs/2026-09-05-status-observability-grafana-design.md
@@ -6290,13 +6290,13 @@ metrics:
     #
     # Scope is deliberately narrow: generic cluster-level alerts (OOMKilled,
     # restart spikes, pods not ready) belong to the cluster's own rules
-    # (mine-bringer: Ranma-Config's monitoring-rules.yaml). Every alert here
+    # (production: Ranma-Config's monitoring-rules.yaml). Every alert here
     # is named `DistantSignal*`, and this chart is their source: the
     # cluster's rules should not redefine any of them.
     enabled: false
     # Extra labels on the PrometheusRule object itself, e.g. whatever the
     # Prometheus CR's ruleSelector matches (`release: kube-prometheus-stack`
-    # on a stock kube-prometheus-stack; mine-bringer selects every rule, so
+    # on a stock kube-prometheus-stack; production selects every rule, so
     # nothing is needed there).
     labels: {}
     # Extra annotations on the PrometheusRule object.

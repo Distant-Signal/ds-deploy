@@ -17,7 +17,7 @@ never touches the cluster.
   `templates/postgres-pgbackrest.yaml`,
   `templates/pgbackrest-prometheusrule.yaml`.
 - Image: not built here. `postgresql.pgbackrest.image` has no default and
-  the chart refuses to render without it. mine-bringer runs the shared
+  the chart refuses to render without it. production runs the shared
   `lucy/postgres-pgbackrest` image (built and tested in its own repo),
   pinned in Ranma-Config's `clusters/base/apps/distant-signal.yaml`. Until
   2026-10-01 this repo built an equivalent image
@@ -32,7 +32,7 @@ never touches the cluster.
 | Image | `postgresql.pgbackrest.image`, which must be the exact `postgres:18.6-trixie` image the chart pins (same version and digest), plus pgBackRest, `/usr/local/bin/pgbackrest-daily-check` (the check CronJob execs it), and `tini` as PID 1 in front of the stock entrypoint (see "Why tini" below). `lucy/postgres-pgbackrest` is such an image. The chart swaps it in for the stock image. |
 | WAL archiving | `archive_mode=on`, `archive_command='pgbackrest --stanza=ds --archive-timeout=30 archive-push %p'` and `archive_timeout=60` are added to the Postgres `-c` args. Archiving is asynchronous, through a spool at `/var/lib/postgresql/data/pgbackrest-spool` on the data volume, beside `PGDATA`. Each archive-push waits up to `--archive-timeout` (`archive.pushTimeoutSecs`) for the async worker; see "Stopping while S3 is unreachable". |
 | Grace period | The Postgres pod's `terminationGracePeriodSeconds` and `PGCTLTIMEOUT` default to 6 x `archive.pushTimeoutSecs` + 60 (240 s). Without pgBackRest the pod sets no grace period (Kubernetes' 30 s), unless `postgresql.terminationGracePeriodSeconds` is set. |
-| Repository | S3 (Thoth on mine-bringer), under `repo.path` in `repo.s3.bucket`. Every file is encrypted client-side with AES-256-CBC before it leaves the pod, and compressed with zstd. |
+| Repository | S3 (Thoth in production), under `repo.path` in `repo.s3.bucket`. Every file is encrypted client-side with AES-256-CBC before it leaves the pod, and compressed with zstd. |
 | Disk-full guard | `archive-push-queue-max` (`archive.queueMax`, 8 GB). If the repository is unreachable for long enough that 8 GB of WAL waits in the queue, pgBackRest **drops** WAL instead of letting `pg_wal` fill the node's disk. Postgres stays up; the dropped WAL is a gap that point-in-time recovery can't cross. |
 | Backups | CronJobs `<release>-pgbackrest-full` (Sunday 05:00 UTC) and `-diff` (Monday–Saturday 05:00 UTC). The backups run with `--no-expire-auto`. CronJob `<release>-pgbackrest-expire` (daily 06:30 UTC, `backup.expireSchedule`) runs `pgbackrest expire`, which keeps the full backups and WAL needed to restore to any point in the last `repo.retentionFull` days. Expire is its own Job so that an S3 failure during it is retried alone and never repeats a backup. |
 | Daily check | CronJob `<release>-pgbackrest-check` (07:00 UTC) runs `pgbackrest-daily-check --no-verify`: `pgbackrest check` (archiving works end to end) and a WAL gap check (every segment since the oldest backup on the current timeline is in the repository). |
@@ -133,7 +133,7 @@ backups have aged past the retention window.
    plus two full backups.
 
 2. **Smoke-test the S3 target** from a tailnet machine with pgBackRest
-   installed, against a throwaway path (e.g. `/mine-bringer/pgbackrest/smoke`)
+   installed, against a throwaway path (e.g. `/prod-cluster/pgbackrest/smoke`)
    and a throwaway local Postgres: `stanza-create`, `archive-push` (via a
    running server), `backup`, `expire` with `--repo1-retention-full=1` after
    a second full backup (this proves DeleteObjects works), and `restore`. If
@@ -153,7 +153,7 @@ backups have aged past the retention window.
    `postgresql.pgbackrest.image.tag` to its stable tag **with a digest**.
    lucy/postgres-pgbackrest tags images
    `pg<postgres>-pgbackrest<version>-tini<version>`; read the digest with
-   `docker buildx imagetools inspect <repository>:<tag>`. mine-bringer
+   `docker buildx imagetools inspect <repository>:<tag>`. Production
    runs (Ranma-Config `clusters/base/apps/distant-signal.yaml`, with the
    registry's pull Secret in the same HelmRelease values) the Postgres 16
    image until the 18 upgrade, then the Postgres 18 one

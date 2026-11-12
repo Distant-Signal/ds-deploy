@@ -3070,7 +3070,7 @@ jobs:
       # Every CronJob the chart renders must set an explicit spec.timeZone
       # (docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md,
       # item 2). Without one the schedule is read in the node's local zone,
-      # which the cluster doesn't control: mine-bringer runs at UTC+2, so a
+      # which the cluster doesn't control: production runs at UTC+2, so a
       # "02:00 UTC" backup really ran at 00:00 UTC. Backups and maintenance
       # use Etc/UTC; jobs tied to the GB rail day use Europe/London. The
       # zone must also exist in the runner's tzdata, because the API server

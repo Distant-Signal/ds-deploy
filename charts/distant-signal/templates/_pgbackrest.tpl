@@ -25,7 +25,7 @@ naming the value, the first time any template asks.
 {{- fail "postgresql.pgbackrest.stanza must not be empty." -}}
 {{- end -}}
 {{- if not (hasPrefix "/" (toString $pb.repo.path)) -}}
-{{- fail "postgresql.pgbackrest.repo.path is required when postgresql.pgbackrest.enabled is true, and must be absolute (e.g. /mine-bringer/pgbackrest/distant-signal). pgBackRest's expire deletes under it." -}}
+{{- fail "postgresql.pgbackrest.repo.path is required when postgresql.pgbackrest.enabled is true, and must be absolute (e.g. /example/pgbackrest/distant-signal). pgBackRest's expire deletes under it." -}}
 {{- end -}}
 {{- if eq (trimSuffix "/" (toString $pb.repo.path)) "" -}}
 {{- fail "postgresql.pgbackrest.repo.path must not be the bucket root: pgBackRest's expire deletes under it." -}}
@@ -36,7 +36,7 @@ naming the value, the first time any template asks.
 {{- end -}}
 {{- end -}}
 {{- if contains "://" (toString $pb.repo.s3.endpoint) -}}
-{{- fail "postgresql.pgbackrest.repo.s3.endpoint is a host name without a scheme (e.g. ra.tail3e0c1e.ts.net); set the port in repo.s3.port." -}}
+{{- fail "postgresql.pgbackrest.repo.s3.endpoint is a host name without a scheme (e.g. s3.example.ts.net); set the port in repo.s3.port." -}}
 {{- end -}}
 {{- if not (has (toString $pb.repo.s3.uriStyle) (list "path" "host")) -}}
 {{- fail "postgresql.pgbackrest.repo.s3.uriStyle must be \"path\" or \"host\"." -}}
