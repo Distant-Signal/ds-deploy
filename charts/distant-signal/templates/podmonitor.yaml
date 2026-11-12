@@ -24,7 +24,8 @@ is gone along with the shared listener it existed to scrape.
 
 trust-consumer/trust-backlog-consumer/full-coverage-consumer are listed
 unconditionally (like
-aggregator/enricher above them -- neither has a chart-level enabled toggle)
+aggregator/enricher above them -- the aggregator has no chart-level enabled
+toggle, the enricher's is on by default)
 and movement-relay is gated on .Values.movementRelay.enabled, closing the
 real scrape gap identified in
 docs/superpowers/specs/2026-09-05-status-observability-grafana-design.md
@@ -58,7 +59,9 @@ spec:
         values:
           - api
           - aggregator
+          {{- if .Values.enricher.enabled }}
           - enricher
+          {{- end }}
           - notifier
           - trust-consumer
           # Exports distant_signal_movement_feed_deadlettered_total, which the

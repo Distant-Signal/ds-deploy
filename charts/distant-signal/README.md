@@ -197,10 +197,11 @@ and the RDM Train Movements Kafka connection above are the chart's
 them empty **aborts the render** with an explicit message rather than
 deploying a pod that cannot work:
 
-- The enricher has no `enabled` toggle, and `baseUrl`/`model` become plain
+- With `enricher.enabled` on (the default), `baseUrl`/`model` become plain
   (non-optional) env vars on its binary, so an empty value would deploy a
   pod that fails every extraction request forever with nothing but log
-  noise to show for it.
+  noise to show for it. `enricher.enabled: false` runs no enricher and
+  needs neither.
 - The api's five `SSO_*` env vars are declared with no defaults in
   `crates/api/src/data/config.rs`, so an api container missing any of them
   exits immediately with "the following required arguments were not
@@ -2427,11 +2428,16 @@ used for and why persistence defaults on.
 
 ### enricher
 
-There is intentionally no `replicaCount` and no `enabled` toggle: the
-enricher is a singleton consumer of one Redis consumer group plus one sweep
-loop, and it renders unconditionally.
+There is intentionally no `replicaCount`: the enricher is a singleton
+consumer of one Redis consumer group plus one sweep loop. It renders by
+default; `enricher.enabled: false` leaves out its Deployment, ServiceAccount,
+scrape target, NetworkPolicy and `llm-api-key` Secret entry, and with them
+the LLM requirement below. Its Postgres role and Redis ACL user (and that
+user's key in the users Secret) are still created, but
+`redis.acl.clients.enricher` is no longer required, as no pod connects as it.
 
-`enricher.llm.baseUrl` and `enricher.llm.model` are **required** (alongside
+With the enricher on, `enricher.llm.baseUrl` and `enricher.llm.model` are
+**required** (alongside
 the five `api.sso.*` values) — leaving either empty aborts the render, because both
 become non-optional env vars on the binary and an empty value would deploy a
 pod that fails every request forever. With `enricher.llm.provider: anthropic`
@@ -2441,6 +2447,7 @@ they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 
 | Key | Default | Description |
 |---|---|---|
+| `enricher.enabled` | `true` | Render the enricher (Deployment, ServiceAccount, scrape target, NetworkPolicy, `llm-api-key` Secret entry). `false` runs no enricher and drops the `baseUrl`/`model` and `redis.acl.clients.enricher` requirements: incident text is then shown as the feed supplied it, with no AI summary. Its Postgres role and Redis ACL user are still created. |
 | `enricher.image.repository` | `ghcr.io/distant-signal/images/enricher` | enricher image repository. |
 | `enricher.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `enricher.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
