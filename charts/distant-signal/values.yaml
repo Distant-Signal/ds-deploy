@@ -3782,6 +3782,13 @@ redis:
 # enricher (crates/enricher/src/config.rs)
 # ---------------------------------------------------------------------------
 enricher:
+  # -- Render the enricher (its Deployment, ServiceAccount, PodMonitor
+  # target, NetworkPolicy and llm-api-key Secret entry). On by default,
+  # which needs enricher.llm.baseUrl and model. `false` runs no enricher
+  # and drops the LLM requirement (values-minimal.yaml): incident text is
+  # then shown as the feed supplied it, with no AI summary. The
+  # enricher's Postgres role and Redis ACL user are still created.
+  enabled: true
   # -- /livez stall window (see workerHealth): one incident's extraction is up to three LLM calls of llmRequestTimeoutSecs (300s) each.
   progressStallSecs: 1800
   # -- The Deployment's rollout. `Recreate` (the default) stops the old

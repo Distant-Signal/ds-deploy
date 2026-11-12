@@ -351,7 +351,7 @@ jobs:
             --set notifications.pubsub.enabled=true \
             --set gcp.projectNumber=000000000000 > /dev/null
 
-      # `enricher` (no `enabled` toggle) and movement-relay (on by default)
+      # The enricher (`enricher.enabled`, on by default) and movement-relay (on by default)
       # `fail()` at render time if their required connection settings are
       # left empty, even though `helm lint` itself tolerates it: the LLM
       # endpoint, SSO, and a Kafka connection. movement-relay falls back to
@@ -3014,6 +3014,58 @@ jobs:
             --set api.sso.redirectUrl=https://app.example.com/callback \
             --set api.sso.postLoginRedirectUrl=https://app.example.com/ \
             > /dev/null
+
+      # DS-435: a stranger can render the chart. values-minimal.yaml is the
+      # smallest install (docs/first-install.md): no LLM endpoint, no Kafka
+      # broker, no RDM key and no external identity provider, so it renders
+      # with no --set at all and runs without the enricher and
+      # movement-relay. values-production-example.yaml is the sanitised
+      # layout of a real deployment and must render too. Both lint
+      # --strict. enricher.enabled=false drops the LLM requirement and
+      # every enricher object; the default still renders the enricher.
+      - name: helm template (values-minimal.yaml and values-production-example.yaml)
+        run: |
+          set -euo pipefail
+          fail() { echo "$1" >&2; exit 1; }
+          chart=charts/distant-signal
+          for f in values-minimal.yaml values-production-example.yaml; do
+            helm lint --strict "${chart}" -f "${chart}/${f}"
+            helm template distant-signal "${chart}" -f "${chart}/${f}" > "${RUNNER_TEMP}/${f}.out"
+          done
+          min="${RUNNER_TEMP}/values-minimal.yaml.out"
+          prod="${RUNNER_TEMP}/values-production-example.yaml.out"
+          # The minimal install has no enricher or movement-relay anywhere.
+          if grep -q -E 'name: distant-signal-(enricher|movement-relay)$|component: (enricher|movement-relay)$' "${min}"; then
+            fail "values-minimal.yaml must render no enricher or movement-relay object"
+          fi
+          if grep -q -E '^  llm-api-key:' "${min}"; then fail "values-minimal.yaml must render no llm-api-key"; fi
+          grep -q 'name: distant-signal-api$' "${min}" || fail "values-minimal.yaml must render the api"
+          grep -q 'name: distant-signal-poller-irish-rail-gtfs$' "${min}" || fail "values-minimal.yaml must render the Irish Rail GTFS poller"
+          grep -q 'name: distant-signal-devauthentik-worker$' "${min}" || fail "values-minimal.yaml must render the bundled identity provider"
+          # The production layout keeps the enricher and movement-relay and
+          # names its Secrets rather than holding a credential.
+          grep -q 'name: distant-signal-enricher$' "${prod}" || fail "values-production-example.yaml must render the enricher"
+          grep -q 'name: distant-signal-movement-relay$' "${prod}" || fail "values-production-example.yaml must render movement-relay"
+          # enricher.enabled=false on the production layout: no LLM settings
+          # needed, and nothing of the enricher renders.
+          off=$(helm template distant-signal "${chart}" -f "${chart}/values-production-example.yaml" \
+            --set enricher.enabled=false --set enricher.llm.baseUrl= --set enricher.llm.model= --set enricher.llm.existingSecret=)
+          if grep -q -E 'name: distant-signal-enricher$|component: enricher$|^      - enricher$|^  llm-api-key:' <<<"${off}"; then
+            fail "enricher.enabled=false must render no enricher Deployment, Service account, scrape target or key"
+          fi
+          # Without enricher.enabled=false the missing LLM endpoint still
+          # aborts the render.
+          # shellcheck disable=SC2310 # the render is expected to fail here; that failure is the assertion
+          if err=$(helm template distant-signal "${chart}" -f "${chart}/values-minimal.yaml" \
+              --set enricher.enabled=true --set redis.acl.clients.enricher=true --set enricher.llm.baseUrl= 2>&1 >/dev/null); then
+            fail "enricher.enabled=true with no enricher.llm.baseUrl must fail the render"
+          fi
+          grep -qF 'enricher.llm.baseUrl is empty' <<<"${err}" || fail "the failure must name enricher.llm.baseUrl: ${err}"
+          # No secret value, tailnet or personal host in the reference files.
+          if grep -n -i -E 'cursed\.solutions|ts\.net|svac_|fdrl_|wrkspc_|BEGIN [A-Z ]*PRIVATE KEY|sealedsecret|encryptedData' \
+              "${chart}/values-minimal.yaml" "${chart}/values-production-example.yaml" "${chart}/values-example.yaml"; then
+            fail "a reference values file holds an internal host, account id or secret"
+          fi
 
       # Every CronJob the chart renders must set an explicit spec.timeZone
       # (docs/superpowers/specs/2026-09-30-backup-and-observability-gaps-design.md,

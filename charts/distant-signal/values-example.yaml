@@ -1,19 +1,35 @@
-# A filled-in "real deployment" example. Render it with:
+# A filled-in "real deployment" example with every feature this chart can
+# turn on: all five pollers, the island-of-Ireland feeds, the ingest-writer,
+# the Redis ACL and the per-service Postgres roles. It renders against the
+# current chart, including its ingest preflight. The images are the chart's
+# own (values.yaml pins every one by tag and digest from
+# ghcr.io/distant-signal/images), so nothing here overrides one.
 #
-#   helm template distant-signal ./charts/distant-signal -f charts/distant-signal/values-example.yaml
+# Render it with no cluster, from a checkout:
+#
+#   helm template distant-signal charts/distant-signal \
+#     -f charts/distant-signal/values-example.yaml
+#
+# or from the published, cosign-signed chart:
+#
+#   helm template distant-signal oci://ghcr.io/distant-signal/charts/distant-signal \
+#     --version <chart version> -f values-example.yaml
+#
+# Other starting points: values-minimal.yaml is the smallest install that
+# renders with no external service (no LLM, no Kafka, no RDM key), and
+# values-production-example.yaml is the layout of a real single-node
+# deployment (sizing, role and ACL layout, existingSecret references).
+# docs/first-install.md lists the Secrets and objects an install expects, in
+# order.
 #
 # Every RDM base URL below is a placeholder host. Replace them, and the API
 # keys, with the real product URLs and keys from your Rail Data Marketplace
 # subscription before installing this for real (production runs all four RDM
-# pollers; see local.env.example in the repository root).
-
-imagePullSecrets:
-  - name: registry-creds
+# pollers; see local.env.example in the repository root). The `replace-...`
+# values are placeholders, not credentials: put real ones in existingSecret
+# Secrets rather than in a values file.
 
 api:
-  image:
-    repository: registry.example.com/distant-signal/api
-    tag: "0.1.0"
   replicaCount: 2
   logLevel: info
   database:
@@ -51,9 +67,6 @@ api:
   # see its comment).
 
 aggregator:
-  image:
-    repository: registry.example.com/distant-signal/aggregator
-    tag: "0.1.0"
   pollIntervalSecs: 60
   historyRetentionDays: 30
   resources:
@@ -114,9 +127,6 @@ redis:
 # trust-consumer's direct writes rely on.
 ingestWriter:
   enabled: true
-  image:
-    repository: registry.example.com/distant-signal/ingest-writer
-    tag: "0.1.0"
   loops:
     enabled: true
   # The island-of-Ireland pollers enabled below each XADD to their own
@@ -127,9 +137,6 @@ ingestWriter:
     ioi-live: apply
 
 enricher:
-  image:
-    repository: registry.example.com/distant-signal/enricher
-    tag: "0.1.0"
   llm:
     # Both of these are REQUIRED -- leaving either empty aborts the render
     # (see templates/enricher-deployment.yaml). Any OpenAI-compatible
@@ -147,9 +154,6 @@ enricher:
       memory: 512Mi
 
 frontend:
-  image:
-    repository: registry.example.com/distant-signal/frontend
-    tag: "0.1.0"
   replicaCount: 2
   resources:
     requests:
@@ -199,60 +203,39 @@ postgresql:
 pollers:
   incidents:
     enabled: true
-    image:
-      repository: registry.example.com/distant-signal/poller-incidents
-      tag: "0.1.0"
     baseUrl: https://rdm.example.com/incidents
     apiKey: replace-me-rdm-incidents-key
     pollIntervalSecs: 300
   stations:
     enabled: true
-    image:
-      repository: registry.example.com/distant-signal/poller-stations
-      tag: "0.1.0"
     baseUrl: https://rdm.example.com/json/1.0
     apiKey: replace-me-rdm-stations-key
     pollIntervalSecs: 86400
   tocs:
     enabled: true
-    image:
-      repository: registry.example.com/distant-signal/poller-tocs
-      tag: "0.1.0"
     baseUrl: https://rdm.example.com/tocs
     apiKey: replace-me-rdm-tocs-key
     pollIntervalSecs: 86400
   ldbws:
     enabled: true
-    image:
-      repository: registry.example.com/distant-signal/poller-ldbws
-      tag: "0.1.0"
     baseUrl: https://rdm.example.com/LDBWS/api/20220120
     apiKey: replace-me-rdm-ldbws-key
     numRows: 10
     pollIntervalSecs: 60
   tfl:
     enabled: true
-    image:
-      repository: registry.example.com/distant-signal/poller-tfl
-      tag: "0.1.0"
     # No `baseUrl` override here, unlike the RDM pollers above: TfL's
     # Unified API is a real, public, documented endpoint, so
     # `values.yaml`'s default (`https://api.tfl.gov.uk`) is already correct.
     apiKey: replace-me-tfl-app-key
     pollIntervalSecs: 300
 
-# Exercises the poller-irish-rail-gtfs Deployment/PodMonitor/Secret
-# templates' enabled=true render path in CI (helm-lint job's
-# "values-example.yaml" step) -- see
-# docs/superpowers/plans/2026-09-05-ireland-rail-support-plan.md Task A5.
+# The Irish Rail GTFS feed. CI renders it enabled here (the helm-lint job).
 # No apiKey field, unlike the RDM pollers above: this feed needs none.
 pollerIrishRailGtfs:
   enabled: true
 
-# Exercises the poller-irish-rail-live Deployment/PodMonitor/Secret
-# templates' enabled=true render path in CI (helm-lint job's
-# "values-example.yaml" step) -- see
-# docs/superpowers/plans/2026-09-05-ireland-rail-support-plan.md Task B5.
+# The Irish Rail live feed. CI renders it enabled here (the helm-lint job).
 # No apiKey field, unlike the RDM pollers above: this feed needs none.
 pollerIrishRailLive:
   enabled: true
@@ -276,12 +259,9 @@ trustConsumer:
 
 metrics:
   podMonitor:
-    # Exercises the PodMonitor template's enabled=true render path in CI
-    # (helm-lint job's "values-example.yaml" step) -- see
-    # docs/superpowers/plans/2026-09-05-status-observability-grafana-plan.md
-    # Task 2. helm template doesn't validate against a live API server, so
-    # this renders and type-checks the object without needing the
-    # monitoring.coreos.com CRDs installed anywhere in CI.
+    # Needs the Prometheus Operator's monitoring.coreos.com CRDs at install
+    # time. CI renders it enabled here; helm template doesn't validate
+    # against a live API server, so no CRDs are needed to render.
     enabled: true
 
 ingress:

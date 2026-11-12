@@ -464,6 +464,14 @@ the movement stream from Redis. */}}
   (dict "component" "trust-backlog-consumer" "metricsPort" .Values.trustBacklogConsumer.metricsPort "healthPorts" (list .Values.trustBacklogConsumer.healthPort) "egress" $queueDbWorker)
   (dict "component" "full-coverage-consumer" "metricsPort" .Values.fullCoverageConsumer.metricsPort "healthPorts" (list .Values.fullCoverageConsumer.healthPort) "egress" $queueDbWorker "brokers" .Values.trustConsumer.kafka.brokers)
 }}
+{{- /* enricher.enabled: false leaves the enricher out (its Deployment does not render). */}}
+{{- if not .Values.enricher.enabled }}
+{{- $kept := list }}
+{{- range $w := $workers }}
+{{- if ne $w.component "enricher" }}{{- $kept = append $kept $w }}{{- end }}
+{{- end }}
+{{- $workers = $kept }}
+{{- end }}
 {{- if .Values.ingestWriter.enabled }}
 {{- /* Postgres; Redis too once an ingestWriter.streams entry is not off (plan 3a.3). */}}
 {{- $writerEgress := dict "postgres" true }}

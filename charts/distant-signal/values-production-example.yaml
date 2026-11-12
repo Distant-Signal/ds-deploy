@@ -1,0 +1,456 @@
+# A production-shaped reference values file: the layout of one real
+# single-node deployment (resource sizing, Postgres tuning, the per-service
+# role and Redis ACL layout, the feed and poller shapes, the Deployment
+# strategies) with every credential, hostname, account id and bucket path
+# replaced by a placeholder. It is a reference to read and copy from, not a
+# file to install as it is: the hosts below are example.com names and every
+# Secret named here (existingSecret) is yours to create.
+#
+# Render it (no cluster needed):
+#
+#   helm template distant-signal charts/distant-signal \
+#     -f charts/distant-signal/values-production-example.yaml
+#
+# For a first install start from values-minimal.yaml and docs/first-install.md
+# (in the ds-deploy repository); come back here to size and harden.
+#
+# What is deliberately not in it:
+#   - Secret values. Every credential is an existingSecret reference, in the
+#     chart's default key names, so a values file never holds one. How to
+#     create each Secret: docs/first-install.md.
+#   - Image pins. The chart's own values.yaml pins every first-party image
+#     by tag and digest; do not override them here.
+#   - pgBackRest point-in-time recovery. It needs an image this repository
+#     does not build and an S3 bucket: docs/postgres-pitr.md.
+#   - The Darwin Push Port relay, the transit timetable networks and the
+#     Cloudflare tunnel (a cluster-specific ingress): each has its own
+#     section in the chart README.
+#   - Rollout flags for features still being switched on. Those are
+#     per-deployment decisions: see the "Values reference".
+# Resource numbers are measured p95 and maximum figures from the deployment
+# this was taken from, with headroom. Measure your own before copying them.
+
+imagePullSecrets: []
+
+# ---- Public site -------------------------------------------------------
+
+frontend:
+  # NEXT_PUBLIC_SITE_URL: the public origin, for share and invite links and
+  # same-origin checks. Same host as the sign-in redirect URLs below.
+  siteUrl: "https://status.example.com"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 768Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  frontend:
+    enabled: true
+    host: status.example.com
+  # The browser only talks to the frontend, which proxies to the api
+  # in-cluster, so the api needs no public host.
+  api:
+    enabled: false
+    host: ""
+  tls:
+    - secretName: distant-signal-tls
+      hosts:
+        - status.example.com
+
+# ---- Sign-in (OIDC) ----------------------------------------------------
+
+api:
+  sso:
+    issuerUrl: "https://sso.example.com/application/o/distant-signal/"
+    clientId: "distant-signal"
+    # A Secret you create, holding the OIDC client secret (key
+    # sso-client-secret by default).
+    existingSecret: distant-signal-sso
+    # The FRONTEND host: the session cookie the callback sets must be scoped
+    # to the origin the browser uses for everything else.
+    redirectUrl: "https://status.example.com/api/auth/callback"
+    postLoginRedirectUrl: "https://status.example.com"
+  # Internal OAuth serves only the optional MCP companion service.
+  internalOauth:
+    issuerUrl: "https://sso.example.com/application/o/distant-signal-internal/"
+    clientId: "distant-signal-internal"
+  # Migrations run in the pre-upgrade hook Job (migrate.job below), and the
+  # background sweeps in the ingest-writer, so the api only serves.
+  migrateOnStartup: false
+  backgroundLoops: false
+  # RollingUpdate: maxSurge 1 and maxUnavailable 0 hide image pulls and
+  # startup behind the old pod. The surge pod doubles the api's Postgres
+  # pool (2 x database.maxConnections), which max_connections below covers.
+  strategy:
+    type: RollingUpdate
+  minReadySeconds: 10
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 3Gi
+  bankHolidays:
+    enabled: true
+    cronjob:
+      enabled: true
+  calendarFeed:
+    enabled: true
+
+migrate:
+  job:
+    enabled: true
+
+apiMaintenance:
+  enabled: true
+  backoffLimit: 3
+
+shared:
+  corpusFallback:
+    enabled: true
+  journeyBreaks:
+    enabled: true
+
+# ---- Workers -----------------------------------------------------------
+
+aggregator:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 384Mi
+
+notifier:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 384Mi
+
+# The enricher on the OpenAI-compatible endpoint of your choice. Turn it off
+# (enabled: false) to run with no LLM. With provider: anthropic the Claude
+# settings are enricher.llm.anthropic.* (docs in the chart README).
+enricher:
+  enabled: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 512Mi
+  llm:
+    baseUrl: "https://llm.example.com/v1"
+    model: "replace-with-a-model-name"
+    # A Secret you create, holding the API key under llm-api-key.
+    existingSecret: distant-signal-llm
+  llmRequestTimeoutSecs: 120
+
+# ---- Ingest: the writer, the TRUST movement path and the feeds ---------
+
+ingestWriter:
+  enabled: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 320Mi
+    limits:
+      memory: 640Mi
+  loops:
+    enabled: true
+  # The streams the writer applies. Each producer enabled below needs its
+  # stream on "apply", or the render fails.
+  streams:
+    ioi-gtfs: apply
+    ioi-live: apply
+    ioi-nir: apply
+
+# RDM Train Movements (Kafka). movement-relay is the only Kafka client; the
+# three consumers read the Redis stream it fills. RDM issues one consumer
+# group per account per product, and it belongs to movement-relay.
+movementRelay:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      memory: 192Mi
+  kafka:
+    brokers: "kafka.example.com:9092"
+    topic: "TRAIN_MVT_ALL_TOC"
+    consumerGroup: "SC-replace-with-your-rdm-consumer-group"
+    saslMechanism: "PLAIN"
+    # A Secret you create, with movement-relay-kafka-sasl-username and
+    # movement-relay-kafka-sasl-password.
+    existingSecret: distant-signal-movement-kafka
+
+trustConsumer:
+  replicaCount: 1
+  movementFeed: redis-stream
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      memory: 384Mi
+  kafka:
+    brokers: "kafka.example.com:9092"
+    topic: "TRAIN_MVT_ALL_TOC"
+    consumerGroup: "SC-replace-with-your-rdm-consumer-group"
+    saslMechanism: "PLAIN"
+
+trustBacklogConsumer:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 48Mi
+    limits:
+      memory: 256Mi
+
+fullCoverageConsumer:
+  replicaCount: 1
+  movementFeed: redis-stream
+  resources:
+    requests:
+      cpu: 50m
+      memory: 768Mi
+    limits:
+      memory: 1Gi
+  windowedStats:
+    enabled: true
+    lineMembership: scope
+
+# Rail Data Marketplace and TfL pollers. The base URLs are the product URLs
+# from your own RDM subscription. Each key is a Secret you create, under the
+# chart's default key (rdm-<poller>-api-key).
+pollers:
+  incidents:
+    enabled: true
+    baseUrl: "https://rdm.example.com/incidents.xml"
+    existingSecret: distant-signal-rdm-incidents
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+  # stations and tocs are idempotent daily pollers: a CronJob, not a
+  # long-running Deployment.
+  stations:
+    enabled: true
+    mode: cronjob
+    baseUrl: "https://rdm.example.com/stations/"
+    existingSecret: distant-signal-rdm-stations
+    resources:
+      requests:
+        cpu: 5m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+  tocs:
+    enabled: true
+    mode: cronjob
+    baseUrl: "https://rdm.example.com/tocs.xml"
+    existingSecret: distant-signal-rdm-tocs
+    resources:
+      requests:
+        cpu: 5m
+        memory: 16Mi
+      limits:
+        memory: 128Mi
+  ldbws:
+    enabled: true
+    baseUrl: "https://rdm.example.com/LDBWS/api/20220120/"
+    existingSecret: distant-signal-rdm-ldbws
+    resources:
+      requests:
+        cpu: 15m
+        memory: 48Mi
+      limits:
+        memory: 192Mi
+  tfl:
+    enabled: true
+    baseUrl: "https://api.tfl.gov.uk"
+    existingSecret: distant-signal-tfl
+    resources:
+      requests:
+        cpu: 5m
+        memory: 32Mi
+      limits:
+        memory: 192Mi
+
+# The island-of-Ireland feeds: anonymous GETs, no key.
+pollerIrishRailGtfs:
+  enabled: true
+pollerIrishRailLive:
+  enabled: true
+pollerNirStations:
+  enabled: true
+
+# The CIF timetable, pushed over SFTP by the timetable provider.
+scheduleFeed:
+  enabled: true
+  ingest:
+    resources:
+      requests:
+        cpu: 5m
+        memory: 32Mi
+      limits:
+        memory: 256Mi
+  corpus:
+    enabled: true
+    formatPrecedence: xml
+  # schedule-reference as a scheduled Job: its nightly publish peaks near
+  # 1.4Gi, which a standing Deployment would reserve all day.
+  reference:
+    mode: cronjob
+    forwardPublishDays: 60
+  sftp:
+    authMethod: password
+    destinationFolder: "incoming"
+    # Secrets you create: the push account's password and the server's SSH
+    # host key, so a rebuilt cluster keeps both and the sender notices
+    # nothing.
+    existingSecret: distant-signal-schedulefeed-sftp
+    existingSecretPasswordKey: schedule-sftp-password
+    existingSecretHostKey: distant-signal-schedulefeed-sftp
+  service:
+    type: NodePort
+    nodePort: 30450
+    externalTrafficPolicy: Local
+
+# ---- Postgres ----------------------------------------------------------
+
+postgresql:
+  persistence:
+    size: 32Gi
+  # shared_buffers is 1GB (values.yaml); the request is below the limit
+  # because measured use peaks near 2.6Gi.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 2Gi
+    limits:
+      memory: 6Gi
+  config:
+    # The per-service roles' CONNECTION LIMITs sum above the 97 usable
+    # connections of Postgres's default 100; the render refuses that.
+    max_connections: 200
+  # The superuser (the image's POSTGRES_USER), from a Secret you create.
+  auth:
+    existingSecret: distant-signal-postgres-auth
+    existingSecretPasswordKey: postgres-password
+  # Roles: the setup Job creates the infrastructure roles and one role per
+  # service (docs/postgres-app-role.md). Every password is a Secret you
+  # create, one per role, under the chart's default key names
+  # (docs/first-install.md, step 2). Left unset, the chart generates the
+  # password into its own Secret instead.
+  roles:
+    enabled: true
+    # initScript stays false on an existing data directory (it would never
+    # run, and turning it on restarts Postgres).
+    initScript: false
+    setupJob:
+      enabled: true
+    owner:
+      existingSecret: distant-signal-postgres-owner
+    exporter:
+      existingSecret: distant-signal-postgres-exporter
+    dump:
+      existingSecret: distant-signal-postgres-dump
+    backup:
+      existingSecret: distant-signal-postgres-backup
+    perService:
+      enabled: true
+      api:
+        existingSecret: distant-signal-postgres-api
+      aggregator:
+        existingSecret: distant-signal-postgres-aggregator
+      enricher:
+        existingSecret: distant-signal-postgres-enricher
+      notifier:
+        existingSecret: distant-signal-postgres-notifier
+      # The writer's connectionLimit is pinned above the computed one: its
+      # busiest days reached more sessions than its pool plus lock.
+      writer:
+        existingSecret: distant-signal-postgres-writer
+        connectionLimit: 12
+      schedule_ingest:
+        existingSecret: distant-signal-postgres-schedule-ingest
+      schedule_reference:
+        existingSecret: distant-signal-postgres-schedule-reference
+      stations:
+        existingSecret: distant-signal-postgres-stations
+      incidents:
+        existingSecret: distant-signal-postgres-incidents
+      trust_backlog:
+        existingSecret: distant-signal-postgres-trust-backlog
+      trust_consumer:
+        existingSecret: distant-signal-postgres-trust-consumer
+      full_coverage_ro:
+        existingSecret: distant-signal-postgres-full-coverage-ro
+      ldbws_ro:
+        existingSecret: distant-signal-postgres-ldbws-ro
+
+# ---- Redis -------------------------------------------------------------
+
+redis:
+  # 1792mb of data in a 3Gi limit: room for the stream budgets, an AOF
+  # rewrite's copy-on-write and the process itself.
+  maxmemory: 1792mb
+  resources:
+    requests:
+      cpu: 50m
+      memory: 1280Mi
+    limits:
+      memory: 3Gi
+  persistence:
+    size: 4Gi
+  # One user per client at stage narrow, with the shared default user kept
+  # on but given its own password that no client holds (docs/redis-acl.md).
+  acl:
+    enabled: true
+    stage: narrow
+    defaultUser: "on-unshared"
+    existingSecret: distant-signal-redis-users
+    # Reload the users in place when the Secret changes, instead of
+    # restarting Redis.
+    reload:
+      mode: inPlace
+    clients:
+      enricher: true
+      movementRelay: true
+      trustConsumer: true
+      trustBacklogConsumer: true
+      fullCoverageConsumer: true
+      ingestWriter: true
+      pollerIncidents: true
+      pollerLdbws: true
+      pollerTfl: true
+      pollerTocs: true
+      pollerIrishRailGtfs: true
+      pollerIrishRailLive: true
+      pollerNirStations: true
+
+# ---- Network and metrics -----------------------------------------------
+
+networkPolicy:
+  enabled: true
+  ingressControllerNamespace: ingress-nginx
+  monitoringNamespace: monitoring
+  egress:
+    enabled: true
+
+metrics:
+  podMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true

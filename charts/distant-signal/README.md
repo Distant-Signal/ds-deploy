@@ -168,8 +168,47 @@ Override one the same way, with a `<tag>@sha256:...` string.
 
 ## Install
 
+**First time, on a cluster that has never run this chart:** read
+[docs/first-install.md](../../docs/first-install.md) first. It lists, in
+order, the Secrets and objects the Postgres roles Job, the Redis ACL and the
+ingest preflight expect, then the install, the migrations, the pollers and
+how to verify the result. Three values files in this directory are the
+starting points:
+
+| File | What it is |
+|---|---|
+| `values-minimal.yaml` | The smallest install that renders with no external service: no LLM (`enricher.enabled: false`), no Kafka broker (`movementRelay.enabled: false`), no RDM key, the bundled dev identity provider and the three island-of-Ireland feeds that need no key. CI renders it with no `--set`. |
+| `values-example.yaml` | Every feature on (all pollers, the ingest-writer, the Redis ACL, the per-service roles), with placeholder hosts and keys. |
+| `values-production-example.yaml` | The layout of a real single-node deployment (sizing, Postgres tuning, role and ACL layout, feeds), sanitised: every credential is an `existingSecret` reference, every host an `example.com` name. A reference to copy from, not a file to install as it is. |
+
+Render the minimal install with no cluster and nothing to configure, from
+the published, cosign-signed chart (the images are the chart's own pins from
+`ghcr.io/distant-signal/images`):
+
+```bash
+helm template distant-signal oci://ghcr.io/distant-signal/charts/distant-signal \
+  --version <chart version> -f values-minimal.yaml
+```
+
+(`values-minimal.yaml` is in this directory of the ds-deploy repository;
+the chart's `helm show values` prints `values.yaml`, not it.) To install it, create the Redis users Secret it names first
+([docs/first-install.md](../../docs/first-install.md), step 3), then:
+
+```bash
+helm install distant-signal oci://ghcr.io/distant-signal/charts/distant-signal \
+  --version <chart version> -n distant-signal --create-namespace -f values-minimal.yaml
+```
+
+The default values alone do not render: the ingest preflight lists what is
+missing (the Postgres per-service roles, the ingest-writer and the Redis
+ACL), and the enricher, the api's sign-in and movement-relay each need their
+own settings. A full install with every setting on the command line looks
+like this (`ci/ingest-prereqs.yaml` is the least a fresh install adds so
+that the ingest preflight passes):
+
 ```bash
 helm install distant-signal ./charts/distant-signal -n distant-signal --create-namespace \
+  -f charts/distant-signal/ci/ingest-prereqs.yaml \
   --set enricher.llm.baseUrl=https://llm.example.com/v1 \
   --set enricher.llm.model=your-model-name \
   --set api.sso.issuerUrl=https://sso.example.com/realms/rail \
@@ -193,14 +232,16 @@ pollers are off.
 
 `enricher.llm.baseUrl`, `enricher.llm.model`, the five `api.sso.*` values
 and the RDM Train Movements Kafka connection above are the chart's
-**required** values; everything else has a working default. Leaving any of
+**required** values (each has an off switch or a bundled stand-in, below);
+everything else has a working default. Leaving any of
 them empty **aborts the render** with an explicit message rather than
 deploying a pod that cannot work:
 
-- The enricher has no `enabled` toggle, and `baseUrl`/`model` become plain
+- With `enricher.enabled` on (the default), `baseUrl`/`model` become plain
   (non-optional) env vars on its binary, so an empty value would deploy a
   pod that fails every extraction request forever with nothing but log
-  noise to show for it.
+  noise to show for it. `enricher.enabled: false` runs no enricher and
+  needs neither.
 - The api's five `SSO_*` env vars are declared with no defaults in
   `crates/api/src/data/config.rs`, so an api container missing any of them
   exits immediately with "the following required arguments were not
@@ -229,7 +270,8 @@ enricher's own output and nothing else — the status pages keep working.
 To pick `enricher.llm.model` and check that it fits your timeouts on your
 hardware, see `docs/enricher-model-eval.md`.
 
-With the worked example values:
+With the worked example values (every feature on; placeholder hosts and
+keys to replace):
 
 ```bash
 helm install distant-signal ./charts/distant-signal -n distant-signal --create-namespace \
@@ -697,6 +739,8 @@ Deployments, then upgrade with `requirePass=true`.
 
 ## Redis ACL users (optional)
 
+A fresh install needs the users Secret before anything renders: [docs/first-install.md](../../docs/first-install.md), step 3.2, has every key and a recipe.
+
 Off by default (`redis.acl.enabled: false`); with it off nothing below
 renders. It builds on `redis.auth`: each client gets its own Redis user
 with only the commands and keys it needs, and the shared `default` user can
@@ -745,6 +789,8 @@ writer always applies, so the ACL at its last step is a prerequisite of
 every install (see "Release B" below).
 
 ## Per-service Postgres roles (optional)
+
+A fresh install gets these roles from the initdb hook and the setup Job; [docs/first-install.md](../../docs/first-install.md) lists the passwords' Secrets, the order things happen in and how to check them.
 
 Off by default (`postgresql.roles.perService.enabled: false`). Stage 0b of
 `docs/postgres-app-role.md`: on top of `postgresql.roles`, every service
@@ -2427,11 +2473,17 @@ used for and why persistence defaults on.
 
 ### enricher
 
-There is intentionally no `replicaCount` and no `enabled` toggle: the
-enricher is a singleton consumer of one Redis consumer group plus one sweep
-loop, and it renders unconditionally.
+There is intentionally no `replicaCount`: the enricher is a singleton
+consumer of one Redis consumer group plus one sweep loop. It renders by
+default; `enricher.enabled: false` leaves out its Deployment, ServiceAccount,
+scrape target, NetworkPolicy and `llm-api-key` Secret entry, and with them
+the LLM requirement below (the minimal install, `values-minimal.yaml`, does
+this). Its Postgres role and Redis ACL user (and that user's key in the
+users Secret) are still created, but `redis.acl.clients.enricher` is no
+longer required, as no pod connects as it.
 
-`enricher.llm.baseUrl` and `enricher.llm.model` are **required** (alongside
+With the enricher on, `enricher.llm.baseUrl` and `enricher.llm.model` are
+**required** (alongside
 the five `api.sso.*` values) — leaving either empty aborts the render, because both
 become non-optional env vars on the binary and an empty value would deploy a
 pod that fails every request forever. With `enricher.llm.provider: anthropic`
@@ -2441,6 +2493,7 @@ they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 
 | Key | Default | Description |
 |---|---|---|
+| `enricher.enabled` | `true` | Render the enricher (Deployment, ServiceAccount, scrape target, NetworkPolicy, `llm-api-key` Secret entry). `false` runs no enricher and drops the `baseUrl`/`model` and `redis.acl.clients.enricher` requirements: incident text is then shown as the feed supplied it, with no AI summary. Its Postgres role and Redis ACL user are still created. |
 | `enricher.image.repository` | `ghcr.io/distant-signal/images/enricher` | enricher image repository. |
 | `enricher.image.tag` | `""` | Empty means "use the chart's appVersion". |
 | `enricher.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |

@@ -528,7 +528,7 @@ counts as deployed. Takes (dict "root" $ "client" <redis.acl.clients key>).
      lost its Redis client in ingest phase 5, step 5.4. */ -}}
 {{- if not (has .client (list "api")) -}}
 {{- $pollers := dict "pollerIncidents" "incidents" "pollerLdbws" "ldbws" "pollerTfl" "tfl" "pollerTocs" "tocs" "pollerStations" "stations" -}}
-{{- $own := dict "pollerIrishRailGtfs" "pollerIrishRailGtfs" "pollerIrishRailLive" "pollerIrishRailLive" "pollerNirStations" "pollerNirStations" "movementRelay" "movementRelay" "darwinRelay" "darwinRelay" "ingestWriter" "ingestWriter" -}}
+{{- $own := dict "pollerIrishRailGtfs" "pollerIrishRailGtfs" "pollerIrishRailLive" "pollerIrishRailLive" "pollerNirStations" "pollerNirStations" "movementRelay" "movementRelay" "darwinRelay" "darwinRelay" "ingestWriter" "ingestWriter" "enricher" "enricher" -}}
 {{- /* poller-transit-schedule, one Deployment per enabled network
      (pollerTransitSchedule.networks.<network>.enabled, transit spec §13.1). */ -}}
 {{- $transit := dict "pollerTransitMetrolink" "metrolink" "pollerTransitNet" "net" "pollerTransitTfl" "tfl" -}}

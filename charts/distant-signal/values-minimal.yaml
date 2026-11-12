@@ -1,0 +1,120 @@
+# The smallest install that renders with no external service: no LLM
+# endpoint, no Kafka broker, no Rail Data Marketplace subscription and no
+# real identity provider. It runs the bundled Postgres and Redis, the api,
+# aggregator, notifier and frontend, the ingest-writer, the three
+# island-of-Ireland feeds (they need no key) and a throwaway Authentik
+# for sign-in. It is a starting point for a trial, not a production
+# layout: see values-production-example.yaml for that.
+#
+# Render it (no cluster needed). From a checkout of this repository:
+#
+#   helm template distant-signal charts/distant-signal \
+#     -f charts/distant-signal/values-minimal.yaml
+#
+# or from the published chart:
+#
+#   helm template distant-signal oci://ghcr.io/distant-signal/charts/distant-signal \
+#     --version <chart version> -f values-minimal.yaml
+#
+# Install it only after the Secrets and the Postgres roles in
+# docs/first-install.md (in the ds-deploy repository) are in place: the
+# chart renders without them, but Redis does not start without the ACL
+# Secret named below. The chart creates the rest (the Postgres and session
+# secrets) on first install.
+
+# The enricher sends incident text to an LLM. Left off here, so no endpoint
+# or key is needed. To turn it on, set enricher.enabled: true and point
+# enricher.llm.baseUrl and model at an OpenAI-compatible endpoint (the
+# values below are placeholders, not a service; the chart ignores them while
+# the enricher is off).
+enricher:
+  enabled: false
+  llm:
+    baseUrl: https://llm.example.com/v1
+    model: replace-with-a-model-name
+
+# Sign-in: the chart's bundled Authentik, for a local or dev cluster only
+# (kind, minikube, k3d): no HA, no TLS, and two manual steps the chart
+# cannot do (forward the NodePort, and run `helm upgrade` once after the
+# first install; chart README, "Local dev identity provider"). With
+# devAuthentik.enabled and api.sso.* left empty the chart computes the
+# issuer, client and redirects itself, which is what lets this file render
+# with nothing else set.
+#
+# For a real identity provider, replace this block with your own OIDC
+# client (the hosts are placeholders; "Single sign-on (OIDC)" in the chart
+# README has the rest):
+#
+#   devAuthentik:
+#     enabled: false
+#   api:
+#     sso:
+#       issuerUrl: https://sso.example.com/application/o/distant-signal/
+#       clientId: distant-signal
+#       existingSecret: distant-signal-sso      # key sso-client-secret
+#       redirectUrl: https://status.example.com/api/auth/callback
+#       postLoginRedirectUrl: https://status.example.com/
+devAuthentik:
+  enabled: true
+
+# movement-relay is the only Kafka client (RDM Train Movements). Off here:
+# the three TRUST consumers then read an empty stream, so there are no live
+# train movements. Turn it on with trustConsumer.kafka.* (brokers, topic,
+# consumerGroup, saslMechanism and a credential) once you hold an RDM
+# subscription.
+movementRelay:
+  enabled: false
+
+# The ingest prerequisites, the same block CI renders on
+# (ci/ingest-prereqs.yaml): every producer writes Postgres as its own role
+# or XADDs to a Redis stream the ingest-writer applies (docs/first-install.md).
+postgresql:
+  # The per-role CONNECTION LIMITs sum above the 97 connections usable at
+  # Postgres's default max_connections of 100; the render refuses that.
+  config:
+    max_connections: 200
+  roles:
+    enabled: true
+    setupJob:
+      enabled: true
+    perService:
+      enabled: true
+
+ingestWriter:
+  enabled: true
+  loops:
+    enabled: true
+  # The island-of-Ireland feeds below each XADD to their own stream, and the
+  # ingest preflight refuses to render unless the writer applies it.
+  streams:
+    ioi-gtfs: apply
+    ioi-nir: apply
+    ioi-live: apply
+
+redis:
+  acl:
+    enabled: true
+    # You create this Secret: one <user>-password key per ACL user, plus
+    # default-password (docs/first-install.md, step 3).
+    existingSecret: distant-signal-redis-users
+    stage: narrow
+    defaultUser: "on-unshared"
+    # Every client whose workload renders in this file. The disabled pollers,
+    # movement-relay and the enricher need none (their users and keys still
+    # exist in the Secret).
+    clients:
+      trustConsumer: true
+      fullCoverageConsumer: true
+      trustBacklogConsumer: true
+      ingestWriter: true
+      pollerIrishRailGtfs: true
+      pollerIrishRailLive: true
+      pollerNirStations: true
+
+# The island-of-Ireland feeds: public, no API key.
+pollerIrishRailGtfs:
+  enabled: true
+pollerIrishRailLive:
+  enabled: true
+pollerNirStations:
+  enabled: true

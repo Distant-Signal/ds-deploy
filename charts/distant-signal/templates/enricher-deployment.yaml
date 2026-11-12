@@ -1,13 +1,17 @@
 {{/*
 Fail-fast on an unusable LLM config, same pattern as poller-deployments.yaml's
-empty-baseUrl guard. Unlike the pollers, the enricher has no `enabled` toggle
-and renders unconditionally, so the guard is unconditional too.
+empty-baseUrl guard. The guard runs whenever the enricher renders (enricher.enabled, on
+by default).
 
 Both values are plain `String` fields on crates/enricher/src/config.rs's clap
 Config, not Options -- an empty string parses fine, so the pod would boot and
 then fail every single extraction request forever with nothing but log noise
 to show for it.
+
+enricher.enabled (default true) leaves the whole Deployment, and with it
+these guards, out: a minimal install needs no LLM endpoint (values-minimal.yaml).
 */}}
+{{- if .Values.enricher.enabled }}
 {{- $anthropic := include "distant-signal.enricherAnthropic" . }}
 {{- /* Profiles (crates/enricher/src/profile.rs): a known name, and a
 number or `omit` for each sampling override. */}}
@@ -270,6 +274,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 
+{{- end }}
 {{- /*
 This container's own env entries. distant-signal.mergeEnv renders them
 with enricher.extraEnv, which replaces an entry of the same name.

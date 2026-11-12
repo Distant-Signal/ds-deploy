@@ -28,6 +28,8 @@ uv run --no-sync python ../ci/scripts/lint-scripts.py   # shellcheck, shfmt, ruf
 uv run --no-sync python -m unittest discover -s scripts/tests -v
 helm lint --strict charts/distant-signal
 helm lint --strict charts/distant-signal -f charts/distant-signal/values-example.yaml
+helm lint --strict charts/distant-signal -f charts/distant-signal/values-minimal.yaml
+helm lint --strict charts/distant-signal -f charts/distant-signal/values-production-example.yaml
 helm lint --strict charts/ds-ingest-bucket -f charts/ds-ingest-bucket/ci/example-values.yaml
 uv run --no-sync scripts/chart-values-doc.py check     # the chart README's values reference vs values.yaml
 uv run --no-sync scripts/sync-core.py --check          # vendored ds-core files vs the core-version release (rewrite without --check)
@@ -39,6 +41,11 @@ uv run --no-sync scripts/check-config-defaults-chart.py --images   # the chart v
 uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --registry \
   --migrations ../ds-core/crates/ds-store/migrations   # ds-core checked out at core-version
 ```
+
+`values-minimal.yaml` (no external service), `values-example.yaml` and
+`values-production-example.yaml` (sanitised: no credential, real host or
+account id; CI greps for them) all render; `docs/first-install.md` is the
+stranger's checklist and must keep matching what the chart expects.
 
 CI's `chart-renders` job also asserts on many `helm template --set`
 renders; when a change touches a feature it covers, run its step's script

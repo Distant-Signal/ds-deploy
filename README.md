@@ -15,6 +15,16 @@ cosign keyless signing ([`chart.yml`](.github/workflows/chart.yml)). The
 signing identity is
 `https://github.com/Distant-Signal/ds-deploy/.github/workflows/chart.yml@refs/heads/main`.
 
+## Installing it
+
+A stranger's path is [docs/first-install.md](docs/first-install.md): the
+Secrets and objects a fresh cluster needs (the Postgres roles, the Redis
+users, what the ingest preflight checks), then the install and how to verify
+it. It starts from
+[`values-minimal.yaml`](charts/distant-signal/values-minimal.yaml), which
+renders with no external service; the chart's README lists the other values
+files.
+
 ## How a change reaches the cluster
 
 1. A service repository builds its image on `main` and pushes
