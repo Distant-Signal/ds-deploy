@@ -2207,6 +2207,26 @@ jobs:
           [[ "${n_healthz}" -eq 2 ]] \
             || fail "frontend readiness and liveness must both hit /healthz"
 
+          # The legal pages' operator details (frontend.legal.*): none by
+          # default, so the pages stay 404 until set; each non-empty value
+          # becomes its LEGAL_* env.
+          if grep -q 'name: LEGAL_\(OPERATOR_NAME\|CONTACT_EMAIL\|SSO_LOG_RETENTION\|LAST_UPDATED\|ICO_REGISTRATION\|MINIMUM_AGE\)' <<<"${fe}"; then
+            fail "frontend.legal.* must render no LEGAL_* env by default"
+          fi
+          fe_legal=$(render --show-only templates/frontend-deployment.yaml \
+            --set frontend.legal.operatorName=Example \
+            --set frontend.legal.contactEmail=legal@example.com \
+            --set frontend.legal.ssoLogRetention="30 days" \
+            --set frontend.legal.lastUpdated="1 November 2026" \
+            --set frontend.legal.icoRegistration=ZA000000 \
+            --set frontend.legal.minimumAge=16)
+          for pair in LEGAL_OPERATOR_NAME:Example LEGAL_CONTACT_EMAIL:legal@example.com \
+            "LEGAL_SSO_LOG_RETENTION:30 days" "LEGAL_LAST_UPDATED:1 November 2026" \
+            LEGAL_ICO_REGISTRATION:ZA000000 LEGAL_MINIMUM_AGE:16; do
+            grep -A1 "name: ${pair%%:*}\$" <<<"${fe_legal}" | grep -q "value: \"${pair#*:}\"" \
+              || fail "frontend.legal.* must render ${pair%%:*}=${pair#*:}"
+          done
+
           for t in aggregator notifier enricher; do
             out=$(render --show-only "templates/${t}-deployment.yaml")
             grep -A2 'livenessProbe:' <<<"${out}" | grep -q 'path: /livez' \
