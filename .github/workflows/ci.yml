@@ -3257,6 +3257,7 @@ jobs:
             want "${api}" RECENTLY_DELETED_RETENTION_DAYS "${days}" "api"
             want "${cj}" RECENTLY_DELETED_ENABLED "${en}" "api-maintenance"
             want "${cj}" RECENTLY_DELETED_RETENTION_DAYS "${days}" "api-maintenance"
+            want "$(doc Deployment distant-signal-frontend <<<"${out}")" RETENTION_RECENTLY_DELETED_DAYS "${days}" "frontend"
           }
 
           check false 7

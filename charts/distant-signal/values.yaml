@@ -2229,7 +2229,8 @@ api:
   # settings reach the api Deployment and the CronJob, so they cannot
   # drift; `retentionDays` must be 7 to 31 (the api refuses to start on any
   # other value, so the chart fails to render instead). Mention it on the
-  # /privacy page before turning it on.
+  # /privacy page before turning it on. The frontend gets `retentionDays` too
+  # (RETENTION_RECENTLY_DELETED_DAYS), so the privacy notice states it.
   recentlyDeleted:
     enabled: false
     retentionDays: 7
