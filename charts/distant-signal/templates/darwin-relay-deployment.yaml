@@ -171,6 +171,10 @@ Kafka value comes from the Push Port Secret.
             - name: METRICS_PORT
               value: {{ .Values.darwinRelay.metricsPort | quote }}
             {{- end }}
+            {{- if .Values.darwinRelay.lateReasonSampling }}
+            - name: DARWIN_LATE_REASON_SAMPLING
+              value: "true"
+            {{- end }}
             - name: RUST_LOG
               value: {{ .Values.darwinRelay.logLevel | quote }}
 {{- end }}

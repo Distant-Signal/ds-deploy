@@ -2865,6 +2865,7 @@ rows are duplicates, which the writer's Darwin-timestamp guards discard.
 | `darwinRelay.progressStallSecs` | `900` | `/livez` answers 503 once no relay-loop iteration has completed for this many seconds (waiting for Kafka or out a Redis outage never counts). |
 | `darwinRelay.metricsPort` | `9095` | Prometheus `/metrics` port. |
 | `darwinRelay.logLevel` | `info` | `RUST_LOG` value. |
+| `darwinRelay.lateReasonSampling` | `false` | Sets `DARWIN_LATE_REASON_SAMPLING=true` (rendered only when true): the relay counts `TS` and `LateReason` elements and logs up to 50 anonymised samples, to learn whether the Push Port carries late reasons (DS-512). Changes nothing the relay publishes; needs a darwin-relay image that has the probe. Turn it off after about a day. |
 | `darwinRelay.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `darwinRelay.resources` | requests `100m`/`128Mi`, limit `384Mi` | Container resource requests/limits. |
 | `darwinRelay.nodeSelector` | `{}` | Pod node selector. |

@@ -4672,6 +4672,14 @@ darwinRelay:
   progressStallSecs: 900
   metricsPort: 9095
   logLevel: info
+  # -- Count Push Port `TS` and `LateReason` elements and log a few
+  # anonymised samples (DARWIN_LATE_REASON_SAMPLING; DS-512,
+  # ds-ingest's docs/darwin-pushport.md, "Sampling LateReason"), to learn
+  # whether the topic carries late reasons before DS stores them. Changes
+  # nothing the relay publishes. Rendered only when true; needs a darwin-relay
+  # image built with PR #23 of ds-ingest (an older image ignores it). Turn it
+  # off after about a day.
+  lateReasonSampling: false
   extraEnv: []
   # One batch (a few thousand rows) in memory plus librdkafka's fetch
   # buffers; the topic is far busier than Train Movements.
