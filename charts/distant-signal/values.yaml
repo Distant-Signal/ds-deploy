@@ -6056,10 +6056,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.43327771655-ea0d9b972b39708eb725cb88bf64485171edea36"
+    tag: "build.43424769615-4ea936a49057dc648a8afe720970c9e137a659e8"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:6c8cf7c7ef8df4f2999eb1dff6d249fc828576ba8c24bf50b3e0d246b65cbb8a"
+    digest: "sha256:b1e3380b02cc0cbb9588b1880d5775d4345f9e365b653dfae568f75c84b782d8"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
