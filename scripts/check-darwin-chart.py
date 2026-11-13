@@ -19,6 +19,8 @@ render needs:
     ds:ingest:darwin; the writer applies `darwin`; the PodMonitor scrapes it;
     its NetworkPolicy allows Redis and the broker port; and the
     PrometheusRule has the staleness, consumer-lag and freshness alerts;
+  - `darwinRelay.lateReasonSampling` (default false) renders
+    DARWIN_LATE_REASON_SAMPLING=true only when true;
   - the guards: on without `ingestWriter.streams.darwin: apply`, without
     `redis.acl.clients.darwinRelay`, with a batch shorter than the stream's
     budget, or `darwin: apply` without the writer's own role, fails.
@@ -265,6 +267,24 @@ def check_on(helm: str, fail: list[str]) -> None:
     check_wiring(docs, fail)
 
 
+def check_sampling(helm: str, fail: list[str]) -> None:
+    """Check DARWIN_LATE_REASON_SAMPLING renders only with lateReasonSampling."""
+    var = "DARWIN_LATE_REASON_SAMPLING"
+    for args, want in (
+        (ON, None),
+        ((*ON, "--set", "darwinRelay.lateReasonSampling=true"), "true"),
+    ):
+        docs, err = render(helm, *args)
+        deployments = of_kind(docs, "Deployment", "darwin-relay")
+        if err or len(deployments) != 1:
+            fail.append(f"sampling: render failed ({want}): {err.strip()}")
+            continue
+        env = container_env(deployments[0], "darwin-relay")
+        got = get(env.get(var), "value")
+        if got != want:
+            fail.append(f"sampling: {var} is {got!r}, expected {want!r}")
+
+
 def check_guards(helm: str, fail: list[str]) -> None:
     """Check each missing prerequisite fails the render."""
     cases: dict[str, tuple[str, ...]] = {
@@ -305,6 +325,7 @@ def main() -> int:
     fail: list[str] = []
     check_off(helm, fail)
     check_on(helm, fail)
+    check_sampling(helm, fail)
     check_guards(helm, fail)
     for line in fail:
         print(f"FAIL: {line}")
