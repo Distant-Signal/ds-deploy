@@ -4615,9 +4615,9 @@ darwinRelay:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/darwin-relay
-    tag: "build.42437112227-9762f7132834d44be77ca69428329f3e45e1efb6"
+    tag: "build.43462464465-43453cc338a8205d77938a6c36a3ca25fe8c47b5"
     # -- Content digest override (see api.image.digest).
-    digest: "sha256:3274d755f71740b694a0dc811992ccddd2fca27d51d342e7a23d5391afa71270"
+    digest: "sha256:cc9d868e6e9c08ef1b5dc33096a856a50211882902d73863b1913be93ac72d40"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent

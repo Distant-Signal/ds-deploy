@@ -238,6 +238,19 @@ KEYLESS_BUCKET = (
         "scheduleFeed.serviceAccount.create=true",
     ),
 )
+# darwin-relay's LateReason sampling probe (DS-512): DARWIN_LATE_REASON_SAMPLING
+# renders only when darwinRelay.lateReasonSampling is true.
+LATE_REASON_SAMPLING = (
+    "-f",
+    str(PREREQS),
+    *REQUIRED,
+    *sets(
+        "darwinRelay.enabled=true",
+        "redis.acl.clients.darwinRelay=true",
+        "ingestWriter.streams.darwin=apply",
+        "darwinRelay.lateReasonSampling=true",
+    ),
+)
 DEFAULTS_RENDER = "chart defaults"
 EVERY_RENDER = "every workload"
 RENDERS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -247,6 +260,7 @@ RENDERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (EVERY_RENDER, EVERY),
     ("enricher on Claude", CLAUDE),
     ("schedulefeed keyless bucket", KEYLESS_BUCKET),
+    ("darwin-relay late reason sampling", LATE_REASON_SAMPLING),
 )
 
 
