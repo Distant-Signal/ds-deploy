@@ -2476,9 +2476,9 @@ migrate:
     # vendors; release-order.py checks every pinned image was built against
     # at most this release. Renovate's ds-core group bumps both, with the
     # digest.
-    tag: v0.14.4
+    tag: v0.14.5
     # -- The release's digest (its release notes list it).
-    digest: "sha256:2cf7d6c3e0135c26964a43504695aa11e285f267b69f4606928dd5201b08dcf1"
+    digest: "sha256:279b0c346d239204699f37510a41863fa5c3afd055f5be54da68f67abdc804a5"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-core
     pullPolicy: IfNotPresent

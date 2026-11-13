@@ -354,6 +354,15 @@ tables:
   # notifier: S (DS-184): a cancellation push words where the train now
   # runs and why (ds_store::trains::cancellation::derive_from_timetable).
   train_reasons: {class: shared-train, grants: {api: S, trust_backlog: SIU, notifier: S}}
+  # Each train's working class and operator code (DS-513), INTERNAL: class
+  # `internal`, so not in read_shared, and no api or notifier grant, because
+  # `toc_id` (a freight operator's code) must never be served or shown.
+  # trust_backlog: INSERT ... ON CONFLICT (trains_id) DO NOTHING, so INSERT
+  # and SELECT on the conflict target only (Postgres checks it even for DO
+  # NOTHING); never UPDATE or DELETE (the row goes with its train, by
+  # cascade). Read by the back-office report (scripts/delay-context-report.py)
+  # as the database owner.
+  train_service_labels: {class: internal, grants: {trust_backlog: [I, {privileges: S, columns: [trains_id]}]}}
   # trust_consumer: SELECT only on the ON CONFLICT (dedup_key) target
   # (security review L3); the writer has it through read_shared.
   # notifier: SD (DS-425): it deletes the signals its cursor has consumed
