@@ -251,6 +251,17 @@ LATE_REASON_SAMPLING = (
         "darwinRelay.lateReasonSampling=true",
     ),
 )
+# trust-backlog-consumer's train_service_labels writes (DS-513):
+# TRAIN_SERVICE_LABELS_ENABLED renders only when
+# trustBacklogConsumer.trainServiceLabelsEnabled is true.
+TRAIN_SERVICE_LABELS = (
+    "-f",
+    str(PREREQS),
+    *REQUIRED,
+    *sets(
+        "trustBacklogConsumer.trainServiceLabelsEnabled=true",
+    ),
+)
 DEFAULTS_RENDER = "chart defaults"
 EVERY_RENDER = "every workload"
 RENDERS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -261,6 +272,7 @@ RENDERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("enricher on Claude", CLAUDE),
     ("schedulefeed keyless bucket", KEYLESS_BUCKET),
     ("darwin-relay late reason sampling", LATE_REASON_SAMPLING),
+    ("trust-backlog-consumer train service labels", TRAIN_SERVICE_LABELS),
 )
 
 

@@ -4379,10 +4379,10 @@ fullCoverageConsumer:
 trustBacklogConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-backlog-consumer
-    tag: "build.42437112227-9762f7132834d44be77ca69428329f3e45e1efb6"
+    tag: "build.43479346701-f981d85977b8e0b40dfae4d271de9b7b660bd37d"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:4e0440928f958bb4ebcd7931270910c316d101b4f90eafee7a78d255243ab307"
+    digest: "sha256:04753af2d008e84819bdfbc6c3a63faa155bfa31408f3a4e74bb633c22ecfc4f"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4443,6 +4443,11 @@ trustBacklogConsumer:
   # exactly (same underlying crates/common/src/trust_timestamp.rs
   # correction, same default, same reasoning).
   trustTimestampCorrectionEnabled: true
+  # -- Write a `train_service_labels` row for each tracked-train movement
+  # (TRAIN_SERVICE_LABELS_ENABLED; DS-513). Rendered only when true; needs a
+  # trust-backlog-consumer image built with PR #24 of ds-ingest (an older
+  # image ignores it) and ds-core v0.14.5's migration and grants.
+  trainServiceLabelsEnabled: false
   extraEnv: []
   # Reads the movement-events Redis stream in bounded batches and POSTs
   # them on. The backlog itself lives in Redis, not in this process.

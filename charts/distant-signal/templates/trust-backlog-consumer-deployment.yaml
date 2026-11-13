@@ -162,4 +162,8 @@ with trustBacklogConsumer.extraEnv, which replaces an entry of the same name.
             # trust_event_backlog_retention_days doc comment).
             - name: TRUST_EVENT_BACKLOG_RETENTION_DAYS
               value: {{ .Values.aggregator.trustEventBacklogRetentionDays | quote }}
+            {{- if .Values.trustBacklogConsumer.trainServiceLabelsEnabled }}
+            - name: TRAIN_SERVICE_LABELS_ENABLED
+              value: "true"
+            {{- end }}
 {{- end }}
