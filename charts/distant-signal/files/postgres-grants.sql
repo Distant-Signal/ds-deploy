@@ -760,6 +760,8 @@ BEGIN
         ('train_reasons', 'trust_backlog', 'INSERT', ''),
         ('train_reasons', 'trust_backlog', 'UPDATE', ''),
         ('train_reasons', 'notifier', 'SELECT', ''),
+        ('train_service_labels', 'trust_backlog', 'INSERT', ''),
+        ('train_service_labels', 'trust_backlog', 'SELECT', 'trains_id'),
         ('notifier_forward_queue', 'api', 'SELECT', ''),
         ('notifier_forward_queue', 'writer', 'SELECT', ''),
         ('notifier_forward_queue', 'writer', 'INSERT', ''),

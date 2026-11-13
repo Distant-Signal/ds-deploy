@@ -67,7 +67,7 @@ this, for the release in `core-version`:
 
 ```sh
 cosign verify-blob --bundle postgres-roles.sql.sigstore.json \
-  --certificate-identity https://github.com/Distant-Signal/ds-core/.github/workflows/release.yml@refs/tags/<core-version, e.g. v0.14.4> \
+  --certificate-identity https://github.com/Distant-Signal/ds-core/.github/workflows/release.yml@refs/tags/<core-version, e.g. v0.14.5> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   postgres-roles.sql
 ```
