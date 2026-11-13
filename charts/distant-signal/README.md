@@ -2883,9 +2883,19 @@ rows are duplicates, which the writer's Darwin-timestamp guards discard.
 | `frontend.image.source` | `https://github.com/Distant-Signal/distant-signal` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `frontend.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `frontend.replicaCount` | `1` | Safe to raise, with one documented caveat. frontend/lib/liveDataCache.ts keeps a process-local stale-data cache so a backend outage shows the last-known line status instead of an error page (docs/superpowers/specs/2026-09-02-frontend-disconnect-reconnect-ux-design.md). That cache is per-pod: with more than one replica, during an outage one visitor may get stale-but-useful content from a warm pod while another gets the auto-retrying error page from a cold one. Each pod stays internally consistent and no stale data crosses users (entries are session-scoped), so this is a degraded-experience caveat, not a correctness one -- deliberately documented rather than blocked, unlike postgresql.replicaCount above. |
+| `frontend.strategy.maxSurge` | `1` | Extra pods a roll may add above `frontend.replicaCount`. With `maxUnavailable` 0 the old pod stays until its replacement is ready, so a roll never leaves the Service without an endpoint. |
+| `frontend.strategy.maxUnavailable` | `0` | Pods a roll may take away before their replacements are ready. |
+| `frontend.terminationGracePeriodSeconds` | `30` | Seconds the kubelet waits after SIGTERM before SIGKILL. Must be at least `frontend.preStopSleepSeconds` + 10 (the render fails otherwise). |
+| `frontend.preStopSleepSeconds` | `10` | Seconds a `preStop` hook sleeps before SIGTERM, so endpoint removal reaches kube-proxy and the tunnel's connections before the server stops accepting. The image is `node:*-bookworm-slim`, so `sleep` exists. `0` renders no hook. |
+| `frontend.podDisruptionBudget.enabled` | `false` | Render a PodDisruptionBudget for the frontend. Needs `frontend.replicaCount` of at least 2: the render fails when `minAvailable` is not below it, as the budget would block every node drain. |
+| `frontend.podDisruptionBudget.minAvailable` | `1` | Pods that must stay available during a voluntary eviction (a number, or a percentage string). |
 | `frontend.service.type` | `ClusterIP` | Service type. |
 | `frontend.service.port` | `3000` | Service and container port. |
 | `frontend.probes.path` | `/healthz` | Probe path: the dependency-free `frontend/app/healthz/route.ts`, which never calls the api (probing `/` restarted the frontend whenever the api was down). |
+| `frontend.probes.startup.enabled` | `true` | Render a startupProbe on `frontend.probes.path`: readiness and liveness begin only once it passes. A healthy pod passes in a couple of seconds, so a roll is no slower. |
+| `frontend.probes.startup.periodSeconds` | `2` | Startup probe period. |
+| `frontend.probes.startup.failureThreshold` | `60` | Startup probe failures allowed: 2s x 60 = 2 minutes to start. |
+| `frontend.probes.startup.timeoutSeconds` | `3` | Startup probe timeout. |
 | `frontend.probes.readiness.periodSeconds` | `10` | Readiness probe period. |
 | `frontend.probes.readiness.failureThreshold` | `3` | Readiness probe failures allowed. |
 | `frontend.probes.readiness.timeoutSeconds` | `3` | Readiness probe timeout. |
@@ -2906,7 +2916,7 @@ rows are duplicates, which the writer's Darwin-timestamp guards discard.
 | `frontend.resources` | requests `100m`/`256Mi`, limit `768Mi` | Container resource requests/limits. |
 | `frontend.nodeSelector` | `{}` | Pod node selector. |
 | `frontend.tolerations` | `[]` | Pod tolerations. |
-| `frontend.affinity` | `{}` | Pod affinity rules. |
+| `frontend.affinity` | `{}` | Pod affinity rules. Empty with more than one replica renders a preferred (never required, so a one-node cluster still schedules) hostname anti-affinity between the replicas. |
 | `frontend.podAnnotations` | `{}` | Pod annotations. |
 | `frontend.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 

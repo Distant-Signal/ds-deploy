@@ -1,0 +1,17 @@
+{{- if .Values.frontend.podDisruptionBudget.enabled }}
+{{- $min := .Values.frontend.podDisruptionBudget.minAvailable }}
+{{- if and (regexMatch "^[0-9]+$" (toString $min)) (ge (int $min) (int .Values.frontend.replicaCount)) }}
+{{- fail (printf "frontend.podDisruptionBudget.minAvailable (%d) must be below frontend.replicaCount (%d): a budget that allows no eviction blocks node drains and rolls of the node. Raise frontend.replicaCount, or turn the budget off." (int $min) (int .Values.frontend.replicaCount)) }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "distant-signal.frontendFullname" . }}
+  labels:
+    {{- include "distant-signal.labels" (dict "root" . "component" "frontend") | nindent 4 }}
+spec:
+  minAvailable: {{ $min }}
+  selector:
+    matchLabels:
+      {{- include "distant-signal.selectorLabels" (dict "root" . "component" "frontend") | nindent 6 }}
+{{- end }}

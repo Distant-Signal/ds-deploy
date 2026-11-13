@@ -4,9 +4,31 @@ metadata:
   name: {{ include "distant-signal.frontendFullname" . }}
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "frontend") | nindent 4 }}
+{{- /*
+Graceful shutdown budget: the preStop sleep (endpoint removal reaches
+kube-proxy and cloudflared's connections), then Next's own drain after
+SIGTERM, inside terminationGracePeriodSeconds with 10 s to spare.
+*/ -}}
+{{- $preStopSleep := int (.Values.frontend.preStopSleepSeconds | default 0) }}
+{{- $grace := int (.Values.frontend.terminationGracePeriodSeconds | default 30) }}
+{{- if lt $preStopSleep 0 }}
+{{- fail (printf "frontend.preStopSleepSeconds must not be negative, got %d." $preStopSleep) }}
+{{- end }}
+{{- if gt (add $preStopSleep 10) $grace }}
+{{- fail (printf "frontend.terminationGracePeriodSeconds (%d) must be at least frontend.preStopSleepSeconds (%d) + 10, or the kubelet kills the frontend mid-drain." $grace $preStopSleep) }}
+{{- end }}
+{{- $replicas := int .Values.frontend.replicaCount }}
 spec:
   revisionHistoryLimit: {{ include "distant-signal.revisionHistoryLimit" $ }}
-  replicas: {{ .Values.frontend.replicaCount }}
+  replicas: {{ $replicas }}
+  # Never take the only ready pod away: surge one new pod, wait for it to be
+  # ready, then remove an old one (what the 25%/25% default rounds to on one
+  # replica, made explicit so a changed replica count cannot change it).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ .Values.frontend.strategy.maxSurge }}
+      maxUnavailable: {{ .Values.frontend.strategy.maxUnavailable }}
   selector:
     matchLabels:
       {{- include "distant-signal.selectorLabels" (dict "root" . "component" "frontend") | nindent 6 }}
@@ -21,6 +43,7 @@ spec:
     spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ $grace }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -43,6 +66,17 @@ spec:
               protocol: TCP
           env:
             {{- include "distant-signal.mergeEnv" (dict "env" (include "distant-signal.frontendEnv" .) "extra" .Values.frontend.extraEnv) | trim | nindent 12 }}
+          {{- if .Values.frontend.probes.startup.enabled }}
+          # Readiness and liveness begin only once this passes, so a slow
+          # start (cold node, image just pulled) is not killed by liveness.
+          startupProbe:
+            httpGet:
+              path: {{ .Values.frontend.probes.path }}
+              port: http
+            periodSeconds: {{ .Values.frontend.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.frontend.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.frontend.probes.startup.timeoutSeconds }}
+          {{- end }}
           readinessProbe:
             httpGet:
               path: {{ .Values.frontend.probes.path }}
@@ -57,6 +91,16 @@ spec:
             periodSeconds: {{ .Values.frontend.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.frontend.probes.liveness.failureThreshold }}
             timeoutSeconds: {{ .Values.frontend.probes.liveness.timeoutSeconds }}
+          {{- if gt $preStopSleep 0 }}
+          # Before SIGTERM: lets the endpoint removal reach kube-proxy and
+          # cloudflared's connections, so no new request arrives once Next
+          # stops accepting. The image is node:*-bookworm-slim, so `sleep`
+          # exists (frontend/Dockerfile, runtime-prod).
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", {{ $preStopSleep | quote }}]
+          {{- end }}
           {{- with .Values.frontend.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -69,9 +113,22 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.frontend.affinity }}
+      {{- if .Values.frontend.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.frontend.affinity | nindent 8 }}
+      {{- else if gt $replicas 1 }}
+      # Preferred, never required: on a single node a required rule would
+      # leave the second replica Pending. With several nodes the replicas
+      # spread; with one they share it.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "distant-signal.selectorLabels" (dict "root" . "component" "frontend") | nindent 20 }}
       {{- end }}
 
 {{- /*

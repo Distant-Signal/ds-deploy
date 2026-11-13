@@ -6078,6 +6078,35 @@ frontend:
   # replicaCount key and so have no table row to annotate, whereas this one
   # does -- see charts/distant-signal/README.md.)
   replicaCount: 1
+  # Rollout shape. maxUnavailable 0 with maxSurge 1: the old pod stays until
+  # the new one is ready, so a roll never leaves the Service without an
+  # endpoint (what 25%/25% rounds to on one replica; explicit so it holds at
+  # any replica count).
+  strategy:
+    # -- Extra pods a roll may add above the replica count.
+    maxSurge: 1
+    # -- Pods a roll may take away before their replacements are ready.
+    maxUnavailable: 0
+  # -- Seconds the kubelet waits after SIGTERM before SIGKILL. Must be at
+  # least preStopSleepSeconds + 10 (the render fails otherwise), leaving
+  # Next's own drain the rest.
+  terminationGracePeriodSeconds: 30
+  # -- Seconds to `sleep` in a preStop hook, before SIGTERM, so endpoint
+  # removal reaches kube-proxy and the tunnel's connections before the
+  # server stops accepting (no refused connections during a roll). The image
+  # is node:*-bookworm-slim, so `sleep` exists. 0 renders no hook.
+  preStopSleepSeconds: 10
+  # PodDisruptionBudget for voluntary evictions (node drains). Off by
+  # default: with one replica a budget of minAvailable 1 would block every
+  # drain, so the render fails if minAvailable is not below replicaCount.
+  # This chart does not require anti-affinity (a one-node cluster could not
+  # schedule it): above one replica, and with frontend.affinity empty, it
+  # renders a preferred hostname spread.
+  podDisruptionBudget:
+    # -- Render the PodDisruptionBudget. Needs replicaCount of at least 2.
+    enabled: false
+    # -- Pods that must stay available (a number, or a percentage string).
+    minAvailable: 1
   service:
     type: ClusterIP
     port: 3000
@@ -6087,6 +6116,16 @@ frontend:
     # it killed the frontend whenever the api was down (FE-1, every node
     # reboot), and CrashLoopBackOff then kept it down after the api was back.
     path: /healthz
+    # -- startupProbe on the same path: readiness and liveness begin only
+    # once it succeeds. periodSeconds x failureThreshold = 2s x 60 = 2
+    # minutes for a slow start (cold node, image pull just done); a healthy
+    # pod passes within a couple of seconds, so a roll is no slower. There
+    # was none before: liveness (10s x 3) alone had to cover the start.
+    startup:
+      enabled: true
+      periodSeconds: 2
+      failureThreshold: 60
+      timeoutSeconds: 3
     readiness:
       periodSeconds: 10
       failureThreshold: 3

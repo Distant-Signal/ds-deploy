@@ -2130,6 +2130,76 @@ jobs:
             fi
           }
 
+      # The frontend's rollout availability (DS-170): with the defaults it is
+      # one replica, rolled surge-first (maxSurge 1, maxUnavailable 0), with a
+      # startupProbe and a preStop sleep, and renders no PodDisruptionBudget
+      # and no affinity; two replicas render two, a preferred (never
+      # required) hostname spread, and the budget once it is enabled. Bad
+      # combinations fail the render.
+      - name: helm template (frontend availability)
+        run: |
+          set -euo pipefail
+          base=(
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+          has() { grep -qE -- "$2" <<<"$1" || fail "$3"; }
+          lacks() { if grep -qE -- "$2" <<<"$1"; then fail "$3"; fi; }
+
+          fe=$(render --show-only templates/frontend-deployment.yaml)
+          has "${fe}" '^  replicas: 1$' "frontend must default to 1 replica"
+          has "${fe}" '^    type: RollingUpdate$' "frontend must roll with RollingUpdate"
+          has "${fe}" '^      maxSurge: 1$' "frontend maxSurge must default to 1"
+          has "${fe}" '^      maxUnavailable: 0$' "frontend maxUnavailable must default to 0"
+          has "${fe}" '^      terminationGracePeriodSeconds: 30$' "frontend grace must default to 30s"
+          has "${fe}" 'command: \["sleep", "10"\]' "frontend must preStop sleep 10s by default"
+          grep -A6 'startupProbe:' <<<"${fe}" | grep -q 'failureThreshold: 60' \
+            || fail "frontend startupProbe must default to 2s x 60 on /healthz"
+          lacks "${fe}" 'affinity:' "one replica must render no affinity"
+          # shellcheck disable=SC2310 # --show-only of a template that renders nothing fails; only a leaked budget matters
+          if render --show-only templates/frontend-pdb.yaml 2>&1 | grep -q 'kind: PodDisruptionBudget'; then
+            fail "the PodDisruptionBudget must not render by default"
+          fi
+
+          fe2=$(render --show-only templates/frontend-deployment.yaml --set frontend.replicaCount=2)
+          has "${fe2}" '^  replicas: 2$' "frontend.replicaCount=2 must render 2 replicas"
+          has "${fe2}" 'preferredDuringSchedulingIgnoredDuringExecution:' "2 replicas must prefer to spread"
+          lacks "${fe2}" 'requiredDuringSchedulingIgnoredDuringExecution' "the spread must never be required (one node)"
+          fe_aff=$(render --show-only templates/frontend-deployment.yaml --set frontend.replicaCount=2 \
+            --set 'frontend.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=x')
+          lacks "${fe_aff}" 'podAntiAffinity' "frontend.affinity must replace the default spread"
+
+          pdb=$(render --show-only templates/frontend-pdb.yaml \
+            --set frontend.replicaCount=2 --set frontend.podDisruptionBudget.enabled=true)
+          has "${pdb}" '^kind: PodDisruptionBudget$' "an enabled budget must render"
+          has "${pdb}" '^  minAvailable: 1$' "the budget must default to minAvailable 1"
+          has "${pdb}" 'app.kubernetes.io/component: frontend' "the budget must select the frontend pods"
+
+          # Off switches, and the guards.
+          fe_off=$(render --show-only templates/frontend-deployment.yaml \
+            --set frontend.preStopSleepSeconds=0 --set frontend.probes.startup.enabled=false)
+          lacks "${fe_off}" 'preStop:' "preStopSleepSeconds=0 must render no hook"
+          lacks "${fe_off}" 'startupProbe:' "probes.startup.enabled=false must render no startupProbe"
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set frontend.podDisruptionBudget.enabled=true >/dev/null 2>&1; then
+            fail "a budget with one replica (it would block every drain) must fail the render"
+          fi
+          # shellcheck disable=SC2310 # render is expected to fail here; that failure is the assertion
+          if render --set frontend.preStopSleepSeconds=25 >/dev/null 2>&1; then
+            fail "a preStop sleep that leaves under 10s of the grace period must fail the render"
+          fi
+
       # Reboot resilience: redis must roll with Recreate (single RWO AOF
       # volume, INF-1); postgres needs a startupProbe so WAL redo is never
       # killed by liveness (INF-4), and it and redis default to tcpSocket
@@ -2204,8 +2274,8 @@ jobs:
 
           fe=$(render --show-only templates/frontend-deployment.yaml)
           n_healthz=$(grep -c 'path: /healthz' <<<"${fe}" || true)
-          [[ "${n_healthz}" -eq 2 ]] \
-            || fail "frontend readiness and liveness must both hit /healthz"
+          [[ "${n_healthz}" -eq 3 ]] \
+            || fail "frontend startup, readiness and liveness must all hit /healthz"
 
           # The legal pages' operator details (frontend.legal.*): none by
           # default, so the pages stay 404 until set; each non-empty value
