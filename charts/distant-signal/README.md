@@ -2772,6 +2772,7 @@ Always reads movement-relay's stream (there is no Kafka mode).
 | `trustBacklogConsumer.retentionDaysWarningAcknowledged` | `false` | Documentation-only flag; the binary does not read it. The retention safeguard is `aggregator.trustEventBacklogRetentionDays`. |
 | `trustBacklogConsumer.logLevel` | `info` | `RUST_LOG` value. |
 | `trustBacklogConsumer.trustTimestampCorrectionEnabled` | `true` | See `trustConsumer.trustTimestampCorrectionEnabled`. |
+| `trustBacklogConsumer.trainServiceLabelsEnabled` | `false` | Sets `TRAIN_SERVICE_LABELS_ENABLED=true` (rendered only when true): the consumer writes a `train_service_labels` row for each tracked-train movement (DS-513). Needs a trust-backlog-consumer image built with ds-ingest PR #24 and ds-core v0.14.5's migration and grants. |
 | `trustBacklogConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `trustBacklogConsumer.resources` | requests `50m`/`128Mi`, limit `256Mi` | Container resource requests/limits. |
 | `trustBacklogConsumer.nodeSelector` | `{}` | Pod node selector. |
