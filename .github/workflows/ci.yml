@@ -2274,8 +2274,8 @@ jobs:
 
           fe=$(render --show-only templates/frontend-deployment.yaml)
           n_healthz=$(grep -c 'path: /healthz' <<<"${fe}" || true)
-          [[ "${n_healthz}" -eq 2 ]] \
-            || fail "frontend readiness and liveness must both hit /healthz"
+          [[ "${n_healthz}" -eq 3 ]] \
+            || fail "frontend startup, readiness and liveness must all hit /healthz"
 
           # The legal pages' operator details (frontend.legal.*): none by
           # default, so the pages stay 404 until set; each non-empty value
