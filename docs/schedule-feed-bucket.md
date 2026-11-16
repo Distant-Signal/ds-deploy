@@ -441,8 +441,8 @@ sets `crossplane.io/paused`, so a Helm upgrade leaves a pause in place.
 
 | Trip | What DS sees | What to do |
 | --- | --- | --- |
-| Egress spike: the reader is removed | `DistantSignalScheduleBucketAccessRevoked` within minutes. The bucket source backs off and logs once per state change; SFTP carries on | Find the cause in the audit log (a reader loop shows as repeated `objects.get` of one generation) and fix it, then ask Ranma to reapply. Nothing in DS restarts it |
-| Ingress or write spike: the publishers are removed | Nothing new in the bucket; `DistantSignalScheduleBucketNoNewObject` after 30 hours (if SFTP is off, `DistantSignalScheduleReferencePublishStale` too). The publisher's transfers fail on their side | Read the audit log for what was written and by whom, examine soft-deleted or unexpected objects, then a deliberate reapply |
+| Egress spike: the reader is removed | `DistantSignalScheduleBucketAccessRevoked` within minutes. The bucket source backs off and logs once per state change; SFTP carries on (bucket only: there is no other source, so no new timetable until it clears) | Find the cause in the audit log (a reader loop shows as repeated `objects.get` of one generation) and fix it, then ask Ranma to reapply. Nothing in DS restarts it |
+| Ingress or write spike: the publishers are removed | Nothing new in the bucket; `DistantSignalScheduleBucketNoNewObject` after 30 hours (if SFTP is off, it is critical, as nothing else delivers, and `DistantSignalScheduleReferencePublishStale` follows). The publisher's transfers fail on their side | Read the audit log for what was written and by whom, examine soft-deleted or unexpected objects, then a deliberate reapply |
 | Budget: everything is removed | Both of the above | As above, plus the billing report |
 
 Recovery is always a deliberate Ranma reapply, which removes

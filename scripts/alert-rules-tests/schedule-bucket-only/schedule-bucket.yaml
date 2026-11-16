@@ -1,0 +1,53 @@
+# promtool unit tests for the bucket alerts with scheduleFeed.sftp.enabled
+# false (the bucket as the only feed source). Runs against
+# scripts/check-alert-payloads.py's `schedule-bucket-only` render as
+# rules.yaml; the expressions are the same as with SFTP on (see
+# ../schedule-bucket.yaml), only the text and NoNewObject's severity differ.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # AccessRevoked: critical, and says there is no other source.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_access_revoked{namespace="distant-signal", pod="sf", source="bucket"}'
+        values: '0x5 1x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DistantSignalScheduleBucketAccessRevoked
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: Schedule-feed bucket access revoked
+              description: "Every bucket call is refused (kill switch, or a missing or rotated key). No other source: no new timetable. Recovery is a Ranma reapply."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketaccessrevoked
+  # NoNewObject: critical, and says there is no other source.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_last_new_object_seconds{namespace="distant-signal", pod="sf", source="bucket"}'
+        values: '1x2000'
+    alert_rule_test:
+      - eval_time: 30h20m
+        alertname: DistantSignalScheduleBucketNoNewObject
+        exp_alerts: []
+      - eval_time: 30h40m
+        alertname: DistantSignalScheduleBucketNoNewObject
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: No new object in the schedule-feed bucket in 30h
+              description: "The publisher's daily push has not reached the bucket. No other source: no new timetable is arriving."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketnonewobject
+  # ReadErrors: still a warning, with the bucket-only text.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_errors_total{namespace="distant-signal", pod="sf", source="bucket", kind="get"}'
+        values: '0x5 1+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DistantSignalScheduleBucketReadErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: Schedule-feed bucket read errors
+              description: "schedule-ingest's bucket source keeps failing to list, get, verify or delete. It backs off; no other source delivers meanwhile."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketreaderrors

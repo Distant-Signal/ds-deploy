@@ -7405,6 +7405,9 @@ metrics:
       # this many hours, once one has been seen. Daily CIF at ~20:00 UTC.
       noNewObjectHours: 30
       noNewObjectFor: 30m
+      # Severity of NoNewObject with scheduleFeed.sftp.enabled false: the
+      # bucket is then the only source, so a silent bucket is no feed.
+      noNewObjectSeverityBucketOnly: critical
       # DistantSignalScheduleBucketNoNewObjectByKind: the same per kind (cif,
       # corpus), so one kind going quiet is not hidden by the other still
       # arriving. Quiet for a kind until its first object.

@@ -64,7 +64,9 @@ checks:
   - alerts: no distant-signal.schedule-bucket group with the bucket off or
     metrics.prometheusRule.scheduleBucket.enabled=false; eight alerts with
     both sources; seven (no SourcesDisagree) and no schedule-sftp group with
-    the bucket only;
+    the bucket only; the AccessRevoked, NoNewObject and ReadErrors text names
+    SFTP with both sources and says no other source exists with the bucket
+    only, whose NoNewObject is critical (same expressions);
   - the db sinks (ingest architecture plans 2a and 2d; the only sinks
     since release B): `reference` gets DATABASE_URL (after PGPASSWORD) as
     distant_signal_schedule_reference, DATABASE_MAX_CONNECTIONS and the
@@ -1337,6 +1339,70 @@ def alert_groups(docs: Sequence[Doc]) -> dict[str, set[str]]:
     return out
 
 
+def bucket_alert_rules(docs: Sequence[Doc]) -> dict[str, dict[str, object]]:
+    """Return the bucket group's alerting rules by name."""
+    out: dict[str, dict[str, object]] = {}
+    for doc in docs:
+        if doc.get("kind") != "PrometheusRule":
+            continue
+        spec = cast("dict[str, list[dict[str, object]]]", doc["spec"])
+        for group in spec["groups"]:
+            if group["name"] != BUCKET_GROUP:
+                continue
+            rules = cast("list[dict[str, object]]", group["rules"])
+            out.update({str(r["alert"]): r for r in rules if "alert" in r})
+    return out
+
+
+def rule_text(rule: dict[str, object], key: str) -> str:
+    """Return annotation `key` of an alerting rule ("" if absent)."""
+    ann = cast("dict[str, str]", rule.get("annotations", {}))
+    return ann.get(key, "")
+
+
+def rule_severity(rule: dict[str, object]) -> str:
+    """Return an alerting rule's severity label."""
+    return cast("dict[str, str]", rule["labels"]).get("severity", "")
+
+
+def check_bucket_alert_wording(c: Checker) -> None:
+    """With SFTP off the bucket alerts say no other source exists; on, SFTP stays."""
+    both = bucket_alert_rules(c.docs(*ON, *BUCKET, *RULES))
+    only = bucket_alert_rules(c.docs(*ON, *BUCKET, *SFTP_OFF, *RULES))
+    names = (
+        "DistantSignalScheduleBucketAccessRevoked",
+        "DistantSignalScheduleBucketNoNewObject",
+        "DistantSignalScheduleBucketReadErrors",
+    )
+    for name in names:
+        if name not in both or name not in only:
+            c.check(ok=False, message=f"{name}: missing from a render")
+            continue
+        c.check(
+            ok="SFTP" in rule_text(both[name], "description"),
+            message=f"{name}: both sources, text drops SFTP",
+        )
+        text = rule_text(only[name], "description")
+        c.check(
+            ok="SFTP" not in text and "other source" in text,
+            message=f"{name}: bucket only, text {text!r}",
+        )
+        c.check(
+            ok=both[name]["expr"] == only[name]["expr"],
+            message=f"{name}: the expression differs with SFTP off",
+        )
+    for name, sev_both, sev_only in (
+        ("DistantSignalScheduleBucketAccessRevoked", "critical", "critical"),
+        ("DistantSignalScheduleBucketNoNewObject", "warning", "critical"),
+    ):
+        c.check(
+            ok=rule_severity(both[name]) == sev_both
+            and rule_severity(only[name]) == sev_only,
+            message=f"{name}: severities {rule_severity(both[name])}, "
+            f"{rule_severity(only[name])}",
+        )
+
+
 def check_alerts(c: Checker) -> None:
     """Check the bucket alert group renders only with the bucket, and right."""
     off = alert_groups(c.docs(*ON, *RULES))
@@ -1352,6 +1418,7 @@ def check_alerts(c: Checker) -> None:
         message=f"bucket only: groups {sorted(only)}, "
         f"bucket alerts {sorted(only.get(BUCKET_GROUP, []))}",
     )
+    check_bucket_alert_wording(c)
     disabled = (
         "--set",
         "metrics.prometheusRule.scheduleBucket.enabled=false",
