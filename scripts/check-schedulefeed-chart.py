@@ -62,8 +62,8 @@ checks:
     Secret named like the reader key's existingSecret;
   - bad bucket values refuse to render, naming the key;
   - alerts: no distant-signal.schedule-bucket group with the bucket off or
-    metrics.prometheusRule.scheduleBucket.enabled=false; six alerts with
-    both sources; five (no SourcesDisagree) and no schedule-sftp group with
+    metrics.prometheusRule.scheduleBucket.enabled=false; seven alerts with
+    both sources; six (no SourcesDisagree) and no schedule-sftp group with
     the bucket only;
   - the db sinks (ingest architecture plans 2a and 2d; the only sinks
     since release B): `reference` gets DATABASE_URL (after PGPASSWORD) as
@@ -254,6 +254,7 @@ SFTP_GROUP = "distant-signal.schedule-sftp"
 BUCKET_ALERTS = {
     "DistantSignalScheduleBucketAccessRevoked",
     "DistantSignalScheduleBucketNoNewObject",
+    "DistantSignalScheduleBucketNoNewObjectByKind",
     "DistantSignalScheduleBucketReadErrors",
     "DistantSignalScheduleBucketUnexpectedObject",
     "DistantSignalScheduleBucketDownloadBudget",

@@ -1663,6 +1663,17 @@ is authoritative for the timetable. Causes are on the publisher's side
 (a late or failed push, or a publisher kill-switch trip) or a reader that
 cannot list (see the other bucket alerts).
 
+### DistantSignalScheduleBucketNoNewObjectByKind
+
+No new object of one `kind` (`cif` or `corpus`, the alert's `kind` label) has
+reached the bucket for 30 hours (`scheduleBucket.noNewObjectByKindHours`),
+once one of that kind has been seen. It catches one kind going quiet while the
+other still arrives, which
+[DistantSignalScheduleBucketNoNewObject](#distantsignalschedulebucketnonewobject)
+(the newest of either kind) cannot. Check the publisher's push for that kind,
+then the other bucket alerts. Metrics are in
+[schedule-feed-bucket.md](schedule-feed-bucket.md#per-kind-metrics).
+
 ### DistantSignalScheduleBucketReadErrors
 
 The bucket source keeps failing; `kind` on
