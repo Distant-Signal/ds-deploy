@@ -355,7 +355,13 @@ description: Distant Signal pods that must be placed, preempting lower ones.
 
 The run can only preempt pods below 10000, so what it can free is
 everything at the default 0 or below (`background`, -10, goes first) and
-`ci-runner`'s pods, not other `prod-critical` ones. Its cost: every
+`ci-runner`'s pods, not other `prod-critical` ones. The class ranks the
+run against every pod on the node, not only this release's: **its victims
+can be any namespace's default-priority pods, Coder workspaces included,
+and `ci-runner`'s CI jobs, killed mid-run** (a workspace loses its
+unsaved state, a CI job fails and must be re-run). Give anything that
+must not be preempted a class of its own at or above 10000 before setting
+the value. Its cost: every
 half-hourly run requests 1536Mi, so while the budget is spent even a no-op
 check preempts pods, up to 48 times a day, and the victims' replacements
 wait Pending for the seconds the check takes. The budget therefore still

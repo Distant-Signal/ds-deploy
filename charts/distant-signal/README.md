@@ -1199,7 +1199,10 @@ victims get their graceful termination, and the Jobs' pod failure policy
 retries a preempted run without counting it). A pod can only preempt pods
 of lower priority than its own, so the class must sit above whatever holds
 the memory: at the default 0 every unclassed pod on the node is a
-candidate, and pods of a class above it are not.
+candidate, and pods of a class above it are not. Candidates are not only
+this release's: a `prod-critical` run can preempt any namespace's
+lower-priority pods, Coder workspaces and `ci-runner`'s CI jobs included
+(docs/scheduled-jobs.md, "Capacity").
 
 Production's classes (Ranma-Config; not deployed yet when this was
 written, so the defaults stay empty): `prod-critical` (value 10000,
