@@ -1674,6 +1674,43 @@ other still arrives, which
 then the other bucket alerts. Metrics are in
 [schedule-feed-bucket.md](schedule-feed-bucket.md#per-kind-metrics).
 
+### DistantSignalScheduleBucketTokenExchangeFailing
+
+The reader's keyless (`workloadIdentity`) Google token exchange keeps failing
+for a reason that is not "access revoked", and nothing has succeeded since.
+Failures at a `stage` (`sts`, then `impersonation`) with an `outcome` of
+`timeout`, `error`, `http_error` or `invalid_request` are counted in
+`gcp_token_exchange_total`
+(`distant_signal:schedule_bucket_token_exchange_transient_failures:increase`),
+but the bucket source files them under
+`schedule_feed_source_errors_total{kind="auth"}`, which
+[DistantSignalScheduleBucketReadErrors](#distantsignalschedulebucketreaderrors)
+excludes. The revoked class (`token_file_error`, `invalid_grant`,
+`invalid_target`, `unauthenticated`, `permission_denied`) is left to
+[DistantSignalScheduleBucketAccessRevoked](#distantsignalschedulebucketaccessrevoked),
+so the two never fire for the same outcome.
+
+It fires when a stage had at least one such failure in
+`scheduleBucket.tokenExchangeWindow` (30m) and no successful exchange for that
+stage in the same window, for `tokenExchangeFor` (10m). A single failed
+exchange that the retry fixes does not page: the success is in the window and
+clears it. Tokens are cached and refreshed ahead of expiry, so a stalled
+refresh is harmless for a while; the alert is the early warning, before the
+cached token expires and reads stop. The metric is not labelled by pod, so
+any other Google external-account user in the namespace would count too. Off
+with `scheduleBucket.tokenExchangeEnabled`.
+
+1. `timeout`, `error` or `http_error` at `sts` or `impersonation`: Google's
+   STS or IAM Credentials endpoint (or egress to it) is slow or failing. Check
+   Google Cloud's status page and the `networkPolicy` egress rules. It usually
+   recovers alone.
+2. `invalid_request`: STS rejected the request as malformed, which a retry
+   will not fix. Check `scheduleFeed.bucket.workloadIdentity.audience` and the
+   credential ConfigMap against the pool provider.
+3. Read schedule-ingest's log for the exchange error, and
+   `distant_signal_gcp_token_remaining_seconds` for how long the cached token
+   has left.
+
 ### DistantSignalScheduleBucketReadErrors
 
 The bucket source keeps failing; `kind` on

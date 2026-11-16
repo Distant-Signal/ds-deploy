@@ -7411,6 +7411,12 @@ metrics:
       noNewObjectByKindEnabled: true
       noNewObjectByKindHours: 30
       noNewObjectByKindFor: 30m
+      # DistantSignalScheduleBucketTokenExchangeFailing: transient
+      # (non-revoked-class) Google token-exchange failures in the window
+      # with no success in it. Keyless (workloadIdentity) only.
+      tokenExchangeEnabled: true
+      tokenExchangeWindow: 30m
+      tokenExchangeFor: 10m
       # DistantSignalScheduleBucketReadErrors: list/get/verify/delete errors.
       readErrorsWindow: 1h
       readErrorsFor: 15m
