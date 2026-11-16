@@ -121,6 +121,9 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "migrate.job.priorityClassName" "names" (list $job.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with $job.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

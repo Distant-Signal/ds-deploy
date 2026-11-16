@@ -114,6 +114,9 @@ spec:
               resources:
                 {{- toYaml . | nindent 16 }}
               {{- end }}
+          {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "apiMaintenance.priorityClassName" "names" (list $m.priorityClassName)) }}
+          {{- . | nindent 10 }}
+          {{- end }}
           {{- with $m.nodeSelector }}
           nodeSelector:
             {{- toYaml . | nindent 12 }}

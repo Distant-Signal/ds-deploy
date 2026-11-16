@@ -36,6 +36,14 @@ global:
   # repository publishes to (repo split spec §5.9), so no override is
   # needed for a plain `helm install` to work.
   imageRegistry: ""
+  # -- The PriorityClass of every pod this chart renders whose own
+  # `priorityClassName` is empty (the `helm test` pods excepted), or ""
+  # for none: the cluster's default priority, as before these values
+  # existed. PriorityClasses are cluster-scoped and not part of this chart:
+  # the class must exist before a release names it, or the API server
+  # refuses the pods. The built-in `system-*` classes are refused (chart
+  # README, "Pod priority").
+  priorityClassName: ""
 
 # The source the images were built from, for the api's `/public/version`
 # (AGPL-3.0 §13: users reach the source of what is deployed over the
@@ -705,6 +713,10 @@ postgresql:
     # limits:
     #   memory: 1Gi
   nodeSelector: {}
+  # -- PriorityClass of the Postgres pod and the roles setup Job, or "" for
+  # `global.priorityClassName` (chart README, "Pod priority"). Never a
+  # class that lets other pods preempt Postgres (no low or negative value).
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -934,6 +946,9 @@ postgresql:
       # -- Merged over the CronJob pods' securityContext (non-root uid 65532
       # by default: the kubectl image's own user is root).
       podSecurityContext: {}
+      # -- PriorityClass of the pgBackRest CronJob pods, or "" for
+      # `global.priorityClassName` (chart README, "Pod priority").
+      priorityClassName: ""
 
 # ---------------------------------------------------------------------------
 # External database (used only when postgresql.enabled is false)
@@ -1057,6 +1072,9 @@ pollers:
       limits:
         memory: 128Mi
     nodeSelector: {}
+    # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+    # (chart README, "Pod priority").
+    priorityClassName: ""
     tolerations: []
     affinity: {}
     podAnnotations: {}
@@ -1169,6 +1187,9 @@ pollers:
       limits:
         memory: 192Mi
     nodeSelector: {}
+    # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+    # (chart README, "Pod priority").
+    priorityClassName: ""
     tolerations: []
     affinity: {}
     podAnnotations: {}
@@ -1309,6 +1330,9 @@ pollers:
       limits:
         memory: 192Mi
     nodeSelector: {}
+    # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+    # (chart README, "Pod priority").
+    priorityClassName: ""
     tolerations: []
     affinity: {}
     podAnnotations: {}
@@ -1403,6 +1427,9 @@ pollers:
       limits:
         memory: 128Mi
     nodeSelector: {}
+    # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+    # (chart README, "Pod priority").
+    priorityClassName: ""
     tolerations: []
     affinity: {}
     podAnnotations: {}
@@ -1544,6 +1571,9 @@ pollers:
       limits:
         memory: 192Mi
     nodeSelector: {}
+    # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+    # (chart README, "Pod priority").
+    priorityClassName: ""
     tolerations: []
     affinity: {}
     podAnnotations: {}
@@ -2209,6 +2239,9 @@ api:
           ephemeral-storage: 256Mi
       podSecurityContext: {}
       nodeSelector: {}
+      # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+      # (chart README, "Pod priority").
+      priorityClassName: ""
       tolerations: []
   # -- The journey calendar feed (DS-414, ds-api's docs/calendar-feed.md): a
   # user can make a secret `.ics` link to subscribe to their saved and
@@ -2430,6 +2463,9 @@ api:
     limits:
       memory: 1Gi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -2547,6 +2583,9 @@ migrate:
     # -- Merged over the chart-wide pod securityContext defaults.
     podSecurityContext: {}
     nodeSelector: {}
+    # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+    # (chart README, "Pod priority").
+    priorityClassName: ""
     tolerations: []
 
 # ---------------------------------------------------------------------------
@@ -2621,6 +2660,9 @@ apiMaintenance:
   # -- Merged over the chart-wide pod securityContext defaults.
   podSecurityContext: {}
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
 
 # ---------------------------------------------------------------------------
@@ -2791,6 +2833,9 @@ ingestWriter:
     limits:
       memory: 384Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -2899,6 +2944,9 @@ devAuthentik:
     limits:
       memory: 1Gi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
 
@@ -3067,6 +3115,9 @@ aggregator:
     limits:
       memory: 384Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -3356,6 +3407,9 @@ notifier:
     limits:
       memory: 384Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -3756,6 +3810,9 @@ redis:
       timeoutSeconds: 5
       failureThreshold: 6
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4080,6 +4137,9 @@ enricher:
     limits:
       memory: 256Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4230,6 +4290,9 @@ trustConsumer:
     limits:
       memory: 384Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4362,6 +4425,9 @@ fullCoverageConsumer:
     limits:
       memory: 1Gi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4463,6 +4529,9 @@ trustBacklogConsumer:
     limits:
       memory: 256Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4592,6 +4661,9 @@ movementRelay:
     limits:
       memory: 192Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4695,6 +4767,9 @@ darwinRelay:
     limits:
       memory: 384Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4758,6 +4833,9 @@ pollerIrishRailGtfs:
     limits:
       memory: 768Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4822,6 +4900,9 @@ pollerIrishRailLive:
     limits:
       memory: 256Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4876,6 +4957,9 @@ pollerNirStations:
     limits:
       memory: 256Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}
@@ -4966,6 +5050,9 @@ pollerTransitSchedule:
           memory: 768Mi
       extraEnv: []
       nodeSelector: {}
+      # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+      # (chart README, "Pod priority").
+      priorityClassName: ""
       tolerations: []
       affinity: {}
       podAnnotations: {}
@@ -5098,6 +5185,9 @@ pollerTransitSchedule:
           memory: 768Mi
       extraEnv: []
       nodeSelector: {}
+      # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+      # (chart README, "Pod priority").
+      priorityClassName: ""
       tolerations: []
       affinity: {}
       podAnnotations: {}
@@ -5161,6 +5251,9 @@ pollerTransitSchedule:
           memory: 1Gi
       extraEnv: []
       nodeSelector: {}
+      # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+      # (chart README, "Pod priority").
+      priorityClassName: ""
       tolerations: []
       affinity: {}
       podAnnotations: {}
@@ -5256,6 +5349,11 @@ scheduleFeed:
     # annotation that changes per release there does not restart SFTPGo.
     # Unused with separateDeployment false.
     podAnnotations: {}
+    # -- PriorityClass of the separate SFTP pod, or "" for
+    # `scheduleFeed.priorityClassName` (then `global.priorityClassName`).
+    # Unused with separateDeployment false (the one pod takes
+    # scheduleFeed.priorityClassName).
+    priorityClassName: ""
     image:
       repository: drakkan/sftpgo
       # -- MUST be a real drakkan/sftpgo tag, NOT left empty: unlike every
@@ -5818,7 +5916,10 @@ scheduleFeed:
       # -- Kill a run (or one still Pending) after this long. A full
       # publish took 18-38 minutes from extraction in production
       # (2026-10-20 to 10-31); 90 minutes leaves room for the in-cycle
-      # retries through a database restart.
+      # retries through a database restart. The clock starts with the
+      # Job, so time Pending is taken from the run's: on 2026-11-16 a run
+      # Pending 75 minutes was killed 14 minutes into its publish
+      # (`priorityClassName` below; docs/scheduled-jobs.md, "Capacity").
       activeDeadlineSeconds: 5400
       # -- Retries of a run that failed transiently (exit 1), each a full
       # republish. Exit 3 (a product refused as bad data, or input it
@@ -5844,6 +5945,15 @@ scheduleFeed:
         limits:
           memory: 4Gi
           ephemeral-storage: 512Mi
+      # -- The run's PriorityClass, or "" for `scheduleFeed.priorityClassName`
+      # (then `global.priorityClassName`). With a class above the node's
+      # other pods and `preemptionPolicy: PreemptLowerPriority`, a run that
+      # finds the node's memory requests spent preempts lower-priority pods
+      # instead of waiting Pending until `activeDeadlineSeconds` kills it
+      # (2026-11-16). The class must exist first, or the API server refuses
+      # the Job's pods. Every half-hourly run requests 1536Mi, so a no-op
+      # check can preempt too (docs/scheduled-jobs.md, "Capacity").
+      priorityClassName: ""
     # -- How many days beyond today each delivery publishes the per-date
     # timetable products for (`SCHEDULE_FORWARD_PUBLISH_DAYS`): train search,
     # `/Train/by-uid` stops, service modes and `/Trips/plan` reach this far
@@ -6001,6 +6111,12 @@ scheduleFeed:
   # The schedulefeed (ingest/reference) pod's annotations. The separate SFTP
   # pod has its own, scheduleFeed.sftp.podAnnotations.
   podAnnotations: {}
+  # -- PriorityClass of the schedulefeed (ingest/reference) pod, and the
+  # default of the SFTP pod (`sftp.priorityClassName`) and of
+  # schedule-reference's CronJob (`reference.cron.priorityClassName`); ""
+  # for `global.priorityClassName` (chart README, "Pod priority";
+  # docs/scheduled-jobs.md, "Capacity").
+  priorityClassName: ""
   serviceAccount:
     # -- Create `<fullname>-schedulefeed` (or `name`): a dedicated
     # ServiceAccount with no RBAC and automountServiceAccountToken false.
@@ -6218,6 +6334,9 @@ frontend:
     limits:
       memory: 768Mi
   nodeSelector: {}
+  # -- PriorityClass of these pods, or "" for `global.priorityClassName`
+  # (chart README, "Pod priority").
+  priorityClassName: ""
   tolerations: []
   affinity: {}
   podAnnotations: {}

@@ -130,6 +130,9 @@ spec:
         - name: work
           emptyDir:
             sizeLimit: {{ $n.workDirSizeLimit }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" (printf "pollerTransitSchedule.networks.%s.priorityClassName" $network) "names" (list $n.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with $n.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

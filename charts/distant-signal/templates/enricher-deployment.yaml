@@ -261,6 +261,9 @@ spec:
             name: {{ . | quote }}
         {{- end }}
       {{- end }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "enricher.priorityClassName" "names" (list .Values.enricher.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.enricher.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

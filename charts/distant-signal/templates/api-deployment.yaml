@@ -317,6 +317,9 @@ spec:
         - name: source-images
           configMap:
             name: {{ printf "%s-source-images" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "api.priorityClassName" "names" (list .Values.api.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.api.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

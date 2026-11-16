@@ -1162,6 +1162,61 @@ within its 180 s, and the services' startup connect
 (`ds_store::pool::PoolSettings::connect_until_ready`) retries a Postgres in
 recovery too, with a warning each try.
 
+## Pod priority
+
+Off by default: every `priorityClassName` value is empty, no pod names a
+PriorityClass, and each gets the cluster's default priority, exactly as
+before these values existed (CI's `scripts/check-priority-class-chart.py`).
+
+**How a pod's class is chosen.** The first non-empty of:
+
+1. the CronJob's own `cron.priorityClassName`, for a worker on a schedule
+   (only `scheduleFeed.reference.cron` declares one);
+2. the workload's `priorityClassName` (`api.priorityClassName`,
+   `pollers.<name>.priorityClassName`, `postgresql.priorityClassName`,
+   which also covers the roles setup Job, ...). The SFTP pod takes
+   `scheduleFeed.sftp.priorityClassName`, then `scheduleFeed.priorityClassName`;
+3. `global.priorityClassName`.
+
+Every pod this chart renders follows that, except the `helm test` pods. An
+empty value inherits; there is no value for "none" under a global class.
+
+**The chart does not create the PriorityClass.** A PriorityClass is
+cluster-scoped and ranks a pod against every other pod on the node, not
+only this release's, so its values are the cluster owner's decision
+(production: Ranma-Config), and a release must not be able to change them
+or delete them on uninstall. The chart creates nothing cluster-scoped. The
+class must exist before a release names it: the API server refuses a pod
+that names a missing class, so a Deployment would get no new pods and a
+CronJob's Jobs none at all. The built-in `system-cluster-critical` and
+`system-node-critical` (any `system-*` name) and names that aren't DNS
+subdomains refuse to render.
+
+**What a class does.** The scheduler places higher-priority pods first,
+and a pod whose class has `preemptionPolicy: PreemptLowerPriority` evicts
+pods of lower priority from a node that has no room for its requests (the
+victims get their graceful termination, and the Jobs' pod failure policy
+retries a preempted run without counting it). A pod can only preempt pods
+of lower priority than its own, so the class must sit above whatever holds
+the memory: at the default 0 every unclassed pod on the node is a
+candidate, and pods of a class above it are not.
+
+Production's classes (Ranma-Config; not deployed yet when this was
+written, so the defaults stay empty): `prod-critical` (value 10000,
+`PreemptLowerPriority`, not the global default) and `background` (value
+-10, `preemptionPolicy: Never`). The cluster already has `ci-runner`
+(1000, `Never`). Suggested values:
+
+| Class | Values | Why |
+|---|---|---|
+| `prod-critical` | `scheduleFeed.priorityClassName` (the schedulefeed pod, SFTP and the schedule-reference CronJob), `postgresql`, `redis`, `api`, `ingestWriter`, `frontend`, `migrate.job` | The schedule-reference publish first: its 1536Mi run is the pod that went Pending (2026-11-16, `docs/scheduled-jobs.md`, "Capacity"). Then what every request depends on, and the pre-upgrade hook a Pending pod would hold a deploy on. Postgres and Redis must never be `background`. |
+| empty (default 0) | the workers (`aggregator`, `notifier`, `enricher`, `trustConsumer`, `fullCoverageConsumer`, `trustBacklogConsumer`, `movementRelay`, `darwinRelay`), `pollers.incidents`, `pollers.ldbws`, `pollers.tfl`, `apiMaintenance`, `api.bankHolidays.cronjob`, `postgresql.pgbackrest.backup` | Live data and backups: preemptible by `prod-critical`, never by `background`. |
+| `background` | `pollers.tocs`, `pollers.stations`, `pollerTransitSchedule.networks.<network>`, `pollerIrishRailGtfs`, `pollerIrishRailLive`, `pollerNirStations`, `devAuthentik` | Daily or slow feeds with a day or more of freshness allowance, and dev-only pods: the first to go when a `prod-critical` pod needs room, and they never preempt. |
+
+Setting a Deployment's or StatefulSet's class changes its pod template, so
+the release restarts those pods once (Postgres and Redis included: set
+them in a quiet window). CronJobs take it from their next run.
+
 ## Point-in-time recovery (optional)
 
 Off by default (`postgresql.pgbackrest.enabled: false`), and while off the
@@ -1634,6 +1689,7 @@ renders. A new workload therefore needs its line in
 | `imagePullSecrets` | `[]` | Image pull secrets applied to every pod in the chart. |
 | `revisionHistoryLimit` | `3` | Old ReplicaSets and StatefulSet ControllerRevisions kept, on every Deployment and StatefulSet (Kubernetes' default is 10). A whole number >= 0; `helm rollback` does not need them. |
 | `global.imageRegistry` | `""` | Registry (and optional path prefix) put in front of every image in place of the registry its `image.repository` carries, e.g. `registry.example.com/myfork`. Empty keeps each repository as written. |
+| `global.priorityClassName` | `""` | PriorityClass of every pod whose own `priorityClassName` is empty (not the `helm test` pods); `""` renders none, the cluster default. The class must exist first; `system-*` classes are refused. See "Pod priority". |
 | `sourceCode.url` | `"https://github.com/Distant-Signal/distant-signal"` | Repository `/public/version` lists for a first-party image with no `image.source` (AGPL-3.0 §13). Every image here sets its own: since the repo split they are built in several repositories, and this one's README lists them all. |
 | `sourceCode.revision` | `""` | Commit `/public/version` lists for an image whose `image.tag` is neither a build tag, `build.<run>-<commit>` (it lists the tag's commit), nor a release tag, `vX.Y.Z` (it lists the tag: ds-migrate). Empty: every first-party image here is pinned at one. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount for the chart's workloads. |
@@ -1780,6 +1836,7 @@ StatefulSet with no replication, backup or restore story.
 | `postgresql.podSecurityContext` | `{}` | Merged over the pod securityContext. uid/gid/fsGroup 999 are pinned by default and required by this image. |
 | `postgresql.resources` | requests `250m`/`3Gi`, limit `5Gi` | Container resource requests/limits. The `config` and `shm` defaults assume the 5Gi limit. |
 | `postgresql.nodeSelector` | `{}` | Pod node selector. |
+| `postgresql.priorityClassName` | `""` | PriorityClass of the Postgres pod and the roles setup Job; `""` for `global.priorityClassName`. See "Pod priority". |
 | `postgresql.tolerations` | `[]` | Pod tolerations. |
 | `postgresql.affinity` | `{}` | Pod affinity rules. |
 | `postgresql.podAnnotations` | `{}` | Pod annotations. |
@@ -1956,6 +2013,7 @@ and [docs/postgres-pitr.md](../../docs/postgres-pitr.md).
 | `postgresql.pgbackrest.backup.image.repository` / `.tag` / `.pullPolicy` | `registry.k8s.io/kubectl`, `v1.36.5@sha256:…`, `IfNotPresent` | The image the CronJobs run `kubectl exec` from. Keep it within one minor version of the cluster. |
 | `postgresql.pgbackrest.backup.resources` | requests `20m`/`64Mi`, limit `128Mi` | CronJob pod resources. The work happens in the Postgres container. |
 | `postgresql.pgbackrest.backup.podSecurityContext` | `{}` | Merged over the CronJob pods' securityContext (non-root uid 65532 by default). |
+| `postgresql.pgbackrest.backup.priorityClassName` | `""` | PriorityClass of the pgBackRest CronJob pods; `""` for `global.priorityClassName`. |
 | `metrics.prometheusRule.ingestWriterDown` | see `values.yaml` | `DistantSignalIngestWriterDown`: `enabled`, `for` (5m), `severity` (critical). Renders only with `ingestWriter.enabled`. |
 | `metrics.prometheusRule.ingestRolloutStuck` | see `values.yaml` | `DistantSignalIngestRolloutStuck`: `enabled`, `for` (10m), `severity` (warning), `deployments` (each ingest Deployment's name after the release fullname, regex allowed: the relays, consumers, ingest-writer and `poller-.+`). |
 | `metrics.prometheusRule.ingestStreamBacklog` / `ingestStreamStalled` / `ingestDeadLetters` / `ingestDeadLetterExpiring` / `ingestUnsupportedSchema` / `ingestProducerXaddFailing` / `ingestStreamMemoryHigh` / `ingestClockSkew` | see `values.yaml` | The ingest stream alerts (ingest spec §14.2): `DistantSignalIngestStreamBacklog` (pending over 600s or 0.5 of MAXLEN: warning; 0.8: critical, which replaces the warning once it fires; `maxlen` per stream, kept in step with `crates/ingest-stream/src/budget.rs`), `…StreamStalled` (XADDs succeed but nothing applied for `stallAfterSecs` per stream; critical), `…DeadLetters` (any in 15m), `…DeadLetterExpiring` (within 4h of the 7-day trim), `…UnsupportedSchema` (critical), `…ProducerXaddFailing` (every XADD failed for 10m; critical), `…StreamMemoryHigh` (over 0.75 of 576 MiB), `…ClockSkew` (an observed time clamped, D13). (`…ShadowMismatch` went with the producers' `http+shadow` sink in release B.) Each has `enabled`, `for`, `severity`. Render only with `ingestWriter.enabled`, and silent until a stream is on. Runbooks: `docs/alerts.md`, `docs/ingest-streams-deadletter.md`. |
@@ -2146,6 +2204,7 @@ release after, setting one fails the render:
 | `api.bankHolidays.cronjob.resources` | requests `10m`/`32Mi`/ephemeral `16Mi`, limits `128Mi`/ephemeral `256Mi` | Container resources. Never empty: a BestEffort pod is the first the kubelet evicts. |
 | `api.bankHolidays.cronjob.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 | `api.bankHolidays.cronjob.nodeSelector` / `.tolerations` | `{}` / `[]` | Scheduling. |
+| `api.bankHolidays.cronjob.priorityClassName` | `""` | PriorityClass of its pods; `""` for `global.priorityClassName`. |
 | `api.calendarFeed.enabled` | `false` | The journey calendar feed (`CALENDAR_FEED_ENABLED`; ds-api's [docs/calendar-feed.md](https://github.com/Distant-Signal/ds-api/blob/main/docs/calendar-feed.md)): a secret `.ics` link of a user's own saved and repeating journeys, with a Delay Repay claim reminder. Off: every feed route answers 404 and the website doesn't offer it. Needs an api build with ds-api#37; no migration or egress. Drop the /privacy "Once it is available" wording when it goes live. |
 | `api.recentlyDeleted.enabled` | `false` | Recently deleted journeys (`RECENTLY_DELETED_ENABLED`; ds-api#45): deleting a journey keeps it for `api.recentlyDeleted.retentionDays` so the user can save it again, then an hourly sweep removes it for good. Off: deletes stay immediate, the routes answer 404 and the website doesn't offer it. Set on the api Deployment and the api-maintenance CronJob (the sweep runs in both). Needs an api build with ds-api#45; no egress. Mention it on the /privacy page before turning it on. |
 | `api.recentlyDeleted.retentionDays` | `7` | Days a deleted journey is kept (`RECENTLY_DELETED_RETENTION_DAYS`). Whole days from 7 to 31: the api refuses to start on any other value, so the chart fails to render one. The frontend gets it too (`RETENTION_RECENTLY_DELETED_DAYS`) only while `api.recentlyDeleted.enabled` is `true`; with it off the variable is absent and the privacy notice says nothing about a grace period. |
@@ -2164,6 +2223,7 @@ release after, setting one fails the render:
 | `api.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `api.resources` | requests `200m`/`512Mi`, limit `1Gi` | Container resource requests/limits, sized from production (working set p95 about 300Mi, max 500Mi over 20 days; the resource-tuning study's request, limit twice it). |
 | `api.nodeSelector` | `{}` | Pod node selector. |
+| `api.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `api.tolerations` | `[]` | Pod tolerations. |
 | `api.affinity` | `{}` | Pod affinity rules. |
 | `api.podAnnotations` | `{}` | Pod annotations. |
@@ -2187,6 +2247,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `migrate.job.resources` | requests `10m`/`64Mi`, limit `512Mi` | The migrate container's resources (keeps the hook pod out of BestEffort; the wait-for-postgres init container has fixed `10m`/`16Mi`, limit `64Mi`). |
 | `migrate.job.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 | `migrate.job.nodeSelector` | `{}` | Node selector. |
+| `migrate.job.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `migrate.job.tolerations` | `[]` | Tolerations. |
 
 ### apiMaintenance
@@ -2212,6 +2273,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `apiMaintenance.resources` | requests `10m`/`32Mi`/ephemeral `16Mi`, limits `128Mi`/ephemeral `256Mi` | Container resources. Never empty: a BestEffort pod is the first the kubelet evicts. |
 | `apiMaintenance.podSecurityContext` | `{}` | Merged over the chart-wide pod securityContext defaults. |
 | `apiMaintenance.nodeSelector` | `{}` | Node selector. |
+| `apiMaintenance.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `apiMaintenance.tolerations` | `[]` | Tolerations. |
 
 ### ingestWriter
@@ -2249,6 +2311,7 @@ Off by default. See [Migrations, maintenance and the ingest-writer](#migrations-
 | `ingestWriter.extraEnv` | `[]` | Extra env entries; one with a chart entry's name replaces it. The render refuses a per-pod `INGEST_WRITER_STREAM_CONSUMER` (a `valueFrom`, a `$(...)` value, or an empty one): the writer reads every stream as one fixed consumer name (default `ingest-writer`), so a restart takes over its predecessor's pending entries at once. The Deployment is fixed at 1 replica under Recreate. |
 | `ingestWriter.resources` | requests `25m`/`192Mi`, limit `384Mi` | Container resources (production p95 141Mi, max 167Mi). |
 | `ingestWriter.nodeSelector` | `{}` | Node selector. |
+| `ingestWriter.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `ingestWriter.tolerations` | `[]` | Tolerations. |
 | `ingestWriter.affinity` | `{}` | Affinity. |
 | `ingestWriter.podAnnotations` | `{}` | Pod annotations. |
@@ -2277,6 +2340,7 @@ default; nothing here is rendered unless `devAuthentik.enabled` is `true`.
 | `devAuthentik.postgresql.resources` | requests `50m`/`128Mi`, limit `512Mi` | Authentik Postgres container resource requests/limits. |
 | `devAuthentik.resources` | requests `100m`/`256Mi`, limit `1Gi` | Authentik server container resource requests/limits. |
 | `devAuthentik.nodeSelector` | `{}` | Pod node selector. |
+| `devAuthentik.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `devAuthentik.tolerations` | `[]` | Pod tolerations. |
 | `devAuthentik.affinity` | `{}` | Pod affinity rules. |
 
@@ -2312,6 +2376,7 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 | `aggregator.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `aggregator.resources` | requests `100m`/`256Mi`, limit `384Mi` | Container resource requests/limits. |
 | `aggregator.nodeSelector` | `{}` | Pod node selector. |
+| `aggregator.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `aggregator.tolerations` | `[]` | Pod tolerations. |
 | `aggregator.affinity` | `{}` | Pod affinity rules. |
 | `aggregator.podAnnotations` | `{}` | Pod annotations. |
@@ -2399,6 +2464,7 @@ twice.
 | `notifier.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `notifier.resources` | requests `50m`/`128Mi`, limit `384Mi` | Container resource requests/limits. |
 | `notifier.nodeSelector` | `{}` | Pod node selector. |
+| `notifier.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `notifier.tolerations` | `[]` | Pod tolerations. |
 | `notifier.affinity` | `{}` | Pod affinity rules. |
 | `notifier.podAnnotations` | `{}` | Pod annotations. |
@@ -2466,6 +2532,7 @@ used for and why persistence defaults on.
 | `redis.probes.liveness.timeoutSeconds` | `5` | Liveness probe timeout. |
 | `redis.probes.liveness.failureThreshold` | `6` | Liveness probe failures allowed (6 x 30s = 3 minutes). |
 | `redis.nodeSelector` | `{}` | Pod node selector. |
+| `redis.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `redis.tolerations` | `[]` | Pod tolerations. |
 | `redis.affinity` | `{}` | Pod affinity rules. |
 | `redis.podAnnotations` | `{}` | Pod annotations. |
@@ -2551,6 +2618,7 @@ they are not used: `enricher.llm.anthropic.*` has defaults for both, and
 | `enricher.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. The off-by-default enricher settings below are set here. |
 | `enricher.resources` | requests `50m`/`128Mi`, limit `256Mi` | Container resource requests/limits. |
 | `enricher.nodeSelector` | `{}` | Pod node selector. |
+| `enricher.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `enricher.tolerations` | `[]` | Pod tolerations. |
 | `enricher.affinity` | `{}` | Pod affinity rules. |
 | `enricher.podAnnotations` | `{}` | Pod annotations. |
@@ -2700,6 +2768,7 @@ falls back to (see `movementRelay`).
 | `trustConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `trustConsumer.resources` | requests `200m`/`256Mi`, limit `384Mi` | Container resource requests/limits. |
 | `trustConsumer.nodeSelector` | `{}` | Pod node selector. |
+| `trustConsumer.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `trustConsumer.tolerations` | `[]` | Pod tolerations. |
 | `trustConsumer.affinity` | `{}` | Pod affinity rules. |
 | `trustConsumer.podAnnotations` | `{}` | Pod annotations. |
@@ -2742,6 +2811,7 @@ its own.
 | `fullCoverageConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `fullCoverageConsumer.resources` | requests `200m`/`640Mi`, limit `1Gi` | Container resource requests/limits. Holds per-line population caches, so it scales with the line catalogue; with windowed stats on, the working set is 430-570 MiB (target ~650 MiB). |
 | `fullCoverageConsumer.nodeSelector` | `{}` | Pod node selector. |
+| `fullCoverageConsumer.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `fullCoverageConsumer.tolerations` | `[]` | Pod tolerations. |
 | `fullCoverageConsumer.affinity` | `{}` | Pod affinity rules. |
 | `fullCoverageConsumer.podAnnotations` | `{}` | Pod annotations. |
@@ -2776,6 +2846,7 @@ Always reads movement-relay's stream (there is no Kafka mode).
 | `trustBacklogConsumer.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `trustBacklogConsumer.resources` | requests `50m`/`128Mi`, limit `256Mi` | Container resource requests/limits. |
 | `trustBacklogConsumer.nodeSelector` | `{}` | Pod node selector. |
+| `trustBacklogConsumer.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `trustBacklogConsumer.tolerations` | `[]` | Pod tolerations. |
 | `trustBacklogConsumer.affinity` | `{}` | Pod affinity rules. |
 | `trustBacklogConsumer.podAnnotations` | `{}` | Pod annotations. |
@@ -2818,6 +2889,7 @@ credential of its own it uses trust-consumer's; see "Install" above.
 | `movementRelay.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `movementRelay.resources` | requests `100m`/`128Mi`, limit `192Mi` | Container resource requests/limits. |
 | `movementRelay.nodeSelector` | `{}` | Pod node selector. |
+| `movementRelay.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `movementRelay.tolerations` | `[]` | Pod tolerations. |
 | `movementRelay.affinity` | `{}` | Pod affinity rules. |
 | `movementRelay.podAnnotations` | `{}` | Pod annotations. |
@@ -2870,6 +2942,7 @@ rows are duplicates, which the writer's Darwin-timestamp guards discard.
 | `darwinRelay.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `darwinRelay.resources` | requests `100m`/`128Mi`, limit `384Mi` | Container resource requests/limits. |
 | `darwinRelay.nodeSelector` | `{}` | Pod node selector. |
+| `darwinRelay.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `darwinRelay.tolerations` | `[]` | Pod tolerations. |
 | `darwinRelay.affinity` | `{}` | Pod affinity rules. |
 | `darwinRelay.podAnnotations` | `{}` | Pod annotations. |
@@ -2917,6 +2990,7 @@ rows are duplicates, which the writer's Darwin-timestamp guards discard.
 | `frontend.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `frontend.resources` | requests `100m`/`256Mi`, limit `768Mi` | Container resource requests/limits. |
 | `frontend.nodeSelector` | `{}` | Pod node selector. |
+| `frontend.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `frontend.tolerations` | `[]` | Pod tolerations. |
 | `frontend.affinity` | `{}` | Pod affinity rules. Empty with more than one replica renders a preferred (never required, so a one-node cluster still schedules) hostname anti-affinity between the replicas. |
 | `frontend.podAnnotations` | `{}` | Pod annotations. |
@@ -2980,6 +3054,7 @@ separate top-level values (`pollerIrishRailGtfs`, `pollerIrishRailLive`,
 | `pollers.<name>.extraEnv` | `[]` (tfl: `TFL_MODES`) | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `pollers.<name>.resources` | requests `25m`/`64Mi`-`128Mi`, limit `128Mi`-`192Mi` | Container resource requests/limits. |
 | `pollers.<name>.nodeSelector` | `{}` | Pod node selector. |
+| `pollers.<name>.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `pollers.<name>.tolerations` | `[]` | Pod tolerations. |
 | `pollers.<name>.affinity` | `{}` | Pod affinity rules. |
 | `pollers.<name>.podAnnotations` | `{}` | Pod annotations. |
@@ -3064,6 +3139,7 @@ Irish Rail GTFS zip. Off by default; no API key needed.
 | `pollerIrishRailGtfs.feedMaxDropFraction` | `0.3` | `FEED_MAX_DROP_FRACTION`: refuse to publish a feed whose station or line count fell by more than this fraction since the last published one (in-memory baseline; the first feed after a start always publishes). `1.0` turns it off; an empty feed is always refused. |
 | `pollerIrishRailGtfs.resources` | requests `100m`/`256Mi`, limit `768Mi` | Container resource requests/limits. The whole GTFS archive is held in memory. |
 | `pollerIrishRailGtfs.nodeSelector` | `{}` | Pod node selector. |
+| `pollerIrishRailGtfs.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `pollerIrishRailGtfs.tolerations` | `[]` | Pod tolerations. |
 | `pollerIrishRailGtfs.affinity` | `{}` | Pod affinity rules. |
 | `pollerIrishRailGtfs.podAnnotations` | `{}` | Pod annotations. |
@@ -3092,6 +3168,7 @@ default; no API key needed.
 | `pollerIrishRailLive.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `pollerIrishRailLive.resources` | requests `25m`/`64Mi`, limit `256Mi` | Container resource requests/limits. |
 | `pollerIrishRailLive.nodeSelector` | `{}` | Pod node selector. |
+| `pollerIrishRailLive.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `pollerIrishRailLive.tolerations` | `[]` | Pod tolerations. |
 | `pollerIrishRailLive.affinity` | `{}` | Pod affinity rules. |
 | `pollerIrishRailLive.podAnnotations` | `{}` | Pod annotations. |
@@ -3119,6 +3196,7 @@ Off by default; no API key needed.
 | `pollerNirStations.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `pollerNirStations.resources` | requests `25m`/`64Mi`, limit `256Mi` | Container resource requests/limits. |
 | `pollerNirStations.nodeSelector` | `{}` | Pod node selector. |
+| `pollerNirStations.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `pollerNirStations.tolerations` | `[]` | Pod tolerations. |
 | `pollerNirStations.affinity` | `{}` | Pod affinity rules. |
 | `pollerNirStations.podAnnotations` | `{}` | Pod annotations. |
@@ -3160,6 +3238,7 @@ spec's §15.1.
 | `pollerTransitSchedule.networks.metrolink.resources` | requests `100m`/`192Mi`, limit `768Mi` | Container resource requests/limits. |
 | `pollerTransitSchedule.networks.metrolink.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it. |
 | `pollerTransitSchedule.networks.metrolink.nodeSelector` | `{}` | Pod node selector. |
+| `pollerTransitSchedule.networks.metrolink.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `pollerTransitSchedule.networks.metrolink.tolerations` | `[]` | Pod tolerations. |
 | `pollerTransitSchedule.networks.metrolink.affinity` | `{}` | Pod affinity rules. |
 | `pollerTransitSchedule.networks.metrolink.podAnnotations` | `{}` | Pod annotations. |
@@ -3196,6 +3275,7 @@ spec's §15.1.
 | `pollerTransitSchedule.networks.net.resources` | requests `100m`/`192Mi`, limit `768Mi` | Container resource requests/limits. |
 | `pollerTransitSchedule.networks.net.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it. |
 | `pollerTransitSchedule.networks.net.nodeSelector` | `{}` | Pod node selector. |
+| `pollerTransitSchedule.networks.net.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `pollerTransitSchedule.networks.net.tolerations` | `[]` | Pod tolerations. |
 | `pollerTransitSchedule.networks.net.affinity` | `{}` | Pod affinity rules. |
 | `pollerTransitSchedule.networks.net.podAnnotations` | `{}` | Pod annotations. |
@@ -3219,6 +3299,7 @@ spec's §15.1.
 | `pollerTransitSchedule.networks.tfl.resources` | requests `100m`/`448Mi`, limit `1Gi` | Container resource requests/limits (332 MiB peak parsing TfL's 2026-10-26 export). |
 | `pollerTransitSchedule.networks.tfl.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it. |
 | `pollerTransitSchedule.networks.tfl.nodeSelector` | `{}` | Pod node selector. |
+| `pollerTransitSchedule.networks.tfl.priorityClassName` | `""` | PriorityClass of these pods; `""` for `global.priorityClassName`. See "Pod priority". |
 | `pollerTransitSchedule.networks.tfl.tolerations` | `[]` | Pod tolerations. |
 | `pollerTransitSchedule.networks.tfl.affinity` | `{}` | Pod affinity rules. |
 | `pollerTransitSchedule.networks.tfl.podAnnotations` | `{}` | Pod annotations. |
@@ -3278,6 +3359,7 @@ one-pod layout.
 | `scheduleFeed.sftp.enabled` | `true` | Run the SFTP receiver (the `sftp` container, its Service/NodePort, host keys and entrypoint). Off for bucket-only delivery (`scheduleFeed.bucket`); the PVC and the ingest/reference containers stay. `scheduleFeed.enabled` with neither source enabled fails the render. |
 | `scheduleFeed.sftp.separateDeployment` | `true` | Run SFTPGo in its own Deployment (`<fullname>-schedulefeed-sftp`) so that app deploys never restart it. Assumes a single node (one ReadWriteOnce PVC for both pods). `false` puts it back in the schedulefeed pod, as before 2026-10-08. Switching recreates both pods once; the PVC is untouched. |
 | `scheduleFeed.sftp.podAnnotations` | `{}` | Annotations for the separate SFTP pod. Unused with `separateDeployment: false`. |
+| `scheduleFeed.sftp.priorityClassName` | `""` | PriorityClass of the separate SFTP pod; `""` for `scheduleFeed.priorityClassName`, then `global.priorityClassName`. |
 | `scheduleFeed.sftp.image.repository` | `drakkan/sftpgo` | SFTP server image. |
 | `scheduleFeed.sftp.image.tag` | `v2.7.6@sha256:…` | Must be a real `drakkan/sftpgo` tag: an empty tag would fall back to this chart's version. |
 | `scheduleFeed.sftp.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
@@ -3343,12 +3425,13 @@ one-pod layout.
 | `scheduleFeed.reference.cron.timeZone` | `Europe/London` | The schedule's time zone. Required. On DST nights the 01:00 and 01:30 runs are skipped (spring) or may run twice (autumn, the second a no-op). |
 | `scheduleFeed.reference.cron.suspend` | `false` | Suspend the CronJob (DistantSignalScheduleReferenceNotSeeded stays quiet while suspended). |
 | `scheduleFeed.reference.cron.startingDeadlineSeconds` | `600` | A start missed by more than this is skipped; the next is 30 minutes later. |
-| `scheduleFeed.reference.cron.activeDeadlineSeconds` | `5400` | Kill a run, or one still Pending, after this long. A full publish takes 18-38 minutes. |
+| `scheduleFeed.reference.cron.activeDeadlineSeconds` | `5400` | Kill a run, or one still Pending, after this long. A full publish takes 18-38 minutes. The clock starts with the Job, so Pending time is taken from the run (`docs/scheduled-jobs.md`, "Capacity"). |
 | `scheduleFeed.reference.cron.backoffLimit` | `2` | Retries of a run that failed transiently (exit 1), each a full republish. Exit 3 (a product refused, or input it can't publish; the delivery is settled) and 137 (OOMKilled) fail the Job at once. |
 | `scheduleFeed.reference.cron.successfulJobsHistoryLimit` | `3` | Finished Jobs kept. |
 | `scheduleFeed.reference.cron.failedJobsHistoryLimit` | `3` | Failed Jobs kept. |
 | `scheduleFeed.reference.cron.ttlSecondsAfterFinished` | `86400` | A finished Job and its pod are deleted this long after. |
 | `scheduleFeed.reference.cron.resources` | requests `250m`/`1536Mi`/`64Mi` ephemeral, limits `4Gi`/`512Mi` ephemeral | The run's resources, held only while it runs: the request covers the nightly peak (1429Mi), the limit keeps production's headroom. Leave the Deployment's all-day request unclaimed on the node as this Job's budget (`docs/scheduled-jobs.md`, "Capacity"). |
+| `scheduleFeed.reference.cron.priorityClassName` | `""` | PriorityClass of the runs; `""` for `scheduleFeed.priorityClassName`, then `global.priorityClassName`. A class above the node's other pods with `preemptionPolicy: PreemptLowerPriority` lets a run preempt instead of waiting Pending into its deadline; every run requests 1536Mi, so a no-op check can preempt too (`docs/scheduled-jobs.md`, "Capacity"). |
 | `scheduleFeed.reference.forwardPublishDays` | `28` | Days beyond today each delivery publishes the per-date timetable products for (`SCHEDULE_FORWARD_PUBLISH_DAYS`, 28-60, never below the 28-day tracking horizon): how far ahead train search, `/Train/by-uid` stops, service modes and `/Trips/plan` reach. Each day costs ~190 MB of Postgres and ~30 s of publish cycle. Raising it fills the new dates on the next delivery. |
 | `scheduleFeed.reference.ingest.database.maxConnections` | `3` | The `db` sink's pool (`DATABASE_MAX_CONNECTIONS`). |
 | `scheduleFeed.reference.healthPort` | `8091` | Health port. Must differ from `workerHealth.port`, which the ingest container in the same pod uses. |
@@ -3367,6 +3450,7 @@ one-pod layout.
 | `scheduleFeed.logLevel` | `info` | `RUST_LOG` value for both Rust containers. |
 | `scheduleFeed.resources` | `{}` | Fallback for any container whose own `resources` is empty. |
 | `scheduleFeed.nodeSelector` | `{}` | Pod node selector, for both the schedulefeed and SFTP pods. |
+| `scheduleFeed.priorityClassName` | `""` | PriorityClass of the schedulefeed (ingest/reference) pod, and the default of the SFTP pod and the schedule-reference CronJob; `""` for `global.priorityClassName`. |
 | `scheduleFeed.tolerations` | `[]` | Pod tolerations, for both pods. |
 | `scheduleFeed.affinity` | `{}` | Pod affinity rules, for both pods. |
 | `scheduleFeed.podAnnotations` | `{}` | Annotations for the schedulefeed (ingest/reference) pod. The separate SFTP pod uses `scheduleFeed.sftp.podAnnotations`. |

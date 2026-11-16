@@ -63,6 +63,9 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "aggregator.priorityClassName" "names" (list .Values.aggregator.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.aggregator.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -151,6 +151,9 @@ spec:
           # chart: kubectl exec needs the token (see the top of this file).
           automountServiceAccountToken: true
           restartPolicy: Never
+          {{- with include "distant-signal.priorityClassName" (dict "root" $root "what" "postgresql.pgbackrest.backup.priorityClassName" "names" (list $pb.backup.priorityClassName)) }}
+          {{- . | nindent 10 }}
+          {{- end }}
           {{- with $root.Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}

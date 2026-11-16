@@ -98,6 +98,9 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 512Mi
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "devAuthentik.priorityClassName" "names" (list .Values.devAuthentik.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.devAuthentik.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
