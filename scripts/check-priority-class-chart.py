@@ -13,7 +13,7 @@
     `scheduleFeed.priorityClassName` on the schedulefeed and SFTP pods and
     schedule-reference's CronJob, `scheduleFeed.reference.cron` and
     `scheduleFeed.sftp` over that, `pollers.tocs` on its CronJob.
-  - Every template that renders a pod with a `nodeSelector` includes
+  - Every template that renders a pod's `containers` includes
     `distant-signal.priorityClassName`, so a workload none of the renders
     turn on is covered too.
   - A name that isn't a DNS subdomain, and a built-in `system-*` class,
@@ -134,6 +134,7 @@ WANT_OVERRIDDEN = {
 REFUSED = (
     ("a system-* class", sets("api.priorityClassName=system-cluster-critical")),
     ("a name that isn't a DNS subdomain", sets("global.priorityClassName=Not_A_Name")),
+    ("a name with an empty label", sets("api.priorityClassName=ds..critical")),
 )
 
 type Doc = dict[str, object]
@@ -222,10 +223,11 @@ def render_problems(helm: str) -> list[str]:
 
 def template_problems() -> list[str]:
     """Return the templates that place a pod but name no PriorityClass."""
+    # templates/*.yaml only: the helm test pods (templates/tests/) are exempt.
     return [
-        f"templates/{path.name} renders a nodeSelector but no {HELPER}"
+        f"templates/{path.name} renders containers but no {HELPER}"
         for path in sorted((CHART / "templates").glob("*.yaml"))
-        if "nodeSelector:" in (text := path.read_text()) and HELPER not in text
+        if "containers:" in (text := path.read_text()) and HELPER not in text
     ]
 
 

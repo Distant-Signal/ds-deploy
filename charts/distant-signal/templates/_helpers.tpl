@@ -2441,13 +2441,13 @@ Takes dict "root", "what" (the pod's value path, for the error) and
 {{- $what = "global.priorityClassName" -}}
 {{- end -}}
 {{- if $name -}}
-{{- if or (gt (len $name) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $name)) -}}
+{{- if or (gt (len $name) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $name)) -}}
 {{- fail (printf "%s: %q is not a valid PriorityClass name (a DNS subdomain: lowercase letters, digits, '-' and '.')." $what $name) -}}
 {{- end -}}
 {{- if hasPrefix "system-" $name -}}
 {{- fail (printf "%s: %q is one of the cluster's own system-* classes; name a PriorityClass made for DS instead (chart README, \"Pod priority\")." $what $name) -}}
 {{- end -}}
-priorityClassName: {{ $name }}
+priorityClassName: {{ $name | quote }}
 {{- end -}}
 {{- end }}
 
