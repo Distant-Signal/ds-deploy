@@ -7405,6 +7405,12 @@ metrics:
       # this many hours, once one has been seen. Daily CIF at ~20:00 UTC.
       noNewObjectHours: 30
       noNewObjectFor: 30m
+      # DistantSignalScheduleBucketNoNewObjectByKind: the same per kind (cif,
+      # corpus), so one kind going quiet is not hidden by the other still
+      # arriving. Quiet for a kind until its first object.
+      noNewObjectByKindEnabled: true
+      noNewObjectByKindHours: 30
+      noNewObjectByKindFor: 30m
       # DistantSignalScheduleBucketReadErrors: list/get/verify/delete errors.
       readErrorsWindow: 1h
       readErrorsFor: 15m

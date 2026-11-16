@@ -47,6 +47,38 @@ tests:
               summary: No new object in the schedule-feed bucket in 30h
               description: "The publisher's daily push has not reached the bucket. SFTP may still be delivering: PublishStale is authoritative."
               runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketnonewobject
+  # Per kind: cif delivered at t=1s and nothing since, corpus keeps
+  # arriving, and the legacy series with no kind keeps moving too. Only
+  # cif fires, with its kind label.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_last_new_object_seconds{namespace="distant-signal", pod="sf", source="bucket", kind="cif"}'
+        values: '1x2000'
+      - series: 'distant_signal_schedule_feed_source_last_new_object_seconds{namespace="distant-signal", pod="sf", source="bucket", kind="corpus"}'
+        values: '1+60x2000'
+      - series: 'distant_signal_schedule_feed_source_last_new_object_seconds{namespace="distant-signal", pod="sf", source="bucket"}'
+        values: '1+60x2000'
+    alert_rule_test:
+      - eval_time: 30h20m
+        alertname: DistantSignalScheduleBucketNoNewObjectByKind
+        exp_alerts: []
+      - eval_time: 30h40m
+        alertname: DistantSignalScheduleBucketNoNewObjectByKind
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, kind: cif}
+            exp_annotations:
+              summary: No new cif object in the schedule-feed bucket in 30h
+              description: "No new cif object has reached the bucket, though one was seen before. The other kind may still be arriving."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketnonewobjectbykind
+  # A never-delivered kind (gauge 0) is quiet.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_last_new_object_seconds{namespace="distant-signal", pod="sf", source="bucket", kind="corpus"}'
+        values: '0x2000'
+    alert_rule_test:
+      - eval_time: 32h
+        alertname: DistantSignalScheduleBucketNoNewObjectByKind
+        exp_alerts: []
   # A download cap: fires on the first evaluation.
   - interval: 1m
     input_series:

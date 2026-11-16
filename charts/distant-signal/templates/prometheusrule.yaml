@@ -2467,6 +2467,27 @@ spec:
             summary: "No new object in the schedule-feed bucket in {{ .noNewObjectHours }}h"
             description: "The publisher's daily push has not reached the bucket. SFTP may still be delivering: PublishStale is authoritative."
             runbook_url: {{ printf "%s#distantsignalschedulebucketnonewobject" $runbook | quote }}
+        {{- /*
+        Per kind (cif, corpus): the series with kind selects exactly these
+        two, so the older gauge with no kind (newest of either) is not
+        mixed in. The "> 0" filter sits inside the aggregation, so a kind
+        that has never delivered (gauge 0) has no sample and stays quiet.
+        */}}
+        {{- if .noNewObjectByKindEnabled }}
+        - alert: DistantSignalScheduleBucketNoNewObjectByKind
+          expr: |
+            time() - max by (namespace, kind) (distant_signal_schedule_feed_source_last_new_object_seconds{namespace="{{ $ns }}", source="bucket", kind=~"cif|corpus"} > 0) > {{ mul (int .noNewObjectByKindHours) 3600 }}
+          for: {{ .noNewObjectByKindFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "No new {{ "{{ $labels.kind }}" }} object in the schedule-feed bucket in {{ .noNewObjectByKindHours }}h"
+            description: "No new {{ "{{ $labels.kind }}" }} object has reached the bucket, though one was seen before. The other kind may still be arriving."
+            runbook_url: {{ printf "%s#distantsignalschedulebucketnonewobjectbykind" $runbook | quote }}
+        {{- end }}
         - alert: DistantSignalScheduleBucketReadErrors
           expr: |
             sum by (namespace) (increase(distant_signal_schedule_feed_source_errors_total{namespace="{{ $ns }}", source="bucket", kind!="auth"}[{{ .readErrorsWindow }}])) > 0

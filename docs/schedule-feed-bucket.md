@@ -412,6 +412,24 @@ Download it with your own credentials, not the reader's, and delete it
 again afterwards: a restored expected object would otherwise be picked up
 by the reader on its next poll as a new generation.
 
+## Per-kind metrics
+
+schedule-ingest's bucket source exports, per object `kind` (`cif` or
+`corpus`; the routing's verdict), all with `source="bucket"`:
+
+- `distant_signal_schedule_feed_source_last_new_object_seconds{kind}`: Unix
+  time of the last new object of that kind, 0 until one is seen.
+- `distant_signal_schedule_feed_source_last_object_bytes{kind}`: its size.
+- `distant_signal_schedule_feed_source_deliveries_total{kind}`: objects
+  downloaded.
+
+The older `last_new_object_seconds{source="bucket"}` has no `kind` label
+(newest of either kind) and is still exported, so a query on the per-kind
+series must select `kind=~"cif|corpus"`, or it mixes the two.
+`DistantSignalScheduleBucketNoNewObject` reads the legacy series;
+`DistantSignalScheduleBucketNoNewObjectByKind` reads the per-kind ones
+(`scheduleBucket.noNewObjectByKindHours`, default 30).
+
 ## Kill switch
 
 Ranma owns the kill switch (D13). When a budget or usage alert trips, it
