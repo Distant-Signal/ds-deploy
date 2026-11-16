@@ -31,7 +31,14 @@ Every CronJob sets:
   missed starts" refusal, which would otherwise stop the CronJob for good.
 - **`activeDeadlineSeconds`** on the Job: a run that hangs, or that waits
   Pending for room on the node, is killed and the Job fails with
-  `DeadlineExceeded`. This replaces a Deployment's liveness probe.
+  `DeadlineExceeded`. This replaces a Deployment's liveness probe. The
+  clock starts with the Job, not the pod's start, so time spent Pending
+  is taken from the run's own (Kubernetes has no separate scheduling
+  timeout for a Job; [schedule-reference's Capacity](#schedule-reference)
+  has the details).
+- **No PriorityClass by default.** A run gets the cluster's default
+  priority unless its values name a class (chart README, "Pod
+  priority"); schedule-reference is the one that needs it.
 - **History and TTL.** `successfulJobsHistoryLimit`/`failedJobsHistoryLimit`
   keep the last runs to read logs from, and `ttlSecondsAfterFinished`
   deletes each finished Job and its pod after a day (pgBackRest: three days,
@@ -302,16 +309,120 @@ The scheduled-job alerts cover its runs as for the pollers.
 
 **Capacity.** The Job requests 1536Mi (the 1429Mi peak) and 250m CPU, with
 a 4Gi memory limit and 64Mi/512Mi ephemeral storage, only while a run is
-going: seconds every half hour, 20-40 minutes once a night. The budget is
-to **leave about 1.8GiB of memory requests unclaimed** on the node, the
-1792Mi the container held all day, so that each run finds room. Nothing
-reserves it (no PriorityClass, no preemption): it is a budget kept by
-whoever sizes the node's other workloads (Ranma-Config,
-`docs/specs/resource-tuning-2026-10.md`). If it is spent, the nightly run
-waits Pending: DistantSignalScheduledJobPending fires after 15 minutes,
-the run fails at `activeDeadlineSeconds` (90 minutes), and the next run
-30 minutes later tries again; DistantSignalScheduleReferencePublishStale
-follows at 30 hours.
+going: seconds every half hour, 20-40 minutes once a night. Requests are
+fixed when a pod is created, so a run that finds nothing new still needs
+the full 1536Mi of room before the scheduler places it, for its 8-16
+seconds (production Job durations, 2026-11-16).
+
+*The 1.8GiB budget.* As a Deployment the container held 1792Mi of requests
+all day. The CronJob gives that back between runs, and the budget is to
+**leave about 1.8GiB of memory requests unclaimed** on the node so each run
+finds room. Without a PriorityClass nothing reserves it: any pod, of this
+release or another namespace, can take it in between, and only whoever
+sizes the node's other workloads keeps it (Ranma-Config,
+`docs/specs/resource-tuning-2026-10.md`).
+
+*2026-11-16.* The budget was spent: the node's 41.3GiB allocatable memory
+(after k3s's 20Gi system-reserved) was 97% requested. The 20:30 run sat
+Pending on "Insufficient memory" for about 75 minutes. A Job's
+`activeDeadlineSeconds` counts from the Job's start, Pending time
+included, so when room finally appeared the run had about 14 minutes left
+before the 90-minute deadline killed it (`DeadlineExceeded`), mid-publish.
+The next run then waited Pending in turn, DistantSignalScheduledJobFailed,
+DistantSignalScheduledJobPending and Ranma-Config's CronJobNotSucceeding
+fired, and that day's derived tables were not republished. This section
+predicted it, and the chart had no way to prevent it.
+
+*Priority (the fix).* `scheduleFeed.reference.cron.priorityClassName` (or
+`scheduleFeed.priorityClassName`, which also covers the schedulefeed and
+SFTP pods) names a PriorityClass for the runs (chart README, "Pod
+priority"). With a class above the node's other pods and
+`preemptionPolicy: PreemptLowerPriority`, a run that finds no room preempts
+lower-priority pods within seconds instead of waiting Pending into its
+deadline. Ranma-Config creates the class, outside this chart, before the
+value is set; production's is `prod-critical`:
+
+```yaml
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: prod-critical
+value: 10000          # above the default 0 and ci-runner's 1000
+preemptionPolicy: PreemptLowerPriority
+globalDefault: false
+description: Distant Signal pods that must be placed, preempting lower ones.
+```
+
+The run can only preempt pods below 10000, so what it can free is
+everything at the default 0 or below (`background`, -10, goes first) and
+`ci-runner`'s pods, not other `prod-critical` ones. Its cost: every
+half-hourly run requests 1536Mi, so while the budget is spent even a no-op
+check preempts pods, up to 48 times a day, and the victims' replacements
+wait Pending for the seconds the check takes. The budget therefore still
+matters; the pre-check below removes the cost.
+
+*The deadline.* Kubernetes has no Job field for a scheduling timeout
+separate from the run's (checked against the batch/v1 Job API of the
+production cluster's v1.36, k3s v1.36.4+k3s1, 2026-11-16).
+`startingDeadlineSeconds` only bounds how late the controller may create
+the Job, not how long its pod waits. A pod's own
+`spec.activeDeadlineSeconds` counts from the pod's `startTime`, which the
+kubelet sets once the pod is bound to a node, so it would exclude Pending;
+the chart does not use it, because a pod killed at its own deadline is
+SIGTERMed then SIGKILLed, and the failure policy reads exit 137 as an OOM
+kill (fail at once) and 143 as transient (a full republish, up to
+`backoffLimit`), so the run's real failure would be misreported.
+`concurrencyPolicy: Forbid` stays: a Pending run blocks the next ones
+(skipped, not queued), and it publishes the moment it is placed. Raising
+`activeDeadlineSeconds` would give a Pending run longer to be placed, at
+the cost of a hung run living as long; with a priority class it is not
+needed. The requests stay at the 1429Mi peak plus 7%: lower would let the
+nightly publish run past its request, where node memory pressure evicts it
+first.
+
+*The pre-check (not built yet).* The heavy request is only needed when
+there is a delivery to publish, about once a night. A small pod can't hand
+over to a bigger one (requests are per pod), so the check has to be a pod
+of its own that then starts the heavy Job, and nothing in this chart or
+the binary can do that today:
+
+- The check needs the binary's own rules: the newest directory under
+  `/data/schedule-feed` with schedule-ingest's completion marker and both
+  `RJTTF*MCA.txt` and `RJTTF*MSN.txt` (`crates/schedule-reference`'s
+  `discovery::latest_complete_delivery`), against the marker
+  (`schedule_reference_publishes`) and the `settled` signal. Copying them
+  into a shell script would drift from the binary's.
+- Starting the heavy Job needs the Kubernetes API: a ServiceAccount with
+  its token mounted, a Role allowing `create` on `jobs` and `get` on the
+  heavy `cronjobs` (pgBackRest's `pods/exec` Role is the precedent), an
+  egress rule to the API server, and an image with both a shell and
+  kubectl (the pinned `registry.k8s.io/kubectl` has no shell).
+- DistantSignalScheduleReferenceNotSeeded expects a `seeded` signal within
+  every hour; if the heavy run only ran nightly, the check would have to
+  record it.
+
+The follow-up, in order:
+
+1. **ds-api**: a check-only once mode for schedule-reference (for example
+   `RUN_ONCE_MODE=check`): take the run lock (held: exit 0), read the
+   marker, record `seeded`, run discovery and read `settled`, and exit 0
+   when there is nothing new or a distinct code (say 10) when a delivery
+   is waiting. It must not build the index, so it stays in tens of MiB.
+   No ds-core change: it reads and writes only rows the
+   `schedule_reference` role already does.
+2. **ds-deploy**: a `<fullname>-schedule-reference-check` CronJob (every 30
+   minutes, requests about 32Mi, the same image, role and read-only PVC)
+   whose init container runs the check and writes its result to an
+   emptyDir, and whose kubectl container runs
+   `kubectl create job --from=cronjob/<fullname>-schedule-reference` when
+   it says a delivery is waiting. The heavy CronJob becomes a template
+   only (`suspend: true`, the priority class, the same failure policy).
+   The Role, ServiceAccount and egress rule above go with it, and the
+   scheduled-job alerts watch the check CronJob, while the heavy Jobs keep
+   their CronJob owner, so DistantSignalScheduledJobFailed still sees
+   them. A check running beside a publish adds its own pool and lock
+   session to the role's connections, so the chart's computed limit for
+   `schedule_reference` has to count both.
 
 **Connections.** The run lock's session is one connection beside the pool
 (3), so the role's computed limit is now pool + 2 (5), in either mode.
@@ -445,7 +556,13 @@ plus half again) and release.
 
 **Pending:** a scheduled pod reserves its requests only while it runs, so the
 room it needs at its time can have gone to other pods. `kubectl describe pod`
-says why it can't be placed.
+says why it can't be placed. The Pending time counts against the Job's
+`activeDeadlineSeconds`, so a run placed late may be killed mid-run. Free
+room (lower another workload's requests), or give the workload a PriorityClass that preempts lower
+ones (chart README, "Pod priority"; for schedule-reference,
+`scheduleFeed.reference.cron.priorityClassName`, [Capacity](#schedule-reference)).
+A pod that names a class the cluster doesn't have is never created at all:
+the Job shows `FailedCreate` events instead of a Pending pod.
 
 ## Rollback
 
