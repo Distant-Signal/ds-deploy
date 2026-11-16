@@ -1521,7 +1521,8 @@ container's error log). The previous extract stays in use.
 schedule-reference last fully published a delivery timestamped over
 `staleAfterHours` ago
 (`schedule_reference_last_published_delivery_timestamp_seconds`). Either no
-new delivery arrived (check schedule-ingest and the SFTP upload) or one keeps
+new delivery arrived (check schedule-ingest and the SFTP upload, or the
+bucket push with `scheduleFeed.sftp.enabled: false`) or one keeps
 failing to publish (check `schedule_reference_publishes_total` by `outcome`,
 and the reference container's error log).
 
@@ -1587,7 +1588,8 @@ already recorded, so it is absent (and silent) until the first. Unlike
 this stops at schedule-ingest: a delivery that arrived but whose marker did
 not land fires here, not only there.
 
-1. Did a delivery arrive? [DistantSignalSftpNoUpload](#distantsignalsftpnoupload),
+1. Did a delivery arrive? [DistantSignalSftpNoUpload](#distantsignalsftpnoupload)
+   (SFTP on only),
    [DistantSignalScheduleBucketNoNewObject](#distantsignalschedulebucketnonewobject).
 2. schedule-ingest's log: a rejected zip
    ([DistantSignalScheduleFeedZipRejected](#distantsignalschedulefeedziprejected)),
@@ -1629,14 +1631,20 @@ password).
 
 These read schedule-ingest's bucket source (`scheduleFeed.bucket`, metrics
 with `source="bucket"`), so they render only with `scheduleFeed.bucket.enabled`;
-`DistantSignalScheduleFeedSourcesDisagree` needs SFTP on as well. The bucket,
+`DistantSignalScheduleFeedSourcesDisagree` needs SFTP on as well. With SFTP
+off the bucket is the only source: AccessRevoked and NoNewObject (both
+critical then) and the ReadErrors text say so. The bucket,
 its IAM and the kill switch are `charts/ds-ingest-bucket`'s and Ranma's. The
 full runbook is [schedule-feed-bucket.md](schedule-feed-bucket.md).
 
 ### DistantSignalScheduleBucketAccessRevoked
 
 Every call to the bucket answered 401/403, or the reader has no usable key,
-for 10 minutes. The SFTP source is unaffected and carries on. The likely
+for 10 minutes. With SFTP on, it is unaffected and carries on. With
+`scheduleFeed.sftp.enabled: false` (bucket only) there is no other source:
+no new timetable or CORPUS arrives until this clears, and
+[DistantSignalScheduleReferencePublishStale](#distantsignalschedulereferencepublishstale)
+(30h) is the only other backstop, so treat it as an outage. The likely
 causes are the kill-switch trips (see
 [schedule-feed-bucket.md](schedule-feed-bucket.md#kill-switch)): the budget
 or a usage alert removed the reader's bindings, Ranma paused the
@@ -1657,9 +1665,12 @@ without reading it.
 ### DistantSignalScheduleBucketNoNewObject
 
 No new expected object has reached the bucket for 30 hours, once one has been
-seen. SFTP may still be delivering:
+seen. With SFTP on, it may still be delivering:
 [DistantSignalScheduleReferencePublishStale](#distantsignalschedulereferencepublishstale)
-is authoritative for the timetable. Causes are on the publisher's side
+is authoritative for the timetable. With `scheduleFeed.sftp.enabled: false`
+(bucket only) nothing else delivers, so the alert is critical
+(`scheduleBucket.noNewObjectSeverityBucketOnly`) and a silent bucket is a
+silent feed. Causes are on the publisher's side
 (a late or failed push, or a publisher kill-switch trip) or a reader that
 cannot list (see the other bucket alerts).
 
@@ -1717,7 +1728,8 @@ The bucket source keeps failing; `kind` on
 `schedule_feed_source_errors_total` says where: `list`, `get` (the download),
 `verify` (size or CRC32C mismatch: the object is not used and is retried),
 `delete`, or `size`. Revoked access (`auth`) is its own alert. The reader backs
-off and SFTP is unaffected. Read schedule-ingest's log for the error.
+off; with SFTP on it is unaffected, and bucket only there is no other source
+meanwhile. Read schedule-ingest's log for the error.
 
 ### DistantSignalScheduleBucketUnexpectedObject
 

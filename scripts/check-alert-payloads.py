@@ -177,6 +177,9 @@ VARIANTS: dict[str, list[str]] = {
     # schedule-reference as a CronJob (CronJob phase 4): its alerts read the
     # ingest-writer's gauges of its database rows instead of its own.
     "schedule-reference-cronjob": ["scheduleFeed.reference.mode=cronjob"],
+    # The bucket as the only feed source: the bucket alerts' text says there
+    # is no other source, and NoNewObject is critical.
+    "schedule-bucket-only": ["scheduleFeed.sftp.enabled=false"],
 }
 
 # What a template expression in an annotation expands to, for the size
@@ -452,12 +455,16 @@ def run_promtool(
 def with_variants(
     alerts: list[Alert], variants: Iterable[Sequence[Mapping[str, object]]]
 ) -> list[Alert]:
-    """`alerts` plus each variant render's alerts that differ from them."""
-    seen = {(a.name, a.expr) for a in alerts}
+    """`alerts` plus each variant render's alerts that differ in expr or text."""
+
+    def key(alert: Alert) -> tuple[str, str, tuple[tuple[str, str], ...]]:
+        return (alert.name, alert.expr, tuple(sorted(alert.annotations.items())))
+
+    seen = {key(a) for a in alerts}
     for groups in variants:
         for alert in alerts_of(groups):
-            if (alert.name, alert.expr) not in seen:
-                seen.add((alert.name, alert.expr))
+            if key(alert) not in seen:
+                seen.add(key(alert))
                 alerts.append(alert)
     return alerts
 

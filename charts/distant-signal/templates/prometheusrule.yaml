@@ -1802,7 +1802,7 @@ spec:
             {{- end }}
           annotations:
             summary: "the last recorded CIF delivery is {{ "{{ $value | humanizeDuration }}" }} old"
-            description: "Over {{ .maxAgeSeconds }}s: no delivery arrived, or its feed marker did not land. Check SFTP, the bucket and schedule-ingest."
+            description: "Over {{ .maxAgeSeconds }}s: no delivery arrived, or its feed marker did not land. Check {{ if $.Values.scheduleFeed.sftp.enabled }}SFTP, {{ end }}the bucket and schedule-ingest."
             runbook_url: {{ printf "%s#distantsignalschedulefeedmarkerstale" $runbook | quote }}
     {{- end }}
     {{- end }}
@@ -2285,7 +2285,7 @@ spec:
             {{- end }}
           annotations:
             summary: "no CIF delivery fully published for {{ .staleAfterHours }}h"
-            description: "No new delivery arrived, or one keeps failing to publish. Check schedule-ingest, the SFTP upload and the reference log."
+            description: "No new delivery arrived, or one keeps failing to publish. Check schedule-ingest, the {{ if $.Values.scheduleFeed.sftp.enabled }}SFTP upload{{ else }}bucket push{{ end }} and the reference log."
             runbook_url: {{ printf "%s#distantsignalschedulereferencepublishstale" $runbook | quote }}
         {{- /*
         SCHED-2: a final chunk's delete was skipped because the staged key
@@ -2431,6 +2431,12 @@ spec:
         docs/schedule-feed-bucket.md for the kill switch and the reader's
         loop guards.
         */}}
+        {{- /*
+        With SFTP off (bucket only) the bucket is the only feed source, so
+        AccessRevoked and NoNewObject say so and NoNewObject takes
+        noNewObjectSeverityBucketOnly. Expressions are the same either way.
+        */}}
+        {{- $bucketOnly := not $.Values.scheduleFeed.sftp.enabled }}
         - alert: DistantSignalScheduleBucketAccessRevoked
           expr: |
             max by (namespace) (distant_signal_schedule_feed_source_access_revoked{namespace="{{ $ns }}", source="bucket"}) == 1
@@ -2442,7 +2448,11 @@ spec:
             {{- end }}
           annotations:
             summary: "Schedule-feed bucket access revoked"
+            {{- if $bucketOnly }}
+            description: "Every bucket call is refused (kill switch, or a missing or rotated key). No other source: no new timetable. Recovery is a Ranma reapply."
+            {{- else }}
             description: "Every bucket call is refused (kill switch, or a missing or rotated key). SFTP carries on. Recovery is a Ranma reapply."
+            {{- end }}
             runbook_url: {{ printf "%s#distantsignalschedulebucketaccessrevoked" $runbook | quote }}
         {{- /*
         Recorded so NoNewObject's expr (which reads it twice) stays well
@@ -2459,13 +2469,17 @@ spec:
             distant_signal:schedule_bucket_last_new_object_seconds:max{namespace="{{ $ns }}"} > 0
           for: {{ .noNewObjectFor }}
           labels:
-            severity: {{ .severity }}
+            severity: {{ if $bucketOnly }}{{ .noNewObjectSeverityBucketOnly | default .severity }}{{ else }}{{ .severity }}{{ end }}
             {{- with $extraLabels }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           annotations:
             summary: "No new object in the schedule-feed bucket in {{ .noNewObjectHours }}h"
+            {{- if $bucketOnly }}
+            description: "The publisher's daily push has not reached the bucket. No other source: no new timetable is arriving."
+            {{- else }}
             description: "The publisher's daily push has not reached the bucket. SFTP may still be delivering: PublishStale is authoritative."
+            {{- end }}
             runbook_url: {{ printf "%s#distantsignalschedulebucketnonewobject" $runbook | quote }}
         {{- /*
         Per kind (cif, corpus): the series with kind selects exactly these
@@ -2534,7 +2548,11 @@ spec:
             {{- end }}
           annotations:
             summary: "Schedule-feed bucket read errors"
+            {{- if $bucketOnly }}
+            description: "schedule-ingest's bucket source keeps failing to list, get, verify or delete. It backs off; no other source delivers meanwhile."
+            {{- else }}
             description: "schedule-ingest's bucket source keeps failing to list, get, verify or delete. It backs off; SFTP is unaffected."
+            {{- end }}
             runbook_url: {{ printf "%s#distantsignalschedulebucketreaderrors" $runbook | quote }}
         - alert: DistantSignalScheduleBucketUnexpectedObject
           expr: |
