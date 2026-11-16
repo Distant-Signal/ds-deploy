@@ -11,22 +11,41 @@ decisions (D1–D14) are in
 the bucket, its IAM and its usage alerts are
 [`charts/ds-ingest-bucket`](../charts/ds-ingest-bucket/README.md)'s.
 
-Every name below is a placeholder (`example-project`, `example-ds-ingest`).
-The real project, bucket, service accounts and budget live in Ranma-Config,
-never in this repository.
+Production's bucket is `gs://ds-ingest-6769-schedule-feed` (europe-west2),
+in the Google project `ds-ingest-6769`, with Google's usual soft delete and
+lifecycle backstop from `charts/ds-ingest-bucket`. The reader signs in
+keyless: the pod's projected service-account token (audience
+`gcp-ds-ingest`) is exchanged through Google workload identity federation
+for `ds-ingest-reader@ds-ingest-6769`, which it impersonates. No key exists.
+That is what is non-secret; the rest (project number, pool and provider
+ids, the publishers' service accounts, the budget) lives in Ranma-Config,
+never in this repository. Names in the later sections that read
+`example-project` or `example-ds-ingest` are placeholders for it.
 
-**Status (2026-10-20, DS-22):** the chart side and the schedule-ingest
-bucket source (the Rust reader) are both built, off by default
-(`scheduleFeed.bucket.enabled: false`). Nothing is provisioned yet: the
-remaining steps are in [Switching it on](#switching-it-on). The audit-log
-shipper (`bucket.auditLogs.ship`, [below](#audit-log)) and the Pub/Sub
-trigger ([Pub/Sub notifications](#pubsub-notifications)) are built too,
-both off by default.
+**Status (2026-11-16, DS-531):** the chart side and the schedule-ingest
+bucket source are built and in use. The chart default is still off
+(`scheduleFeed.bucket.enabled: false`, and `scheduleFeed.sftp.enabled:
+true`), so a stranger's install is unchanged; production overrides it.
+Production has had the bucket source on since chart `0.6.1_build.79`,
+against the bucket above in `workloadIdentity` mode. RDM/DTD now deliver
+the timetable and CORPUS to the bucket, not to SFTP, so the bucket is the
+live source. SFTP stays enabled for a week as a fallback only, then the
+steady state is chosen ([Adoption](#adoption-from-dss-side)). The reader
+is `schedule-ingest` in ds-api (`gcs.rs`): it uses `object_store`'s GCS
+client for the transfers, with a first-party
+`ExternalAccountTokenSource` (ds-core's
+`crates/common/src/gcp_external_account.rs`) supplying the credentials,
+because `object_store` cannot read `external_account` files itself. The
+audit-log shipper (`bucket.auditLogs.ship`, [below](#audit-log)) and the
+Pub/Sub trigger ([Pub/Sub notifications](#pubsub-notifications)) are
+built and off by default in the chart; whether production enables them is
+Ranma-Config's.
 
 ## Switching it on
 
-Each step is the previous one's prerequisite. Every concrete name, id and
-email lives in Ranma-Config, never here.
+Each step is the previous one's prerequisite. Production has done all of
+them (see Status); this is the order for a new bucket. Project numbers,
+ids and emails live in Ranma-Config, never here.
 
 1. **Ranma: the Google project, keyless sign-in and the bucket.** The
    dedicated GCP project and its budget, Crossplane and the GCP providers,
