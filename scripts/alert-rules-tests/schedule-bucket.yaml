@@ -111,3 +111,80 @@ tests:
       - eval_time: 70m
         alertname: DistantSignalScheduleBucketUnexpectedObject
         exp_alerts: []
+  # Transient token-exchange failures (timeout at sts) from 6m, and no
+  # success in the window: pending, then fires after `for: 10m`. The
+  # sibling impersonation stage only succeeds, so it stays quiet; the
+  # revoked-class outcome (invalid_grant) at the same stage is not counted.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="sts", outcome="timeout"}'
+        values: '0x5 1+1x60'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="sts", outcome="success"}'
+        values: '0x70'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="sts", outcome="invalid_grant"}'
+        values: '0x5 1+1x60'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="impersonation", outcome="success"}'
+        values: '0+1x70'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="impersonation", outcome="error"}'
+        values: '0x70'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: DistantSignalScheduleBucketTokenExchangeFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalScheduleBucketTokenExchangeFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, stage: sts, outcome: timeout}
+            exp_annotations:
+              summary: Bucket token exchange failing (sts)
+              description: "timeout errors, no success in 30m. Reads stop when the cached token expires."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebuckettokenexchangefailing
+  # A blip: one http_error at 6m, then the retry succeeds at 9m. The
+  # success is in the window, so it never fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="impersonation", outcome="http_error"}'
+        values: '0x5 1x60'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="impersonation", outcome="success"}'
+        values: '0x8 1x60'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DistantSignalScheduleBucketTokenExchangeFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DistantSignalScheduleBucketTokenExchangeFailing
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DistantSignalScheduleBucketTokenExchangeFailing
+        exp_alerts: []
+  # Successes only: never fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="sts", outcome="success"}'
+        values: '0+1x70'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="sts", outcome="timeout"}'
+        values: '0x70'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DistantSignalScheduleBucketTokenExchangeFailing
+        exp_alerts: []
+  # Revoked-class outcomes only (every one of them, climbing, no success):
+  # AccessRevoked's, not this alert's.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="sts", outcome="token_file_error"}'
+        values: '0+1x70'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="sts", outcome="invalid_grant"}'
+        values: '0+1x70'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="sts", outcome="invalid_target"}'
+        values: '0+1x70'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="impersonation", outcome="unauthenticated"}'
+        values: '0+1x70'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="impersonation", outcome="permission_denied"}'
+        values: '0+1x70'
+      - series: 'distant_signal_gcp_token_exchange_total{namespace="distant-signal", pod="sf", stage="sts", outcome="success"}'
+        values: '0x70'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DistantSignalScheduleBucketTokenExchangeFailing
+        exp_alerts: []

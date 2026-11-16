@@ -2488,6 +2488,41 @@ spec:
             description: "No new {{ "{{ $labels.kind }}" }} object has reached the bucket, though one was seen before. The other kind may still be arriving."
             runbook_url: {{ printf "%s#distantsignalschedulebucketnonewobjectbykind" $runbook | quote }}
         {{- end }}
+        {{- /*
+        Transient Google token-exchange failures (workloadIdentity mode).
+        ReadErrors excludes kind="auth" and AccessRevoked covers only the
+        revoked class, so a failing exchange that is not revoked (timeout,
+        error, http_error, invalid_request) raised nothing. The revoked
+        class (token_file_error, invalid_grant, invalid_target,
+        unauthenticated, permission_denied: ds-core's is_access_revoked)
+        is excluded here so it does not double-fire. A success in the same
+        stage inside the window means the retry worked, so a blip clears.
+        The counter is registered at 0 for every stage and outcome, so the
+        success series exists before the first success.
+        */}}
+        {{- if .tokenExchangeEnabled }}
+        - record: distant_signal:schedule_bucket_token_exchange_transient_failures:increase
+          expr: |
+            sum by (namespace, stage, outcome) (increase(distant_signal_gcp_token_exchange_total{namespace="{{ $ns }}", outcome!~"success|token_file_error|invalid_grant|invalid_target|unauthenticated|permission_denied"}[{{ .tokenExchangeWindow }}]))
+        - record: distant_signal:schedule_bucket_token_exchange_successes:increase
+          expr: |
+            sum by (namespace, stage) (increase(distant_signal_gcp_token_exchange_total{namespace="{{ $ns }}", outcome="success"}[{{ .tokenExchangeWindow }}]))
+        - alert: DistantSignalScheduleBucketTokenExchangeFailing
+          expr: |
+            distant_signal:schedule_bucket_token_exchange_transient_failures:increase{namespace="{{ $ns }}"} > 0
+            and on (namespace, stage)
+            distant_signal:schedule_bucket_token_exchange_successes:increase{namespace="{{ $ns }}"} == 0
+          for: {{ .tokenExchangeFor }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Bucket token exchange failing ({{ "{{ $labels.stage }}" }})"
+            description: "{{ "{{ $labels.outcome }}" }} errors, no success in {{ .tokenExchangeWindow }}. Reads stop when the cached token expires."
+            runbook_url: {{ printf "%s#distantsignalschedulebuckettokenexchangefailing" $runbook | quote }}
+        {{- end }}
         - alert: DistantSignalScheduleBucketReadErrors
           expr: |
             sum by (namespace) (increase(distant_signal_schedule_feed_source_errors_total{namespace="{{ $ns }}", source="bucket", kind!="auth"}[{{ .readErrorsWindow }}])) > 0
