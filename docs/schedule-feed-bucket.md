@@ -204,13 +204,54 @@ Data is held in the bucket only in transit (D11):
    pipeline as an SFTP delivery. A failed check keeps the object in the
    bucket and retries on a later poll; after enough failed verifications
    the reader gives up on it (see [Giving up on an object](#giving-up-on-an-object)).
-4. Anything else is **unexpected**: it is never downloaded, one log line
+4. An **ignored** object is a known benign file that `bucket.ignoredKeys`
+   names and `bucket.expectedKeys` does not (see
+   [Known benign objects](#known-benign-objects)). It is never downloaded;
+   one info log line and `schedule_feed_source_ignored_objects_total` record
+   it once per generation, and no alert fires.
+5. Anything else is **unexpected**: it is never downloaded, one log line
    names it (escaped and truncated) and
    `DistantSignalScheduleBucketUnexpectedObject` fires.
-5. Once an object is `bucket.deleteMinAgeSecs` old (default 1 hour, so
-   the publisher's read-back and scan finish) and either confirmed or
-   unexpected, it is deleted with `ifGenerationMatch`: a newer upload under
-   the same name in between is never lost.
+6. Once an object is `bucket.deleteMinAgeSecs` old (default 1 hour, so
+   the publisher's read-back and scan finish) and either confirmed,
+   ignored or unexpected, it is deleted with `ifGenerationMatch`: a newer
+   upload under the same name in between is never lost.
+
+### Known benign objects
+
+RDM also drops `CORPUSExtract.csv.gz` (the SMART berth data, about 300 KB)
+at the bucket root every day around 00:00 UTC, beside
+`CORPUSExtract.json.gz`. schedule-ingest loads only the JSON extract and
+the NLC XML snapshot, so before `bucket.ignoredKeys` the CSV was flagged
+as unexpected and `DistantSignalScheduleBucketUnexpectedObject` fired
+every day.
+
+`scheduleFeed.bucket.ignoredKeys` lists such names: case-insensitive `*`
+globs at the bucket root, the same matcher as `expectedKeys`. The default
+is `[CORPUSExtract.csv.gz]`. The chart renders it as `BUCKET_IGNORED_KEYS`
+on the `ingest` container while the bucket source is on and the list is
+non-empty. An ignored object is treated as an unexpected one in every way
+that matters for safety: it is never downloaded, and it is deleted unread
+once `deleteMinAgeSecs` old with the same `ifGenerationMatch` guard. It
+differs only in how it is reported: an info log line and
+`distant_signal_schedule_feed_source_ignored_objects_total{source}` once
+per generation, instead of a warning and `..._unexpected_objects_total`.
+
+- **Expected wins.** A name both lists match is expected: downloaded, or
+  unexpected if it does not route or is too big. It is never ignored.
+- **Unsafe names stay unexpected.** A nested, hidden, control-character or
+  over-long name is unexpected whatever the list says.
+- **Keep it narrow.** Name files, not patterns that could cover a new
+  feed: every other name still alerts. The chart refuses an entry with
+  `/`, `\`, `,` or a leading `.`, and `*` alone; schedule-ingest refuses
+  the same at start.
+- To add a name, append it to the list in deploy config (the list
+  replaces the default, so keep `CORPUSExtract.csv.gz`). `[]` turns the
+  list off and the CSV alerts again.
+- An image older than ds-api#61 does not read `BUCKET_IGNORED_KEYS` and
+  reports these objects as unexpected, as before.
+- `ignored_objects_total` should rise about once a day. If it stops, the
+  publisher stopped sending the file, which is harmless.
 
 The bucket backs this up: versioning is off, soft delete keeps a deleted
 object for 7 days, and a 7-day lifecycle rule deletes anything the reader
@@ -292,7 +333,8 @@ The reader's metrics, all `{source="bucket"}` and registered at 0:
 `distant_signal_schedule_feed_source_access_revoked`,
 `..._last_new_object_seconds`, `..._errors_total{kind}` (`auth`, `list`,
 `get`, `verify`, `delete`, `size`), `..._unexpected_objects_total{reason}`
-(`name`, `size`, `unroutable`, `failed`), `..._download_capped`,
+(`name`, `size`, `unroutable`, `failed`), `..._ignored_objects_total`
+(from an image with ds-api#61), `..._download_capped`,
 `..._downloaded_bytes_total` and `..._poll_duration_seconds`; plus
 `distant_signal_schedule_feed_source_disagreement_total{kind}` and, keyless,
 `distant_signal_gcp_token_exchange_total{stage,outcome}` and

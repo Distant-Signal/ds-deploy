@@ -1814,7 +1814,14 @@ meanwhile. Read schedule-ingest's log for the error.
 An object with a name outside `scheduleFeed.bucket.expectedKeys`, over
 `maxObjectBytes`, or not routable to CIF or CORPUS was flagged; it is deleted
 unread after `deleteMinAgeSecs` and stays recoverable from soft delete for
-7 days. To inspect it, restore it as in
+7 days. Names in `scheduleFeed.bucket.ignoredKeys` (by default RDM's daily
+SMART `CORPUSExtract.csv.gz`) are deleted the same way but never fire this
+alert: they count in `schedule_feed_source_ignored_objects_total` instead.
+If the flagged name is a new benign file the publisher now sends every day,
+add it to `ignoredKeys` in deploy config, keeping the default entry
+([schedule-feed-bucket.md](schedule-feed-bucket.md#known-benign-objects)).
+Don't add a name you haven't explained: the alert is how a new or renamed
+feed is noticed. To inspect it, restore it as in
 [schedule-feed-bucket.md](schedule-feed-bucket.md#restoring-a-deleted-object),
 and check the audit log for who wrote it. With
 `scheduleBucket.objectAbandonedEnabled` on, `reason="failed"` is left out

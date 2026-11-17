@@ -215,6 +215,7 @@ BOTH_ENV = {
     "BUCKET_NAME": "example-ds-ingest",
     "GOOGLE_SERVICE_ACCOUNT_PATH": f"{KEY_DIR}/service-account.json",
     "BUCKET_EXPECTED_KEYS": "timetable_full.zip,CORPUSExtract.json.gz,NLC*.xml.gz",
+    "BUCKET_IGNORED_KEYS": "CORPUSExtract.csv.gz",
     "BUCKET_POLL_INTERVAL_SECS": "300",
     "BUCKET_DELETE_MIN_AGE_SECS": "3600",
     "BUCKET_ARCHIVE_KEEP": "5",
@@ -716,6 +717,18 @@ def check_both(c: Checker) -> None:
         or n in PUBSUB_ENV
     )
     c.check(ok=not extra, message=f"both: unrequested ingest env {extra}")
+    # An empty ignore list renders no BUCKET_IGNORED_KEYS (the image's own
+    # default, nothing ignored).
+    unignored = env(
+        container(
+            c.docs(*ON, *BUCKET, "--set-json", "scheduleFeed.bucket.ignoredKeys=[]"),
+            "ingest",
+        )
+    )
+    c.check(
+        ok="BUCKET_IGNORED_KEYS" not in unignored,
+        message="both: ignoredKeys=[] still renders BUCKET_IGNORED_KEYS",
+    )
     vol = volumes(docs).get("bucket-credentials", {})
     secret = cast("dict[str, object]", vol.get("secret") or {})
     c.check(
@@ -1078,6 +1091,26 @@ FAILURES: tuple[tuple[str, tuple[str, ...], str], ...] = (
         "expectedKeys with /",
         ("--set", "scheduleFeed.bucket.expectedKeys[0]=a/b"),
         "scheduleFeed.bucket.expectedKeys",
+    ),
+    (
+        "ignoredKeys with /",
+        ("--set", "scheduleFeed.bucket.ignoredKeys[0]=a/b"),
+        "scheduleFeed.bucket.ignoredKeys",
+    ),
+    (
+        "ignoredKeys with a leading .",
+        ("--set", "scheduleFeed.bucket.ignoredKeys[0]=.hidden"),
+        "scheduleFeed.bucket.ignoredKeys",
+    ),
+    (
+        "ignoredKeys of * alone",
+        ("--set-string", "scheduleFeed.bucket.ignoredKeys[0]=**"),
+        "scheduleFeed.bucket.ignoredKeys",
+    ),
+    (
+        "ignoredKeys not a list",
+        ("--set", "scheduleFeed.bucket.ignoredKeys=CORPUSExtract.csv.gz"),
+        "scheduleFeed.bucket.ignoredKeys",
     ),
     (
         "maxObjectBytes over the hour cap",

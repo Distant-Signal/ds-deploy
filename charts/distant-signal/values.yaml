@@ -5860,6 +5860,21 @@ scheduleFeed:
       - timetable_full.zip
       - CORPUSExtract.json.gz
       - NLC*.xml.gz
+    # -- Known benign object names (case-insensitive `*` globs, bucket root
+    # only) the publisher drops beside the feed. One that expectedKeys does
+    # not match (expectedKeys wins) is never downloaded and is deleted
+    # unread after deleteMinAgeSecs like an unexpected object, but it counts
+    # in schedule_feed_source_ignored_objects_total (logged at info), not
+    # unexpected_objects_total, so DistantSignalScheduleBucketUnexpectedObject
+    # does not fire for it. The default is RDM's daily SMART
+    # CORPUSExtract.csv.gz, which CORPUS ingest does not load. Rendered as
+    # BUCKET_IGNORED_KEYS while the bucket source is on and the list is
+    # non-empty; `[]` ignores nothing. No `/`, `\`, `,` or leading `.`, and
+    # not `*` alone. Needs a schedule-ingest image with DS-534
+    # (ds-api#61); an older one ignores the variable and reports these
+    # objects as unexpected, as before.
+    ignoredKeys:
+      - CORPUSExtract.csv.gz
     # -- Seconds between bucket listings. At least 60.
     pollIntervalSecs: 300
     # -- An object is deleted only once it is this old, so the

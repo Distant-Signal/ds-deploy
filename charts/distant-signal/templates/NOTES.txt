@@ -204,6 +204,9 @@ Schedule feed bucket source (docs/schedule-feed-bucket.md):
                  Until it exists, the bucket source reports revoked access.
   {{- end }}
   Expected keys: {{ join ", " .expectedKeys }}
+  {{- with .ignoredKeys }}
+  Ignored keys:  {{ join ", " . }} (deleted unread, not alerted on)
+  {{- end }}
 
   charts/ds-ingest-bucket must grant this reader (its reader.member) on the
   bucket, or schedule-ingest raises DistantSignalScheduleBucketAccessRevoked.
