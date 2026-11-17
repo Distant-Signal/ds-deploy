@@ -1451,6 +1451,32 @@ be mixed). They are added to the defaults rather than replacing them, and
 because policies are additive, no policy outside the chart can take this
 allowance away.
 
+## Production guards
+
+Every isolation control in this chart is off by default, so that existing
+installs render unchanged: with the defaults every service connects to
+Postgres as the superuser, Redis has no password and no NetworkPolicy
+restricts a pod. `global.production: true` turns that into a render
+failure. It is off by default, and nothing in this repository turns it on
+for a deployment.
+
+With it on, `helm template` and `helm install` fail, listing every gap at
+once, unless:
+
+- `networkPolicy.enabled` and `networkPolicy.egress.enabled` are true;
+- Redis has a password: `redis.auth.enabled`, or `redis.acl.defaultUser:
+  "on-unshared"` (or `"off"`) with the ACL on;
+- with the bundled Redis (`redis.enabled`), `redis.acl.enabled` is true at
+  `stage: narrow` ([docs/redis-acl.md](../../docs/redis-acl.md));
+- with the bundled Postgres (`postgresql.enabled`), `postgresql.roles.enabled`
+  and `postgresql.roles.perService.enabled` are true
+  ([docs/postgres-app-role.md](../../docs/postgres-app-role.md)).
+
+[`values-production-example.yaml`](values-production-example.yaml) sets it
+and every control it needs, and `scripts/check-security-guards-chart.py`
+keeps that render passing. Turn it on in a deployment only after its values
+render with it (`helm template ... --set global.production=true`).
+
 ## Distant-Signal-MCP as a service caller
 
 The Distant-Signal-MCP is a separate release (its own `ds-mcp` namespace)
@@ -1697,6 +1723,7 @@ renders. A new workload therefore needs its line in
 | `revisionHistoryLimit` | `3` | Old ReplicaSets and StatefulSet ControllerRevisions kept, on every Deployment and StatefulSet (Kubernetes' default is 10). A whole number >= 0; `helm rollback` does not need them. |
 | `global.imageRegistry` | `""` | Registry (and optional path prefix) put in front of every image in place of the registry its `image.repository` carries, e.g. `registry.example.com/myfork`. Empty keeps each repository as written. |
 | `global.priorityClassName` | `""` | PriorityClass of every pod whose own `priorityClassName` is empty (not the `helm test` pods); `""` renders none, the cluster default. The class must exist first; `system-*` classes are refused. See "Pod priority". |
+| `global.production` | `false` | Fail the render unless the isolation controls are on: NetworkPolicy with its egress policy, a Redis password (bundled Redis: the narrow ACL too) and per-service Postgres roles (bundled Postgres). Off changes nothing. See "Production guards". |
 | `sourceCode.url` | `"https://github.com/Distant-Signal/distant-signal"` | Repository `/public/version` lists for a first-party image with no `image.source` (AGPL-3.0 §13). Every image here sets its own: since the repo split they are built in several repositories, and this one's README lists them all. |
 | `sourceCode.revision` | `""` | Commit `/public/version` lists for an image whose `image.tag` is neither a build tag, `build.<run>-<commit>` (it lists the tag's commit), nor a release tag, `vX.Y.Z` (it lists the tag: ds-migrate). Empty: every first-party image here is pinned at one. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount for the chart's workloads. |

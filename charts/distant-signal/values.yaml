@@ -44,6 +44,17 @@ global:
   # refuses the pods. The built-in `system-*` classes are refused (chart
   # README, "Pod priority").
   priorityClassName: ""
+  # -- Production switch for the isolation controls. Every one of them is
+  # off by default, so a bare install runs every service as the Postgres
+  # superuser against a Redis with no password and no NetworkPolicy. With
+  # `production: true` the render fails, listing every gap, unless
+  # `networkPolicy.enabled` and `networkPolicy.egress.enabled` are on, Redis
+  # has a password (`redis.auth.enabled`, or `redis.acl.defaultUser`
+  # `on-unshared`) and, for the bundled Redis, `redis.acl.enabled` with
+  # `stage: narrow`, and the bundled Postgres has `postgresql.roles.enabled`
+  # with `perService.enabled`. Off (the default) changes nothing. See the
+  # chart README, "Production guards".
+  production: false
 
 # The source the images were built from, for the api's `/public/version`
 # (AGPL-3.0 §13: users reach the source of what is deployed over the

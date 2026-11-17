@@ -4167,3 +4167,46 @@ api-maintenance CronJob.
 {{- end -}}
 {{- $days -}}
 {{- end -}}
+
+{{/*
+global.production: the isolation controls that default to off must all be on.
+Renders nothing; fails with every gap at once. Called from
+templates/zz-security-guards.yaml. Off by default, so existing values render
+unchanged (chart README, "Production guards").
+*/}}
+{{- define "distant-signal.productionGuards" -}}
+{{- if .Values.global.production -}}
+{{- $v := .Values -}}
+{{- $gaps := list -}}
+{{- if not $v.networkPolicy.enabled -}}
+{{- $gaps = append $gaps "networkPolicy.enabled is false: every pod can reach every other pod and the cluster network" -}}
+{{- end -}}
+{{- if not $v.networkPolicy.egress.enabled -}}
+{{- $gaps = append $gaps "networkPolicy.egress.enabled is false: a compromised pod can reach any address, including the cluster's internal ranges" -}}
+{{- end -}}
+{{- if $v.redis.enabled -}}
+{{- if not $v.redis.acl.enabled -}}
+{{- $gaps = append $gaps "redis.acl.enabled is false: every service shares one Redis user (docs/redis-acl.md)" -}}
+{{- else if ne (toString $v.redis.acl.stage) "narrow" -}}
+{{- $gaps = append $gaps (printf "redis.acl.stage is %q: only \"narrow\" limits each service's Redis user to its own rights" (toString $v.redis.acl.stage)) -}}
+{{- end -}}
+{{- /* The default user's password: redis.auth, or its own (on-unshared) or none (off). */ -}}
+{{- if and (not $v.redis.auth.enabled) (not (and $v.redis.acl.enabled (ne (include "distant-signal.redisAclDefaultUserMode" .) "on"))) -}}
+{{- $gaps = append $gaps "Redis has no password: set redis.auth.enabled, or redis.acl.defaultUser to \"on-unshared\" (or \"off\")" -}}
+{{- end -}}
+{{- else if not $v.redis.auth.enabled -}}
+{{- $gaps = append $gaps "redis.auth.enabled is false: the external Redis is reached without a password" -}}
+{{- end -}}
+{{- if $v.postgresql.enabled -}}
+{{- if not $v.postgresql.roles.enabled -}}
+{{- $gaps = append $gaps "postgresql.roles.enabled is false: the api and every worker connect as the Postgres superuser (docs/postgres-app-role.md)" -}}
+{{- end -}}
+{{- if not $v.postgresql.roles.perService.enabled -}}
+{{- $gaps = append $gaps "postgresql.roles.perService.enabled is false: the services do not each get their own Postgres role" -}}
+{{- end -}}
+{{- end -}}
+{{- if $gaps -}}
+{{- fail (printf "global.production is true, but the isolation controls are not all on:\n  - %s\nTurn each on (values-production-example.yaml shows them, docs/first-install.md the order), or leave global.production false." (join "\n  - " $gaps)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

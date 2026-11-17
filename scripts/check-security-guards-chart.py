@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+# ruff: noqa: T201  # a CLI whose output (the failures) is stdout
+"""Check charts/distant-signal's security guards (chart README, "Production guards").
+
+  uv run scripts/check-security-guards-chart.py [--helm HELM]
+
+  - global.production (off by default, which changes nothing) fails the
+    render, naming every gap, unless networkPolicy and its egress policy,
+    a Redis password with the narrow ACL, and per-service Postgres roles
+    are on; the production example values satisfy it.
+
+Exit 1 with one line per failed check. Needs helm on PATH (or --helm).
+"""
+
+import argparse
+import pathlib
+import shutil
+import subprocess
+import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+REPO = pathlib.Path(__file__).resolve().parent.parent
+CHART = REPO / "charts" / "distant-signal"
+
+
+def sets(*pairs: str) -> tuple[str, ...]:
+    """Return `--set` arguments for each `key=value`."""
+    return tuple(a for p in pairs for a in ("--set", p))
+
+
+# The least a fresh install adds (release B's ingest prerequisites), as in
+# the other chart checks.
+BASE = (
+    "-f",
+    str(CHART / "ci" / "ingest-prereqs.yaml"),
+    *sets(
+        "trustConsumer.kafka.brokers=k:9094",
+        "trustConsumer.kafka.topic=t",
+        "trustConsumer.kafka.saslMechanism=PLAIN",
+        "enricher.llm.baseUrl=http://l/v1",
+        "enricher.llm.model=m",
+        "api.sso.issuerUrl=https://sso.example.com",
+        "api.sso.clientId=c",
+        "api.sso.clientSecret=s",
+        "api.sso.redirectUrl=https://app.example.com/cb",
+        "api.sso.postLoginRedirectUrl=https://app.example.com/",
+    ),
+)
+PRODUCTION_EXAMPLE = ("-f", str(CHART / "values-production-example.yaml"))
+# BASE already has the narrow Redis ACL and the per-service Postgres roles
+# on (ci/ingest-prereqs.yaml); this adds the rest of what global.production
+# needs.
+ISOLATED = sets(
+    "global.production=true",
+    "networkPolicy.enabled=true",
+    "networkPolicy.egress.enabled=true",
+    "redis.auth.enabled=true",
+)
+# The same with the Redis ACL and Postgres roles off, as a fresh install has them.
+UNISOLATED = sets(
+    "global.production=true",
+    "redis.acl.enabled=false",
+    "postgresql.roles.enabled=false",
+    "postgresql.roles.perService.enabled=false",
+)
+
+
+@dataclass(frozen=True)
+class Case:
+    """One render: its arguments and what it must say (None: render fine)."""
+
+    name: str
+    args: tuple[str, ...]
+    refusal: str | None = None
+
+
+CASES: tuple[Case, ...] = (
+    Case("defaults render with global.production off", BASE),
+    Case(
+        "global.production refuses the defaults, naming every gap",
+        (*BASE, *UNISOLATED),
+        "networkPolicy.enabled is false",
+    ),
+    Case(
+        "global.production names the Postgres gap too",
+        (*BASE, *UNISOLATED),
+        "postgresql.roles.enabled is false",
+    ),
+    Case(
+        "global.production names the Redis gap too",
+        (*BASE, *UNISOLATED),
+        "redis.acl.enabled is false",
+    ),
+    Case("global.production passes with every control on", (*BASE, *ISOLATED)),
+    Case(
+        "global.production needs the egress policy",
+        (*BASE, *ISOLATED, *sets("networkPolicy.egress.enabled=false")),
+        "networkPolicy.egress.enabled is false",
+    ),
+    Case(
+        "global.production needs the narrow ACL stage",
+        (*BASE, *ISOLATED, *sets("redis.acl.stage=open")),
+        "redis.acl.stage is",
+    ),
+    Case(
+        "global.production needs a Redis password",
+        (
+            *BASE,
+            *ISOLATED,
+            *sets("redis.auth.enabled=false", "redis.acl.defaultUser=on"),
+        ),
+        "Redis has no password",
+    ),
+    Case(
+        "an unshared default user is a Redis password",
+        (
+            *BASE,
+            *ISOLATED,
+            *sets("redis.auth.enabled=false", "redis.acl.defaultUser=on-unshared"),
+        ),
+    ),
+    Case(
+        "global.production needs per-service Postgres roles",
+        (*BASE, *ISOLATED, *sets("postgresql.roles.perService.enabled=false")),
+        "postgresql.roles.perService.enabled is false",
+    ),
+    Case("the production example values satisfy global.production", PRODUCTION_EXAMPLE),
+    Case(
+        "the production example fails without its NetworkPolicy",
+        (*PRODUCTION_EXAMPLE, *sets("networkPolicy.enabled=false")),
+        "networkPolicy.enabled is false",
+    ),
+)
+
+
+def render(helm: str, args: Sequence[str]) -> tuple[int, str]:
+    """Return `helm template`'s exit status and its stderr."""
+    result = subprocess.run(  # noqa: S603  # helm, with this script's own args
+        [helm, "template", "distant-signal", str(CHART), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode, result.stderr
+
+
+def problems(helm: str) -> list[str]:
+    """Return one line for each case that doesn't behave."""
+    found: list[str] = []
+    for case in CASES:
+        status, error = render(helm, case.args)
+        if case.refusal is None:
+            if status != 0:
+                found.append(f"{case.name}: refused to render: {error.strip()[:300]}")
+        elif status == 0:
+            found.append(f"{case.name}: rendered, expected a refusal")
+        elif case.refusal not in error:
+            found.append(
+                f"{case.name}: refused without {case.refusal!r}: {error.strip()[:300]}"
+            )
+    return found
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run every case; print failures."""
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser.add_argument("--helm", default=shutil.which("helm") or "helm")
+    args = parser.parse_args(argv)
+    failures = problems(args.helm)
+    for failure in failures:
+        print(failure)
+    if not failures:
+        print(f"ok: {len(CASES)} security guard renders behave")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

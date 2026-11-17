@@ -270,6 +270,12 @@ jobs:
       - name: egress policies scope DNS
         run: uv run --no-sync scripts/check-dns-netpol-chart.py
 
+      # Security guards (chart README, "Production guards"):
+      # global.production refuses values that leave the isolation controls
+      # off, and the production example values satisfy it.
+      - name: security guards
+        run: uv run --no-sync scripts/check-security-guards-chart.py
+
       # enricher.llm.provider (docs/enricher-anthropic.md): openai renders
       # the enricher as before; anthropic renders the Claude env, key Secret
       # and egress port, batch mode its knobs; bad combinations refuse.

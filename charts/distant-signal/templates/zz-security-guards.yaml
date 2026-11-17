@@ -1,0 +1,8 @@
+{{- /*
+Security guard-rails that are checked in one place (distant-signal.productionGuards
+in _helpers.tpl). Renders nothing. Named zz- so it runs before the other
+templates (Helm renders the top-level templates in reverse name order and
+stops at the first failure) and a values file with several gaps gets one
+message listing them all.
+*/ -}}
+{{- include "distant-signal.productionGuards" . -}}
