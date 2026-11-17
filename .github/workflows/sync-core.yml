@@ -155,8 +155,9 @@ jobs:
             echo "::error::refusing to push to ${BRANCH}" >&2
             exit 1
           fi
-          if [[ "$(git rev-parse HEAD)" != "${SHA}" ]]; then
-            echo "::error::checked out $(git rev-parse HEAD), not ${SHA}" >&2
+          head="$(git rev-parse HEAD)"
+          if [[ "${head}" != "${SHA}" ]]; then
+            echo "::error::checked out ${head}, not ${SHA}" >&2
             exit 1
           fi
           # Reject renames, copies, mode changes and symlinks before they
@@ -172,6 +173,7 @@ jobs:
           # The paths come from the index after the apply, not from parsing
           # the patch: the files scripts/sync-core.py owns, nothing else
           # (a case-insensitive or renamed path cannot match).
+          git diff --cached --raw --no-renames -z >"${RUNNER_TEMP}/raw"
           count=0
           while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
             read -r old new _ _ status <<<"${meta}"
@@ -196,7 +198,7 @@ jobs:
                 ;;
             esac
             count=$((count + 1))
-          done < <(git diff --cached --raw --no-renames -z)
+          done <"${RUNNER_TEMP}/raw"
           if [[ "${count}" -eq 0 ]]; then
             echo "::error::the patch changes nothing" >&2
             exit 1
@@ -219,7 +221,8 @@ jobs:
           set -euo pipefail
           # The branch is still where this run started: a fast-forward push
           # would refuse otherwise, this says why.
-          tip="$(git ls-remote origin "refs/heads/${BRANCH}" | cut -f1)"
+          git ls-remote origin "refs/heads/${BRANCH}" >"${RUNNER_TEMP}/tip"
+          read -r tip _ <"${RUNNER_TEMP}/tip" || tip=""
           if [[ "${tip}" != "${SHA}" ]]; then
             echo "::error::${BRANCH} moved to ${tip} since ${SHA}; a newer run takes over" >&2
             exit 1
