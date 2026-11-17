@@ -4167,3 +4167,75 @@ api-maintenance CronJob.
 {{- end -}}
 {{- $days -}}
 {{- end -}}
+
+{{/*
+global.production: the isolation controls that default to off must all be on.
+Renders nothing; fails with every gap at once. Called from
+templates/zz-security-guards.yaml. Off by default, so existing values render
+unchanged (chart README, "Production guards").
+*/}}
+{{- define "distant-signal.productionGuards" -}}
+{{- if .Values.global.production -}}
+{{- $v := .Values -}}
+{{- $gaps := list -}}
+{{- if not $v.networkPolicy.enabled -}}
+{{- $gaps = append $gaps "networkPolicy.enabled is false: every pod can reach every other pod and the cluster network" -}}
+{{- end -}}
+{{- if not $v.networkPolicy.egress.enabled -}}
+{{- $gaps = append $gaps "networkPolicy.egress.enabled is false: a compromised pod can reach any address, including the cluster's internal ranges" -}}
+{{- end -}}
+{{- if $v.redis.enabled -}}
+{{- if not $v.redis.acl.enabled -}}
+{{- $gaps = append $gaps "redis.acl.enabled is false: every service shares one Redis user (docs/redis-acl.md)" -}}
+{{- else if ne (toString $v.redis.acl.stage) "narrow" -}}
+{{- $gaps = append $gaps (printf "redis.acl.stage is %q: only \"narrow\" limits each service's Redis user to its own rights" (toString $v.redis.acl.stage)) -}}
+{{- end -}}
+{{- /* The default user's password: redis.auth, or its own (on-unshared) or none (off). */ -}}
+{{- if and (not $v.redis.auth.enabled) (not (and $v.redis.acl.enabled (ne (include "distant-signal.redisAclDefaultUserMode" .) "on"))) -}}
+{{- $gaps = append $gaps "Redis has no password: set redis.auth.enabled, or redis.acl.defaultUser to \"on-unshared\" (or \"off\")" -}}
+{{- end -}}
+{{- else if and (not $v.redis.auth.enabled) (not (regexMatch "^[a-z]+://[^/@]*@" (toString $v.redis.externalUrl))) -}}
+{{- /* An external Redis: a password in redis.auth, or inline in redis.externalUrl (redisUrl above allows it). */ -}}
+{{- $gaps = append $gaps "redis.auth.enabled is false and redis.externalUrl carries no credentials: the external Redis is reached without a password" -}}
+{{- end -}}
+{{- if $v.postgresql.enabled -}}
+{{- if not $v.postgresql.roles.enabled -}}
+{{- $gaps = append $gaps "postgresql.roles.enabled is false: the api and every worker connect as the Postgres superuser (docs/postgres-app-role.md)" -}}
+{{- end -}}
+{{- if not $v.postgresql.roles.perService.enabled -}}
+{{- $gaps = append $gaps "postgresql.roles.perService.enabled is false: the services do not each get their own Postgres role" -}}
+{{- end -}}
+{{- end -}}
+{{- if and (include "distant-signal.sftpOpenToAnySource" .) (not $v.scheduleFeed.sftp.allowAnySource) -}}
+{{- $gaps = append $gaps "scheduleFeed.sftp.allowedCidrs is empty on a LoadBalancer SFTP Service: any address can reach the port. List the sender's ranges (needs scheduleFeed.service.externalTrafficPolicy: Local), turn scheduleFeed.sftp.enabled off for bucket-only delivery, or set scheduleFeed.sftp.allowAnySource=true" -}}
+{{- end -}}
+{{- if $gaps -}}
+{{- fail (printf "global.production is true, but the isolation controls are not all on:\n  - %s\nTurn each on (values-production-example.yaml shows them, docs/first-install.md the order), or leave global.production false." (join "\n  - " $gaps)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Client-address trust: the guards that need no global.production. Renders
+nothing; fails on the first unacknowledged risk. Called from
+templates/zz-security-guards.yaml (chart README, "Production guards").
+*/}}
+{{- define "distant-signal.clientTrustGuards" -}}
+{{- $v := .Values -}}
+{{- if and $v.ingress.enabled $v.ingress.api.enabled $v.api.rateLimit.enabled $v.api.rateLimit.trustXRealIp (not $v.api.rateLimit.trustXRealIpIngressAcknowledged) -}}
+{{- fail "ingress.api.enabled is true while api.rateLimit.trustXRealIp is true. A request arriving through the Ingress carries whatever X-Real-IP its client sent, so it could choose its own rate-limit key. Set api.rateLimit.trustXRealIp=false (every request the frontend proxies then shares the frontend pod's bucket), or turn ingress.api.enabled off and route the public hostname to the frontend. If the ingress controller overwrites X-Real-IP itself, set api.rateLimit.trustXRealIpIngressAcknowledged=true." -}}
+{{- end -}}
+{{- if and (include "distant-signal.delegatedEnabled" .) (not $v.networkPolicy.enabled) (not $v.api.delegated.allowWithoutNetworkPolicy) -}}
+{{- fail "api.delegated.clients has an enabled client while networkPolicy.enabled is false. Nothing then limits who can reach the delegated listener, so any pod in the cluster could present a bearer and pick its own rate-limit key. Set networkPolicy.enabled=true (admit the caller with networkPolicy.apiExtraIngressNamespaces), or set api.delegated.allowWithoutNetworkPolicy=true if another control restricts the listener's port." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when the SFTP receiver is published on a LoadBalancer with no source
+CIDR list, so any address can reach its port (authentication is then the
+only control). Used by NOTES.txt and, with global.production, the guards.
+*/}}
+{{- define "distant-signal.sftpOpenToAnySource" -}}
+{{- $s := .Values.scheduleFeed -}}
+{{- if and $s.enabled $s.sftp.enabled (eq (toString $s.service.type) "LoadBalancer") (not $s.sftp.allowedCidrs) -}}true{{- end -}}
+{{- end -}}

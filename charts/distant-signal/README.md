@@ -1451,6 +1451,74 @@ be mixed). They are added to the defaults rather than replacing them, and
 because policies are additive, no policy outside the chart can take this
 allowance away.
 
+## Production guards
+
+Every isolation control in this chart is off by default, so that existing
+installs render unchanged: with the defaults every service connects to
+Postgres as the superuser, Redis has no password and no NetworkPolicy
+restricts a pod. `global.production: true` turns that into a render
+failure. It is off by default, and nothing in this repository turns it on
+for a deployment.
+
+With it on, `helm template` and `helm install` fail, listing every gap at
+once, unless:
+
+- `networkPolicy.enabled` and `networkPolicy.egress.enabled` are true;
+- Redis has a password: `redis.auth.enabled`, or `redis.acl.defaultUser:
+  "on-unshared"` (or `"off"`) with the ACL on; an external Redis
+  (`redis.enabled: false`) needs `redis.auth.enabled` or credentials in
+  `redis.externalUrl`;
+- with the bundled Redis (`redis.enabled`), `redis.acl.enabled` is true at
+  `stage: narrow` ([docs/redis-acl.md](../../docs/redis-acl.md));
+- with the bundled Postgres (`postgresql.enabled`), `postgresql.roles.enabled`
+  and `postgresql.roles.perService.enabled` are true
+  ([docs/postgres-app-role.md](../../docs/postgres-app-role.md)).
+
+One more guard applies only with `global.production`: the SFTP receiver
+(`scheduleFeed.enabled` and `scheduleFeed.sftp.enabled`) on a LoadBalancer
+Service (`scheduleFeed.service.type`, the default) with
+`scheduleFeed.sftp.allowedCidrs` empty is open to every address, with SFTP
+authentication the only control. The render fails unless `allowedCidrs`
+lists the sender's ranges (with `externalTrafficPolicy: Local`, so the pod
+sees the real source), SFTP is off for bucket-only delivery
+(`scheduleFeed.sftp.enabled: false`) or `scheduleFeed.sftp.allowAnySource` is
+true. Without `global.production` it is a `NOTES.txt` warning only. A
+NodePort Service, which the production example uses, is not checked.
+
+Left as options, not guards, because production runs them as they are:
+
+- `networkPolicy.healthIngress` admits any source to the workers' health
+  ports by default (the probes come from the node, which no selector can
+  name). On a CNI that exempts node-local traffic, set
+  `healthIngress.enabled: false` or list the nodes in `healthIngress.from`
+  (see "NetworkPolicy"); check that on your CNI first, since one that does
+  filter it would fail every probe.
+- The Postgres grants of each service role (the notifier's among them) are
+  ds-core's `db-grants.yaml`, not this chart's; narrowing one is a ds-core
+  change.
+
+[`values-production-example.yaml`](values-production-example.yaml) sets it
+and every control it needs, and `scripts/check-security-guards-chart.py`
+keeps that render passing. Turn it on in a deployment only after its values
+render with it (`helm template ... --set global.production=true`).
+
+### Client-address trust
+
+These two guards apply whether or not `global.production` is on, and neither
+fires for the defaults or for the production example values:
+
+- `ingress.api.enabled` with `api.rateLimit.trustXRealIp` (the default) fails
+  the render, as `networkPolicy.tunnel.api` already did: a request through
+  the Ingress carries whatever `X-Real-IP` its client sent, so it picks its
+  own rate-limit key. Either set `trustXRealIp: false`, or, if the ingress
+  controller overwrites the header, set
+  `api.rateLimit.trustXRealIpIngressAcknowledged: true`.
+- An enabled `api.delegated.clients` entry with `networkPolicy.enabled` false
+  fails the render: the delegated listener relies on the NetworkPolicy to
+  admit only `networkPolicy.apiExtraIngressNamespaces`. Turn the policy on,
+  or set `api.delegated.allowWithoutNetworkPolicy: true` when another control
+  restricts the port.
+
 ## Distant-Signal-MCP as a service caller
 
 The Distant-Signal-MCP is a separate release (its own `ds-mcp` namespace)
@@ -1697,6 +1765,7 @@ renders. A new workload therefore needs its line in
 | `revisionHistoryLimit` | `3` | Old ReplicaSets and StatefulSet ControllerRevisions kept, on every Deployment and StatefulSet (Kubernetes' default is 10). A whole number >= 0; `helm rollback` does not need them. |
 | `global.imageRegistry` | `""` | Registry (and optional path prefix) put in front of every image in place of the registry its `image.repository` carries, e.g. `registry.example.com/myfork`. Empty keeps each repository as written. |
 | `global.priorityClassName` | `""` | PriorityClass of every pod whose own `priorityClassName` is empty (not the `helm test` pods); `""` renders none, the cluster default. The class must exist first; `system-*` classes are refused. See "Pod priority". |
+| `global.production` | `false` | Fail the render unless the isolation controls are on: NetworkPolicy with its egress policy, a Redis password (bundled Redis: the narrow ACL too) and per-service Postgres roles (bundled Postgres). Off changes nothing. See "Production guards". |
 | `sourceCode.url` | `"https://github.com/Distant-Signal/distant-signal"` | Repository `/public/version` lists for a first-party image with no `image.source` (AGPL-3.0 §13). Every image here sets its own: since the repo split they are built in several repositories, and this one's README lists them all. |
 | `sourceCode.revision` | `""` | Commit `/public/version` lists for an image whose `image.tag` is neither a build tag, `build.<run>-<commit>` (it lists the tag's commit), nor a release tag, `vX.Y.Z` (it lists the tag: ds-migrate). Empty: every first-party image here is pinned at one. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount for the chart's workloads. |
@@ -2109,6 +2178,7 @@ release after, setting one fails the render:
 | `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token (the internal provider's client id; must differ from `api.sso.clientId`). |
 | `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account, the only internal-token use left since release B removed `/private`: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. See "Distant-Signal-MCP as a service caller" below. |
 | `api.delegated.clients` | `[]` | Delegated access ([docs/connected-apps.md](https://github.com/Distant-Signal/ds-api/blob/main/docs/connected-apps.md)): the registered clients, sent to the api as `DELEGATED_CLIENTS` JSON. Each has `name`, `displayName`, `issuerUrl`, `audience`, `maxScopes`, `enabled` (default `true`; `false` is the kill switch) and `serviceGroup`. Empty (the default) turns the feature off: no delegated listener, no delegated Service, and every delegated bearer refused. |
+| `api.delegated.allowWithoutNetworkPolicy` | `false` | Allow enabled delegated clients while `networkPolicy.enabled` is false. The chart refuses that pair otherwise: nothing then limits who reaches the delegated listener. See "Production guards". |
 | `api.delegated.port` | `8082` | The delegated listener's port, published only by the `<release>-api-delegated` ClusterIP Service and admitted by the NetworkPolicy only from `networkPolicy.apiExtraIngressNamespaces`. The only port that accepts delegated bearers. Must differ from `api.service.port` and `metrics.port`. |
 | `api.delegated.dailySaveLimit` / `.dailyDeleteLimit` | `50` / `20` | Journeys one user's client may save, and delete, per rolling 24 hours (429 `daily_limit`). |
 | `api.delegated.revokedGrantRetentionDays` | `365` | Days a revoked grant is kept, as the record of when and why an app's access ended, before the hourly maintenance pass (api loop or `api-maintenance` CronJob) deletes it. |
@@ -2126,7 +2196,8 @@ release after, setting one fails the render:
 | `api.personalTokens.rateLimit.global.perMinute` / `.burst` | `1200` / `200` | Every token together, per pod. |
 | `api.personalTokens.rateLimit.authFailure.perMinute` / `.burst` | `10` / `10` | Failed authentications per client address; over it, 429 before any lookup. |
 | `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). |
-| `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off. |
+| `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off: the chart refuses the pair unless `trustXRealIpIngressAcknowledged`. |
+| `api.rateLimit.trustXRealIpIngressAcknowledged` | `false` | Allow `trustXRealIp` with `ingress.api.enabled`, for an ingress controller that overwrites `X-Real-IP` itself. See "Production guards". |
 | `api.rateLimit.login.perMinute` / `.burst` | `10` / `20` | Per client IP, `/public/auth/login` and `/public/auth/callback`. |
 | `api.rateLimit.tripPlan.perMinute` / `.burst` | `20` / `10` | Per client IP, `/Trips/plan`. |
 | `api.rateLimit.trainByUid.perMinute` / `.burst` | `120` / `60` | Per client IP, `/Train/by-uid/*`. |
@@ -3372,6 +3443,7 @@ one-pod layout.
 | `scheduleFeed.sftp.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `scheduleFeed.sftp.port` | `2022` | SFTP container and Service port. |
 | `scheduleFeed.sftp.allowedCidrs` | `[]` | See the networkPolicy table below. |
+| `scheduleFeed.sftp.allowAnySource` | `false` | Acknowledge an SFTP receiver on a LoadBalancer Service with `allowedCidrs` empty (open to every address). `NOTES.txt` warns about it; with `global.production` the render fails unless this is true. See "Production guards". |
 | `scheduleFeed.sftp.publicHostname` | `""` | Informational only: the public hostname pointed at the Service, shown in NOTES.txt with the other details to give the feed provider. |
 | `scheduleFeed.sftp.username` | `dtd-push` | The push account's username on this server. |
 | `scheduleFeed.sftp.authMethod` | `""` | `password` or `public-key`. No default: enabling without it fails the render. |

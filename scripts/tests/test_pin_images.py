@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import re
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ import urllib.error
 from collections.abc import Mapping
 from email.message import Message
 from types import ModuleType
+from typing import override
 
 SCRIPTS = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = SCRIPTS / "pin-images.py"
@@ -149,6 +151,13 @@ def labels(source: str | None, revision: str | None = None) -> dict[str, str]:
 
 class PinImagesTest(unittest.TestCase):
     """scripts/pin-images.py."""
+
+    @override
+    def setUp(self) -> None:
+        """Retry a failed cosign without waiting."""
+        patcher = unittest.mock.patch.object(pin_images, "VERIFY_BACKOFF_SECS", 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_pin(
         self, registry: FakeRegistry, *services: str, values_text: str = VALUES
@@ -353,6 +362,150 @@ class PinImagesTest(unittest.TestCase):
         )
         self.assertTrue(registry.urls[1].startswith("https://ghcr.io/token?"))
         self.assertNotIn(f"{BASE}/api/blobs/x", registry.urls)
+
+    def run_with_cosign(
+        self, exit_code: int, *services: str
+    ) -> tuple[int, str, str, str]:
+        """Pin SERVICES with --verify-signatures and a stub cosign.
+
+        Returns the exit code, the file, the stub's recorded arguments and
+        the api's digest.
+        """
+        registry = FakeRegistry(
+            {
+                "api": labels("https://github.com/Distant-Signal/ds-api"),
+                "poller-tfl": labels("https://github.com/Distant-Signal/ds-pollers"),
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = pathlib.Path(tmp) / "cosign"
+            seen = pathlib.Path(tmp) / "seen"
+            stub.write_text(
+                f'#!/bin/sh\necho "$@" >>"{seen}"\nexit {exit_code}\n', "utf-8"
+            )
+            stub.chmod(0o755)
+            values = pathlib.Path(tmp) / "values.yaml"
+            values.write_text(VALUES, "utf-8")
+            argv = [
+                "--values",
+                str(values),
+                "--tag",
+                TAG,
+                "--verify-signatures",
+                "--cosign",
+                str(stub),
+                *services,
+            ]
+            with unittest.mock.patch("sys.stderr"):
+                code = pin_images.main(argv, fetch=registry)
+            recorded = seen.read_text("utf-8") if seen.exists() else ""
+            return code, values.read_text("utf-8"), recorded, registry.digest("api")
+
+    def test_verifies_each_image_by_digest_before_writing(self) -> None:
+        """Cosign gets the digest reference, the issuer and the identity."""
+        code, text, seen, digest = self.run_with_cosign(0, "api", "poller-tfl")
+        self.assertEqual(code, 0)
+        self.assertIn(f'tag: "{TAG}"', text)
+        self.assertIn(f"ghcr.io/distant-signal/images/api@{digest}", seen)
+        self.assertIn("images/poller-tfl@sha256:", seen)
+        self.assertIn(f"--certificate-oidc-issuer {pin_images.OIDC_ISSUER}", seen)
+        self.assertIn(
+            f"--certificate-identity-regexp {pin_images.IDENTITY_REGEXP}", seen
+        )
+
+    def test_an_unverified_image_writes_nothing(self) -> None:
+        """A failed `cosign verify` refuses the run and leaves values alone."""
+        code, text, seen, _ = self.run_with_cosign(1, "api", "poller-tfl")
+        self.assertEqual(code, 1)
+        self.assertEqual(text, VALUES)
+        self.assertEqual(
+            len(seen.splitlines()), pin_images.VERIFY_ATTEMPTS, "one image, retried"
+        )
+
+    def test_signatures_are_not_checked_by_default(self) -> None:
+        """Without the flag cosign is never run, even when it would fail."""
+        registry = FakeRegistry(
+            {"api": labels("https://github.com/Distant-Signal/ds-api")}
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            values = pathlib.Path(tmp) / "values.yaml"
+            values.write_text(VALUES, "utf-8")
+            argv = ["--values", str(values), "--tag", TAG, "--cosign", "/nonexistent"]
+            with unittest.mock.patch("sys.stderr"):
+                code = pin_images.main([*argv, "api"], fetch=registry)
+        self.assertEqual(code, 0)
+
+    def test_a_missing_cosign_is_an_error_not_a_pass(self) -> None:
+        """--verify-signatures without a working cosign refuses the run."""
+        registry = FakeRegistry(
+            {"api": labels("https://github.com/Distant-Signal/ds-api")}
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            values = pathlib.Path(tmp) / "values.yaml"
+            values.write_text(VALUES, "utf-8")
+            argv = [
+                "--values",
+                str(values),
+                "--tag",
+                TAG,
+                "--verify-signatures",
+                "--cosign",
+                "/nonexistent/cosign",
+                "api",
+            ]
+            with unittest.mock.patch("sys.stderr"):
+                code = pin_images.main(argv, fetch=registry)
+            self.assertEqual(code, 1)
+            self.assertEqual(values.read_text("utf-8"), VALUES)
+
+    def test_verify_pinned_checks_every_pin_and_writes_nothing(self) -> None:
+        """Each pinned image is checked by the digest values.yaml holds."""
+        checked: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            values = pathlib.Path(tmp) / "values.yaml"
+            values.write_text(VALUES, "utf-8")
+            count = pin_images.verify_pinned(values, checked.append)
+            self.assertEqual(values.read_text("utf-8"), VALUES)
+        self.assertEqual(count, VALUES.count("repository: ghcr.io/"))
+        self.assertEqual(len(checked), count)
+        for service in ("api", "poller-tfl"):
+            self.assertIn(
+                f"ghcr.io/distant-signal/images/{service}@{ZERO_DIGEST}", checked
+            )
+
+    def test_verify_pinned_refuses_a_failure_and_a_malformed_digest(self) -> None:
+        """One unverifiable image, or a digest that isn't sha256, is an error."""
+
+        def refuse(reference: str) -> None:
+            raise pin_images.PinError(reference)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            values = pathlib.Path(tmp) / "values.yaml"
+            values.write_text(VALUES, "utf-8")
+            with self.assertRaises(pin_images.PinError):
+                pin_images.verify_pinned(values, refuse)
+            values.write_text(VALUES.replace(ZERO_DIGEST, "sha256:abc"), "utf-8")
+            with self.assertRaises(pin_images.PinError):
+                pin_images.verify_pinned(values, lambda _: None)
+
+    def test_the_identity_is_exactly_the_image_workflow(self) -> None:
+        """Only image.yml at main or a full commit SHA, in Distant-Signal/ci."""
+        identity = re.compile(pin_images.IDENTITY_REGEXP)
+        base = "https://github.com/Distant-Signal/ci/.github/workflows/image.yml"
+        for good in (f"{base}@refs/heads/main", f"{base}@{'a' * 40}"):
+            self.assertIsNotNone(identity.match(good), good)
+        for bad in (
+            f"{base}@refs/heads/other",
+            f"{base}@refs/heads/main2",
+            f"{base}@{'a' * 39}",
+            f"{base}x@refs/heads/main",
+            f"{base}@{'A' * 40}",
+            f"{base.replace('/ci/', '/ci2/')}@refs/heads/main",
+            f"{base.replace('Distant-Signal', 'Other-Org')}@refs/heads/main",
+            f"{base.replace('image.yml', 'other.yml')}@refs/heads/main",
+            f"x{base}@refs/heads/main",
+        ):
+            self.assertIsNone(identity.match(bad), bad)
 
 
 if __name__ == "__main__":

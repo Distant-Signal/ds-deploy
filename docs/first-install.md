@@ -52,14 +52,23 @@ cosign verify ghcr.io/distant-signal/charts/distant-signal@sha256:<chart digest>
 
 An image (every first-party image is built and signed by the organization's
 shared `image.yml` workflow in `Distant-Signal/ci`, whichever repository
-calls it, so the identity is matched by prefix; the digest is the one in
-`values.yaml`, for example `api.image.digest`):
+calls it. The certificate identity is that workflow at the ref its caller
+pins: `refs/heads/main` or a full 40-character commit SHA, nothing else, so
+the regular expression anchors both ends and a look-alike workflow, branch
+or repository does not match; the digest is the one in `values.yaml`, for
+example `api.image.digest`):
 
 ```sh
 cosign verify ghcr.io/distant-signal/images/api@sha256:<digest from values.yaml> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github\.com/Distant-Signal/ci/\.github/workflows/image\.yml@'
+  --certificate-identity-regexp '^https://github\.com/Distant-Signal/ci/\.github/workflows/image\.yml@(refs/heads/main|[0-9a-f]{40})$'
 ```
+
+From a checkout of this repository, `uv run scripts/pin-images.py
+--verify-pinned` runs that check on every image `values.yaml` pins (it needs
+cosign and network access; CI runs it when cosign is installed), and
+`pin-images.py --verify-signatures --tag ... <service>` checks a build before
+pinning it. The same expression is `IDENTITY_REGEXP` in that script.
 
 The access files the chart vendors (below) come from a `Distant-Signal/ds-core`
 release, and each has a Sigstore bundle. The chart's own check does exactly

@@ -54,6 +54,19 @@ Reach the api:
   # then: curl http://localhost:{{ .Values.api.service.port }}{{ .Values.api.probes.path }}
 {{- end }}
 
+{{- if and (include "distant-signal.sftpOpenToAnySource" .) (not .Values.scheduleFeed.sftp.allowAnySource) }}
+
+  ############################################################################
+  # WARNING: the SFTP receiver is on a LoadBalancer Service and
+  # scheduleFeed.sftp.allowedCidrs is empty, so any address can reach its
+  # port; only SFTP authentication stands in the way. List the sender's
+  # ranges in scheduleFeed.sftp.allowedCidrs (with
+  # scheduleFeed.service.externalTrafficPolicy: Local, and
+  # networkPolicy.enabled), or set scheduleFeed.sftp.enabled=false for
+  # bucket-only delivery. scheduleFeed.sftp.allowAnySource=true silences this.
+  ############################################################################
+{{- end }}
+
 {{- if .Values.devAuthentik.enabled }}
 
 ############################################################################

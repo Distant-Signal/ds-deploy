@@ -2,6 +2,7 @@
 """Pin services' images in the chart's values.yaml: tag, digest and source.
 
   uv run --no-sync scripts/pin-images.py --tag build.<run id>-<commit> SERVICE...
+  uv run --no-sync scripts/pin-images.py --verify-pinned   # check, write nothing
 
 The hand bump while Renovate is idle (README.md, "How a change reaches the
 cluster"): after a service repository's `main` build, pin that build's
@@ -40,18 +41,31 @@ api from every commit, so:
   services, so an api release never carries them. --with-schedule-feed
   allows the mix, for a release that needs both at once (a contract
   migration's floor, say).
+
+A tag is mutable, so the digest this writes is whatever the registry says
+the tag is now. --verify-signatures (off by default) also runs `cosign
+verify` on each image by that digest, against the keyless identity of
+Distant-Signal/ci's image.yml (IDENTITY_REGEXP below: the workflow at
+refs/heads/main or at a full commit SHA, the two refs its callers use), and
+writes nothing when one fails to verify. It needs cosign and network access
+to the registry and Sigstore; --cosign names the binary. --verify-pinned
+does that check alone, on every image values.yaml pins now (no tag, no
+services, nothing written): the CI job's check, when cosign is installed.
 """
 
 import argparse
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -68,6 +82,10 @@ REVISION_LABEL = "org.opencontainers.image.revision"
 
 # The chart's pins: what tests/test_chart_pins.py accepts.
 SOURCE = re.compile(r"^https://github\.com/Distant-Signal/[a-z-]+$")
+VERIFY_WORKERS = 8
+VERIFY_ATTEMPTS = 3
+VERIFY_BACKOFF_SECS = 5
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 BUILD_TAG = re.compile(r"^build\.\d+-([0-9a-f]{40})$")
 REPOSITORY_LINE = re.compile(
     rf"^(?P<indent>\s*)repository: {re.escape(REGISTRY)}/{re.escape(IMAGES)}/"
@@ -99,7 +117,19 @@ MANIFEST_TYPES = (
     "application/vnd.docker.distribution.manifest.v2+json"
 )
 
+# The signature check (--verify-signatures): the issuer and the certificate
+# identity of Distant-Signal/ci's reusable image.yml, which signs every
+# first-party image whichever repository calls it. The ref is main (its own
+# self-test) or the full commit SHA a caller pins, nothing else.
+OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+IDENTITY_REGEXP = (
+    r"^https://github\.com/Distant-Signal/ci/\.github/workflows/image\.yml"
+    r"@(refs/heads/main|[0-9a-f]{40})$"
+)
+
 Fetch = Callable[[str, Mapping[str, str]], tuple[bytes, Mapping[str, str]]]
+# Verify one image reference (`<repository>@<digest>`); raise PinError.
+Verify = Callable[[str], None]
 
 
 class PinError(Exception):
@@ -207,6 +237,101 @@ def resolve_with_retries(
                 raise PinError(msg) from error
             time.sleep(5 * attempt)
     raise AssertionError  # unreachable
+
+
+# --- the signature --------------------------------------------------------
+
+
+def cosign_verifier(cosign: str) -> Verify:
+    """Return a check that `cosign verify` accepts an image reference."""
+
+    def verify(reference: str) -> None:
+        result: subprocess.CompletedProcess[str] | None = None
+        for attempt in range(1, VERIFY_ATTEMPTS + 1):
+            try:
+                result = subprocess.run(  # noqa: S603  # cosign, fixed flags
+                    [
+                        cosign,
+                        "verify",
+                        "--certificate-oidc-issuer",
+                        OIDC_ISSUER,
+                        "--certificate-identity-regexp",
+                        IDENTITY_REGEXP,
+                        reference,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=120,
+                )
+            except OSError as error:  # no such binary: retrying can't help
+                msg = f"{reference}: cosign did not run: {error}"
+                raise PinError(msg) from error
+            except subprocess.TimeoutExpired:
+                result = None
+            if result is not None and result.returncode == 0:
+                return
+            # A failure may be the network (Sigstore, the registry): try again.
+            if attempt < VERIFY_ATTEMPTS:
+                time.sleep(attempt * VERIFY_BACKOFF_SECS)
+        detail = (
+            f"cosign exited {result.returncode}: {result.stderr.strip()[-400:]}"
+            if result is not None
+            else "cosign timed out"
+        )
+        msg = f"{reference}: no signature from {IDENTITY_REGEXP} ({detail})"
+        raise PinError(msg)
+
+    return verify
+
+
+def pinned_images(lines: Sequence[str]) -> list[tuple[str, str]]:
+    """Return (service, digest) for each first-party image LINES pin."""
+    found: list[tuple[str, str]] = []
+    for i, line in enumerate(lines):
+        match = REPOSITORY_LINE.match(line)
+        if not match:
+            continue
+        width = len(match.group("indent"))
+        for later in lines[i + 1 :]:
+            stripped = later.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if len(later) - len(later.lstrip()) < width:
+                break
+            key_line = KEY_LINE.match(later)
+            if (
+                key_line
+                and len(key_line.group("indent")) == width
+                and key_line.group("key") == "digest"
+            ):
+                digest = later.split(":", 1)[1].strip().strip("'\"")
+                found.append((match.group("service"), digest))
+                break
+    return found
+
+
+def verify_pinned(values: Path, verify: Verify) -> int:
+    """Verify every image VALUES pins by its digest; return how many."""
+    pinned = pinned_images(values.read_text("utf-8").splitlines())
+    if not pinned:
+        msg = f"{values}: no first-party image pins found"
+        raise PinError(msg)
+    references: list[str] = []
+    for service, digest in pinned:
+        if not DIGEST.match(digest):
+            msg = f"{service}: digest {digest!r} is not a sha256 digest"
+            raise PinError(msg)
+        references.append(f"{REGISTRY}/{IMAGES}/{service}@{digest}")
+    # One cosign run takes seconds (Sigstore and registry round trips), so
+    # check the images side by side; the first failure is raised. The first
+    # one goes alone: on a cold cache cosign fetches Sigstore's trusted root
+    # then, and runs that start together race to write it and fail.
+    verify(references[0])
+    with ThreadPoolExecutor(max_workers=VERIFY_WORKERS) as pool:
+        for _ in pool.map(verify, references[1:]):
+            pass
+    return len(pinned)
 
 
 # --- the source -----------------------------------------------------------
@@ -368,8 +493,13 @@ def run(  # noqa: PLR0913  # the CLI's options, each a keyword
     fetch: Fetch = http_fetch,
     *,
     with_schedule_feed: bool = False,
+    verify: Verify | None = None,
 ) -> list[str]:
-    """Pin SERVICES at TAG in VALUES; return the warnings. Raise PinError."""
+    """Pin SERVICES at TAG in VALUES; return the warnings. Raise PinError.
+
+    With VERIFY, each image is checked by its digest first, and nothing is
+    written when one fails.
+    """
     components = yaml.safe_load(components_path.read_text("utf-8")) or {}
     if not with_schedule_feed:
         check_schedule_feed_alone(services, components)
@@ -377,6 +507,8 @@ def run(  # noqa: PLR0913  # the CLI's options, each a keyword
     warnings: list[str] = []
     for service in dict.fromkeys(services):
         image = resolve_with_retries(service, tag, fetch)
+        if verify is not None:
+            verify(f"{REGISTRY}/{IMAGES}/{service}@{image.digest}")
         pins[service], found = pin_for(service, tag, image, components)
         warnings += found
     lines = values.read_text("utf-8").splitlines(keepends=True)
@@ -394,7 +526,7 @@ def main(argv: Sequence[str] | None = None, fetch: Fetch = http_fetch) -> int:
         description=(__doc__ or "").splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--tag", required=True, help="build.<run id>-<commit>")
+    parser.add_argument("--tag", help="build.<run id>-<commit>")
     parser.add_argument("--values", type=Path, default=VALUES)
     parser.add_argument("--components", type=Path, default=COMPONENTS)
     parser.add_argument(
@@ -402,8 +534,31 @@ def main(argv: Sequence[str] | None = None, fetch: Fetch = http_fetch) -> int:
         action="store_true",
         help="allow schedule-feed images in a run with other services",
     )
-    parser.add_argument("services", nargs="+", metavar="SERVICE")
+    parser.add_argument(
+        "--verify-signatures",
+        action="store_true",
+        help="cosign-verify each image by its digest first (off by default)",
+    )
+    parser.add_argument(
+        "--verify-pinned",
+        action="store_true",
+        help="cosign-verify every image values.yaml pins; write nothing",
+    )
+    parser.add_argument("--cosign", default=shutil.which("cosign") or "cosign")
+    parser.add_argument("services", nargs="*", metavar="SERVICE")
     args = parser.parse_args(argv)
+    if args.verify_pinned:
+        if args.tag or args.services:
+            parser.error("--verify-pinned takes no --tag or SERVICE")
+        try:
+            count = verify_pinned(args.values, cosign_verifier(args.cosign))
+        except PinError as error:
+            print(f"error: {error}", file=sys.stderr)  # noqa: T201  # CLI output
+            return 1
+        print(f"verified {count} pinned image(s)", file=sys.stderr)  # noqa: T201  # CLI output
+        return 0
+    if not args.tag or not args.services:
+        parser.error("--tag and at least one SERVICE are required")
     try:
         warnings = run(
             args.values,
@@ -412,6 +567,7 @@ def main(argv: Sequence[str] | None = None, fetch: Fetch = http_fetch) -> int:
             args.services,
             fetch,
             with_schedule_feed=args.with_schedule_feed,
+            verify=cosign_verifier(args.cosign) if args.verify_signatures else None,
         )
     except PinError as error:
         print(f"error: {error}", file=sys.stderr)  # noqa: T201  # CLI output

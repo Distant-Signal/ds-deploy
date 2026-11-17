@@ -32,6 +32,12 @@
 
 imagePullSecrets: []
 
+global:
+  # Fails the render unless the isolation controls below are all on:
+  # networkPolicy and its egress policy, Redis auth with the narrow ACL, and
+  # the per-service Postgres roles (chart README, "Production guards").
+  production: true
+
 # ---- Public site -------------------------------------------------------
 
 frontend:
