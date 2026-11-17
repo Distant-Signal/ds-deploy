@@ -1,5 +1,13 @@
 # Schedule feed SFTP: push account controls
 
+**Production does not run this receiver.** Since 2026-11-16 RDM/DTD
+deliver only to the schedule-feed bucket and production sets
+`scheduleFeed.sftp.enabled: false`
+([schedule-feed-bucket.md](schedule-feed-bucket.md), Status). The chart
+default is still SFTP on, so this page stays the reference for an install
+that uses it; the production history below (logins, uploads, host keys) is
+from while DTD pushed over SFTP.
+
 The `sftp` container (SFTPGo v2.7.6) of the `schedulefeed-sftp` pod is the
 one service on the node's public IP. It has had its own Deployment since
 2026-10-08 (`scheduleFeed.sftp.separateDeployment`), so app deploys no
@@ -468,4 +476,6 @@ keys, entrypoint, SFTP ingress rule, telemetry endpoint and the
 containers stay. Ranma then drops the SFTP NodePort from
 `public-exposure-check.yml` and its monitoring exception. Turn SFTP off only
 after the bucket has carried the feed for a while (the adoption steps in
-schedule-feed-bucket.md).
+schedule-feed-bucket.md). Production did so on 2026-11-16. Turning it back
+on restores the server, not the deliveries: RDM/DTD must also be asked to
+push over SFTP again.

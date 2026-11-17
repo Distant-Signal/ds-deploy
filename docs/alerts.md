@@ -1632,8 +1632,11 @@ password).
 These read schedule-ingest's bucket source (`scheduleFeed.bucket`, metrics
 with `source="bucket"`), so they render only with `scheduleFeed.bucket.enabled`;
 `DistantSignalScheduleFeedSourcesDisagree` needs SFTP on as well. With SFTP
-off the bucket is the only source: AccessRevoked and NoNewObject (both
-critical then) and the ReadErrors text say so. The bucket,
+off (production since 2026-11-16) the bucket is the only source: the
+AccessRevoked, NoNewObject and ReadErrors descriptions say so, and
+NoNewObject becomes critical (`scheduleBucket.noNewObjectSeverityBucketOnly`;
+AccessRevoked and DownloadBudget are critical either way, the rest warning).
+The bucket,
 its IAM and the kill switch are `charts/ds-ingest-bucket`'s and Ranma's. The
 full runbook is [schedule-feed-bucket.md](schedule-feed-bucket.md).
 
