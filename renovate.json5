@@ -11,6 +11,13 @@
   // isn't specific to this repository. It disables ghcr.io/distant-signal/**
   // images everywhere; the rules below turn them back on, here only, for the
   // chart's first-party pins.
+  //
+  // The preset is read from Distant-Signal/ci's default branch, so a change
+  // there reaches this repository's Renovate config (its schedules and rules)
+  // without a PR here. It is the organisation's own repository, behind the
+  // same review as this one, so it is trusted as it is. To freeze it, extend
+  // a commit instead (`...default.json5#<full commit sha>`) and bump that
+  // sha by hand when the preset changes.
   "extends": ["github>Distant-Signal/ci//renovate/default.json5"],
 
   // Renovate decides on automerge itself, after every check on the branch

@@ -1483,6 +1483,18 @@ sees the real source), SFTP is off for bucket-only delivery
 true. Without `global.production` it is a `NOTES.txt` warning only. A
 NodePort Service, which the production example uses, is not checked.
 
+Left as options, not guards, because production runs them as they are:
+
+- `networkPolicy.healthIngress` admits any source to the workers' health
+  ports by default (the probes come from the node, which no selector can
+  name). On a CNI that exempts node-local traffic, set
+  `healthIngress.enabled: false` or list the nodes in `healthIngress.from`
+  (see "NetworkPolicy"); check that on your CNI first, since one that does
+  filter it would fail every probe.
+- The Postgres grants of each service role (the notifier's among them) are
+  ds-core's `db-grants.yaml`, not this chart's; narrowing one is a ds-core
+  change.
+
 [`values-production-example.yaml`](values-production-example.yaml) sets it
 and every control it needs, and `scripts/check-security-guards-chart.py`
 keeps that render passing. Turn it on in a deployment only after its values
