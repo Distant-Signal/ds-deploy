@@ -86,6 +86,8 @@ so that clause fired on every rollout.
 {{- $anyOn = or $anyOn $darwinOn }}
 {{- $rolloutStuckOn := ($rule.ingestRolloutStuck).enabled }}
 {{- $anyOn = or $anyOn $rolloutStuckOn }}
+{{- $enricherPrimaryOn := and ($rule.enricherPrimaryErrors).enabled .Values.enricher.enabled }}
+{{- $anyOn = or $anyOn $enricherPrimaryOn }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -851,6 +853,36 @@ spec:
             summary: "enricher LLM {{ "{{ $labels.call }}" }} calls failing ({{ "{{ $value | humanizePercentage }}" }})"
             description: "Over {{ .errorRatio }} of calls failed in {{ .window }} (at least {{ .minErrors }}). Check enricher.llm.baseUrl and enricher's logs."
             runbook_url: {{ printf "%s#distantsignalenrichererrors" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $enricherPrimaryOn }}
+    {{- with $rule.enricherPrimaryErrors }}
+    {{- /*
+    The primary extraction's own failures, apart from the ratio alert above:
+    outcome="error" is enricher_llm_call_total's fallback label (a body that
+    is not the expected JSON; since ds-workers eae41b3, also a
+    resolution_status outside its set, which fails the extraction because no
+    stand-in value is safe). A handful per hour is too few to cross the
+    ratio alert's 50% but still means incidents stay unenriched, so this
+    counts them. A scope_description that fails validation is only a warn
+    log line ("failed validation; storing none"), not a metric: there is
+    deliberately no alert for it.
+    */}}
+    - name: distant-signal.enricher-primary
+      rules:
+        - alert: DistantSignalEnricherPrimaryErrors
+          expr: |
+            sum by (namespace) (increase(distant_signal_enricher_llm_call_total{namespace="{{ $ns }}", call="primary", outcome="error"}[{{ .window }}])) >= {{ .minErrors }}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "enricher primary extraction failing"
+            description: "At least {{ .minErrors }} primary LLM calls failed in {{ .window }} with an unclassified error, often an unreadable answer. Check enricher's logs."
+            runbook_url: {{ printf "%s#distantsignalenricherprimaryerrors" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $tokenExchangeOn }}
@@ -1723,6 +1755,26 @@ spec:
             description: "Its group had no usable committed offset within {{ .window }}. Check the relay's log for how long it was behind."
             runbook_url: {{ printf "%s#distantsignaldarwinoffsetreset" $runbook | quote }}
         {{- end }}
+        {{- with $rule.darwinRelay.malformed }}
+        {{- /*
+        A record the relay could not decode (not gzip or JSON, or over the
+        8 MiB gunzip cap) is skipped and its offset committed, so it is
+        lost, not retried. Registered at 0 at start, so a plain increase()
+        sees the first one.
+        */}}
+        - alert: DistantSignalDarwinRecordMalformed
+          expr: |
+            sum by (namespace) (increase(distant_signal_darwin_relay_records_total{namespace="{{ $ns }}", outcome="malformed"}[{{ .window }}])) > 0
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "darwin-relay skipped a Push Port record it could not decode"
+            description: "In the last {{ .window }}: not gzip or JSON, or over the size cap. The record is lost. Check the relay's log for its offset."
+            runbook_url: {{ printf "%s#distantsignaldarwinrecordmalformed" $runbook | quote }}
+        {{- end }}
     {{- end }}
     {{- if or $poolTimeoutsOn $directWritesOn }}
     - name: distant-signal.database
@@ -2556,7 +2608,7 @@ spec:
             runbook_url: {{ printf "%s#distantsignalschedulebucketreaderrors" $runbook | quote }}
         - alert: DistantSignalScheduleBucketUnexpectedObject
           expr: |
-            sum by (namespace) (increase(distant_signal_schedule_feed_source_unexpected_objects_total{namespace="{{ $ns }}", source="bucket"}[{{ .unexpectedWindow }}])) > 0
+            sum by (namespace) (increase(distant_signal_schedule_feed_source_unexpected_objects_total{namespace="{{ $ns }}", source="bucket"{{ if .objectAbandonedEnabled }}, reason!="failed"{{ end }}}[{{ .unexpectedWindow }}])) > 0
           for: 0m
           labels:
             severity: {{ .severity }}
@@ -2567,6 +2619,57 @@ spec:
             summary: "Unexpected object in the schedule-feed bucket"
             description: "An object with an unexpected name or size was flagged and is deleted unread (recoverable from soft delete for 7 days)."
             runbook_url: {{ printf "%s#distantsignalschedulebucketunexpectedobject" $runbook | quote }}
+        {{- if .objectAbandonedEnabled }}
+        {{- /*
+        reason="failed": an expected object that failed verification
+        (size, CRC32C or MD5 mismatch, or no CRC32C) MAX_FETCH_FAILURES
+        times and was given up on (ds-api a1dd44d). Kept in the bucket, never
+        deleted by the reader, so unlike the unexpected reasons above it is
+        a delivery that did not land. With SFTP off nothing else delivers,
+        so the bucket-only severity is the critical one. Off by default
+        until the pinned schedule-ingest image exports the label; the
+        UnexpectedObject alert above leaves the reason out while this one
+        is on, so one object notifies once.
+        */}}
+        - alert: DistantSignalScheduleBucketObjectAbandoned
+          expr: |
+            sum by (namespace) (increase(distant_signal_schedule_feed_source_unexpected_objects_total{namespace="{{ $ns }}", source="bucket", reason="failed"}[{{ .objectAbandonedWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ if $bucketOnly }}{{ .criticalSeverity }}{{ else }}{{ .severity }}{{ end }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Schedule-feed bucket object given up on"
+            {{- if $bucketOnly }}
+            description: "An expected object kept failing verification and was abandoned. No other source: no new timetable until it is re-uploaded."
+            {{- else }}
+            description: "An expected object kept failing verification and was abandoned. SFTP carries on; the bucket copy is not used until it is re-uploaded."
+            {{- end }}
+            runbook_url: {{ printf "%s#distantsignalschedulebucketobjectabandoned" $runbook | quote }}
+        {{- end }}
+        {{- if and .auditAbandonedEnabled $.Values.scheduleFeed.bucket.auditLogs.ship }}
+        {{- /*
+        The audit-log shipper (scheduleFeed.bucket.auditLogs.ship) gave up
+        on an audit-log file after 5 failures (ds-api af0c390): its entries
+        are not shipped. Registered at 0 at start. This is the audit trail
+        only; deliveries are unaffected.
+        */}}
+        - alert: DistantSignalScheduleBucketAuditAbandoned
+          expr: |
+            sum by (namespace) (increase(distant_signal_schedule_feed_bucket_audit_errors_total{namespace="{{ $ns }}", kind="abandoned"}[{{ .auditAbandonedWindow }}])) > 0
+          for: 0m
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Bucket audit-log file given up on"
+            description: "The shipper gave up on an audit-log file after repeated failures: its entries are not in Loki. Deliveries are unaffected."
+            runbook_url: {{ printf "%s#distantsignalschedulebucketauditabandoned" $runbook | quote }}
+        {{- end }}
         - alert: DistantSignalScheduleBucketDownloadBudget
           expr: |
             max by (namespace) (distant_signal_schedule_feed_source_download_capped{namespace="{{ $ns }}", source="bucket"}) == 1
@@ -2674,7 +2777,12 @@ routes job is on, so routes are expected. */}}
 {{- $ldbwsInvalidCrsOn := and ($rule.ldbwsInvalidCrs).enabled (.Values.pollers.ldbws).enabled }}
 {{- $incidentRemovalOn := and ($rule.incidentRemovalStalled).enabled (.Values.pollers.incidents).enabled }}
 {{- $incidentSnapshotsOn := and ($rule.incidentSnapshotsMissing).enabled (.Values.pollers.incidents).enabled }}
-{{- if or $pollerFailuresOn $pollerStaleOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn $incidentSnapshotsOn $transitRefusedOn $transitUnmappedOn $tflRoutesMissingOn }}
+{{- $bodyCapOn := and ($rule.upstreamBodyCapExceeded).enabled $anyPoller }}
+{{- $redirectOn := and ($rule.upstreamRedirectRefused).enabled $anyPoller }}
+{{- $tflSkippedOn := and ($rule.tflLineStatusSkipped).enabled .Values.pollers.tfl.enabled }}
+{{- $situationsSkippedOn := and ($rule.transitSituationsSkipped).enabled $transitOn }}
+{{- $stationsSkippedOn := and ($rule.stationsEntriesSkipped).enabled (.Values.pollers.stations).enabled }}
+{{- if or $pollerFailuresOn $pollerStaleOn $ldbwsOn $ldbwsInvalidCrsOn $incidentRemovalOn $incidentSnapshotsOn $transitRefusedOn $transitUnmappedOn $tflRoutesMissingOn $bodyCapOn $redirectOn $tflSkippedOn $situationsSkippedOn $stationsSkippedOn }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -2931,6 +3039,126 @@ spec:
             summary: "no incidents snapshot reached the database in {{ .window }}"
             description: "poller-incidents wrote none. Check poller-incidents, its upstream and its database writes."
             runbook_url: {{ printf "%s#distantsignalincidentsnapshotsmissing" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.upstreamBodyCapExceeded }}
+        {{- if $bodyCapOn }}
+        {{- /*
+        poller-http's read_capped counts a response body that grew past the
+        feed's cap (a declared length over it, or the stream passing it) and
+        fails the read. Registered at 0 by each poller at startup, so a
+        plain increase() sees the first one. Off by default: the metric
+        arrives with ds-pollers ca4838e, newer than the pinned images.
+        */}}
+        - alert: DistantSignalUpstreamBodyCapExceeded
+          expr: |
+            sum by (namespace, feed) (increase(distant_signal_upstream_body_cap_exceeded_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.feed }}" }} upstream body over its size cap"
+            description: "The poller refused a response over its read cap in the last {{ .window }}. The cycle fails: a changed or hostile upstream."
+            runbook_url: {{ printf "%s#distantsignalupstreambodycapexceeded" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.upstreamRedirectRefused }}
+        {{- if $redirectOn }}
+        {{- /*
+        poller-http's check_status counts a 3xx the client did not follow
+        (the pollers do not follow redirects; the Location is never logged).
+        Registered at 0 at startup. Off by default: the metric arrives
+        with ds-pollers ca4838e, newer than the pinned images.
+        */}}
+        - alert: DistantSignalUpstreamRedirectRefused
+          expr: |
+            sum by (namespace, feed) (increase(distant_signal_upstream_redirect_refused_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.feed }}" }} upstream answered with a redirect"
+            description: "A redirect was not followed in the last {{ .window }}. The cycle fails: the upstream moved, or something is steering the poller."
+            runbook_url: {{ printf "%s#distantsignalupstreamredirectrefused" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.tflLineStatusSkipped }}
+        {{- if $tflSkippedOn }}
+        {{- /*
+        poller-tfl counts malformed line status entries by what became of
+        their lines (fc20ea4). Created at the first skip, not registered at
+        0, so the very first one on a pod is invisible to increase(); the
+        same entry is normally skipped again next cycle, which counts.
+        Off by default: newer than the pinned images.
+        */}}
+        - alert: DistantSignalTflLineStatusSkipped
+          expr: |
+            sum by (namespace, outcome) (increase(distant_signal_tfl_line_status_skipped_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "TfL line status entries skipped ({{ "{{ $labels.outcome }}" }})"
+            description: "Malformed entries in the last {{ .window }}. carried_forward: the last good report stood in. refused: no snapshot was published."
+            runbook_url: {{ printf "%s#distantsignaltfllinestatusskipped" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.transitSituationsSkipped }}
+        {{- if $situationsSkippedOn }}
+        {{- /*
+        poller-transit-schedule skips SIRI-SX situations whose time it
+        cannot read (c172e57); owner is network for the network's own,
+        else other. Created at the first skip, so the first one on a pod
+        is invisible to increase(). Off by default: newer than the pinned
+        images.
+        */}}
+        - alert: DistantSignalTransitSituationsSkipped
+          expr: |
+            sum by (namespace, network, owner) (increase(distant_signal_transit_situations_skipped_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $labels.network }}" }} situations skipped for an unreadable time"
+            description: "SIRI-SX situations with an unreadable time were skipped in the last {{ .window }}. They show on no line."
+            runbook_url: {{ printf "%s#distantsignaltransitsituationsskipped" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.stationsEntriesSkipped }}
+        {{- if $stationsSkippedOn }}
+        {{- /*
+        poller-stations skips a station entry it cannot read (reason
+        malformed) or whose CRS code is not three characters (reason
+        invalid_crs) rather than failing the batch (34b6ee9). Created at the
+        first skip, so the first one on a pod is invisible to increase();
+        the daily cycle repeats it. Off by default: newer than the pinned
+        images.
+        */}}
+        - alert: DistantSignalStationsEntriesSkipped
+          expr: |
+            sum by (namespace, reason) (increase(distant_signal_poller_stations_skipped_entries_total{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Station entries skipped ({{ "{{ $labels.reason }}" }})"
+            description: "poller-stations skipped entries in the last {{ .window }}. Check the upstream list."
+            runbook_url: {{ printf "%s#distantsignalstationsentriesskipped" $runbook | quote }}
         {{- end }}
         {{- end }}
 {{- end }}

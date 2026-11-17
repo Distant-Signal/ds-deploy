@@ -1,0 +1,198 @@
+# promtool unit tests for the alerts added for the DS-534 hardening metrics
+# (see recorded-alerts.yaml's header for how rules.yaml is rendered: the
+# off-by-default ones are switched on by check-alert-payloads.py's
+# RENDER_FLAGS). Each fires on an `increase() > 0` (or, for the enricher, a
+# count), so a flat series is quiet.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # darwin-relay: one malformed record at 5m fires; a flat series, and the
+  # other outcomes, do not.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_darwin_relay_records_total{namespace="distant-signal", pod="d", outcome="malformed"}'
+        values: '0x5 1x20'
+      - series: 'distant_signal_darwin_relay_records_total{namespace="distant-signal", pod="d", outcome="xml"}'
+        values: '0+1x25'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalDarwinRecordMalformed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: darwin-relay skipped a Push Port record it could not decode
+              description: "In the last 15m: not gzip or JSON, or over the size cap. The record is lost. Check the relay's log for its offset."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignaldarwinrecordmalformed
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_darwin_relay_records_total{namespace="distant-signal", pod="d", outcome="malformed"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DistantSignalDarwinRecordMalformed
+        exp_alerts: []
+  # enricher: a primary "error" a minute fires once 5 land in the hour.
+  # Four errors, or other outcomes or call sites, do not.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_call_total{namespace="distant-signal", pod="e", call="primary", outcome="error"}'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DistantSignalEnricherPrimaryErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: enricher primary extraction failing
+              description: "At least 5 primary LLM calls failed in 1h with an unclassified error, often an unreadable answer. Check enricher's logs."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalenricherprimaryerrors
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_enricher_llm_call_total{namespace="distant-signal", pod="e", call="primary", outcome="error"}'
+        values: '0x10 2x110'
+      - series: 'distant_signal_enricher_llm_call_total{namespace="distant-signal", pod="e", call="primary", outcome="timeout"}'
+        values: '0+1x120'
+      - series: 'distant_signal_enricher_llm_call_total{namespace="distant-signal", pod="e", call="resolution_adversarial", outcome="error"}'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: DistantSignalEnricherPrimaryErrors
+        exp_alerts: []
+  # Bucket: an abandoned object fires its own alert, and leaves
+  # UnexpectedObject quiet; a "name" one fires UnexpectedObject only.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_unexpected_objects_total{namespace="distant-signal", pod="sf", source="bucket", reason="failed"}'
+        values: '0x5 1x20'
+      - series: 'distant_signal_schedule_feed_source_unexpected_objects_total{namespace="distant-signal", pod="sf", source="bucket", reason="name"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalScheduleBucketObjectAbandoned
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: Schedule-feed bucket object given up on
+              description: "An expected object kept failing verification and was abandoned. SFTP carries on; the bucket copy is not used until it is re-uploaded."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketobjectabandoned
+      - eval_time: 10m
+        alertname: DistantSignalScheduleBucketUnexpectedObject
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_unexpected_objects_total{namespace="distant-signal", pod="sf", source="bucket", reason="name"}'
+        values: '0x5 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalScheduleBucketUnexpectedObject
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: Unexpected object in the schedule-feed bucket
+              description: "An object with an unexpected name or size was flagged and is deleted unread (recoverable from soft delete for 7 days)."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketunexpectedobject
+      - eval_time: 10m
+        alertname: DistantSignalScheduleBucketObjectAbandoned
+        exp_alerts: []
+  # The audit shipper: only kind="abandoned" fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_bucket_audit_errors_total{namespace="distant-signal", pod="sf", kind="abandoned"}'
+        values: '0x5 1x20'
+      - series: 'distant_signal_schedule_feed_bucket_audit_errors_total{namespace="distant-signal", pod="sf", kind="get"}'
+        values: '0+1x25'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalScheduleBucketAuditAbandoned
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: Bucket audit-log file given up on
+              description: "The shipper gave up on an audit-log file after repeated failures: its entries are not in Loki. Deliveries are unaffected."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketauditabandoned
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_bucket_audit_errors_total{namespace="distant-signal", pod="sf", kind="get"}'
+        values: '0+1x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DistantSignalScheduleBucketAuditAbandoned
+        exp_alerts: []
+  # Pollers: each counter's first increment after an established series
+  # fires, by its labels.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_upstream_body_cap_exceeded_total{namespace="distant-signal", pod="p", feed="tfl"}'
+        values: '0x5 1x20'
+      - series: 'distant_signal_upstream_body_cap_exceeded_total{namespace="distant-signal", pod="q", feed="stations"}'
+        values: '0x25'
+      - series: 'distant_signal_upstream_redirect_refused_total{namespace="distant-signal", pod="p", feed="ldbws"}'
+        values: '0x5 1x20'
+      - series: 'distant_signal_tfl_line_status_skipped_total{namespace="distant-signal", pod="p", outcome="refused"}'
+        values: '0x5 3x20'
+      - series: 'distant_signal_transit_situations_skipped_total{namespace="distant-signal", pod="p", network="metrolink", owner="network"}'
+        values: '0x5 2x20'
+      - series: 'distant_signal_poller_stations_skipped_entries_total{namespace="distant-signal", pod="p", reason="invalid_crs"}'
+        values: '0x5 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalUpstreamBodyCapExceeded
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, feed: tfl}
+            exp_annotations:
+              summary: tfl upstream body over its size cap
+              description: "The poller refused a response over its read cap in the last 1h. The cycle fails: a changed or hostile upstream."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalupstreambodycapexceeded
+      - eval_time: 10m
+        alertname: DistantSignalUpstreamRedirectRefused
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, feed: ldbws}
+            exp_annotations:
+              summary: ldbws upstream answered with a redirect
+              description: "A redirect was not followed in the last 1h. The cycle fails: the upstream moved, or something is steering the poller."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalupstreamredirectrefused
+      - eval_time: 10m
+        alertname: DistantSignalTflLineStatusSkipped
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, outcome: refused}
+            exp_annotations:
+              summary: TfL line status entries skipped (refused)
+              description: "Malformed entries in the last 1h. carried_forward: the last good report stood in. refused: no snapshot was published."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignaltfllinestatusskipped
+      - eval_time: 10m
+        alertname: DistantSignalTransitSituationsSkipped
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, network: metrolink, owner: network}
+            exp_annotations:
+              summary: metrolink situations skipped for an unreadable time
+              description: "SIRI-SX situations with an unreadable time were skipped in the last 1h. They show on no line."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignaltransitsituationsskipped
+      - eval_time: 10m
+        alertname: DistantSignalStationsEntriesSkipped
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, reason: invalid_crs}
+            exp_annotations:
+              summary: Station entries skipped (invalid_crs)
+              description: "poller-stations skipped entries in the last 26h. Check the upstream list."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalstationsentriesskipped
+  # station-full-coverage-samples is a once-a-day source (rail-day close,
+  # 02:00 UTC): its row landed at 0 and its stream applies. Quiet at 3h and
+  # 25h (the old 1800s threshold fired from 40m); past 26h (93600s) it
+  # fires once `for` (10m) has passed. full-coverage-stats keeps 1800s.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_freshness_timestamp_seconds{namespace="distant-signal", pod="w", source="station-full-coverage-samples"}'
+        values: '0x1700'
+      - series: 'distant_signal_ingest_stream_mode_info{namespace="distant-signal", pod="w", stream="ds:ingest:full-coverage", mode="apply"}'
+        values: '1x1700'
+    alert_rule_test:
+      - {eval_time: 3h, alertname: DistantSignalIngestSourceStale, exp_alerts: []}
+      - {eval_time: 25h, alertname: DistantSignalIngestSourceStale, exp_alerts: []}
+      - eval_time: 1580m
+        alertname: DistantSignalIngestSourceStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, source: station-full-coverage-samples}
+            exp_annotations:
+              summary: "station-full-coverage-samples data last landed 1d 2h 20m 0s ago"
+              description: "Its ingest_freshness row is over 93600s old: its producer is down or failing, or writes nowhere."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestsourcestale

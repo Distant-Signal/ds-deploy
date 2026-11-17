@@ -145,7 +145,14 @@ been seen; off with `noNewObjectByKindEnabled`),
 `DistantSignalScheduleBucketTokenExchangeFailing` (warning, keyless mode's
 non-revoked token-exchange failures with no success in
 `tokenExchangeWindow`; off with `tokenExchangeEnabled`),
-`DistantSignalScheduleBucketUnexpectedObject` (warning) and
+`DistantSignalScheduleBucketUnexpectedObject` (warning),
+`DistantSignalScheduleBucketObjectAbandoned` (warning, critical with SFTP
+off; `reason="failed"`: an expected object given up on after repeated
+verification failures; off with `objectAbandonedEnabled` false, the default,
+until the pinned schedule-ingest image exports the label),
+`DistantSignalScheduleBucketAuditAbandoned` (warning; `kind="abandoned"` on
+the audit shipper; `auditAbandonedEnabled`, off by default, and only with
+`auditLogs.ship`) and
 `DistantSignalScheduleBucketDownloadBudget` (critical). Bucket only,
 `DistantSignalScheduleReferencePublishStale` is the only backstop outside
 the bucket group.
@@ -195,7 +202,8 @@ Data is held in the bucket only in transit (D11):
    `/data/schedule-feed/sources/bucket/archive` (`bucket.archiveKeep` of
    them), its name, generation and SHA-256 recorded, and it joins the same
    pipeline as an SFTP delivery. A failed check keeps the object in the
-   bucket and retries on a later poll.
+   bucket and retries on a later poll; after enough failed verifications
+   the reader gives up on it (see [Giving up on an object](#giving-up-on-an-object)).
 4. Anything else is **unexpected**: it is never downloaded, one log line
    names it (escaped and truncated) and
    `DistantSignalScheduleBucketUnexpectedObject` fires.
@@ -207,6 +215,34 @@ Data is held in the bucket only in transit (D11):
 The bucket backs this up: versioning is off, soft delete keeps a deleted
 object for 7 days, and a 7-day lifecycle rule deletes anything the reader
 missed.
+
+### Giving up on an object
+
+An expected object that fails verification ten times (the same generation:
+its size, CRC32C or MD5 do not match its metadata, or it has no CRC32C) is
+given up on, so one bad upload cannot keep the reader retrying for ever.
+Only verification failures count toward giving up. A transport error, an
+HTTP error, a token failure, revoked access or a local disk error never
+does, so an outage or a full volume cannot make the reader give up on a real
+delivery. With the default poll interval and backoff ceiling (300 s, 3600 s)
+ten failed polls is about eight hours.
+
+A given-up object:
+
+- is never downloaded again until schedule-ingest restarts or a new
+  generation of that name is uploaded;
+- is never deleted by the reader (the bucket's 7-day lifecycle rule removes
+  it);
+- is reported once, as
+  `schedule_feed_source_unexpected_objects_total{reason="failed"}`, with one
+  error-level log line ("giving up on a bucket object that keeps failing
+  verification");
+- does not use one of the poll's download slots, so it cannot starve newer
+  objects (the byte budget still counts what it received).
+
+`DistantSignalScheduleBucketObjectAbandoned` (off by default until the pinned
+schedule-ingest image exports the label) fires on it; see
+[its runbook](alerts.md#distantsignalschedulebucketobjectabandoned).
 
 ### How the reader hands a delivery on
 
@@ -256,7 +292,7 @@ The reader's metrics, all `{source="bucket"}` and registered at 0:
 `distant_signal_schedule_feed_source_access_revoked`,
 `..._last_new_object_seconds`, `..._errors_total{kind}` (`auth`, `list`,
 `get`, `verify`, `delete`, `size`), `..._unexpected_objects_total{reason}`
-(`name`, `size`, `unroutable`), `..._download_capped`,
+(`name`, `size`, `unroutable`, `failed`), `..._download_capped`,
 `..._downloaded_bytes_total` and `..._poll_duration_seconds`; plus
 `distant_signal_schedule_feed_source_disagreement_total{kind}` and, keyless,
 `distant_signal_gcp_token_exchange_total{stage,outcome}` and
@@ -524,7 +560,14 @@ audit-log bucket) is logged once and retried at `maxBackoffSecs`; nothing
 here affects the reader or SFTP. Metrics:
 `distant_signal_schedule_feed_bucket_audit_lines_total` and
 `..._bucket_audit_errors_total{kind}` (`auth`, `list`, `get`, `verify`,
-`parse`).
+`parse`, `abandoned`). A file that fails does not hold up the newer ones: a
+failure counts against that file when it is a verification failure (CRC32C),
+or when another file of the same poll shipped (so the fault is the file's,
+not the bucket's). After five such failures the file is given up on:
+recorded as shipped (so it is never fetched again), logged at error level
+and counted as `kind="abandoned"`, and its entries are not shipped.
+`DistantSignalScheduleBucketAuditAbandoned` (off by default until the pinned
+schedule-ingest image exports the kind) fires on it.
 
 Every bucket call, as a table:
 
