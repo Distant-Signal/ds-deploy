@@ -3002,16 +3002,22 @@ jobs:
           done
 
           # The internet rule allows egress.internetPorts (443) plus each
-          # component's own upstream ports: Kafka brokers, an http:// feed.
+          # component's own upstream ports: Kafka brokers, an http:// feed URL.
           # internet_ports_of <component> <render>: the ports after ::/0.
           internet_ports_of() { egress_of "$1" "$2" | awk '/cidr: "::\/0"/{f=1} f && /port:/{print $2}' | sort -n | tr '\n' ' '; }
           eg=$(render "${ioi[@]}" --set networkPolicy.egress.enabled=true --set pollerIrishRailLive.enabled=true \
             --show-only templates/networkpolicy.yaml)
           for c in 'notifier:443 ' 'api:443 ' 'trust-consumer:443 9094 ' 'full-coverage-consumer:443 9094 ' \
-              'movement-relay:443 9094 ' 'poller-irish-rail-live:80 443 '; do
+              'movement-relay:443 9094 ' 'poller-irish-rail-live:443 '; do
             got=$(internet_ports_of "${c%%:*}" "${eg}")
             [[ "${got}" == "${c#*:}" ]] || fail "${c%%:*} internet ports: want '${c#*:}', got '${got}'"
           done
+          # An http:// feed URL still adds port 80 for that component.
+          eg=$(render "${ioi[@]}" --set networkPolicy.egress.enabled=true --set pollerIrishRailLive.enabled=true \
+            --set pollerIrishRailLive.irishRailBaseUrl=http://api.irishrail.ie/realtime/realtime.asmx \
+            --show-only templates/networkpolicy.yaml)
+          got=$(internet_ports_of poller-irish-rail-live "${eg}")
+          [[ "${got}" == "80 443 " ]] || fail "an http:// feed URL must add port 80, got '${got}'"
           eg=$(render --set networkPolicy.egress.enabled=true --set-json 'networkPolicy.egress.internetPorts=[]' \
             --set 'networkPolicy.components.api.internetPorts={8443}' --show-only templates/networkpolicy.yaml)
           got=$(internet_ports_of notifier "${eg}")
