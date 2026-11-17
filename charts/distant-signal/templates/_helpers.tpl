@@ -2159,25 +2159,30 @@ The values keys that have one, by their per-service role key.
 {{- end }}
 
 {{/*
-trust-consumer and full-coverage-consumer must never run two pods at once:
-each reads movement-events as one fixed Redis consumer name
-("trust-consumer-1", "full-coverage-consumer-1"), and full-coverage-consumer
-keeps the day's stats in memory, so a second pod (another replica, or a
+trust-consumer, full-coverage-consumer, trust-backlog-consumer and enricher
+must never run two pods at once. Each reads its stream as one fixed Redis
+consumer name ("trust-consumer-1", "full-coverage-consumer-1",
+"trust-event-backlog-1", "enricher-1"), and full-coverage-consumer keeps
+the day's stats in memory, so a second pod (another replica, or a
 RollingUpdate's new pod beside the old one) splits the stream between two
-copies of that state and corrupts the stats, and two trust-consumers
-contend for one consumer's pending entries. Only Recreate stops the old pod
-before the new one starts: a RollingUpdate, even with maxSurge 0, starts the
-new pod while the old one is still terminating. replicaCount 0 (stopped) is
-allowed. Takes (dict "key" <values key> "replicas" <replicaCount> "type"
+copies of that state and corrupts the stats, and two pods contend for one consumer's pending
+entries. The backlog consumer and the enricher also track their consumer
+group's delivered position in memory (ds-core's GroupCursor) to restore it
+after a Redis reload: a second pod's in-flight entries are invisible to the
+first pod's cursor, so it could restore the group past them and lose them.
+Only Recreate stops the old pod before the new one starts: a RollingUpdate,
+even with maxSurge 0, starts the new pod while the old one is still
+terminating. replicaCount 0 (stopped) is allowed (the backlog consumer and
+the enricher have no replicaCount: their Deployments are fixed at 1). Takes (dict "key" <values key> "replicas" <replicaCount> "type"
 <updateStrategy.type>); renders nothing.
 */}}
 {{- define "distant-signal.singleConsumerGuard" -}}
-{{- if has .key (list "trustConsumer" "fullCoverageConsumer") -}}
+{{- if has .key (list "trustConsumer" "fullCoverageConsumer" "trustBacklogConsumer" "enricher") -}}
 {{- if gt (int (default 1 .replicas)) 1 -}}
-{{- fail (printf "%s.replicaCount is %v, but it must be 0 or 1: it reads movement-events under one fixed consumer name (and full-coverage-consumer keeps its stats in memory), so a second pod duplicates or corrupts its work." .key .replicas) -}}
+{{- fail (printf "%s.replicaCount is %v, but it must be 0 or 1: it reads its stream under one fixed consumer name (full-coverage-consumer keeps its stats in memory; the backlog consumer and enricher keep their group cursor in memory), so a second pod duplicates, corrupts or loses work." .key .replicas) -}}
 {{- end -}}
 {{- if ne .type "Recreate" -}}
-{{- fail (printf "%s.updateStrategy.type is %q, but it must be Recreate: any other strategy runs the new pod beside the old one (fixed consumer name; full-coverage-consumer's in-memory stats). The few seconds between them lose nothing: the consumer group keeps every entry." .key .type) -}}
+{{- fail (printf "%s.updateStrategy.type is %q, but it must be Recreate: any other strategy runs the new pod beside the old one (fixed consumer name; in-memory stats or group cursor). The few seconds between them lose nothing: the consumer group keeps every entry." .key .type) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

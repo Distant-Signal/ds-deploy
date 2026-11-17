@@ -2041,32 +2041,20 @@ jobs:
           limit_is full_coverage_ro "${out}" 3 "full_coverage_ro must default to 3"
           limit_is enricher "${out}" 6 "enricher must default to 6"
 
-          out=$(render --set trustBacklogConsumer.updateStrategy.type=RollingUpdate \
-            --set trustBacklogConsumer.updateStrategy.rollingUpdate.maxSurge=1 \
-            --set trustBacklogConsumer.updateStrategy.rollingUpdate.maxUnavailable=0)
-          s=$(strategy trust-backlog-consumer "${out}")
-          grep -q '^      maxSurge: 1$' <<<"${s}" || fail "maxSurge must render"
-          grep -q '^      maxUnavailable: 0$' <<<"${s}" || fail "maxUnavailable must render"
-          limit_is trust_backlog "${out}" 7 "a surge pod's pool must count: (1 + 1) x 3 + 1 = 7"
-
-          out=$(render --set trustBacklogConsumer.updateStrategy.type=RollingUpdate)
-          s=$(strategy trust-backlog-consumer "${out}")
-          grep -q '^      maxSurge: 0$' <<<"${s}" || fail "RollingUpdate must default to maxSurge 0"
-          grep -q '^      maxUnavailable: 1$' <<<"${s}" || fail "RollingUpdate must default to maxUnavailable 1"
-          limit_is trust_backlog "${out}" 4 "maxSurge 0 adds no pod"
-
-          # 25% of 1 replica rounds up to 1 surge pod: (1 + 1) x 3 + 1 = 7.
-          out=$(render --set trustBacklogConsumer.updateStrategy.type=RollingUpdate \
-            --set-string trustBacklogConsumer.updateStrategy.rollingUpdate.maxSurge=25%)
-          limit_is trust_backlog "${out}" 7 "a percentage surge must round up"
-
-          # trust-consumer and full-coverage-consumer run one pod, ever: a
-          # fixed Redis consumer name each, and full-coverage-consumer's
-          # stats in memory (distant-signal.singleConsumerGuard). 0 stops
-          # them; Recreate is the only strategy.
+          # trust-consumer, full-coverage-consumer, trust-backlog-consumer
+          # and the enricher run one pod, ever: a fixed Redis consumer name
+          # each, full-coverage-consumer's stats in memory, and the backlog
+          # consumer's and enricher's group cursor in memory
+          # (distant-signal.singleConsumerGuard). Recreate is the only
+          # strategy. 0 stops the two that have a replicaCount; the backlog
+          # consumer and enricher have none (a fixed 1 replica), but a
+          # replicaCount set on them still fails the render at 2.
           for w in trustConsumer fullCoverageConsumer; do
             render --set "${w}.replicaCount=0" >/dev/null
             render --set "${w}.replicaCount=1" >/dev/null
+          done
+          for w in trustConsumer fullCoverageConsumer trustBacklogConsumer enricher; do
+            render --set "${w}.updateStrategy.type=Recreate" >/dev/null
             # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
             {
               if err=$(render --set "${w}.replicaCount=2" 2>&1 >/dev/null); then
@@ -2119,10 +2107,6 @@ jobs:
             if render --set enricher.updateStrategy.type=RollingUpdate \
                 --set enricher.updateStrategy.rollingUpdate.maxUnavailable=0 >/dev/null 2>&1; then
               fail "maxSurge 0 with maxUnavailable 0 must fail the render"
-            fi
-            if render --set trustBacklogConsumer.updateStrategy.type=RollingUpdate \
-                --set trustBacklogConsumer.updateStrategy.rollingUpdate.maxSurge=60 >/dev/null 2>&1; then
-              fail "a surge past max_connections must fail the role budget"
             fi
           }
 

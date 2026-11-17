@@ -3873,19 +3873,16 @@ enricher:
   enabled: true
   # -- /livez stall window (see workerHealth): one incident's extraction is up to three LLM calls of llmRequestTimeoutSecs (300s) each.
   progressStallSecs: 1800
-  # -- The Deployment's rollout. `Recreate` (the default) stops the old
-  # pod before the new one starts: a gap of a few seconds (unacked stream entries stay pending and
-  # are reclaimed; the sweep re-queues anything missed). A surge pod would
-  # also run beside the old one with its own in-flight dedupe, so the same
-  # incident could be extracted, and paid for, twice. Under a
-  # surge both pods hold a Postgres pool at once, and the 2026-10-10
-  # rollout deadlocked on exactly that (the new pod could not connect past
-  # its role's CONNECTION LIMIT, so it never became Ready and the old pod
-  # was never stopped). `RollingUpdate` takes `rollingUpdate.maxSurge`
-  # (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge
-  # above 0 is added to the replicas when the chart computes the
-  # per-service role's CONNECTION LIMIT and the max_connections budget.
-  # See docs/ingest-phase5-runbook.md "Rollout deadlock".
+  # -- The Deployment's rollout: `Recreate`, the only type the render
+  # accepts (distant-signal.singleConsumerGuard). It stops the old pod
+  # before the new one starts: a gap of a few seconds (unacked stream
+  # entries stay pending and are reclaimed; the sweep re-queues anything
+  # missed). `RollingUpdate`, even with maxSurge 0, starts the new pod
+  # beside the old one: two readers under one consumer name, each with its
+  # own in-flight dedupe and its own record of the group's delivered
+  # position (the one it restores the group to after a Redis reload), so
+  # the same incident could be extracted twice and one pod could restore
+  # the group past the other's pending entries.
   updateStrategy:
     type: Recreate
   image:
@@ -4505,17 +4502,14 @@ trustBacklogConsumer:
   # -- terminationGracePeriodSeconds: as trustConsumer's. At least 30.
   terminationGracePeriodSeconds: 30
   metricsPort: 9096
-  # -- The Deployment's rollout. `Recreate` (the default) stops the old
-  # pod before the new one starts: a gap of a few seconds (the consumer group keeps every entry, and the
-  # new pod replays its own pending entries). Under a
-  # surge both pods hold a Postgres pool at once, and the 2026-10-10
-  # rollout deadlocked on exactly that (the new pod could not connect past
-  # its role's CONNECTION LIMIT, so it never became Ready and the old pod
-  # was never stopped). `RollingUpdate` takes `rollingUpdate.maxSurge`
-  # (default 0) and `rollingUpdate.maxUnavailable` (default 1); a maxSurge
-  # above 0 is added to the replicas when the chart computes the
-  # per-service role's CONNECTION LIMIT and the max_connections budget.
-  # See docs/ingest-phase5-runbook.md "Rollout deadlock".
+  # -- The Deployment's rollout: `Recreate`, the only type the render
+  # accepts (distant-signal.singleConsumerGuard). It stops the old pod
+  # before the new one starts: a gap of a few seconds that loses nothing
+  # (the consumer group keeps every entry, and the new pod replays its own
+  # pending entries). `RollingUpdate`, even with maxSurge 0, starts the new
+  # pod beside the old one: two readers under one consumer name, each with
+  # its own record of the group's delivered position (the one it restores
+  # the group to after a Redis reload).
   updateStrategy:
     type: Recreate
   # -- A purely documentation-level flag: this plan's real retention
