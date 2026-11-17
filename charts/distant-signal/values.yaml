@@ -1943,6 +1943,29 @@ api:
       user: {perMinute: 60, burst: 20}
       global: {perMinute: 1200, burst: 200}
       authFailure: {perMinute: 10, burst: 10}
+  # Test credentials (ds-api's docs/test-auth.md): a second, narrower
+  # trust root on the personal-token listener only, for automated checks.
+  # A ds-sso client-credentials JWT from the distant-signal-test provider
+  # whose `groups` holds requiredGroup reads the lines:read and trains:read
+  # routes (GET only) as a sandbox principal that is never a user. Refused
+  # on every other listener. No per-token revocation (the tokens live an
+  # hour): `enabled: false` is the kill switch. Needs the api image that
+  # reads TEST_AUTH_* (ds-api#62).
+  testAuth:
+    # -- Master switch (TEST_AUTH_ENABLED). Off: no TEST_AUTH_* env is
+    # rendered, the api fetches no JWKS and refuses every test token. On:
+    # needs api.personalTokens.enabled.
+    enabled: false
+    # -- The token issuer (TEST_AUTH_ISSUER); its JWKS is found by OIDC
+    # discovery. The api refuses to start, and the render fails, unless it
+    # is exactly this value. Added to the api's egress allowlist while on.
+    issuerUrl: https://ds-sso.cursed.solutions/application/o/distant-signal-test/
+    # -- The `aud` every test token carries (TEST_AUTH_AUDIENCE). Must
+    # differ from the SSO, internal and delegated audiences.
+    audience: distant-signal-test
+    # -- The group the token's `groups` claim must contain
+    # (TEST_AUTH_REQUIRED_GROUP).
+    requiredGroup: ds-test
   # The CORPUS fallback (`corpusFallback`) moved to `shared.corpusFallback`
   # (DS-403); `api.corpusFallback.enabled` still works for one release.
   # -- The transit networks `/public/transit` serves (API_TRANSIT_NETWORKS;

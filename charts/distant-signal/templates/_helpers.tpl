@@ -378,6 +378,28 @@ CF-Connecting-IP trustworthy.
 {{- if dig "enabled" false $pt -}}true{{- end -}}
 {{- end }}
 
+{{/*
+"true" when test credentials (api.testAuth, ds-api's docs/test-auth.md) are
+on, else empty. Fails the render when they are on without the personal-token
+listener (the only one that accepts them) or with any issuer but ds-sso's
+distant-signal-test provider; the api refuses to start in both cases too.
+*/}}
+{{- define "distant-signal.testAuthEnabled" -}}
+{{- $ta := dig "testAuth" dict .Values.api -}}
+{{- if dig "enabled" false $ta -}}
+{{- if not (include "distant-signal.personalTokensEnabled" .) -}}
+{{- fail "api.testAuth.enabled needs api.personalTokens.enabled: test credentials are accepted only on the personal-token listener." -}}
+{{- end -}}
+{{- if ne (dig "issuerUrl" "" $ta) "https://ds-sso.cursed.solutions/application/o/distant-signal-test/" -}}
+{{- fail "api.testAuth.issuerUrl must be exactly https://ds-sso.cursed.solutions/application/o/distant-signal-test/ while api.testAuth.enabled is true." -}}
+{{- end -}}
+{{- if or (not (dig "audience" "" $ta)) (not (dig "requiredGroup" "" $ta)) -}}
+{{- fail "api.testAuth.audience and api.testAuth.requiredGroup must not be empty while api.testAuth.enabled is true." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
+
 {{- define "distant-signal.apiTokensFullname" -}}
 {{- printf "%s-api-tokens" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}

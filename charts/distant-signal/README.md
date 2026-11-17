@@ -2194,6 +2194,10 @@ release after, setting one fails the render:
 | `api.personalTokens.rateLimit.user.perMinute` / `.burst` | `60` / `20` | Per-user bucket across all of a user's tokens. |
 | `api.personalTokens.rateLimit.global.perMinute` / `.burst` | `1200` / `200` | Every token together, per pod. |
 | `api.personalTokens.rateLimit.authFailure.perMinute` / `.burst` | `10` / `10` | Failed authentications per client address; over it, 429 before any lookup. |
+| `api.testAuth.enabled` | `false` | Test credentials (ds-api's docs/test-auth.md): ds-sso client-credentials JWTs for automated checks, accepted only on the personal-token listener, only on its `lines:read` and `trains:read` routes, `GET` only, as a sandbox principal that is never a user. Off: no `TEST_AUTH_*` env and every test token refused. The render fails unless `api.personalTokens.enabled` is on too. The kill switch: there is no per-token revocation. Needs an api image that reads `TEST_AUTH_*` (ds-api#62). |
+| `api.testAuth.issuerUrl` | `https://ds-sso.cursed.solutions/application/o/distant-signal-test/` | The token issuer, found by OIDC discovery and added to the api's egress allowlist while on. The render fails (and the api refuses to start) for any other value while on. |
+| `api.testAuth.audience` | `distant-signal-test` | The `aud` every test token carries. The api refuses to start if it equals the SSO, internal or a delegated audience. |
+| `api.testAuth.requiredGroup` | `ds-test` | The group the token's `groups` claim must contain. |
 | `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). |
 | `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off: the chart refuses the pair unless `trustXRealIpIngressAcknowledged`. |
 | `api.rateLimit.trustXRealIpIngressAcknowledged` | `false` | Allow `trustXRealIp` with `ingress.api.enabled`, for an ingress controller that overwrites `X-Real-IP` itself. See "Production guards". |

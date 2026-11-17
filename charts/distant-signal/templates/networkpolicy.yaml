@@ -366,6 +366,10 @@ spec:
 {{- range (dig "delegated" "clients" list .Values.api | default list) }}
 {{- $apiIdpUrls = append $apiIdpUrls (dig "issuerUrl" "" .) }}
 {{- end }}
+{{- /* Test credentials: the api discovers their issuer's JWKS. */}}
+{{- if include "distant-signal.testAuthEnabled" . }}
+{{- $apiIdpUrls = append $apiIdpUrls .Values.api.testAuth.issuerUrl }}
+{{- end }}
 {{- with include "distant-signal.egressSection" (dict "root" . "component" "api" "deps" (dict "postgres" true "idp" true) "internet" true "urls" $apiIdpUrls) }}
   {{- . | nindent 2 }}
 {{- end }}

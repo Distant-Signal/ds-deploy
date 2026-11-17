@@ -333,6 +333,30 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
             "api.sso.primarySubClaim", "distant-signal#192, ds-core v0.1.1"
         ),
         "WEBHOOK_SECRET_KEYS": optional("api.webhooks.secretKeys.existingSecret"),
+        # Test credentials (ds-api's docs/test-auth.md): off by default, so
+        # no render sets them; the chart renders the first four only while
+        # api.testAuth.enabled, and has no value for the rate limits.
+        **{
+            name: ahead_of_image("api.testAuth.enabled", "ds-api#62")
+            for name in (
+                "TEST_AUTH_ENABLED",
+                "TEST_AUTH_ISSUER",
+                "TEST_AUTH_AUDIENCE",
+                "TEST_AUTH_REQUIRED_GROUP",
+            )
+        },
+        **{
+            f"TEST_AUTH_RATE_{name}": f"{AHEAD_OF_IMAGE}{no_value('api')} "
+            "(read since ds-api#62)"
+            for name in (
+                "PER_MINUTE",
+                "BURST",
+                "TRAINS_PER_MINUTE",
+                "TRAINS_BURST",
+                "GLOBAL_PER_MINUTE",
+                "GLOBAL_BURST",
+            )
+        },
     },
     "darwin-relay": {
         "DARWIN_STREAM_MAXLEN": no_value("darwinRelay"),
