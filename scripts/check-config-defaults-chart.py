@@ -262,6 +262,22 @@ TRAIN_SERVICE_LABELS = (
         "trustBacklogConsumer.trainServiceLabelsEnabled=true",
     ),
 )
+# The TNDS producer over FTPS: TRANSIT_TXC_FTP_SECURITY and
+# TRANSIT_TXC_FTP_CA_FILE render only when txcFtpSecurity is not plain.
+TNDS_FTPS = (
+    "-f",
+    str(PREREQS),
+    *REQUIRED,
+    *sets(
+        "pollerTransitSchedule.networks.net.enabled=true",
+        "pollerTransitSchedule.networks.net.adapter=txc",
+        "pollerTransitSchedule.networks.net.txcCredentials.existingSecret=tnds",
+        "pollerTransitSchedule.networks.net.txcFtpSecurity=required",
+        "pollerTransitSchedule.networks.net.txcFtpCa.existingConfigMap=tnds-ca",
+        "redis.acl.clients.pollerTransitNet=true",
+        "ingestWriter.streams.transit-net=apply",
+    ),
+)
 DEFAULTS_RENDER = "chart defaults"
 EVERY_RENDER = "every workload"
 RENDERS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -273,6 +289,7 @@ RENDERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("schedulefeed keyless bucket", KEYLESS_BUCKET),
     ("darwin-relay late reason sampling", LATE_REASON_SAMPLING),
     ("trust-backlog-consumer train service labels", TRAIN_SERVICE_LABELS),
+    ("TNDS producer over FTPS", TNDS_FTPS),
 )
 
 
@@ -440,10 +457,6 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
     "poller-stations": READY_FALLBACK,
     "poller-tfl": READY_FALLBACK,
     "poller-tocs": READY_FALLBACK,
-    "poller-transit-schedule": {
-        "TRANSIT_TXC_FTP_CA_FILE": no_value("pollerTransitSchedule"),
-        "TRANSIT_TXC_FTP_SECURITY": no_value("pollerTransitSchedule"),
-    },
     "schedule-ingest": {
         "MAX_EXTRACTED_BYTES": no_value("scheduleFeed.ingest"),
         "MAX_ZIP_ENTRIES": no_value("scheduleFeed.ingest"),

@@ -983,6 +983,53 @@ def check_net_producer(c: Checker) -> None:
             "pollerTransitSchedule.networks.net.txcUrl=https://example.org/em.zip",
         ),
     )
+    c.check(
+        ok="TRANSIT_TXC_FTP_SECURITY" not in e and "TRANSIT_TXC_FTP_CA_FILE" not in e,
+        message=f"{name}: the default FTP security (plain) renders no variable",
+    )
+    ftps = by_name(
+        c.docs(
+            *NET_ON,
+            *sets(
+                "pollerTransitSchedule.networks.net.txcFtpSecurity=required",
+                "pollerTransitSchedule.networks.net.txcFtpCa.existingConfigMap=tnds-ca",
+            ),
+        )
+    ).get(name, {})
+    ftps_env = env((containers(ftps) or [{}])[0])
+    c.check(
+        ok=value(ftps_env.get("TRANSIT_TXC_FTP_SECURITY")) == "required"
+        and value(ftps_env.get("TRANSIT_TXC_FTP_CA_FILE")) == "/etc/ftp-ca/ca.pem"
+        and any(
+            v.get("name") == "ftp-ca"
+            and cast("dict[str, str]", v.get("configMap") or {}).get("name")
+            == "tnds-ca"
+            for v in cast("list[dict[str, object]]", pod(ftps).get("volumes") or [])
+        ),
+        message=f"{name}: the FTPS settings reach the container, with the CA mounted",
+    )
+    c.refuses(
+        "an unknown FTP security mode",
+        "txcFtpSecurity must be plain, explicit or required",
+        *NET_ON,
+        *sets("pollerTransitSchedule.networks.net.txcFtpSecurity=tls"),
+    )
+    c.refuses(
+        "FTPS settings on an https:// TXC URL",
+        "needs an ftp:// txcUrl",
+        *NET_ON,
+        *sets(
+            "pollerTransitSchedule.networks.net.txcCredentials.existingSecret=",
+            "pollerTransitSchedule.networks.net.txcUrl=https://example.org/em.zip",
+            "pollerTransitSchedule.networks.net.txcFtpSecurity=explicit",
+        ),
+    )
+    c.refuses(
+        "an FTPS CA bundle with plain FTP",
+        "txcFtpCa is only read with txcFtpSecurity",
+        *NET_ON,
+        *sets("pollerTransitSchedule.networks.net.txcFtpCa.existingConfigMap=tnds-ca"),
+    )
     c.refuses(
         "an unknown transit adapter",
         "adapter must be gtfs or txc",

@@ -31,6 +31,22 @@ and the situations pod produces no timetable.
 {{- if and (eq (toString $n.adapter) "txc") (hasPrefix "ftp://" (toString $n.txcUrl)) (not ($n.txcCredentials | default dict).existingSecret) }}
 {{- fail (printf "pollerTransitSchedule.networks.%s: an ftp:// txcUrl (TNDS) needs txcCredentials.existingSecret, a Secret with the Traveline login (keys username and password; docs/transit-networks.md)" $network) }}
 {{- end }}
+{{- $ftpSecurity := toString (default "plain" $n.txcFtpSecurity) }}
+{{- if not (has $ftpSecurity (list "plain" "explicit" "required")) }}
+{{- fail (printf "pollerTransitSchedule.networks.%s.txcFtpSecurity must be plain, explicit or required (got %q)" $network $ftpSecurity) }}
+{{- end }}
+{{- if and (ne $ftpSecurity "plain") (not (hasPrefix "ftp://" (toString $n.txcUrl))) }}
+{{- fail (printf "pollerTransitSchedule.networks.%s.txcFtpSecurity %s needs an ftp:// txcUrl (an https:// one is already TLS)" $network $ftpSecurity) }}
+{{- end }}
+{{- $ftpCa := $n.txcFtpCa | default dict }}
+{{- if $ftpCa.existingConfigMap }}
+{{- if eq $ftpSecurity "plain" }}
+{{- fail (printf "pollerTransitSchedule.networks.%s.txcFtpCa is only read with txcFtpSecurity explicit or required" $network) }}
+{{- end }}
+{{- if not (regexMatch "^[A-Za-z0-9._-]{1,253}$" (toString ($ftpCa.key | default "ca.pem"))) }}
+{{- fail (printf "pollerTransitSchedule.networks.%s.txcFtpCa.key must be 1-253 of A-Z a-z 0-9 . _ - (got %q)" $network (toString $ftpCa.key)) }}
+{{- end }}
+{{- end }}
 {{- $refresh := toString (default "" $n.timetableRefresh) }}
 {{- if and $refresh (not (regexMatch "^[A-Za-z0-9._:-]{1,64}$" $refresh)) }}
 {{- fail (printf "pollerTransitSchedule.networks.%s.timetableRefresh must be 1-64 of A-Z a-z 0-9 . _ : - (got %q)" $network $refresh) }}
@@ -120,6 +136,11 @@ spec:
           volumeMounts:
             - name: work
               mountPath: /work
+          {{- if $ftpCa.existingConfigMap }}
+            - name: ftp-ca
+              mountPath: /etc/ftp-ca
+              readOnly: true
+          {{- end }}
           {{- with $resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -130,6 +151,15 @@ spec:
         - name: work
           emptyDir:
             sizeLimit: {{ $n.workDirSizeLimit }}
+      {{- if $ftpCa.existingConfigMap }}
+        # Extra CA certificates for the FTPS server (TRANSIT_TXC_FTP_CA_FILE).
+        - name: ftp-ca
+          configMap:
+            name: {{ $ftpCa.existingConfigMap | quote }}
+            items:
+              - key: {{ $ftpCa.key | default "ca.pem" | quote }}
+                path: {{ $ftpCa.key | default "ca.pem" | quote }}
+      {{- end }}
       {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" (printf "pollerTransitSchedule.networks.%s.priorityClassName" $network) "names" (list $n.priorityClassName)) }}
       {{- . | nindent 6 }}
       {{- end }}
@@ -178,6 +208,17 @@ network's extraEnv, which replaces an entry of the same name. Takes (dict
             {{- with $n.txcMaxBytes }}
             - name: TRANSIT_TXC_MAX_BYTES
               value: {{ . | int64 | quote }}
+            {{- end }}
+            {{- /* Only when set: the default (plain) renders no variable, as
+            before the pollers read it (docs/transit-networks.md in ds-pollers). */}}
+            {{- $ftpSecurity := toString (default "plain" $n.txcFtpSecurity) }}
+            {{- if ne $ftpSecurity "plain" }}
+            - name: TRANSIT_TXC_FTP_SECURITY
+              value: {{ $ftpSecurity | quote }}
+            {{- with ($n.txcFtpCa | default dict).existingConfigMap }}
+            - name: TRANSIT_TXC_FTP_CA_FILE
+              value: {{ printf "/etc/ftp-ca/%s" (($n.txcFtpCa).key | default "ca.pem") | quote }}
+            {{- end }}
             {{- end }}
             {{- $creds := $n.txcCredentials | default dict }}
             {{- with $creds.existingSecret }}
