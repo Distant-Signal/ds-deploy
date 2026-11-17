@@ -75,7 +75,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Distant-Signal/ci
-          ref: 71cc611e1d6f647fa9018b46c9b022440b689187
+          ref: 0473da68a2af3101d91a7843b6df0e0742765d0f
           path: .ds-ci
           persist-credentials: false
 
@@ -89,7 +89,8 @@ jobs:
           git clone --quiet --depth 1 --branch "${version}" \
             https://github.com/Distant-Signal/ds-core "${core}"
           uv run --no-sync python .ds-ci/scripts/release-order.py check --values charts/distant-signal/values.yaml --registry \
-            --migrations "${core}/crates/ds-store/migrations"
+            --migrations "${core}/crates/ds-store/migrations" \
+            --grant-floors grant-floors.toml
 
       - name: appVersion
         id: app-version
@@ -97,7 +98,7 @@ jobs:
 
   chart:
     needs: ordering
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@0473da68a2af3101d91a7843b6df0e0742765d0f # main
     permissions:
       contents: read
       packages: write
@@ -128,13 +129,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sign and verify
-        uses: Distant-Signal/ci/actions/cosign-sign@71cc611e1d6f647fa9018b46c9b022440b689187 # main
+        uses: Distant-Signal/ci/actions/cosign-sign@0473da68a2af3101d91a7843b6df0e0742765d0f # main
         with:
           ref: ${{ needs.chart.outputs.ref }}@${{ needs.chart.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
 
   ingest-bucket:
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@0473da68a2af3101d91a7843b6df0e0742765d0f # main
     permissions:
       contents: read
       packages: write
@@ -164,7 +165,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sign and verify
-        uses: Distant-Signal/ci/actions/cosign-sign@71cc611e1d6f647fa9018b46c9b022440b689187 # main
+        uses: Distant-Signal/ci/actions/cosign-sign@0473da68a2af3101d91a7843b6df0e0742765d0f # main
         with:
           ref: ${{ needs.ingest-bucket.outputs.ref }}@${{ needs.ingest-bucket.outputs.digest }}
           verify-identity: ${{ github.server_url }}/${{ github.workflow_ref }}
