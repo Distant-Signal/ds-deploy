@@ -1465,7 +1465,9 @@ once, unless:
 
 - `networkPolicy.enabled` and `networkPolicy.egress.enabled` are true;
 - Redis has a password: `redis.auth.enabled`, or `redis.acl.defaultUser:
-  "on-unshared"` (or `"off"`) with the ACL on;
+  "on-unshared"` (or `"off"`) with the ACL on; an external Redis
+  (`redis.enabled: false`) needs `redis.auth.enabled` or credentials in
+  `redis.externalUrl`;
 - with the bundled Redis (`redis.enabled`), `redis.acl.enabled` is true at
   `stage: narrow` ([docs/redis-acl.md](../../docs/redis-acl.md));
 - with the bundled Postgres (`postgresql.enabled`), `postgresql.roles.enabled`

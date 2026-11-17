@@ -70,6 +70,10 @@ UNISOLATED = sets(
     "postgresql.roles.enabled=false",
     "postgresql.roles.perService.enabled=false",
 )
+EXTERNAL_REDIS = sets(
+    "redis.enabled=false",
+    "redis.externalUrl=rediss://redis.example.com:6380",
+)
 SFTP = sets(
     "scheduleFeed.enabled=true",
     "scheduleFeed.sftp.authMethod=password",
@@ -148,6 +152,27 @@ CASES: tuple[Case, ...] = (
             *BASE,
             *ISOLATED,
             *sets("redis.auth.enabled=false", "redis.acl.defaultUser=on-unshared"),
+        ),
+    ),
+    Case(
+        "global.production needs a password on an external Redis",
+        (*BASE, *ISOLATED, *EXTERNAL_REDIS, *sets("redis.auth.enabled=false")),
+        "redis.externalUrl carries no credentials",
+    ),
+    Case(
+        "an external Redis with redis.auth renders",
+        (*BASE, *ISOLATED, *EXTERNAL_REDIS),
+    ),
+    Case(
+        "an external Redis with credentials in its URL is accepted",
+        (
+            *BASE,
+            *ISOLATED,
+            *sets(
+                "redis.enabled=false",
+                "redis.auth.enabled=false",
+                "redis.externalUrl=rediss://user:pw@redis.example.com:6380",
+            ),
         ),
     ),
     Case(

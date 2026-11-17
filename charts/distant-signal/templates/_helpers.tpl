@@ -4194,8 +4194,9 @@ unchanged (chart README, "Production guards").
 {{- if and (not $v.redis.auth.enabled) (not (and $v.redis.acl.enabled (ne (include "distant-signal.redisAclDefaultUserMode" .) "on"))) -}}
 {{- $gaps = append $gaps "Redis has no password: set redis.auth.enabled, or redis.acl.defaultUser to \"on-unshared\" (or \"off\")" -}}
 {{- end -}}
-{{- else if not $v.redis.auth.enabled -}}
-{{- $gaps = append $gaps "redis.auth.enabled is false: the external Redis is reached without a password" -}}
+{{- else if and (not $v.redis.auth.enabled) (not (regexMatch "^[a-z]+://[^/@]*@" (toString $v.redis.externalUrl))) -}}
+{{- /* An external Redis: a password in redis.auth, or inline in redis.externalUrl (redisUrl above allows it). */ -}}
+{{- $gaps = append $gaps "redis.auth.enabled is false and redis.externalUrl carries no credentials: the external Redis is reached without a password" -}}
 {{- end -}}
 {{- if $v.postgresql.enabled -}}
 {{- if not $v.postgresql.roles.enabled -}}
