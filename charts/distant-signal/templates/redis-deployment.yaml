@@ -398,6 +398,9 @@ spec:
             limits:
               memory: 32Mi
         {{- end }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "redis.priorityClassName" "names" (list .Values.redis.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.redis.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

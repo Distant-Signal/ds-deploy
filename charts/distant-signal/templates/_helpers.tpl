@@ -2411,6 +2411,47 @@ alerts read in that mode. Takes root.
 {{- end }}
 
 {{/*
+A pod's `priorityClassName: <name>` line (chart README, "Pod priority"),
+or nothing. The name is the first non-empty one of "names" (the pod's own
+value first, then any value it falls back to, e.g. a CronJob's
+cron.priorityClassName, then its workload's), else
+global.priorityClassName. All empty (the default) renders nothing: the pod
+gets the cluster's default priority, as before these values existed.
+
+The PriorityClass itself is cluster-scoped and is not part of this chart:
+the cluster's owner creates it (production: Ranma-Config) before a release
+names it, since the API server refuses a pod naming a class that doesn't
+exist. Fails on a name that isn't a DNS subdomain, and on the built-in
+system-* classes, which are for the cluster's own components and would let
+a DS pod preempt them.
+
+Takes dict "root", "what" (the pod's value path, for the error) and
+"names" (a list; entries may be empty or nil).
+*/}}
+{{- define "distant-signal.priorityClassName" -}}
+{{- $name := "" -}}
+{{- $what := .what -}}
+{{- range .names -}}
+{{- if and (not $name) . -}}
+{{- $name = toString . -}}
+{{- end -}}
+{{- end -}}
+{{- if not $name -}}
+{{- $name = toString (.root.Values.global.priorityClassName | default "") -}}
+{{- $what = "global.priorityClassName" -}}
+{{- end -}}
+{{- if $name -}}
+{{- if or (gt (len $name) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $name)) -}}
+{{- fail (printf "%s: %q is not a valid PriorityClass name (a DNS subdomain: lowercase letters, digits, '-' and '.')." $what $name) -}}
+{{- end -}}
+{{- if hasPrefix "system-" $name -}}
+{{- fail (printf "%s: %q is one of the cluster's own system-* classes; name a PriorityClass made for DS instead (chart README, \"Pod priority\")." $what $name) -}}
+{{- end -}}
+priorityClassName: {{ $name | quote }}
+{{- end -}}
+{{- end }}
+
+{{/*
 A worker run on a schedule instead of as an always-on Deployment
 (docs/scheduled-jobs.md): one CronJob with the chart's safe defaults.
 
@@ -2430,11 +2471,15 @@ Takes dict:
   "cron"       the workload's `cron` values (schedule, timeZone, suspend,
                startingDeadlineSeconds, activeDeadlineSeconds, backoffLimit,
                successfulJobsHistoryLimit, failedJobsHistoryLimit,
-               ttlSecondsAfterFinished, resources);
+               ttlSecondsAfterFinished, resources, and optionally
+               priorityClassName, which wins over the workload's own and
+               then global.priorityClassName: all empty renders none, so
+               the pod gets the cluster's default priority; only
+               scheduleFeed.reference.cron declares one in values.yaml);
   "image"      the workload's image values;
   "env"        the container's env, a list of {name, value|valueFrom};
   "workload"   the workload's values, for podSecurityContext, nodeSelector,
-               tolerations and affinity;
+               tolerations, affinity and priorityClassName;
 optionally:
   "name"       the CronJob's name after <fullname>- (default: the
                component), for a component with one CronJob per instance;
@@ -2494,6 +2539,9 @@ spec:
           serviceAccountName: {{ include "distant-signal.serviceAccountName" $root }}
           automountServiceAccountToken: false
           restartPolicy: Never
+          {{- with include "distant-signal.priorityClassName" (dict "root" $root "what" (printf "%s.priorityClassName (or its workload's)" $what) "names" (list $cron.priorityClassName $w.priorityClassName)) }}
+          {{- . | nindent 10 }}
+          {{- end }}
           {{- with $root.Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}

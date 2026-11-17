@@ -64,6 +64,9 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "pollerIrishRailGtfs.priorityClassName" "names" (list .Values.pollerIrishRailGtfs.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.pollerIrishRailGtfs.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

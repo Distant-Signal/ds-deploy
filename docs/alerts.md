@@ -2120,8 +2120,21 @@ and raise the workload's `resources.limits.memory`, or find what grew.
 A Job pod of this release has been Pending for `pendingFor`: the node has no
 room for its requests (`kubectl describe pod` shows `FailedScheduling`
 "Insufficient memory"), or its image won't pull. The time counts against the
-Job's `activeDeadlineSeconds`, so it ends as `DeadlineExceeded`. A scheduled
-Job reserves its requests only while it runs, so capacity freed by moving a
-worker to a schedule can be taken by other pods in between: free room, or
-lower another workload's requests.
+Job's `activeDeadlineSeconds` (its clock starts with the Job, not the pod),
+so a run placed late has only what is left of it and may end as
+`DeadlineExceeded` mid-run; Kubernetes has no separate scheduling timeout.
+A scheduled Job reserves its requests only while it runs, so capacity
+freed by moving a worker to a schedule can be taken by other pods in
+between: free room, lower another workload's requests, or give the
+workload a PriorityClass with `preemptionPolicy: PreemptLowerPriority`
+above the pods holding the memory (the chart's README, "Pod priority").
+For schedule-reference, whose 1536Mi nightly publish this hit on
+2026-11-16, that is `scheduleFeed.reference.cron.priorityClassName` (or
+`scheduleFeed.priorityClassName`); see
+[scheduled jobs, schedule-reference](scheduled-jobs.md#schedule-reference),
+"Capacity". Once the Pending Job has ended (or you delete it) and there is
+room, start a run by hand rather than waiting for the next one (the run
+lock keeps two schedule-reference runs from publishing at once):
+`kubectl create job -n distant-signal
+--from=cronjob/<cronjob> <cronjob>-manual-$(date +%s)`.
 

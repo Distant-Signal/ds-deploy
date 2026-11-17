@@ -91,6 +91,9 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "fullCoverageConsumer.priorityClassName" "names" (list .Values.fullCoverageConsumer.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.fullCoverageConsumer.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -180,6 +180,9 @@ spec:
       serviceAccountName: {{ include "distant-signal.serviceAccountName" . }}
       automountServiceAccountToken: false
       restartPolicy: Never
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "postgresql.priorityClassName" "names" (list .Values.postgresql.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

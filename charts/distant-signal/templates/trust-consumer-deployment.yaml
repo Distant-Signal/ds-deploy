@@ -86,6 +86,9 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "trustConsumer.priorityClassName" "names" (list .Values.trustConsumer.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.trustConsumer.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

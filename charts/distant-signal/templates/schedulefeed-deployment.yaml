@@ -259,6 +259,9 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
         {{- end }}
+      {{- with include "distant-signal.priorityClassName" (dict "root" $ "what" "scheduleFeed.priorityClassName" "names" (list .Values.scheduleFeed.priorityClassName)) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.scheduleFeed.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

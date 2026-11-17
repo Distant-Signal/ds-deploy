@@ -257,6 +257,13 @@ jobs:
       - name: CronJob safe defaults
         run: uv run --no-sync scripts/check-cronjobs-chart.py
 
+      # Pod priority (chart README, "Pod priority"): with every
+      # priorityClassName empty no pod names a class; global.priorityClassName
+      # reaches every pod but the helm test ones, and a workload's own value
+      # only its pods; system-* classes and invalid names refuse to render.
+      - name: pod priority classes
+        run: uv run --no-sync scripts/check-priority-class-chart.py
+
       # enricher.llm.provider (docs/enricher-anthropic.md): openai renders
       # the enricher as before; anthropic renders the Claude env, key Secret
       # and egress port, batch mode its knobs; bad combinations refuse.
