@@ -3940,6 +3940,16 @@ ConfigMap, a dedicated ServiceAccount, and no key anywhere. */ -}}
 {{- fail (printf "scheduleFeed.bucket.expectedKeys: %q must be a non-empty name at the bucket root (no / or ,) of at most 1024 bytes" $k) -}}
 {{- end -}}
 {{- end -}}
+{{- $ignored := $b.ignoredKeys | default list -}}
+{{- if not (kindIs "slice" $ignored) -}}
+{{- fail "scheduleFeed.bucket.ignoredKeys must be a list of object names (globs), or []" -}}
+{{- end -}}
+{{- range $ignored -}}
+{{- $k := . | default "" | toString -}}
+{{- if or (eq $k "") (contains "/" $k) (contains "\\" $k) (contains "," $k) (hasPrefix "." $k) (eq (trimAll "*" $k) "") (gt (len $k) 1024) -}}
+{{- fail (printf "scheduleFeed.bucket.ignoredKeys: %q must be a name at the bucket root (no /, \\ or , and no leading .), not * alone, of at most 1024 bytes" $k) -}}
+{{- end -}}
+{{- end -}}
 {{- with $b.baseUrl -}}
 {{- if not (regexMatch "^https?://[^/]+" (toString .)) -}}
 {{- fail (printf "scheduleFeed.bucket.baseUrl must be empty or an http(s):// URL, got %q" (toString .)) -}}

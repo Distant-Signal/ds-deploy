@@ -571,6 +571,11 @@ scheduleFeed.ingest.extraEnv by distant-signal.mergeEnv (an extraEnv entry repla
             {{- end }}
             - name: BUCKET_EXPECTED_KEYS
               value: {{ join "," $b.expectedKeys | quote }}
+            {{- with $b.ignoredKeys }}
+            # Known benign names: deleted unread, counted as ignored.
+            - name: BUCKET_IGNORED_KEYS
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: BUCKET_POLL_INTERVAL_SECS
               value: {{ $b.pollIntervalSecs | int64 | quote }}
             - name: BUCKET_DELETE_MIN_AGE_SECS

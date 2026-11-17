@@ -445,9 +445,6 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "TRANSIT_TXC_FTP_SECURITY": no_value("pollerTransitSchedule"),
     },
     "schedule-ingest": {
-        # ds-deploy#98 wires it (scheduleFeed.bucket.ignoredKeys) and
-        # removes this entry.
-        "BUCKET_IGNORED_KEYS": no_value("scheduleFeed.ingest"),
         "MAX_EXTRACTED_BYTES": no_value("scheduleFeed.ingest"),
         "MAX_ZIP_ENTRIES": no_value("scheduleFeed.ingest"),
     },
