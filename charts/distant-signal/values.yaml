@@ -7728,15 +7728,24 @@ networkPolicy:
     # the kubelet (10250) and every host-published port. Policies are
     # additive, so no other policy can take that allowance away.
     extraDeniedCidrs: []
-    # -- NetworkPolicyPeers every egress policy's DNS rule (UDP/TCP 53) is
-    # limited to. Empty (the default) allows port 53 to any destination,
-    # which works with any resolver, NodeLocal DNSCache included, but also
-    # reaches a DNS server on the node or a private address. To use only
-    # the cluster DNS (CoreDNS's usual labels):
-    #   - namespaceSelector:
-    #       matchLabels: {kubernetes.io/metadata.name: kube-system}
-    #     podSelector:
-    #       matchLabels: {k8s-app: kube-dns}
+    # -- The cluster DNS every egress policy's DNS rule (UDP/TCP 53) is
+    # limited to: the pods labelled `podLabels` in the namespace `namespace`
+    # (one peer, so both must match). The defaults are CoreDNS's, which k3s
+    # and most distributions label the same way. Change them for a cluster
+    # whose DNS pods are elsewhere or labelled differently.
+    dns:
+      # -- The namespace the DNS pods run in, matched on the
+      # kubernetes.io/metadata.name label.
+      namespace: kube-system
+      # -- Labels on the DNS pods.
+      podLabels:
+        k8s-app: kube-dns
+    # -- NetworkPolicyPeers that replace the `dns` peer wholesale when set,
+    # for a resolver the pod and namespace selectors can't name, e.g. NodeLocal
+    # DNSCache's link-local address:
+    #   - ipBlock: {cidr: 169.254.20.10/32}
+    # Empty (the default) uses `dns` above. Port 53 is never allowed to every
+    # destination unless a peer here says so.
     dnsPeers: []
     # -- TCP ports the public-internet rule allows. Each component also
     # gets the ports its own configured upstreams use, read from their

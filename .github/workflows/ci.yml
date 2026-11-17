@@ -264,6 +264,12 @@ jobs:
       - name: pod priority classes
         run: uv run --no-sync scripts/check-priority-class-chart.py
 
+      # Every egress policy's DNS rule (port 53) names the cluster DNS (kube-dns
+      # pods in kube-system by default, networkPolicy.egress.dns or dnsPeers
+      # to change it): none allows port 53 to every address (IAC-44).
+      - name: egress policies scope DNS
+        run: uv run --no-sync scripts/check-dns-netpol-chart.py
+
       # enricher.llm.provider (docs/enricher-anthropic.md): openai renders
       # the enricher as before; anthropic renders the Claude env, key Secret
       # and egress port, batch mode its knobs; bad combinations refuse.
@@ -2935,7 +2941,9 @@ jobs:
             if grep -q 'cidr: 0.0.0.0/0' <<<"${out}"; then fail "${c} must not reach the internet by default"; fi
           done
           out=$(egress_of redis "${eg}")
-          if grep -q 'podSelector' <<<"${out}"; then fail "redis egress must reach no pod"; fi
+          # The one podSelector is the DNS rule's kube-dns peer.
+          pods=$(grep -c 'podSelector' <<<"${out}" || true)
+          if [[ "${pods}" -ne 1 ]]; then fail "redis egress must reach no pod but the DNS pods"; fi
           out=$(egress_of api "${eg}")
           if grep -q 'component: api$' <<<"${out}"; then fail "api must not reach itself"; fi
           eg=$(render --set networkPolicy.egress.enabled=true \

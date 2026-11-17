@@ -3484,8 +3484,33 @@ true
 {{- end }}
 
 {{/*
+The NetworkPolicyPeer list every egress DNS rule (UDP/TCP 53) is limited to,
+so no policy allows port 53 to any address (IAC-44). networkPolicy.egress.dnsPeers,
+when set, replaces it wholesale (NodeLocal DNSCache: an ipBlock for its link-local
+address). Otherwise one peer, namespaceSelector and podSelector in the same
+entry so they are ANDed: the pods labelled networkPolicy.egress.dns.podLabels
+(k8s-app: kube-dns) in the namespace networkPolicy.egress.dns.namespace
+(kube-system). Takes root; renders a YAML list.
+*/}}
+{{- define "distant-signal.dnsPeers" -}}
+{{- $eg := .Values.networkPolicy.egress -}}
+{{- if $eg.dnsPeers -}}
+{{- toYaml $eg.dnsPeers -}}
+{{- else -}}
+{{- $ns := required "networkPolicy.egress.dns.namespace must not be empty (or set networkPolicy.egress.dnsPeers)" $eg.dns.namespace -}}
+{{- $labels := required "networkPolicy.egress.dns.podLabels must not be empty (or set networkPolicy.egress.dnsPeers)" $eg.dns.podLabels -}}
+- namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: {{ $ns | quote }}
+  podSelector:
+    matchLabels:
+      {{- toYaml $labels | nindent 6 }}
+{{- end -}}
+{{- end }}
+
+{{/*
 The NetworkPolicyEgressRule list for one component (render under
-`egress:`): DNS (port 53, to networkPolicy.egress.dnsPeers when set); the in-cluster services in `deps` (api, redis, postgres;
+`egress:`): DNS (port 53, to distant-signal.dnsPeers); the in-cluster services in `deps` (api, redis, postgres;
 api and idp also admit the bundled dev IdP when devAuthentik.enabled); the
 public internet (distant-signal.internetEgressRule, on the ports from
 distant-signal.internetPorts, which reads `urls`, `brokers` and `ports`)
@@ -3509,10 +3534,8 @@ Takes (dict "root" $root "component" "api" "deps" (dict "postgres" true)
       port: 53
     - protocol: TCP
       port: 53
-  {{- with $np.egress.dnsPeers }}
   to:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- include "distant-signal.dnsPeers" $root | nindent 4 }}
 {{- if $deps.api }}
 - to:
     - podSelector:
