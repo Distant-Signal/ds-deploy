@@ -1415,9 +1415,13 @@ cluster.
 | postgres | none | only with `postgresql.pgbackrest.enabled` (the repository's S3) |
 | redis | none | no |
 
-DNS goes to any destination on port 53 unless `networkPolicy.egress.dnsPeers`
-names the resolvers (e.g. CoreDNS: namespace `kube-system`, pods
-`k8s-app: kube-dns`; leave it empty with NodeLocal DNSCache).
+DNS goes only to the cluster DNS: pods labelled `k8s-app: kube-dns` in the
+`kube-system` namespace (one peer, both selectors must match), UDP and TCP
+port 53. Set `networkPolicy.egress.dns.namespace` and `.podLabels` for a
+cluster whose DNS pods differ, or `networkPolicy.egress.dnsPeers` to replace
+the peer wholesale (NodeLocal DNSCache: `- ipBlock: {cidr: 169.254.20.10/32}`).
+No policy allows port 53 to every destination; `scripts/check-dns-netpol-chart.py`
+checks it.
 
 The internet rule allows only TCP `networkPolicy.egress.internetPorts`
 (default 443) plus the ports each component's own upstreams use, read from
@@ -3680,7 +3684,9 @@ creates new per-pod series, so that clause fired on every rollout.
 | `networkPolicy.egress.privateCidrs` | RFC 1918, CGNAT, loopback, link-local, reserved | IPv4 ranges excluded from the public-internet egress allow. |
 | `networkPolicy.egress.privateCidrsV6` | loopback, ULA, link-local, multicast, NAT64/6to4/Teredo | IPv6 ranges excluded from the public-internet egress allow. |
 | `networkPolicy.egress.extraDeniedCidrs` | `[]` | More CIDRs (IPv4 and IPv6 mixed) excluded from the public-internet egress allow, on top of `privateCidrs`/`privateCidrsV6`. Set the nodes' own public addresses here. |
-| `networkPolicy.egress.dnsPeers` | `[]` | NetworkPolicy peers the DNS egress rule (port 53) is limited to, e.g. CoreDNS (`kube-system`, `k8s-app: kube-dns`). Empty allows port 53 to any destination. |
+| `networkPolicy.egress.dns.namespace` | `kube-system` | The namespace of the cluster DNS pods every egress DNS rule (UDP/TCP 53) is limited to, matched on `kubernetes.io/metadata.name`. |
+| `networkPolicy.egress.dns.podLabels` | `{k8s-app: kube-dns}` | Labels on the cluster DNS pods; ANDed with the namespace in one peer. |
+| `networkPolicy.egress.dnsPeers` | `[]` | NetworkPolicy peers that replace the `dns` peer wholesale when set, e.g. an `ipBlock` for NodeLocal DNSCache. Empty uses `dns`. |
 | `networkPolicy.egress.internetPorts` | `[443]` | TCP ports the public-internet egress rule allows. Each component also gets its own upstreams' ports (from their URLs, the Kafka brokers, the pgBackRest S3 port). `[]` allows every port. |
 | `networkPolicy.egress.extraRules` | `[]` | Extra NetworkPolicyEgressRule entries appended to every egress policy the chart renders. |
 | `networkPolicy.components` | `{}` | Per-component settings keyed by the `app.kubernetes.io/component` label (`api`, `postgres`, `poller-ldbws`, ...); an unknown key fails the render. Each entry: `egress` (`false` renders no egress policy for it), `internet` (add or drop its public-internet rule), `internetPorts` (replaces `egress.internetPorts` for it), `extraEgress` / `extraIngress` (raw NetworkPolicy rules appended to its policy). See [NetworkPolicy](#networkpolicy). |

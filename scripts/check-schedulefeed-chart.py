@@ -102,7 +102,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 import yaml
@@ -530,6 +530,12 @@ def sftp_service_selector(docs: Sequence[Doc]) -> dict[str, str]:
     return {}
 
 
+def only_dns_pods(rule: Mapping[str, object]) -> bool:
+    """Report whether a rule's `to` names only the cluster DNS pods (a podSelector)."""
+    peers = cast("list[dict[str, object]]", rule.get("to") or [])
+    return len(peers) == 1 and set(peers[0]) == {"namespaceSelector", "podSelector"}
+
+
 def check_split_policies(c: Checker, docs: Sequence[Doc]) -> None:
     """SFTP and telemetry ingress on the SFTP pod only; its egress is DNS."""
     policy = sftp_policy(docs)
@@ -551,7 +557,7 @@ def check_split_policies(c: Checker, docs: Sequence[Doc]) -> None:
         for port in cast("list[dict[str, object]]", rule.get("ports") or [])
     }
     c.check(
-        ok=len(egress) == 1 and not egress[0].get("to") and egress_ports == {53},
+        ok=len(egress) == 1 and egress_ports == {53} and only_dns_pods(egress[0]),
         message=f"split: schedulefeed-sftp egress is not DNS only: {egress}",
     )
     left = ingress_ports(schedulefeed_policy(docs)) & {SFTP_PORT, SFTP_TELEMETRY_PORT}
