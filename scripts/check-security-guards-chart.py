@@ -8,6 +8,9 @@
     render, naming every gap, unless networkPolicy and its egress policy,
     a Redis password with the narrow ACL, and per-service Postgres roles
     are on; the production example values satisfy it.
+  - With global.production, the SFTP receiver on a LoadBalancer with no
+    allowedCidrs fails the render unless acknowledged; without it, it
+    renders (a NOTES.txt warning only).
   - The api exposed by an Ingress with api.rateLimit.trustXRealIp, and a
     delegated client without a NetworkPolicy, fail the render unless
     acknowledged (neither is in the defaults or the production example).
@@ -66,6 +69,17 @@ UNISOLATED = sets(
     "redis.acl.enabled=false",
     "postgresql.roles.enabled=false",
     "postgresql.roles.perService.enabled=false",
+)
+SFTP = sets(
+    "scheduleFeed.enabled=true",
+    "scheduleFeed.sftp.authMethod=password",
+    "scheduleFeed.reference.mode=cronjob",
+)
+BUCKET_ONLY = sets(
+    "scheduleFeed.sftp.enabled=false",
+    "scheduleFeed.bucket.enabled=true",
+    "scheduleFeed.bucket.name=example-ds-ingest",
+    "scheduleFeed.bucket.existingSecret=distant-signal-schedulefeed-bucket",
 )
 INGRESS_API = sets(
     "ingress.enabled=true",
@@ -174,6 +188,33 @@ CASES: tuple[Case, ...] = (
     Case(
         "a disabled delegated client needs no NetworkPolicy",
         (*BASE, *DELEGATED, *sets("api.delegated.clients[0].enabled=false")),
+    ),
+    Case("an open SFTP LoadBalancer renders without global.production", (*BASE, *SFTP)),
+    Case(
+        "global.production refuses an open SFTP LoadBalancer",
+        (*BASE, *ISOLATED, *SFTP),
+        "scheduleFeed.sftp.allowedCidrs is empty",
+    ),
+    Case(
+        "global.production allows an SFTP LoadBalancer with allowedCidrs",
+        (
+            *BASE,
+            *ISOLATED,
+            *SFTP,
+            *sets("scheduleFeed.sftp.allowedCidrs[0]=192.0.2.0/24"),
+        ),
+    ),
+    Case(
+        "global.production allows an acknowledged open SFTP LoadBalancer",
+        (*BASE, *ISOLATED, *SFTP, *sets("scheduleFeed.sftp.allowAnySource=true")),
+    ),
+    Case(
+        "global.production allows bucket-only delivery",
+        (*BASE, *ISOLATED, *SFTP, *BUCKET_ONLY),
+    ),
+    Case(
+        "global.production allows a NodePort SFTP Service",
+        (*BASE, *ISOLATED, *SFTP, *sets("scheduleFeed.service.type=NodePort")),
     ),
     Case("the production example values satisfy global.production", PRODUCTION_EXAMPLE),
     Case(

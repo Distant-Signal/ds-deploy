@@ -1472,6 +1472,17 @@ once, unless:
   and `postgresql.roles.perService.enabled` are true
   ([docs/postgres-app-role.md](../../docs/postgres-app-role.md)).
 
+One more guard applies only with `global.production`: the SFTP receiver
+(`scheduleFeed.enabled` and `scheduleFeed.sftp.enabled`) on a LoadBalancer
+Service (`scheduleFeed.service.type`, the default) with
+`scheduleFeed.sftp.allowedCidrs` empty is open to every address, with SFTP
+authentication the only control. The render fails unless `allowedCidrs`
+lists the sender's ranges (with `externalTrafficPolicy: Local`, so the pod
+sees the real source), SFTP is off for bucket-only delivery
+(`scheduleFeed.sftp.enabled: false`) or `scheduleFeed.sftp.allowAnySource` is
+true. Without `global.production` it is a `NOTES.txt` warning only. A
+NodePort Service, which the production example uses, is not checked.
+
 [`values-production-example.yaml`](values-production-example.yaml) sets it
 and every control it needs, and `scripts/check-security-guards-chart.py`
 keeps that render passing. Turn it on in a deployment only after its values
@@ -3418,6 +3429,7 @@ one-pod layout.
 | `scheduleFeed.sftp.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `scheduleFeed.sftp.port` | `2022` | SFTP container and Service port. |
 | `scheduleFeed.sftp.allowedCidrs` | `[]` | See the networkPolicy table below. |
+| `scheduleFeed.sftp.allowAnySource` | `false` | Acknowledge an SFTP receiver on a LoadBalancer Service with `allowedCidrs` empty (open to every address). `NOTES.txt` warns about it; with `global.production` the render fails unless this is true. See "Production guards". |
 | `scheduleFeed.sftp.publicHostname` | `""` | Informational only: the public hostname pointed at the Service, shown in NOTES.txt with the other details to give the feed provider. |
 | `scheduleFeed.sftp.username` | `dtd-push` | The push account's username on this server. |
 | `scheduleFeed.sftp.authMethod` | `""` | `password` or `public-key`. No default: enabling without it fails the render. |

@@ -4205,6 +4205,9 @@ unchanged (chart README, "Production guards").
 {{- $gaps = append $gaps "postgresql.roles.perService.enabled is false: the services do not each get their own Postgres role" -}}
 {{- end -}}
 {{- end -}}
+{{- if and (include "distant-signal.sftpOpenToAnySource" .) (not $v.scheduleFeed.sftp.allowAnySource) -}}
+{{- $gaps = append $gaps "scheduleFeed.sftp.allowedCidrs is empty on a LoadBalancer SFTP Service: any address can reach the port. List the sender's ranges (needs scheduleFeed.service.externalTrafficPolicy: Local), turn scheduleFeed.sftp.enabled off for bucket-only delivery, or set scheduleFeed.sftp.allowAnySource=true" -}}
+{{- end -}}
 {{- if $gaps -}}
 {{- fail (printf "global.production is true, but the isolation controls are not all on:\n  - %s\nTurn each on (values-production-example.yaml shows them, docs/first-install.md the order), or leave global.production false." (join "\n  - " $gaps)) -}}
 {{- end -}}
@@ -4224,4 +4227,14 @@ templates/zz-security-guards.yaml (chart README, "Production guards").
 {{- if and (include "distant-signal.delegatedEnabled" .) (not $v.networkPolicy.enabled) (not $v.api.delegated.allowWithoutNetworkPolicy) -}}
 {{- fail "api.delegated.clients has an enabled client while networkPolicy.enabled is false. Nothing then limits who can reach the delegated listener, so any pod in the cluster could present a bearer and pick its own rate-limit key. Set networkPolicy.enabled=true (admit the caller with networkPolicy.apiExtraIngressNamespaces), or set api.delegated.allowWithoutNetworkPolicy=true if another control restricts the listener's port." -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+"true" when the SFTP receiver is published on a LoadBalancer with no source
+CIDR list, so any address can reach its port (authentication is then the
+only control). Used by NOTES.txt and, with global.production, the guards.
+*/}}
+{{- define "distant-signal.sftpOpenToAnySource" -}}
+{{- $s := .Values.scheduleFeed -}}
+{{- if and $s.enabled $s.sftp.enabled (eq (toString $s.service.type) "LoadBalancer") (not $s.sftp.allowedCidrs) -}}true{{- end -}}
 {{- end -}}

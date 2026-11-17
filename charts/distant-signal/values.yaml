@@ -5412,6 +5412,12 @@ scheduleFeed:
     # load balancer that preserves it); behind source NAT a non-empty list
     # blocks every push. See templates/networkpolicy.yaml.
     allowedCidrs: []
+    # -- Acknowledge an SFTP receiver open to every address: `enabled` on a
+    # LoadBalancer Service (`scheduleFeed.service.type`) with `allowedCidrs`
+    # empty. `NOTES.txt` warns about it, and with `global.production` the
+    # render fails unless this is true (or `allowedCidrs` lists the sender's
+    # range). SFTP authentication is then the only control on the port.
+    allowAnySource: false
     # -- Purely informational: the public hostname/DNS name an operator has
     # pointed at this Service's LoadBalancer, i.e. what actually gets
     # handed to DTD alongside the port/username/destination below. This
