@@ -35,7 +35,7 @@ header explains the format). The chart reads a vendored copy,
 | User | Kind | Narrow rights (summary) |
 |---|---|---|
 | `movement-relay` | client | `movement-events` and its dead-letter stream: XADD, XTRIM, XGROUP CREATE, XINFO, XLEN, XRANGE, EXISTS; INFO |
-| `trust-consumer`, `trust-backlog-consumer` | client | `movement-events`: XREADGROUP, XACK, XAUTOCLAIM, XCLAIM, XPENDING, XGROUP CREATE, XINFO, XLEN, XRANGE, EXISTS; the dead-letter stream: XADD, XLEN. No ingest stream (decision D1 for trust-consumer) |
+| `trust-consumer`, `trust-backlog-consumer` | client | `movement-events`: XREADGROUP, XACK, XAUTOCLAIM, XPENDING, XGROUP CREATE and SETID, XINFO, XLEN, XRANGE, EXISTS (no XCLAIM or XGROUP CREATECONSUMER: ds-core DS-534); the dead-letter stream: XADD, XLEN. No ingest stream (decision D1 for trust-consumer). The three movement consumers share one stream, so no rule keeps one out of another's group |
 | `full-coverage-consumer` | client | as above, plus XADD and XREVRANGE on `ds:ingest:full-coverage` (phase 3a) |
 | `enricher` | client | `incident-text-changed`: its consumer group commands |
 | `exporter` | client | read-only metrics commands (`INFO`, `CONFIG GET`, `CLIENT LIST`, `SLOWLOG`, `LATENCY`, `XINFO`, `SCAN`, `MEMORY USAGE`, `COMMAND INFO`, ...) |

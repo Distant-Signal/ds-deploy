@@ -292,7 +292,7 @@ narrows the roles from.
 | `distant_signal_api` | api pools | member of `distant_signal_app`; `read_shared`, `schema_gate` | (api.replicaCount + 1) × 16 + 2 = 34 |
 | `distant_signal_aggregator` | aggregator (and its archive pool) | member of `app`; `read_shared`, `schema_gate` | 10 (+ 2 archive) + 1 = 11 |
 | `distant_signal_enricher` | enricher | member of `app`; `schema_gate` | 5 + 1 = 6 |
-| `distant_signal_notifier` | notifier | member of `app`; `read_shared`, `schema_gate` | 5 + 1 = 6 |
+| `distant_signal_notifier` | notifier | member of `app`; `schema_gate` (its reads are granted table by table, ds-core DS-534) | 5 + 1 = 6 |
 | `distant_signal_read_shared` (NOLOGIN) | group | `SELECT` on every shared-train, ingest, derived and reference table | – |
 | `distant_signal_schema_gate` (NOLOGIN) | group | `SELECT` on `_sqlx_migrations` (the phase 1B schema gate) | – |
 
