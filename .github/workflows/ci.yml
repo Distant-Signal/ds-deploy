@@ -1959,7 +1959,23 @@ jobs:
             || fail "the audience must reach the api"
           grep -A1 -- '- name: TEST_AUTH_REQUIRED_GROUP' <<<"${dep}" | grep -q 'value: "ds-test"' \
             || fail "the group must reach the api"
-          render "${on[@]}" --show-only templates/networkpolicy.yaml >/dev/null
+          # The issuer joins the api's egress allowlist only while on: with
+          # the other upstreams on http and port 80 the only one allowed, its
+          # https port (443) appears in the api's egress rules only when on.
+          np=(
+            --set 'networkPolicy.egress.internetPorts={80}'
+            --set api.sso.issuerUrl=http://sso.example.com
+            --set api.tflArrivals.enabled=false
+            --set api.personalTokens.enabled=true
+            --show-only templates/networkpolicy.yaml
+          )
+          off=$(render "${np[@]}")
+          if grep -q 'port: 443' <<<"${off}"; then
+            fail "no test issuer port in the egress rules while off"
+          fi
+          egress_on=$(render "${np[@]}" --set api.testAuth.enabled=true)
+          grep -q 'port: 443' <<<"${egress_on}" \
+            || fail "the test issuer's port must join the api's egress rules while on"
 
           # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
           {
@@ -1973,6 +1989,9 @@ jobs:
             fi
             if render "${on[@]}" --set api.testAuth.requiredGroup= >/dev/null 2>&1; then
               fail "an empty group must fail the render"
+            fi
+            if render "${on[@]}" --set api.testAuth.audience= >/dev/null 2>&1; then
+              fail "an empty audience must fail the render"
             fi
           }
 
