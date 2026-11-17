@@ -9,6 +9,16 @@ name: Sync core
 # changed, commits and pushes them back to the same branch. CI then runs
 # on that commit and the PR can automerge when green.
 #
+# Two jobs, so the branch's code never sees the write token. `sync` has
+# read-only permissions and no App token: it checks the branch out without
+# persisting any credentials, runs scripts/sync-core.py (branch code, and
+# uv's locked dependencies) and hands the resulting diff of the vendored
+# paths over as an artifact. `push` runs none of the branch's code: it mints
+# the token, checks the same commit out, refuses a patch that touches
+# anything but the vendored paths (or adds a symlink), applies it and
+# pushes. The workflow's own permissions are none; each job asks for what
+# it needs.
+#
 # The push uses an installation token of the `ds-deploy-sync` GitHub App,
 # not GITHUB_TOKEN: a GITHUB_TOKEN push starts no workflows, so the
 # checks would never run on the new commit. The App:
@@ -37,27 +47,22 @@ concurrency:
   group: sync-core-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   sync:
     name: re-vendor ds-core's access files
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
     steps:
-      - name: Mint the ds-deploy-sync token
-        id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          app-id: ${{ secrets.DS_DEPLOY_SYNC_APP_ID }}
-          private-key: ${{ secrets.DS_DEPLOY_SYNC_PRIVATE_KEY }}
-          permission-contents: write
-
       - name: Checkout the Renovate branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.ref }}
-          token: ${{ steps.app.outputs.token }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Set up uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
@@ -73,25 +78,96 @@ jobs:
       - name: Re-vendor from the core-version release (verified)
         run: uv run --locked --no-default-groups scripts/sync-core.py
 
-      - name: Commit and push the vendored files
+      - name: The diff of the vendored files
+        id: patch
+        run: |
+          set -euo pipefail
+          git add -- charts/distant-signal/files scripts/render-redis-acl.py
+          if git diff --cached --quiet; then
+            echo "The vendored files already match core-version's release."
+            echo "changed=false" >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          mkdir "${RUNNER_TEMP}/sync-patch"
+          git diff --cached --binary >"${RUNNER_TEMP}/sync-patch/sync-core.patch"
+          echo "changed=true" >>"${GITHUB_OUTPUT}"
+
+      - name: Upload the patch
+        if: steps.patch.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sync-core-patch
+          path: ${{ runner.temp }}/sync-patch/sync-core.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  push:
+    name: push the vendored files
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-26.04
+    # The ds-deploy-sync App token below is the only credential; this job
+    # runs none of the branch's code.
+    permissions: {}
+    steps:
+      - name: Download the patch
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sync-core-patch
+          path: ${{ runner.temp }}/sync-patch
+
+      - name: Mint the ds-deploy-sync token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DS_DEPLOY_SYNC_APP_ID }}
+          private-key: ${{ secrets.DS_DEPLOY_SYNC_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Checkout the same commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Apply the patch (vendored paths only) and push it
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           SLUG: ${{ steps.app.outputs.app-slug }}
           BRANCH: ${{ github.ref_name }}
+          PATCH: ${{ runner.temp }}/sync-patch/sync-core.patch
         run: |
           set -euo pipefail
           if [[ ! "${BRANCH}" =~ ^renovate/ds-core ]]; then
             echo "::error::refusing to push to ${BRANCH}" >&2
             exit 1
           fi
-          if git diff --quiet; then
-            echo "The vendored files already match core-version's release."
-            exit 0
+          # Only the paths the sync owns, and no symlinks: the patch came
+          # from a job that ran the branch's code.
+          git apply --numstat -z "${PATCH}" >"${RUNNER_TEMP}/numstat"
+          tr '\0' '\n' <"${RUNNER_TEMP}/numstat" | cut -f3- >"${RUNNER_TEMP}/paths"
+          git apply --summary "${PATCH}" >"${RUNNER_TEMP}/summary"
+          while IFS= read -r path; do
+            case "${path}" in
+              charts/distant-signal/files/* | scripts/render-redis-acl.py) ;;
+              *)
+                echo "::error::the patch touches ${path}, outside the vendored files" >&2
+                exit 1
+                ;;
+            esac
+            [[ "${path}" != *..* ]] || {
+              echo "::error::${path} has a parent-directory part" >&2
+              exit 1
+            }
+          done <"${RUNNER_TEMP}/paths"
+          if grep -q 'mode 120000' "${RUNNER_TEMP}/summary"; then
+            echo "::error::the patch adds a symlink" >&2
+            exit 1
           fi
+          git apply --index "${PATCH}"
           user_id="$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)"
           git config user.name "${SLUG}[bot]"
           git config user.email "${user_id}+${SLUG}[bot]@users.noreply.github.com"
-          git add -- charts/distant-signal/files scripts/render-redis-acl.py
           version="$(cat core-version)"
           git commit -m "Vendor ds-core ${version}'s access files" \
             -m "scripts/sync-core.py, from the release's signed assets."

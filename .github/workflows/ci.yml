@@ -24,8 +24,7 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   # Reusable workflow_call from FasterSpeeding/Piped: runs actionlint over
@@ -33,6 +32,8 @@ jobs:
   # (checkout + one third-party action), no justfile dependency -- a clean
   # fit for validating the workflow files this change adds.
   actionlint:
+    permissions:
+      contents: read
     uses: FasterSpeeding/Piped/.github/workflows/lint-actions.yml@5bbddb5d32d5bde939b18f6c6bcfa0e36779412f # master @ 2026-09-01
 
   # Commit identity (repo split spec §5.10), Distant-Signal/ci's
@@ -42,12 +43,16 @@ jobs:
   # "Generated with Claude Code" footer). Other identities pass, outside
   # contributors included.
   commit-identity:
+    permissions:
+      contents: read
     uses: Distant-Signal/ci/.github/workflows/identity.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
 
   # Every LICENSE (the root one and both charts') is the canonical GNU AGPL
   # v3 text, byte for byte: the licence text is never distributed modified.
   # Distant-Signal/ci's licence.yml compares against a pinned SHA-256.
   licence:
+    permissions:
+      contents: read
     uses: Distant-Signal/ci/.github/workflows/licence.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
 
   # Distant-Signal/ci's scripts-lint.yml, strict by default:
@@ -66,12 +71,16 @@ jobs:
   # from the repository root, with a checkout of Distant-Signal/ci:
   #   uv run python <ci>/scripts/lint-scripts.py
   scripts-lint:
+    permissions:
+      contents: read
     uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@71cc611e1d6f647fa9018b46c9b022440b689187 # main
 
   # The chart checks, run with the pinned script tools (pyproject.toml's
   # `lint` group). They came from the monorepo's repo-checks job with the
   # chart (repo split spec §8.3).
   chart-checks:
+    permissions:
+      contents: read
     name: chart checks (policies, values reference, alerts, ordering, ds-core files)
     runs-on: ubuntu-26.04
     steps:
@@ -305,6 +314,8 @@ jobs:
   # operations, stream caps, Postgres roles and probe paths. A Renovate
   # image group whose service changed a default fails here.
   chart-config-contract:
+    permissions:
+      contents: read
     name: chart config contract (--print-config-defaults, pinned images)
     runs-on: ubuntu-26.04
     steps:
@@ -359,6 +370,8 @@ jobs:
   # must not render. No reusable workflow covers these; they are this
   # chart's own. Lint is helm-lint, above.
   chart-renders:
+    permissions:
+      contents: read
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
