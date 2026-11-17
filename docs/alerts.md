@@ -1322,6 +1322,38 @@ the user id), but a new user is created with neither and shows as
 application and that the api still requests the `profile` scope. Users
 created while it fired get their names at their next login after the fix.
 
+### DistantSignalAccountRekeyed
+
+Off by default (`metrics.prometheusRule.accountRekeyed.enabled`). The api
+re-keyed at least one account to a new login subject within the window:
+account continuity moved a user row (and its tokens, grants and pins) to
+the `sub` of a new login, matched by the ID token's Discord id or forwarded
+primary sub ([account continuity](https://github.com/Distant-Signal/ds-api/blob/main/docs/connected-apps.md)).
+It is expected only during an identity-provider migration window, when each
+user's first login through the new provider re-keys their account.
+
+Outside such a window, treat it as a possible account takeover: anyone who
+can set their own Discord id or primary sub claim at the identity provider
+can claim another user's account. Find the accounts in the api's audit lines
+(`event=account_rekeyed`, with `from_user_id`, `to_user_id`, `matched_by`
+and the counts of sessions, tokens and grants revoked; Loki keeps them
+longer than the pod):
+
+```sh
+kubectl -n <ns> logs deploy/<release>-api --since=24h \
+  | jq -c 'select(.event == "account_rekeyed")'
+```
+
+If it is not a migration: confirm with the account's owner, revoke the
+sessions and tokens of the new `sub`
+([session revocation](https://github.com/Distant-Signal/ds-api/blob/main/docs/session-revocation.md)),
+make the identity provider's Discord id and primary sub claims non-editable
+by users, and unset `api.sso.discordIdClaim` and `api.sso.primarySubClaim`
+once the migration is over. A re-key ends the account's other sessions but
+keeps its tokens and grants unless the api runs with
+`ACCOUNT_CONTINUITY_REVOKE_TOKENS_ON_REKEY`. Needs an api build that exports
+the counter; silent until then.
+
 ## bank holidays
 
 ### DistantSignalBankHolidaysStale

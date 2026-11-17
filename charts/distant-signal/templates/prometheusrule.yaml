@@ -54,6 +54,7 @@ so that clause fired on every rollout.
 {{- $archiveAlertOn := and ($rule.archiveUploadFailures).enabled .Values.archive.enabled }}
 {{- $signupSpikeOn := ($rule.userSignupSpike).enabled }}
 {{- $missingNamesOn := ($rule.loginMissingNameClaims).enabled }}
+{{- $rekeyedOn := ($rule.accountRekeyed).enabled }}
 {{- $bankHolidaysOn := and ($rule.bankHolidaysStale).enabled (dig "bankHolidays" "enabled" false .Values.api) }}
 {{- $archiveExpiryOn := and ($rule.archiveExpiry).enabled .Values.archive.enabled (.Values.archive.expiry).enabled }}
 {{- $postgresDownOn := ($rule.postgresDown).enabled }}
@@ -79,7 +80,7 @@ so that clause fired on every rollout.
 {{- $poolTimeoutsOn := ($rule.dbPoolAcquireTimeouts).enabled }}
 {{- $directWritesOn := ($rule.directWritesFailing).enabled }}
 {{- $feedMarkerOn := and ($rule.scheduleFeedMarkerStale).enabled .Values.scheduleFeed.enabled }}
-{{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $leaveByUnreachableOn $archiveAlertOn $signupSpikeOn $missingNamesOn $bankHolidaysOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
+{{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $leaveByUnreachableOn $archiveAlertOn $signupSpikeOn $missingNamesOn $rekeyedOn $bankHolidaysOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
 {{- $archiveHealthOn := and .Values.archive.enabled (or ($rule.archiveStale).enabled ($rule.archiveBatchChurn).enabled) }}
 {{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled }}
 {{- $darwinOn := and ($rule.darwinRelay).enabled .Values.darwinRelay.enabled }}
@@ -1858,7 +1859,7 @@ spec:
             runbook_url: {{ printf "%s#distantsignalschedulefeedmarkerstale" $runbook | quote }}
     {{- end }}
     {{- end }}
-    {{- if or $signupSpikeOn $missingNamesOn }}
+    {{- if or $signupSpikeOn $missingNamesOn $rekeyedOn }}
     - name: distant-signal.users
       rules:
     {{- end }}
@@ -1908,6 +1909,31 @@ spec:
             summary: "{{ "{{ $value | humanize }}" }} logins without name claims in {{ .window }}"
             description: "The IdP sent no name or username claim. Check its profile scope mapping for the Distant Signal application."
             runbook_url: {{ printf "%s#distantsignalloginmissingnameclaims" $runbook | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if $rekeyedOn }}
+    {{- with $rule.accountRekeyed }}
+        {{- /*
+        Account continuity (ds-api docs/connected-apps.md): a login whose
+        sub has no account took over an existing account, moving it to the
+        new sub. Expected only while an identity-provider migration is
+        running; otherwise it may be a takeover through a self-editable
+        continuity claim. The counter is api's, once per re-key, and is
+        registered at 0 when the api starts.
+        */}}
+        - alert: DistantSignalAccountRekeyed
+          expr: |
+            sum by (namespace) (increase({{ .metric }}{namespace="{{ $ns }}"}[{{ .window }}])) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "{{ "{{ $value | humanize }}" }} account(s) re-keyed to a new login in {{ .window }}"
+            description: "Expected only in an IdP migration window. Otherwise check the account_rekeyed audit lines for a takeover."
+            runbook_url: {{ printf "%s#distantsignalaccountrekeyed" $runbook | quote }}
     {{- end }}
     {{- end }}
     {{- if $bankHolidaysOn }}

@@ -7456,6 +7456,20 @@ metrics:
       threshold: 3
       for: 0m
       severity: warning
+    # DistantSignalAccountRekeyed: the api re-keyed at least one account to
+    # a new login subject within `window` (account continuity). Expected only
+    # while an identity-provider migration runs; otherwise it may be a
+    # takeover through a self-editable Discord id or primary sub claim.
+    # OFF by default: `metric` is api's counter and exists only in an api
+    # build that exports it (ds-api's account continuity), and the alert
+    # means nothing while continuity is off. Turn it on for the migration
+    # window, or permanently once the claims are unforgeable.
+    accountRekeyed:
+      enabled: false
+      metric: distant_signal_api_account_rekeys_total
+      window: 1h
+      for: 0m
+      severity: warning
     # DistantSignalArchiveUploadFailures: at least minFailures cold-archive
     # batch uploads (or their verification) failed within `window`. Renders
     # only when archive.enabled is also true.
