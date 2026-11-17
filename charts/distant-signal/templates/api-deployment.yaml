@@ -522,6 +522,18 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ dig "authFailure" "perMinute" 10 $ptLimits | quote }}
             - name: PERSONAL_TOKENS_RATE_AUTH_FAILURE_BURST
               value: {{ dig "authFailure" "burst" 10 $ptLimits | quote }}
+            {{- if include "distant-signal.testAuthEnabled" . }}
+            # Test credentials: see api.testAuth. Rendered only while on;
+            # off, the api's own default (false) applies.
+            - name: TEST_AUTH_ENABLED
+              value: "true"
+            - name: TEST_AUTH_ISSUER
+              value: {{ .Values.api.testAuth.issuerUrl | quote }}
+            - name: TEST_AUTH_AUDIENCE
+              value: {{ .Values.api.testAuth.audience | quote }}
+            - name: TEST_AUTH_REQUIRED_GROUP
+              value: {{ .Values.api.testAuth.requiredGroup | quote }}
+            {{- end }}
             - name: SCHEDULE_PROVISIONAL_AFTER_DAYS
               value: {{ .Values.api.scheduleProvisionalAfterDays | quote }}
             - name: TRIP_PLAN_GRAPH_CACHE_DATES

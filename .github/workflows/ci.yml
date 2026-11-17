@@ -1918,6 +1918,64 @@ jobs:
             fi
           }
 
+      # Test credentials (ds-api's docs/test-auth.md): off by default with
+      # no TEST_AUTH_* env at all; on, the four values reach the api, and
+      # the render fails without personal tokens or with another issuer.
+      - name: helm template (test credentials)
+        run: |
+          set -euo pipefail
+          base=(
+            -f charts/distant-signal/ci/ingest-prereqs.yaml
+            --set trustConsumer.kafka.brokers=kafka.example.com:9094
+            --set trustConsumer.kafka.topic=test-topic
+            --set trustConsumer.kafka.saslMechanism=PLAIN
+            --set enricher.llm.baseUrl=http://llm.example.com/v1
+            --set enricher.llm.model=test-model
+            --set api.sso.issuerUrl=https://sso.example.com
+            --set api.sso.clientId=test-client
+            --set api.sso.clientSecret=test-secret
+            --set api.sso.redirectUrl=https://app.example.com/callback
+            --set api.sso.postLoginRedirectUrl=https://app.example.com/
+            --set networkPolicy.enabled=true
+            --set networkPolicy.egress.enabled=true
+          )
+          on=(
+            --set api.personalTokens.enabled=true
+            --set api.testAuth.enabled=true
+          )
+          render() { helm template distant-signal charts/distant-signal "${base[@]}" "$@"; }
+          fail() { echo "$1" >&2; exit 1; }
+
+          out=$(render --set api.personalTokens.enabled=true)
+          if grep -q 'TEST_AUTH_' <<<"${out}"; then fail "no TEST_AUTH_* env by default"; fi
+
+          dep=$(render "${on[@]}" --show-only templates/api-deployment.yaml)
+          grep -A1 -- '- name: TEST_AUTH_ENABLED' <<<"${dep}" | grep -q 'value: "true"' \
+            || fail "the switch must reach the api"
+          grep -A1 -- '- name: TEST_AUTH_ISSUER' <<<"${dep}" \
+            | grep -q 'value: "https://ds-sso.cursed.solutions/application/o/distant-signal-test/"' \
+            || fail "the issuer must reach the api"
+          grep -A1 -- '- name: TEST_AUTH_AUDIENCE' <<<"${dep}" | grep -q 'value: "distant-signal-test"' \
+            || fail "the audience must reach the api"
+          grep -A1 -- '- name: TEST_AUTH_REQUIRED_GROUP' <<<"${dep}" | grep -q 'value: "ds-test"' \
+            || fail "the group must reach the api"
+          render "${on[@]}" --show-only templates/networkpolicy.yaml >/dev/null
+
+          # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion
+          {
+            if render --set api.testAuth.enabled=true >/dev/null 2>&1; then
+              fail "test credentials without personal tokens must fail the render"
+            fi
+            if render "${on[@]}" \
+              --set api.testAuth.issuerUrl=https://ds-sso.cursed.solutions/application/o/distant-signal/ \
+              >/dev/null 2>&1; then
+              fail "another issuer must fail the render"
+            fi
+            if render "${on[@]}" --set api.testAuth.requiredGroup= >/dev/null 2>&1; then
+              fail "an empty group must fail the render"
+            fi
+          }
+
       - name: helm template (api rollout strategy)
         run: |
           set -euo pipefail
