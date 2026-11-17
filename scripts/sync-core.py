@@ -60,6 +60,9 @@ ISSUER = "https://token.actions.githubusercontent.com"
 FILES = Path("charts/distant-signal/files")
 VALUES = Path("charts/distant-signal/values.yaml")
 CORE_GIT = f"https://github.com/{REPOSITORY}"
+# One vX.Y.Z tag (an optional suffix of letters, digits and hyphens): the
+# version goes into a download URL, so no slash, dot-dot or other URL syntax.
+VERSION = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z-]*")
 # values.yaml's top-level `migrate:` block, up to its image's tag line.
 MIGRATE_TAG = re.compile(
     r"^migrate:\n(?:(?:[ #].*|)\n)*?    tag: (?P<tag>\S+)$", re.MULTILINE
@@ -91,7 +94,7 @@ def identity(version: str) -> str:
 def read_version(root: Path) -> str:
     """Return core-version's version."""
     version = (root / VERSION_FILE).read_text(encoding="utf-8").strip()
-    if not version.startswith("v") or version.count(".") != 2:  # noqa: PLR2004
+    if not VERSION.fullmatch(version):
         msg = f"{VERSION_FILE} must hold one vX.Y.Z version, got {version!r}"
         raise AssetError(msg)
     return version

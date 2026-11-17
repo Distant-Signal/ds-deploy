@@ -158,6 +158,9 @@ class SyncCoreTest(unittest.TestCase):
         """core-version must be one vX.Y.Z."""
         (self.root / "core-version").write_text("main\n", encoding="utf-8")
         self.assertEqual(self.run_main()[0], 2)
+        for bad in ("v1.2.3/../../x", "v1.2.3\n../x", "v1..3", "v1.2.3?x=y"):
+            (self.root / "core-version").write_text(bad + "\n", encoding="utf-8")
+            self.assertEqual(self.run_main()[0], 2, bad)
 
 
 if __name__ == "__main__":
