@@ -6,3 +6,4 @@ stops at the first failure) and a values file with several gaps gets one
 message listing them all.
 */ -}}
 {{- include "distant-signal.productionGuards" . -}}
+{{- include "distant-signal.clientTrustGuards" . -}}

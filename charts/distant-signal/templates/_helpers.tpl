@@ -4210,3 +4210,18 @@ unchanged (chart README, "Production guards").
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Client-address trust: the guards that need no global.production. Renders
+nothing; fails on the first unacknowledged risk. Called from
+templates/zz-security-guards.yaml (chart README, "Production guards").
+*/}}
+{{- define "distant-signal.clientTrustGuards" -}}
+{{- $v := .Values -}}
+{{- if and $v.ingress.enabled $v.ingress.api.enabled $v.api.rateLimit.enabled $v.api.rateLimit.trustXRealIp (not $v.api.rateLimit.trustXRealIpIngressAcknowledged) -}}
+{{- fail "ingress.api.enabled is true while api.rateLimit.trustXRealIp is true. A request arriving through the Ingress carries whatever X-Real-IP its client sent, so it could choose its own rate-limit key. Set api.rateLimit.trustXRealIp=false (every request the frontend proxies then shares the frontend pod's bucket), or turn ingress.api.enabled off and route the public hostname to the frontend. If the ingress controller overwrites X-Real-IP itself, set api.rateLimit.trustXRealIpIngressAcknowledged=true." -}}
+{{- end -}}
+{{- if and (include "distant-signal.delegatedEnabled" .) (not $v.networkPolicy.enabled) (not $v.api.delegated.allowWithoutNetworkPolicy) -}}
+{{- fail "api.delegated.clients has an enabled client while networkPolicy.enabled is false. Nothing then limits who can reach the delegated listener, so any pod in the cluster could present a bearer and pick its own rate-limit key. Set networkPolicy.enabled=true (admit the caller with networkPolicy.apiExtraIngressNamespaces), or set api.delegated.allowWithoutNetworkPolicy=true if another control restricts the listener's port." -}}
+{{- end -}}
+{{- end -}}

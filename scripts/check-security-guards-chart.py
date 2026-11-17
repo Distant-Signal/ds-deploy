@@ -8,6 +8,9 @@
     render, naming every gap, unless networkPolicy and its egress policy,
     a Redis password with the narrow ACL, and per-service Postgres roles
     are on; the production example values satisfy it.
+  - The api exposed by an Ingress with api.rateLimit.trustXRealIp, and a
+    delegated client without a NetworkPolicy, fail the render unless
+    acknowledged (neither is in the defaults or the production example).
 
 Exit 1 with one line per failed check. Needs helm on PATH (or --helm).
 """
@@ -63,6 +66,19 @@ UNISOLATED = sets(
     "redis.acl.enabled=false",
     "postgresql.roles.enabled=false",
     "postgresql.roles.perService.enabled=false",
+)
+INGRESS_API = sets(
+    "ingress.enabled=true",
+    "ingress.frontend.host=ds.example.com",
+    "ingress.api.enabled=true",
+    "ingress.api.host=api.example.com",
+)
+DELEGATED = sets(
+    "api.delegated.clients[0].name=ds-mcp",
+    "api.delegated.clients[0].displayName=Assistant",
+    "api.delegated.clients[0].issuerUrl=https://sso.example.com/application/o/api/",
+    "api.delegated.clients[0].audience=distant-signal-api",
+    "api.delegated.clients[0].maxScopes={journeys:read}",
 )
 
 
@@ -124,6 +140,40 @@ CASES: tuple[Case, ...] = (
         "global.production needs per-service Postgres roles",
         (*BASE, *ISOLATED, *sets("postgresql.roles.perService.enabled=false")),
         "postgresql.roles.perService.enabled is false",
+    ),
+    Case(
+        "ingress.api with trustXRealIp refuses to render",
+        (*BASE, *INGRESS_API),
+        "ingress.api.enabled is true while api.rateLimit.trustXRealIp is true",
+    ),
+    Case(
+        "ingress.api with trustXRealIp renders when acknowledged",
+        (
+            *BASE,
+            *INGRESS_API,
+            *sets("api.rateLimit.trustXRealIpIngressAcknowledged=true"),
+        ),
+    ),
+    Case(
+        "ingress.api renders without trustXRealIp",
+        (*BASE, *INGRESS_API, *sets("api.rateLimit.trustXRealIp=false")),
+    ),
+    Case(
+        "a delegated client without a NetworkPolicy refuses to render",
+        (*BASE, *DELEGATED),
+        "api.delegated.clients has an enabled client while networkPolicy.enabled",
+    ),
+    Case(
+        "a delegated client renders when acknowledged",
+        (*BASE, *DELEGATED, *sets("api.delegated.allowWithoutNetworkPolicy=true")),
+    ),
+    Case(
+        "a delegated client renders with the NetworkPolicy on",
+        (*BASE, *DELEGATED, *sets("networkPolicy.enabled=true")),
+    ),
+    Case(
+        "a disabled delegated client needs no NetworkPolicy",
+        (*BASE, *DELEGATED, *sets("api.delegated.clients[0].enabled=false")),
     ),
     Case("the production example values satisfy global.production", PRODUCTION_EXAMPLE),
     Case(

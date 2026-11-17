@@ -1875,6 +1875,13 @@ api:
     #     enabled: true
     #     serviceGroup: srv-ds-mcp
     clients: []
+    # -- Acknowledge delegated clients without a NetworkPolicy. The chart
+    # refuses `clients` while `networkPolicy.enabled` is false: the
+    # delegated listener is meant to be reachable only from
+    # `networkPolicy.apiExtraIngressNamespaces`, and without a policy every
+    # pod in the cluster can present a bearer and choose its rate-limit key.
+    # Set true only when another control restricts the listener's port.
+    allowWithoutNetworkPolicy: false
     # -- The delegated listener's container port (DELEGATED_LISTEN_ADDR is
     # 0.0.0.0:<this>), and the port of its own ClusterIP Service,
     # <release>-api-delegated. Delegated bearers are accepted only on it:
@@ -1982,6 +1989,13 @@ api:
   rateLimit:
     enabled: true
     trustXRealIp: true
+    # -- Acknowledge `trustXRealIp` with `ingress.api.enabled`. The chart
+    # refuses that pair: a request that reaches the api through the Ingress
+    # carries whatever X-Real-IP its client sent, so it can pick its own
+    # rate-limit key and never be limited. Set true only when the ingress
+    # controller overwrites X-Real-IP itself (the same check as for
+    # `networkPolicy.tunnel.api`, which has no override).
+    trustXRealIpIngressAcknowledged: false
     login:           # /public/auth/login and /public/auth/callback
       perMinute: 10
       burst: 20

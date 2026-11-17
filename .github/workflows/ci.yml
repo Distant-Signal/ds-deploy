@@ -1805,7 +1805,7 @@ jobs:
             fail "the tunnel must not reach the delegated port"
           fi
           ing=$(render "${client[@]}" --set ingress.enabled=true --set ingress.frontend.enabled=false --set ingress.api.enabled=true \
-            --set ingress.api.host=api.example.com --show-only templates/ingress.yaml)
+            --set api.rateLimit.trustXRealIp=false --set ingress.api.host=api.example.com --show-only templates/ingress.yaml)
           if grep -q 'distant-signal-api-delegated' <<<"${ing}"; then fail "the Ingress must not route to the delegated Service"; fi
 
           # shellcheck disable=SC2310 # each render is expected to fail; that failure is the assertion

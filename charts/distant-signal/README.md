@@ -1477,6 +1477,23 @@ and every control it needs, and `scripts/check-security-guards-chart.py`
 keeps that render passing. Turn it on in a deployment only after its values
 render with it (`helm template ... --set global.production=true`).
 
+### Client-address trust
+
+These two guards apply whether or not `global.production` is on, and neither
+fires for the defaults or for the production example values:
+
+- `ingress.api.enabled` with `api.rateLimit.trustXRealIp` (the default) fails
+  the render, as `networkPolicy.tunnel.api` already did: a request through
+  the Ingress carries whatever `X-Real-IP` its client sent, so it picks its
+  own rate-limit key. Either set `trustXRealIp: false`, or, if the ingress
+  controller overwrites the header, set
+  `api.rateLimit.trustXRealIpIngressAcknowledged: true`.
+- An enabled `api.delegated.clients` entry with `networkPolicy.enabled` false
+  fails the render: the delegated listener relies on the NetworkPolicy to
+  admit only `networkPolicy.apiExtraIngressNamespaces`. Turn the policy on,
+  or set `api.delegated.allowWithoutNetworkPolicy: true` when another control
+  restricts the port.
+
 ## Distant-Signal-MCP as a service caller
 
 The Distant-Signal-MCP is a separate release (its own `ds-mcp` namespace)
@@ -2136,6 +2153,7 @@ release after, setting one fails the render:
 | `api.internalOauth.clientId` | `""` | **Required.** Expected `aud` claim on a verified token (the internal provider's client id; must differ from `api.sso.clientId`). |
 | `api.internalOauth.groups.mcp` | `srv-ds-mcp` | Authentik group of the Distant-Signal-MCP's service account, the only internal-token use left since release B removed `/private`: it only moves the MCP's public requests onto `api.rateLimit.mcp`. Empty turns that off. See "Distant-Signal-MCP as a service caller" below. |
 | `api.delegated.clients` | `[]` | Delegated access ([docs/connected-apps.md](https://github.com/Distant-Signal/ds-api/blob/main/docs/connected-apps.md)): the registered clients, sent to the api as `DELEGATED_CLIENTS` JSON. Each has `name`, `displayName`, `issuerUrl`, `audience`, `maxScopes`, `enabled` (default `true`; `false` is the kill switch) and `serviceGroup`. Empty (the default) turns the feature off: no delegated listener, no delegated Service, and every delegated bearer refused. |
+| `api.delegated.allowWithoutNetworkPolicy` | `false` | Allow enabled delegated clients while `networkPolicy.enabled` is false. The chart refuses that pair otherwise: nothing then limits who reaches the delegated listener. See "Production guards". |
 | `api.delegated.port` | `8082` | The delegated listener's port, published only by the `<release>-api-delegated` ClusterIP Service and admitted by the NetworkPolicy only from `networkPolicy.apiExtraIngressNamespaces`. The only port that accepts delegated bearers. Must differ from `api.service.port` and `metrics.port`. |
 | `api.delegated.dailySaveLimit` / `.dailyDeleteLimit` | `50` / `20` | Journeys one user's client may save, and delete, per rolling 24 hours (429 `daily_limit`). |
 | `api.delegated.revokedGrantRetentionDays` | `365` | Days a revoked grant is kept, as the record of when and why an app's access ended, before the hourly maintenance pass (api loop or `api-maintenance` CronJob) deletes it. |
@@ -2153,7 +2171,8 @@ release after, setting one fails the render:
 | `api.personalTokens.rateLimit.global.perMinute` / `.burst` | `1200` / `200` | Every token together, per pod. |
 | `api.personalTokens.rateLimit.authFailure.perMinute` / `.burst` | `10` / `10` | Failed authentications per client address; over it, 429 before any lookup. |
 | `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). |
-| `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off. |
+| `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off: the chart refuses the pair unless `trustXRealIpIngressAcknowledged`. |
+| `api.rateLimit.trustXRealIpIngressAcknowledged` | `false` | Allow `trustXRealIp` with `ingress.api.enabled`, for an ingress controller that overwrites `X-Real-IP` itself. See "Production guards". |
 | `api.rateLimit.login.perMinute` / `.burst` | `10` / `20` | Per client IP, `/public/auth/login` and `/public/auth/callback`. |
 | `api.rateLimit.tripPlan.perMinute` / `.burst` | `20` / `10` | Per client IP, `/Trips/plan`. |
 | `api.rateLimit.trainByUid.perMinute` / `.burst` | `120` / `60` | Per client IP, `/Train/by-uid/*`. |
