@@ -4872,7 +4872,7 @@ pollerIrishRailLive:
   # key-free, confirmed reachable directly
   # (docs/superpowers/specs/2026-09-05-ireland-vs-northern-ireland-friction-research.md
   # section 1; re-confirmed live during this crate's own implementation).
-  irishRailBaseUrl: "http://api.irishrail.ie/realtime/realtime.asmx"
+  irishRailBaseUrl: "https://api.irishrail.ie/realtime/realtime.asmx"
   # -- Conservative default: api.irishrail.ie's real rate limits/uptime are
   # unconfirmed (design spec section 8, open question 4), and this poller
   # samples every station getAllStationsXML returns (no line-catalogue
@@ -7750,7 +7750,7 @@ networkPolicy:
     # -- TCP ports the public-internet rule allows. Each component also
     # gets the ports its own configured upstreams use, read from their
     # URLs (an explicit port, else 443 for https and 80 for http: e.g.
-    # pollerIrishRailLive.irishRailBaseUrl is http), the Kafka brokers'
+    # pollerIrishRailLive.irishRailBaseUrl is https, so 443), the Kafka brokers'
     # ports (trust-consumer, full-coverage-consumer, movement-relay) and
     # postgresql.pgbackrest.repo.s3.port. Web Push, OIDC and the OAuth
     # token endpoint use 443. Override one component with

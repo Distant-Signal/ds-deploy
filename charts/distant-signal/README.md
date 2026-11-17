@@ -3165,7 +3165,7 @@ default; no API key needed.
 | `pollerIrishRailLive.image.digest` | `""` | Exact content digest (`sha256:...`). See `api.image.digest` above. |
 | `pollerIrishRailLive.image.source` | `https://github.com/Distant-Signal/ds-pollers` | Source repository, listed by `/public/version`. See `api.image.source` above. |
 | `pollerIrishRailLive.image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `pollerIrishRailLive.irishRailBaseUrl` | `http://api.irishrail.ie/realtime/realtime.asmx` | Irish Rail realtime service root (public, key-free). |
+| `pollerIrishRailLive.irishRailBaseUrl` | `https://api.irishrail.ie/realtime/realtime.asmx` | Irish Rail realtime service root (public, key-free). |
 | `pollerIrishRailLive.pollIntervalSecs` | `300` | Poll cadence. Conservative: the API's rate limits are unknown and every station is sampled. |
 | `pollerIrishRailLive.rollout` | `surge` | As `pollers.<name>.rollout`. |
 | `pollerIrishRailLive.stationCodesOverride` | `""` | Comma-separated station-code allowlist. Empty polls every station the API lists. |
