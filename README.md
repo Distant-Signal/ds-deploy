@@ -107,7 +107,10 @@ merge.
   image's `core-version` label is at most the pinned `ds-migrate`'s, the
   frontend's `api-build` at most the pinned api's, and every image at
   least the floor of any versioned contract migration in the pinned
-  `ds-core` release;
+  `ds-core` release; and, from `grant-floors.toml` (`--grant-floors`),
+  once the pinned `ds-migrate` carries a core that changed a service's
+  grants, that service's image is built against it too (the notifier
+  against ds-core v0.16.1 and v0.17.0);
 - the config defaults contract (`scripts/check-config-defaults-chart.py
   --images`): the chart against each pinned image's
   `--print-config-defaults`;

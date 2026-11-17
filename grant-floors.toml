@@ -1,0 +1,17 @@
+# Grant floors for release-order.py check --grant-floors (rule 4): once the
+# pinned ds-migrate's core-version is at least a floor's `core`, that
+# service's pinned image must carry a core-version of at least `core` too.
+# A service whose role lost a grant (or whose code needs a new one) fails its
+# schema gate on restart when its image predates the core that changed it.
+# Add an entry in the same change as the ds-core release that takes a grant
+# away from, or gives a new one to, a service.
+
+[[floor]]
+service = "notifier"
+core = "v0.16.1"
+reason = "ds-core#83 takes the notifier out of read_shared"
+
+[[floor]]
+service = "notifier"
+core = "v0.17.0"
+reason = "train_subscriptions.public_id column grant"

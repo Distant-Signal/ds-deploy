@@ -61,10 +61,23 @@ movement-relay client ~movement-events ~movement-events-deadletter +xadd +xtrim 
 # dead-letter stream (never XTRIM: the relay trims it). XGROUP SETID moves
 # their group forward again after a Redis restart reloaded an older
 # position (common::redis_group, 2026-10-09).
-trust-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|createconsumer +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen)
-trust-backlog-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|createconsumer +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen)
+#
+# No XCLAIM and no XGROUP CREATECONSUMER (DS-534, security assessment L16):
+# the code never sends either (XAUTOCLAIM takes over idle entries, and
+# XREADGROUP creates its consumer by itself), and both change a group's
+# pending list or consumers. (The XCLAIMs in the AOF are the server's own
+# rewrite of XREADGROUP, replayed as `default`, docs/redis-acl.md in ds-deploy.)
+#
+# What an ACL cannot do: the three consumers share `movement-events`, and a
+# Redis ACL names keys and subcommands, never a group. So each can still run
+# XGROUP SETID, XAUTOCLAIM, XACK or XREADGROUP against ANOTHER consumer's
+# group on that stream (SETID to `$` skips its entries, to `0` replays them).
+# Closing that needs a stream per group (the relay writing each event to
+# three streams): a code change, not a rule.
+trust-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xpending +xgroup|create +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen)
+trust-backlog-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xpending +xgroup|create +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen)
 # Plus its phase 3a stream (spec §7.1), with final rights now.
-full-coverage-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|createconsumer +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen) (~ds:ingest:full-coverage +xadd +xrevrange)
+full-coverage-consumer client ~movement-events +xreadgroup +xack +xautoclaim +xpending +xgroup|create +xgroup|setid +xinfo|stream +xinfo|groups +xlen +xrange +exists +ping +hello +auth +client|setname +client|setinfo +client|id (~movement-events-deadletter +xadd +xlen) (~ds:ingest:full-coverage +xadd +xrevrange)
 
 # enricher: crates/enricher/src/stream.rs (group `enricher` on
 # incident-text-changed). XGROUP SETID as for the movement-events consumers.
@@ -100,6 +113,6 @@ poller-transit-tfl optional ~ds:ingest:transit-tfl +xadd +xrevrange +ping +hello
 # drop the producers' entries (security review L7); XADD, the MINID XTRIM,
 # and the gauges' XLEN, XRANGE and MEMORY USAGE on ds:dlq:* only. (XGROUP
 # and XREADGROUP write the group's state, so the source streams stay `~`.)
-ingest-writer final ~ds:ingest:* +xreadgroup +xack +xautoclaim +xclaim +xpending +xgroup|create +xgroup|delconsumer +xinfo|stream +xinfo|groups +xinfo|consumers +xlen +memory|usage +ping +hello +auth +client|setname +client|setinfo +client|id (~ds:dlq:* +xadd +xtrim +xlen +xrange +memory|usage)
+ingest-writer final ~ds:ingest:* +xreadgroup +xack +xautoclaim +xpending +xgroup|create +xgroup|delconsumer +xinfo|stream +xinfo|groups +xinfo|consumers +xlen +memory|usage +ping +hello +auth +client|setname +client|setinfo +client|id (~ds:dlq:* +xadd +xtrim +xlen +xrange +memory|usage)
 
 ds-admin admin

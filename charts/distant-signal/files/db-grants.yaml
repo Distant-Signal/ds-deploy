@@ -107,9 +107,14 @@ roles:
     used_by: the enricher
   notifier:
     name: distant_signal_notifier
+    # Not in read_shared (DS-534, security assessment L16): every table it
+    # reads has its own grant below, so a table it never touches (line_status,
+    # incidents, the transit and island-of-Ireland feeds, ...) is not
+    # readable. A new table it needs is a grant on that table, in the same
+    # change as the code.
     status: narrow
     phase: "5"
-    groups: [read_shared, schema_gate]
+    groups: [schema_gate]
     connection_limit: 5
     used_by: the notifier
   writer:
@@ -336,10 +341,12 @@ tables:
   #     notifications_enabled, the pins: a leg's route falls back to them,
   #     DS-144), create_subscription_for_train's insert and re-enable, and
   #     the NULL-pin fill on its CIF enrichment (fill_route_into_subscribers),
-  #     and pin_origin_ref for an Irish push's "from" station (v0.4.0).
+  #     and pin_origin_ref for an Irish push's "from" station (v0.4.0),
+  #     and public_id (v0.17.0, DS-534) for the opaque ids in its push URLs
+  #     and tags.
   #   The writer's Irish history prune reads only trains_id (whether a
   #   train is tracked); the pin refs are the api's.
-  train_subscriptions: {class: personal, grants: {api: SIUD, writer: [{privileges: S, columns: [id, trains_id, service_date, resolution_status, unresolved_from, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_skipped_stations, pin_platform, pin_planned_platform]}, {privileges: U, columns: [resolution_status, unresolved_from, trains_id, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}], trust_backlog: [{privileges: S, columns: [id, trains_id, resolution_status, unresolved_from]}, {privileges: U, columns: [resolution_status, unresolved_from]}], trust_consumer: {privileges: S, columns: [id, trains_id]}, aggregator: {privileges: S, columns: [trains_id]}, notifier: [{privileges: S, columns: [id, user_id, trains_id, notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_origin_ref]}, {privileges: I, columns: [user_id, trains_id, service_date, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: U, columns: [notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}]}}
+  train_subscriptions: {class: personal, grants: {api: SIUD, writer: [{privileges: S, columns: [id, trains_id, service_date, resolution_status, unresolved_from, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_skipped_stations, pin_platform, pin_planned_platform]}, {privileges: U, columns: [resolution_status, unresolved_from, trains_id, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}], trust_backlog: [{privileges: S, columns: [id, trains_id, resolution_status, unresolved_from]}, {privileges: U, columns: [resolution_status, unresolved_from]}], trust_consumer: {privileges: S, columns: [id, trains_id]}, aggregator: {privileges: S, columns: [trains_id]}, notifier: [{privileges: S, columns: [id, user_id, trains_id, notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_origin_ref, public_id]}, {privileges: I, columns: [user_id, trains_id, service_date, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: U, columns: [notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}]}}
   # No UPDATE for anyone (security review L3): every writer inserts with
   # ON CONFLICT (trains_id, dedup_key) DO NOTHING. The conflict target
   # needs SELECT on its columns, so trust_consumer (outside read_shared)
@@ -440,8 +447,10 @@ tables:
   # station's live_code from island_of_ireland_live_stations
   # (ds_store::samples::island_of_ireland, migration 20261104120000).
   island_of_ireland_lines: {class: ingest, grants: {api: S, writer: SIUD}}
-  island_of_ireland_stations: {class: ingest, grants: {api: S, writer: SIU}}
-  island_of_ireland_live_stations: {class: ingest, grants: {api: S, writer: SIU}}
+  # notifier: S on both stations tables, an Irish train push's "from" name
+  # (queries.rs, station_code_from_ref).
+  island_of_ireland_stations: {class: ingest, grants: {api: S, writer: SIU, notifier: S}}
+  island_of_ireland_live_stations: {class: ingest, grants: {api: S, writer: SIU, notifier: S}}
   island_of_ireland_station_samples: {class: ingest, grants: {api: S, writer: SIU}}
   # Iarnród Éireann board history by train (migration 20261105120000):
   # the writer records it with each ioi-station-samples/1 apply and prunes
@@ -455,7 +464,7 @@ tables:
   # prune deletes old transit_feed_versions rows, and every versioned
   # table cascades from them (a cascade needs no grant), so the writer gets
   # no DELETE there. The api reads (batch 3); read_shared gives the
-  # aggregator and notifier SELECT too, which no code uses.
+  # aggregator SELECT too, which no code uses.
   transit_networks: {class: ingest, grants: {api: S, writer: SIU}}
   transit_feed_versions: {class: ingest, grants: {api: S, writer: SIUD}}
   transit_feed_parts: {class: ingest, grants: {api: S, writer: SI}}
@@ -503,7 +512,9 @@ tables:
   corpus_tiploc_crs: {class: derived, grants: {api: S, writer: SID, notifier: S, schedule_ingest: SID, schedule_reference: S}}
 
   # --- reference: stations, codes and schedule products.
-  stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S, schedule_ingest: S}}
+  # notifier: S, the display names in its pushes (queries.rs, leave_reminder.rs;
+  # ds_store::trains::cancellation).
+  stations: {class: reference, grants: {api: S, writer: S, stations: SIU, incidents: S, aggregator: S, schedule_ingest: S, notifier: S}}
   tocs: {class: reference, grants: {api: S, writer: SIU}}
   # TfL's Tube, DLR and tram stops (docs/superpowers/specs/2026-10-20-tfl-stop-lookup-design.md;
   # migration 20261020160000): the writer's tfl-stops/1 handler replaces
