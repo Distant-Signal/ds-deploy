@@ -5182,6 +5182,21 @@ pollerTransitSchedule:
       txcUrl: "ftp://ftp.tnds.co.uk/EM.zip"
       # -- The TXC download's byte cap (TRANSIT_TXC_MAX_BYTES; 400 MiB).
       txcMaxBytes: 419430400
+      # -- How an `ftp://` txcUrl is protected (TRANSIT_TXC_FTP_SECURITY,
+      # read by ds-pollers' poller-transit-schedule since ds-pollers#24):
+      # `plain` (no TLS; renders no variable), `explicit` (FTPS via AUTH
+      # TLS, plain FTP if the server answers 5xx) or `required` (FTPS or an
+      # error, before the login is sent). Raise it only once Traveline is
+      # confirmed to offer FTPS (docs/transit-networks.md in ds-pollers).
+      txcFtpSecurity: plain
+      txcFtpCa:
+        # -- A ConfigMap with extra CA certificates (PEM) to trust for the
+        # FTPS server, on top of the system's roots, mounted for
+        # TRANSIT_TXC_FTP_CA_FILE. Only with txcFtpSecurity explicit or
+        # required. Empty: the system's roots alone.
+        existingConfigMap: ""
+        # -- The ConfigMap key holding the PEM bundle.
+        key: ca.pem
       txcCredentials:
         # -- A Secret holding the TNDS (Traveline) FTP login, as
         # TRANSIT_TXC_USERNAME and TRANSIT_TXC_PASSWORD. Required while
