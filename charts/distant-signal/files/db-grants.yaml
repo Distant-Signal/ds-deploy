@@ -70,7 +70,7 @@ budget:
 # Roles postgres-roles.sql manages (docs/postgres-app-role.md), counted in
 # the budget only.
 other_roles:
-  owner: {name: distant_signal_owner, connection_limit: 2}
+  owner: {name: distant_signal_owner, connection_limit: 4}
   exporter: {name: distant_signal_exporter, connection_limit: 3}
   dump: {name: distant_signal_dump, connection_limit: 2}
   backup: {name: distant_signal_backup, connection_limit: 4}
