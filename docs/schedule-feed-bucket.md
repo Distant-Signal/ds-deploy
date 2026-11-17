@@ -22,15 +22,22 @@ ids, the publishers' service accounts, the budget) lives in Ranma-Config,
 never in this repository. Names in the later sections that read
 `example-project` or `example-ds-ingest` are placeholders for it.
 
-**Status (2026-11-16, DS-531):** the chart side and the schedule-ingest
-bucket source are built and in use. The chart default is still off
-(`scheduleFeed.bucket.enabled: false`, and `scheduleFeed.sftp.enabled:
-true`), so a stranger's install is unchanged; production overrides it.
-Production has had the bucket source on since chart `0.6.1_build.79`,
-against the bucket above in `workloadIdentity` mode. RDM/DTD now deliver
-the timetable and CORPUS to the bucket, not to SFTP, so the bucket is the
-live source. SFTP stays enabled for a week as a fallback only, then the
-steady state is chosen ([Adoption](#adoption-from-dss-side)). The reader
+**Status (2026-11-17, DS-534):** the chart side and the schedule-ingest
+bucket source are built and in use, and production runs bucket only.
+The chart default is unchanged (`scheduleFeed.bucket.enabled: false`, and
+`scheduleFeed.sftp.enabled: true`), so a stranger's install is SFTP only;
+production overrides both. Production has had the bucket source on since
+chart `0.6.1_build.79`, against the bucket above in `workloadIdentity`
+mode. RDM/DTD deliver the timetable and CORPUS only to
+`gs://ds-ingest-6769-schedule-feed`, so the bucket is the only delivery
+path, and production turned the SFTP receiver off on 2026-11-16
+(`scheduleFeed.sftp.enabled: false` in Ranma-Config): DS runs no SFTP
+server, and there is no SFTP fallback. Going back to SFTP takes both the
+value and RDM/DTD switching delivery back; the value alone restores the
+server, not the deliveries. With SFTP off the bucket alerts say there is
+no other source, and `DistantSignalScheduleBucketNoNewObject` is critical
+([alerts.md](alerts.md#schedule-bucket), and
+[Bucket-only alerts](#bucket-only-alerts) below). The reader
 is `schedule-ingest` in ds-api (`gcs.rs`): it uses `object_store`'s GCS
 client for the transfers, with a first-party
 `ExternalAccountTokenSource` (ds-core's
@@ -44,7 +51,8 @@ Ranma-Config's.
 ## Switching it on
 
 Each step is the previous one's prerequisite. Production has done all of
-them (see Status); this is the order for a new bucket. Project numbers,
+them and then turned SFTP off (see Status); this is the order for a new
+bucket alongside an existing SFTP feed. Project numbers,
 ids and emails live in Ranma-Config, never here.
 
 1. **Ranma: the Google project, keyless sign-in and the bucket.** The
@@ -82,7 +90,8 @@ ids and emails live in Ranma-Config, never here.
    logs `bucket source started`; an empty
    bucket is fine. `DistantSignalScheduleBucketAccessRevoked` firing means
    step 1's sign-in is not right yet; SFTP carries on regardless.
-4. **Verify both** for a week, as in [Adoption](#adoption-from-dss-side).
+4. **Verify both**, then choose the steady state, as in
+   [Adoption](#adoption-from-dss-side).
 
 ## The two switches
 
@@ -92,7 +101,7 @@ ids and emails live in Ranma-Config, never here.
 | --- | --- | --- |
 | `true` (default) | `false` (default) | SFTP only, as before. Nothing bucket-related renders |
 | `true` | `true` | Both. Each delivery arrives twice and is ingested once (deduplicated by SHA-256). When the two differ within `scheduleFeed.disagreementWindowMinutes`, `scheduleFeed.sourcePrecedence` decides (the bucket, D5) and `DistantSignalScheduleFeedSourcesDisagree` fires |
-| `false` | `true` | Bucket only. No `sftp` container, Service, NodePort, host keys, entrypoint or SFTP alerts: the cluster's only public listener goes away. The PVC and the `ingest`/`reference` containers stay |
+| `false` | `true` | Bucket only (production since 2026-11-16). No `sftp` container, Service, NodePort, host keys, entrypoint or SFTP alerts: the cluster's only public listener goes away. The PVC and the `ingest`/`reference` containers stay |
 | `false` | `false` | Refused: `scheduleFeed.enabled` with neither source fails the render |
 
 With the bucket on, the chart:
@@ -114,6 +123,33 @@ With the bucket on, the chart:
 The full value list is the chart README's "scheduleFeed: bucket source"
 table.
 
+### Bucket-only alerts
+
+The `distant-signal.schedule-bucket` group renders the same expressions
+whichever way `scheduleFeed.sftp.enabled` is set; with it `false` the chart
+changes only the following (`templates/prometheusrule.yaml`,
+[alerts.md](alerts.md#schedule-bucket) has the runbooks):
+
+| Alert | SFTP on | Bucket only |
+| --- | --- | --- |
+| `DistantSignalScheduleBucketAccessRevoked` | Critical; the description says SFTP carries on | Critical; the description says there is no other source, so no new timetable |
+| `DistantSignalScheduleBucketNoNewObject` | Warning (`scheduleBucket.severity`); the description points at PublishStale, as SFTP may still deliver | Critical (`scheduleBucket.noNewObjectSeverityBucketOnly`, default `critical`); the description says no new timetable is arriving |
+| `DistantSignalScheduleBucketReadErrors` | Warning; SFTP is unaffected | Warning; no other source delivers meanwhile |
+| `DistantSignalScheduleFeedSourcesDisagree` | Rendered | Not rendered: one source cannot disagree with itself |
+| `distant-signal.schedule-sftp` (`DistantSignalSftp*`) | Rendered with telemetry on | Not rendered |
+
+The rest do not depend on SFTP:
+`DistantSignalScheduleBucketNoNewObjectByKind` (warning, per `kind`, after
+`scheduleBucket.noNewObjectByKindHours`, default 30, once that kind has
+been seen; off with `noNewObjectByKindEnabled`),
+`DistantSignalScheduleBucketTokenExchangeFailing` (warning, keyless mode's
+non-revoked token-exchange failures with no success in
+`tokenExchangeWindow`; off with `tokenExchangeEnabled`),
+`DistantSignalScheduleBucketUnexpectedObject` (warning) and
+`DistantSignalScheduleBucketDownloadBudget` (critical). Bucket only,
+`DistantSignalScheduleReferencePublishStale` is the only backstop outside
+the bucket group.
+
 ## Adoption, from DS's side
 
 Steps 1–3 of the design's adoption plan (§12) are Ranma's: the project and
@@ -133,11 +169,15 @@ resources `READY`. Then:
    SFTP's, the audit log shows only the publisher's principals writing and
    the reader reading and deleting, and
    `DistantSignalScheduleReferencePublishStale` stays quiet.
-4. **Choose the steady state**, reversibly: both (the default), bucket
-   only, or SFTP only. Bucket only means `scheduleFeed.sftp.enabled: false`
+4. **Choose the steady state**: both, bucket only, or SFTP only. Bucket
+   only means `scheduleFeed.sftp.enabled: false`
    (see [schedule-feed-sftp.md](schedule-feed-sftp.md#alongside-the-bucket-source)).
+   Production chose bucket only on 2026-11-16, with RDM/DTD delivering to
+   the bucket alone.
 
-Each step is undone by flipping the value back.
+Each value is undone by flipping it back, but a source only receives what
+the publisher sends it: once RDM/DTD stop pushing over SFTP, turning SFTP
+back on brings no deliveries until they push there again.
 
 ## An object's life
 
