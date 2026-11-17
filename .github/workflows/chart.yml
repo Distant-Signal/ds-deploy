@@ -43,14 +43,15 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   # The release ordering checks against the pinned images' labels, read
   # anonymously from the registry as the cluster pulls, and the appVersion
   # for the packaged chart (`sha-<short sha>` of this commit).
   ordering:
+    permissions:
+      contents: read
     name: release ordering (the pinned images' labels)
     runs-on: ubuntu-26.04
     outputs:
