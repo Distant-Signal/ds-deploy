@@ -12,13 +12,11 @@
   // images everywhere; the rules below turn them back on, here only, for the
   // chart's first-party pins.
   //
-  // The preset is read from Distant-Signal/ci's default branch, so a change
-  // there reaches this repository's Renovate config (its schedules and rules)
-  // without a PR here. It is the organisation's own repository, behind the
-  // same review as this one, so it is trusted as it is. To freeze it, extend
-  // a commit instead (`...default.json5#<full commit sha>`) and bump that
-  // sha by hand when the preset changes.
-  "extends": ["github>Distant-Signal/ci//renovate/default.json5"],
+  // The preset is pinned to a Distant-Signal/ci commit, so a change there
+  // reaches this repository's Renovate config (its schedules and rules) only
+  // through a PR here that moves the sha. Bump it as Distant-Signal/ci's
+  // README ("Renovate preset") describes.
+  "extends": ["github>Distant-Signal/ci//renovate/default.json5#3315550e579c716eaf23501c06f76f90bb12c36b"],
 
   // Renovate decides on automerge itself, after every check on the branch
   // has passed. GitHub's own auto-merge would merge at once: the "Protect
