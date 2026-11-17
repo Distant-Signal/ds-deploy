@@ -1340,8 +1340,7 @@ and the counts of sessions, tokens and grants revoked; Loki keeps them
 longer than the pod):
 
 ```sh
-kubectl -n <ns> logs deploy/<release>-api --since=24h \
-  | jq -c 'select(.event == "account_rekeyed")'
+kubectl -n <ns> logs deploy/<release>-api --since=24h | grep account_rekeyed
 ```
 
 If it is not a migration: confirm with the account's owner, revoke the
