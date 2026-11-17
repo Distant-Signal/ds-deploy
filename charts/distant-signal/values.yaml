@@ -348,8 +348,8 @@ postgresql:
         existingSecret: ""
         # -- Key within `existingSecret` (and in the chart's Secret).
         existingSecretPasswordKey: postgres-enricher-password
-        # -- CONNECTION LIMIT. Empty: its pool (5) times its pods (1, plus
-        # any `enricher.updateStrategy` surge) plus 1.
+        # -- CONNECTION LIMIT. Empty: its pool (5) times its one pod
+        # (the enricher runs under Recreate only) plus 1.
         connectionLimit: ""
       notifier:
         # -- Password. Generated when empty (and no `existingSecret`).

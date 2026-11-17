@@ -2005,8 +2005,8 @@ jobs:
       # Rollout deadlock (2026-10-10, docs/ingest-phase5-runbook.md "Rollout
       # deadlock"): the Postgres workers that used the Deployment default
       # surge now default to Recreate (with `rollingUpdate: null` for
-      # server-side apply), and a <component>.updateStrategy surge counts in
-      # the per-service CONNECTION LIMIT: (replicas + maxSurge) x pool + 1.
+      # server-side apply), and singleConsumerGuard refuses any other
+      # strategy or more than one replica for the four consumer workers.
       - name: helm template (worker rollout strategy)
         run: |
           set -euo pipefail

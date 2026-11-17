@@ -2143,7 +2143,8 @@ RollingUpdate surge pod (maxSurge 1). Each has its own pool. Takes root.
 Rollout deadlock (2026-10-10): the `updateStrategy` of the Postgres
 workloads that used to take the Deployment default (RollingUpdate,
 maxSurge 25% = 1 pod, maxUnavailable 25% = 0): enricher, trustConsumer,
-fullCoverageConsumer and trustBacklogConsumer. Under a surge the new pod
+fullCoverageConsumer and trustBacklogConsumer. All four are now held to Recreate
+(distant-signal.singleConsumerGuard), so a surge never applies to them. Under a surge the new pod
 connects while the old one still holds its pool, so a per-service role
 sized for one pod (pool + 1) refuses the new pod's connections, its
 schema gate never passes, it never becomes Ready, and the old pod is never
@@ -2165,15 +2166,16 @@ consumer name ("trust-consumer-1", "full-coverage-consumer-1",
 "trust-event-backlog-1", "enricher-1"), and full-coverage-consumer keeps
 the day's stats in memory, so a second pod (another replica, or a
 RollingUpdate's new pod beside the old one) splits the stream between two
-copies of that state and corrupts the stats, and two pods contend for one consumer's pending
-entries. The backlog consumer and the enricher also track their consumer
+copies of that state and corrupts the stats, and two pods contend for one
+consumer's pending entries. The backlog consumer and the enricher also track their consumer
 group's delivered position in memory (ds-core's GroupCursor) to restore it
 after a Redis reload: a second pod's in-flight entries are invisible to the
 first pod's cursor, so it could restore the group past them and lose them.
 Only Recreate stops the old pod before the new one starts: a RollingUpdate,
 even with maxSurge 0, starts the new pod while the old one is still
 terminating. replicaCount 0 (stopped) is allowed (the backlog consumer and
-the enricher have no replicaCount: their Deployments are fixed at 1). Takes (dict "key" <values key> "replicas" <replicaCount> "type"
+the enricher have no replicaCount: their Deployments are fixed at 1). Takes
+(dict "key" <values key> "replicas" <replicaCount> "type"
 <updateStrategy.type>); renders nothing.
 */}}
 {{- define "distant-signal.singleConsumerGuard" -}}
