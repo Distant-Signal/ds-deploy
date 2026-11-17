@@ -105,6 +105,18 @@ RENDER_FLAGS = [
     "api.sso.redirectUrl=https://app.example.com/callback",
     "api.sso.postLoginRedirectUrl=https://app.example.com/",
     "metrics.prometheusRule.enabled=true",
+    # The alerts whose metrics are newer than the pinned images (off by
+    # default): the poller input-refusal and skip alerts, and the bucket
+    # reader's abandoned-object and audit-shipper alerts.
+    "metrics.prometheusRule.upstreamBodyCapExceeded.enabled=true",
+    "metrics.prometheusRule.upstreamRedirectRefused.enabled=true",
+    "metrics.prometheusRule.tflLineStatusSkipped.enabled=true",
+    "metrics.prometheusRule.transitSituationsSkipped.enabled=true",
+    "metrics.prometheusRule.stationsEntriesSkipped.enabled=true",
+    "metrics.prometheusRule.scheduleBucket.objectAbandonedEnabled=true",
+    "metrics.prometheusRule.scheduleBucket.auditAbandonedEnabled=true",
+    "scheduleFeed.bucket.auditLogs.ship=true",
+    "scheduleFeed.bucket.auditLogs.bucket=example-audit-logs",
     # DistantSignalNotifierLeaveByUnreachable (off by default, only with the
     # leave-by reminders).
     "notifier.leaveReminders.enabled=true",

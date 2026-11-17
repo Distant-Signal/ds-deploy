@@ -1,0 +1,20 @@
+# promtool unit tests for the abandoned-object alert with
+# scheduleFeed.sftp.enabled false (the bucket as the only feed source): the
+# expression is the same as with SFTP on (see ../hardening-metrics.yaml);
+# the severity is critical and the text says there is no other source.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_schedule_feed_source_unexpected_objects_total{namespace="distant-signal", pod="sf", source="bucket", reason="failed"}'
+        values: '0x5 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalScheduleBucketObjectAbandoned
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: distant-signal}
+            exp_annotations:
+              summary: Schedule-feed bucket object given up on
+              description: "An expected object kept failing verification and was abandoned. No other source: no new timetable until it is re-uploaded."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalschedulebucketobjectabandoned

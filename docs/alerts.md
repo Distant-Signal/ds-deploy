@@ -351,6 +351,16 @@ A consumer tried to dead-letter records but the stream is at its cap
 (`movement_feed_deadletter_full_total`). Those records stay pending and are
 retried forever until the stream is drained:
 [movement-events-deadletter](https://github.com/Distant-Signal/ds-ingest/blob/main/docs/movement-events-deadletter.md#deleting).
+The counter is per `group`: a group may hold at most half the cap, so one
+group's refused writes can start before the stream as a whole is full, and
+the other groups keep room. The stalled group's poison entry stays pending
+and it reads nothing newer, so treat it as an incident for that group's lag;
+[when it is full](https://github.com/Distant-Signal/ds-ingest/blob/main/docs/movement-events-deadletter.md#when-it-is-full-or-a-group-is-stalled-behind-it)
+has the steps. Newer consumers also export
+`movement_feed_deadletter_cap{stream}` (ds-ingest 5e78a3d), the cap the
+writes are refused at (10,000). It is informational: there is no alert on
+it, and [DistantSignalDeadLetterNearFull](#distantsignaldeadletternearfull)
+still divides by the constant 10,000.
 
 ### DistantSignalMovementRelayPublishFailing
 
@@ -508,6 +518,35 @@ provider's `request_id` where it sends one (OpenAI does); see
 means OpenAI answered 401 even to a freshly exchanged token: check that the
 OpenAI service account, its project and the mapping still exist and are
 enabled.
+
+### DistantSignalEnricherPrimaryErrors
+
+At least `enricherPrimaryErrors.minErrors` (5) primary extractions failed
+within `window` (1h) with the fallback outcome
+(`enricher_llm_call_total{call="primary", outcome="error"}`). `error` is what
+a failure gets when it is none of the typed outcomes
+(`timeout`, `rate_limited`, `http_error`, ...): an answer that is not the
+expected JSON, a connection lost mid-body, or, since ds-workers eae41b3, a
+`resolution_status` outside `ongoing`, `residual` and `resolved` (no stand-in
+value is safe, so the extraction fails and the sweep retries it). A few of
+these never cross [DistantSignalEnricherErrors](#distantsignalenricherrors)'s
+ratio, but those incidents stay unenriched.
+
+1. Enricher's log for the failing extractions: an "unrecognised
+   resolution_status" error means the model answered outside its schema
+   (a changed model alias or a provider-side change); a serde error means
+   an unreadable body.
+2. Check `enricher.llm.model` and the provider's status. See
+   [enricher-openai.md](https://github.com/Distant-Signal/ds-workers/blob/main/docs/enricher-openai.md#errors-and-what-the-enricher-does-with-them)
+   for the errors and what the enricher does with each.
+3. The sweep retries on its own once the model answers in schema; the
+   alert clears an hour after the last failure.
+
+A model-written `scope_description` that fails validation (a URL, markup,
+instruction-shaped text, or over the length cap) has no metric and no alert:
+enricher logs one warning ("primary extraction returned a scope description
+that failed validation; storing none"), stores no scope and carries on.
+Search the log for it if scope text goes missing from an incident.
 
 ### DistantSignalEnricherTokenExchangeFailing
 
@@ -1033,8 +1072,11 @@ which the writer reads every 60 s; recorded as
 it (an api route, a direct writer, a stream handler), the source's data has
 not landed for that long. Defaults: `incidents` and `tfl` 15 min (polled
 every 5 min), `stations` and `tocs` 2 days (daily), the stream-only sources
-(`station-samples`, `full-coverage-*`, `station-full-coverage-samples`) 30
-min, the island-of-Ireland catalogues 2 days (daily; one source per table
+(`station-samples`, `full-coverage-stats`, `full-coverage-window-stats`;
+written every minute or so) 30 min, `station-full-coverage-samples` 26 h
+(full-coverage-consumer sends it once a day, at rail-day close, 02:00 UTC,
+so its row is up to a day old by design; at 30 min it fired every night
+from about 02:30), the island-of-Ireland catalogues 2 days (daily; one source per table
 and network: `island_of_ireland_{stations,lines}_gtfs` from
 poller-irish-rail-gtfs, `_nir` from poller-nir-stations),
 `island_of_ireland_station_samples_live` 30 min (Iarnród Éireann's live
@@ -1245,7 +1287,9 @@ OOM.
 
 The writer clamped an observed time to its own `now() + 2 min`
 (`ingest_stream_observed_at_clamped_total{stream,schema}`; D13, spec §7.8)
-within `ingestClockSkew.window`. A producer stamped `produced_at` (or a row
+within `ingestClockSkew.window` (15m, firing on any clamp). A single clamp
+is a blip; a clamp in every window for hours is a producer whose clock is
+wrong, or one stamping times it should not (the Darwin handler clamps too). A producer stamped `produced_at` (or a row
 time) more than 2 minutes in the future: its node's clock is ahead of the
 writer's. The clamp keeps the ordering guard working (a row stamped in the
 future is overwritten by the next snapshot), so data is not blocked, but
@@ -1741,7 +1785,62 @@ An object with a name outside `scheduleFeed.bucket.expectedKeys`, over
 unread after `deleteMinAgeSecs` and stays recoverable from soft delete for
 7 days. To inspect it, restore it as in
 [schedule-feed-bucket.md](schedule-feed-bucket.md#restoring-a-deleted-object),
-and check the audit log for who wrote it.
+and check the audit log for who wrote it. With
+`scheduleBucket.objectAbandonedEnabled` on, `reason="failed"` is left out
+here and has its own alert below.
+
+### DistantSignalScheduleBucketObjectAbandoned
+
+The reader gave up on an expected object
+(`schedule_feed_source_unexpected_objects_total{reason="failed"}`) within
+`scheduleBucket.objectAbandonedWindow` (1h): it failed verification
+ten times (its size, CRC32C or MD5 did not match its metadata, or it has no
+CRC32C). Unlike the other reasons this is a real delivery that did not land,
+so the alert is the critical one when SFTP is off and nothing else
+delivers. The object is kept (the reader never deletes it; the bucket's
+7-day lifecycle rule does), is not downloaded again until the pod restarts
+or a new generation is uploaded, and is reported once. Only the object's own
+fault counts toward giving up: a transport, HTTP or token error, revoked
+access or a full disk never does, so an outage cannot trigger this (see
+[schedule-feed-bucket.md](schedule-feed-bucket.md#giving-up-on-an-object)).
+
+1. schedule-ingest's log: the "giving up on a bucket object that keeps
+   failing verification" line names the object (escaped, truncated), its
+   size and generation.
+2. Ask the publisher to re-upload it. A new generation is fetched on the
+   next poll; the alert needs no action once the new copy lands.
+3. Without a re-upload, a restart of schedule-ingest tries the same
+   generation again. If the failure was in our reading, not the object,
+   that is the way to recover it.
+4. Compare the audit log's `storage.objects.create` for the object with the
+   size the publisher sent: a persistent mismatch is the publisher's
+   upload, not DS.
+
+Rendered only with `scheduleBucket.objectAbandonedEnabled` (off by default:
+the label needs a schedule-ingest image from ds-api a1dd44d).
+
+### DistantSignalScheduleBucketAuditAbandoned
+
+The audit-log shipper gave up on a file in the audit-log bucket
+(`schedule_feed_bucket_audit_errors_total{kind="abandoned"}`) within
+`scheduleBucket.auditAbandonedWindow` (1h): five failures against that
+file, counting a verification failure (CRC32C) or a failure while other
+files of the same poll shipped. Its entries are not shipped to Loki, and
+the file is recorded as shipped so it is not fetched again. Only the
+audit trail is lost: deliveries and the reader are unaffected.
+
+1. schedule-ingest's log at error level: "giving up on an audit-log file
+   that keeps failing" names the file and its last error kind.
+2. The other `kind` values on the same counter
+   (`auth`, `list`, `get`, `verify`, `parse`) say why it failed.
+3. To recover the entries, read the file from the audit-log bucket
+   directly, or remove its name from
+   `/data/schedule-feed/sources/bucket/.audit-shipped` and restart
+   schedule-ingest to ship it again (`insert_id` tells copies apart).
+
+Rendered only with `scheduleBucket.auditAbandonedEnabled` and
+`scheduleFeed.bucket.auditLogs.ship` (off by default: the kind needs a
+schedule-ingest image from ds-api af0c390).
 
 ### DistantSignalScheduleBucketDownloadBudget
 
@@ -1945,6 +2044,111 @@ two branches lie close. The api also logs one warning an hour per pod
 `reason="stop"` (a stop a line's routes do not pass, such as a new stop)
 does not alert.
 
+The next five are off by default: their metrics are newer than the pinned
+poller images (`metrics.prometheusRule.<name>.enabled`, turned on in the
+pull request that bumps the pins past the ds-pollers commit named in
+`values.yaml`).
+
+### DistantSignalUpstreamBodyCapExceeded
+
+A poller refused an upstream response body that grew past its cap, within
+`upstreamBodyCapExceeded.window` (1h)
+(`upstream_body_cap_exceeded_total{feed}`; `feed` is the poller's feed:
+`tocs`, `incidents`, `tfl`, `stations`, `ldbws`, `nir-stations` or
+`irish-rail-live`). `poller-http`'s `read_capped` fails the read either on a
+declared length over the cap or as the stream passes it, so the cycle
+fails and nothing is stored from it. Real feeds sit far under their caps,
+so this is an upstream that changed shape (a new, much larger payload, or an
+error page), or something hostile.
+
+1. The poller's log: an error-level "upstream response body exceeded its
+   cap" with the `feed` and `cap`.
+2. `DistantSignalPollerFailing` or `DistantSignalPollerStale` for the same
+   poller usually follow; the data goes stale until the cap is met.
+3. Fetch the upstream by hand (from a throwaway pod, not the poller's) and
+   look at its size and content. If the feed legitimately grew, the cap is
+   a ds-pollers change; if it is an error page or an unexpected host, leave
+   it capped and tell the provider.
+
+### DistantSignalUpstreamRedirectRefused
+
+An upstream answered a poller with a 3xx and the poller did not follow it
+(`upstream_redirect_refused_total{feed}`) within
+`upstreamRedirectRefused.window` (1h). The pollers never follow redirects:
+a followed one could send an authenticated request, or an in-cluster
+fetch, somewhere the operator never chose. The cycle fails with "upstream
+answered 3xx, a redirect that was not followed" and the `Location` is
+deliberately not logged.
+
+1. The poller's warning "upstream answered with a redirect that was not
+   followed" gives the `feed` and the status.
+2. Usually the provider moved the endpoint (301/308): update the feed's
+   `baseUrl` (or its Secret) to the new address and roll the poller. Check
+   the new address first; do not paste one a redirect handed you without
+   confirming it with the provider.
+3. A redirect from an endpoint that never moved, to a host you don't
+   recognise, is worth raising with the provider.
+
+### DistantSignalTflLineStatusSkipped
+
+poller-tfl found malformed line status entries in TfL's answer within
+`tflLineStatusSkipped.window` (1h)
+(`tfl_line_status_skipped_total{outcome}`). `outcome` says what became of
+the affected lines: `carried_forward` (the last good report for the line
+stood in, so the line shows slightly old status) or `refused` (the whole
+snapshot was not published, so every line's status ages until a clean
+cycle). The counter is created at the first skip, so the first one on a
+pod is invisible to `increase()`; a repeating entry counts from its second
+cycle.
+
+1. poller-tfl's log: "malformed TfL line status entries; their lines keep
+   their last status" lists the lines carried forward. A `refused` cycle
+   logs its error instead, naming why the snapshot was not published.
+2. `refused` for more than a cycle or two also trips
+   [DistantSignalPollerStale](#distantsignalpollerstale): check the
+   line-status freshness.
+3. A TfL schema change shows as every entry skipped: compare a raw answer
+   with the parser in `crates/poller-tfl` and release a fix.
+
+### DistantSignalTransitSituationsSkipped
+
+poller-transit-schedule skipped SIRI-SX situations whose time it could not
+read within `transitSituationsSkipped.window` (1h)
+(`transit_situations_skipped_total{network,owner}`; `owner` is `network` for
+the network's own situations, `other` for another operator's in the shared
+file). A skipped situation shows on no line. The counter is created at the
+first skip, so the first one on a pod is invisible to `increase()`.
+
+1. The poller's warning "skipped the network's situations with an
+   unreadable time" lists the network's own situations. Another operator's
+   are only counted, not logged.
+2. `owner="other"` is another operator's bad data and rarely ours to fix;
+   `owner="network"` is the network's feed, so tell the operator.
+3. Every situation skipped at once means the feed's time format changed:
+   fix the parser in `crates/poller-transit-schedule`. See
+   [transit-networks.md](https://github.com/Distant-Signal/ds-pollers/blob/main/docs/transit-networks.md)
+   for the rollout and recovery steps.
+
+### DistantSignalStationsEntriesSkipped
+
+poller-stations skipped station entries within
+`stationsEntriesSkipped.window` (26h, one daily cycle)
+(`poller_stations_skipped_entries_total{reason}`) instead of failing the
+batch. `malformed`: not a station object it can read (a missing `crsCode`,
+say). `invalid_crs`: a `crsCode` that is not three ASCII letters or digits
+once trimmed, which would have failed the whole write (`stations.crs` is
+`CHAR(3)`). The other stations load; the skipped ones keep their previous
+rows, or have none. The counter is created at the first skip, so the first
+one on a pod is invisible to `increase()`; the daily cycle repeats it.
+
+1. poller-stations' log: "skipping station entry" with the station's raw
+   JSON.
+2. `invalid_crs` for a real station: the upstream list has a typo or a new
+   code format; check it against the rail data and, if it is ours to
+   handle, change the parser.
+3. Many entries at once is an upstream schema change: compare a raw answer
+   with `crates/poller-stations/src/schema.rs`.
+
 ## Darwin Push Port (darwin-relay)
 
 Rendered only with `darwinRelay.enabled` (DS-152; docs/darwin-pushport.md).
@@ -2008,6 +2212,29 @@ older image. A failed lookup of the committed offsets is counted in
   switch back to `earliest` unless the replay itself is the problem.
 - Check the relay's log around the reset for how long it had been down
   or failing to commit, and why.
+
+### DistantSignalDarwinRecordMalformed
+
+darwin-relay skipped a Kafka record it could not decode within
+`darwinRelay.malformed.window` (15m)
+(`darwin_relay_records_total{outcome="malformed"}`). The record is not
+gzip or JSON of the Push Port shape, or it gunzips to more than the relay's
+cap (8 MiB from ds-ingest 6379550; the pinned image's cap is larger). The
+relay logs it at error level with its partition and offset, commits the
+offset and moves on, so that record is lost, not retried. One now and then
+is a bad message from the publisher; a steady run is the wrong topic or a
+format change, and Push Port data goes stale
+([DistantSignalDarwinPushPortStale](#distantsignaldarwinpushportstale)
+follows).
+
+1. `kubectl logs deploy/distant-signal-darwin-relay | grep "cannot be decoded"`:
+   the `error` says which: a gzip or JSON error, or "decodes to more than N
+   bytes".
+2. `outcome="xml"` rising too means the topic in the Secret is the XML
+   topic, not the JSON one.
+3. A real message over the cap is not expected (an update is a few KB, a
+   snapshot fragment a few MB): ask the publisher before raising it, which
+   is a ds-ingest change.
 
 ## pgBackRest
 

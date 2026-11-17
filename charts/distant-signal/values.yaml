@@ -6797,7 +6797,12 @@ metrics:
         station-samples: 1800
         full-coverage-stats: 1800
         full-coverage-window-stats: 1800
-        station-full-coverage-samples: 1800
+        # Daily: full-coverage-consumer's station samples reach the writer
+        # once a day, at rail-day close (02:00 UTC), so the row is up to a
+        # day old by design. 26 h (a day and 2 h of slack); at 1800 it fired
+        # every night from ~02:30 until the next 02:00. The line and window
+        # stats above are written every minute and keep 1800.
+        station-full-coverage-samples: 93600
         island_of_ireland_stations_gtfs: 172800
         island_of_ireland_lines_gtfs: 172800
         island_of_ireland_stations_nir: 172800
@@ -6866,6 +6871,12 @@ metrics:
     # darwinRelay.kafka.autoOffsetReset. A brand-new consumer group counts
     # one no_committed_offset per partition on its first start. Exported
     # since ds-ingest 662fe534; inert on an older image.
+    #
+    # DistantSignalDarwinRecordMalformed: the relay skipped a record it could
+    # not decode within `window`
+    # (distant_signal_darwin_relay_records_total{outcome="malformed"}): not
+    # gzip or JSON, or over its gunzip cap (8 MiB from ds-ingest 6379550). The
+    # skipped record's offset is committed, so it is lost.
     darwinRelay:
       enabled: true
       stale:
@@ -6878,6 +6889,9 @@ metrics:
         severity: warning
       offsetReset:
         window: 30m
+        severity: warning
+      malformed:
+        window: 15m
         severity: warning
     # DistantSignalDbPoolAcquireTimeouts: a component's Postgres pool timed
     # out handing out a connection (distant_signal_db_pool_acquire_timeouts_total,
@@ -7107,6 +7121,20 @@ metrics:
       minErrors: 3
       for: 15m
       severity: warning
+    # DistantSignalEnricherPrimaryErrors: at least minErrors primary
+    # extractions failed with outcome "error" over `window`
+    # (distant_signal_enricher_llm_call_total{call="primary", outcome="error"}:
+    # the fallback outcome, e.g. an unreadable answer or, since ds-workers
+    # eae41b3, a resolution_status outside its set). Few enough not to cross
+    # enricherErrors' ratio, many enough to leave incidents unenriched. Only
+    # while enricher.enabled. A scope_description that fails validation is a
+    # log line only, with no metric and no alert. Runbook: docs/alerts.md.
+    enricherPrimaryErrors:
+      enabled: true
+      window: 1h
+      minErrors: 5
+      for: 0m
+      severity: warning
     # DistantSignalEnricherTokenExchangeFailing: in a workload identity mode
     # (enricher.llm.auth), at least minFailures token requests to one stage
     # (authentik, openai or anthropic) failed over `window` with none
@@ -7218,6 +7246,54 @@ metrics:
     transitUnmappedLineRef:
       enabled: true
       window: 1h
+      severity: warning
+    # The next five are OFF by default: their metrics exist from the
+    # ds-pollers commits named below, newer than the pinned poller images
+    # (a9147ee3). Turn each on in the pull request that bumps the pins past
+    # that commit, then check the series exist before relying on it.
+    # DistantSignalUpstreamBodyCapExceeded: a poller refused an upstream
+    # response over its read cap within `window`
+    # (distant_signal_upstream_body_cap_exceeded_total{feed}; ca4838e).
+    upstreamBodyCapExceeded:
+      enabled: false
+      window: 1h
+      for: 0m
+      severity: warning
+    # DistantSignalUpstreamRedirectRefused: an upstream answered with a
+    # redirect the poller did not follow, within `window`
+    # (distant_signal_upstream_redirect_refused_total{feed}; ca4838e).
+    upstreamRedirectRefused:
+      enabled: false
+      window: 1h
+      for: 0m
+      severity: warning
+    # DistantSignalTflLineStatusSkipped: poller-tfl skipped malformed line
+    # status entries within `window`
+    # (distant_signal_tfl_line_status_skipped_total{outcome}; fc20ea4). Only
+    # while pollers.tfl.enabled.
+    tflLineStatusSkipped:
+      enabled: false
+      window: 1h
+      for: 0m
+      severity: warning
+    # DistantSignalTransitSituationsSkipped: poller-transit-schedule skipped
+    # SIRI-SX situations with an unreadable time within `window`
+    # (distant_signal_transit_situations_skipped_total{network, owner};
+    # c172e57). Only while a pollerTransitSchedule network is enabled.
+    transitSituationsSkipped:
+      enabled: false
+      window: 1h
+      for: 0m
+      severity: warning
+    # DistantSignalStationsEntriesSkipped: poller-stations skipped station
+    # entries within `window`
+    # (distant_signal_poller_stations_skipped_entries_total{reason};
+    # 34b6ee9). A daily poller: 26h spans one cycle. Only while
+    # pollers.stations.enabled.
+    stationsEntriesSkipped:
+      enabled: false
+      window: 26h
+      for: 0m
       severity: warning
     # DistantSignalTflRoutesMissing (DS-187): the api planned a TfL stop end
     # on a line with no routes loaded, within `window`
@@ -7544,6 +7620,24 @@ metrics:
       readErrorsFor: 15m
       # DistantSignalScheduleBucketUnexpectedObject.
       unexpectedWindow: 1h
+      # DistantSignalScheduleBucketObjectAbandoned: an expected object failed
+      # verification (size, CRC32C or MD5 mismatch, or no CRC32C) ten times
+      # and the reader gave up on it
+      # (..._unexpected_objects_total{reason="failed"}; transport, HTTP,
+      # token and disk errors never count toward giving up). Critical (not
+      # `severity`) with scheduleFeed.sftp.enabled false. While on, the
+      # UnexpectedObject alert leaves that reason out. OFF by default: the
+      # reason label exists from ds-api a1dd44d, newer than the pinned
+      # schedule-ingest image; turn it on in the pull request that bumps it.
+      objectAbandonedEnabled: false
+      objectAbandonedWindow: 1h
+      # DistantSignalScheduleBucketAuditAbandoned: the audit-log shipper
+      # gave up on a file after five failures
+      # (distant_signal_schedule_feed_bucket_audit_errors_total{kind="abandoned"}).
+      # Only with auditLogs.ship. OFF by default: the kind exists from ds-api
+      # af0c390, newer than the pinned schedule-ingest image.
+      auditAbandonedEnabled: false
+      auditAbandonedWindow: 1h
       # DistantSignalScheduleFeedSourcesDisagree (both sources on).
       disagreeWindow: 1d
       severity: warning
