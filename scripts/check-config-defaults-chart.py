@@ -324,8 +324,15 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "SCHEDULE_LINE_POPULATION_RETENTION_DAYS": no_value("aggregator"),
     },
     "api": {
+        # Read by the api image pinned for Deploy 1; no chart value yet, so
+        # the default applies and api.extraEnv overrides it.
+        "ACCOUNT_CONTINUITY_REQUIRE_STRONG_MATCH": no_value("api"),
+        "ACCOUNT_CONTINUITY_REVOKE_TOKENS_ON_REKEY": no_value("api"),
+        "API_RATE_LIMIT_TRUSTED_PROXIES": no_value("api"),
+        "DARWIN_STOPS_FALLBACK_ENABLED": no_value("api"),
         "LINES_DIR": LINES,
         "SCHEDULE_MATCH_INTERVAL_SECS": "unwired on purpose (its doc in config.rs)",
+        "SESSION_RECENT_LOGIN_MINUTES": no_value("api"),
         "SSO_DISCORD_ID_CLAIM": ahead_of_image(
             "api.sso.discordIdClaim", "distant-signal#192, ds-core v0.1.1"
         ),
@@ -357,9 +364,11 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
                 "GLOBAL_BURST",
             )
         },
+        "TRUST_STOPS_FALLBACK_ENABLED": no_value("api"),
     },
     "darwin-relay": {
         "DARWIN_STREAM_MAXLEN": no_value("darwinRelay"),
+        "KAFKA_ALLOW_INSECURE_PROTOCOL": no_value("darwinRelay"),
         "KAFKA_COMMIT_DELAY_SECS": no_value("darwinRelay"),
     },
     "enricher": {
@@ -431,7 +440,14 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
     "poller-stations": READY_FALLBACK,
     "poller-tfl": READY_FALLBACK,
     "poller-tocs": READY_FALLBACK,
+    "poller-transit-schedule": {
+        "TRANSIT_TXC_FTP_CA_FILE": no_value("pollerTransitSchedule"),
+        "TRANSIT_TXC_FTP_SECURITY": no_value("pollerTransitSchedule"),
+    },
     "schedule-ingest": {
+        # ds-deploy#98 wires it (scheduleFeed.bucket.ignoredKeys) and
+        # removes this entry.
+        "BUCKET_IGNORED_KEYS": no_value("scheduleFeed.ingest"),
         "MAX_EXTRACTED_BYTES": no_value("scheduleFeed.ingest"),
         "MAX_ZIP_ENTRIES": no_value("scheduleFeed.ingest"),
     },
