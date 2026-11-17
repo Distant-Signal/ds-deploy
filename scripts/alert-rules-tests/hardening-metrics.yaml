@@ -196,3 +196,26 @@ tests:
               summary: "station-full-coverage-samples data last landed 1d 2h 20m 0s ago"
               description: "Its ingest_freshness row is over 93600s old: its producer is down or failing, or writes nowhere."
               runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalingestsourcestale
+  # api account continuity: one re-key fires, even the first after the series
+  # appears at 0 (the api registers it at 0 at start); a flat series does not.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_account_rekeys_total{namespace="distant-signal", pod="a", matched_by="discord_id"}'
+        values: '0x5 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DistantSignalAccountRekeyed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal}
+            exp_annotations:
+              summary: "1 account(s) re-keyed to a new login in 1h"
+              description: "Expected only in an IdP migration window. Otherwise check the account_rekeyed audit lines for a takeover."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalaccountrekeyed
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_api_account_rekeys_total{namespace="distant-signal", pod="a", matched_by="primary_sub"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DistantSignalAccountRekeyed
+        exp_alerts: []
