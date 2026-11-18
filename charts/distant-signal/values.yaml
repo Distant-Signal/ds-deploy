@@ -3011,10 +3011,10 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: "build.44105296059-26e38c453a4b41ba98a2a901049dc9b1c3789cf0"
+    tag: "build.44281471147-9afb6a6a6b01510f7f0e80a7ed4ef4282dd06beb"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:fb88247077ef048fbee43f9d7ff653ec18adc1e0b54e417c7e7c80f95e508757"
+    digest: "sha256:6d5c2c1620597200d5b4c53cd6072ac954a15d9bca76171a0859a46288b2b273"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3284,10 +3284,10 @@ notifier:
   progressStallSecs: 900
   image:
     repository: ghcr.io/distant-signal/images/notifier
-    tag: "build.44121036301-be8788736357036594d658a0aa3cf6acc4f5ce6c"
+    tag: "build.44281471147-9afb6a6a6b01510f7f0e80a7ed4ef4282dd06beb"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:3c477f96f4f54036ceaf4f2a5139dc5bf400ef501bc064c1819946d6ef839e12"
+    digest: "sha256:9a47519034ec007786c3191fa9ba468512d87fa6e704a5ce1409fa4f2e84096a"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3910,10 +3910,10 @@ enricher:
     type: Recreate
   image:
     repository: ghcr.io/distant-signal/images/enricher
-    tag: "build.44105296059-26e38c453a4b41ba98a2a901049dc9b1c3789cf0"
+    tag: "build.44281471147-9afb6a6a6b01510f7f0e80a7ed4ef4282dd06beb"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:7fd54e676baf2658d570dc2301bab97f986106e226903d6fdb61987c7e4e7651"
+    digest: "sha256:03e44486468480acae5aaf8d5a02e9c5540af4bbb28dcfd39ba33f730517496b"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
