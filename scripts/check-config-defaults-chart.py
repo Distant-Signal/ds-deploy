@@ -462,7 +462,13 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "MAX_ZIP_ENTRIES": no_value("scheduleFeed.ingest"),
     },
     "schedule-reference": {"LINES_DIR": LINES},
-    "trust-backlog-consumer": {"LINES_DIR": LINES, "STANOX_CRS_FILE": STANOX},
+    "trust-backlog-consumer": {
+        "LINES_DIR": LINES,
+        "STANOX_CRS_FILE": STANOX,
+        # Off by default: the catalogue-scope trial turns it on through
+        # trustBacklogConsumer.extraEnv, and a named value is a later change.
+        "TRUST_BACKLOG_ALL_STATIONS": no_value("trustBacklogConsumer"),
+    },
     "trust-consumer": {"MOVEMENT_FEED_BACKEND": KAFKA_GONE, "STANOX_CRS_FILE": STANOX},
 }
 
