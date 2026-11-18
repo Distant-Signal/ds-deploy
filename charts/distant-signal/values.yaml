@@ -4490,10 +4490,10 @@ fullCoverageConsumer:
 trustBacklogConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-backlog-consumer
-    tag: "build.44120723244-97d69e3e6d1bd92716cbf27348e5b33c157ed4a6"
+    tag: "build.44260340330-d9f43a22d541b013ccb98781a0a312a4fcf406a3"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:8312f74168768571fa7c719b69ed5c5494b52eb25887cb53933580b017e9b892"
+    digest: "sha256:922c5b1496253a6ae15834e7e996407083724f2935c08eadfdfb836fbdedc49a"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
