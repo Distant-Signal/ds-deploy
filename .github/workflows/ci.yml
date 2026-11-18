@@ -45,7 +45,7 @@ jobs:
   commit-identity:
     permissions:
       contents: read
-    uses: Distant-Signal/ci/.github/workflows/identity.yml@0473da68a2af3101d91a7843b6df0e0742765d0f # main
+    uses: Distant-Signal/ci/.github/workflows/identity.yml@eeac7d909c0373e481b1ae8dad6d95df5a1bbf20 # main
 
   # Every LICENSE (the root one and both charts') is the canonical GNU AGPL
   # v3 text, byte for byte: the licence text is never distributed modified.
@@ -53,7 +53,7 @@ jobs:
   licence:
     permissions:
       contents: read
-    uses: Distant-Signal/ci/.github/workflows/licence.yml@0473da68a2af3101d91a7843b6df0e0742765d0f # main
+    uses: Distant-Signal/ci/.github/workflows/licence.yml@eeac7d909c0373e481b1ae8dad6d95df5a1bbf20 # main
 
   # Distant-Signal/ci's scripts-lint.yml, strict by default:
   #   - every tracked *.sh: shellcheck with every optional check at style
@@ -73,7 +73,7 @@ jobs:
   scripts-lint:
     permissions:
       contents: read
-    uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@0473da68a2af3101d91a7843b6df0e0742765d0f # main
+    uses: Distant-Signal/ci/.github/workflows/scripts-lint.yml@eeac7d909c0373e481b1ae8dad6d95df5a1bbf20 # main
 
   # The chart checks, run with the pinned script tools (pyproject.toml's
   # `lint` group). They came from the monorepo's repo-checks job with the
@@ -143,7 +143,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Distant-Signal/ci
-          ref: 0473da68a2af3101d91a7843b6df0e0742765d0f
+          ref: eeac7d909c0373e481b1ae8dad6d95df5a1bbf20
           path: .ds-ci
           persist-credentials: false
 
@@ -349,7 +349,7 @@ jobs:
   # workflow can't get more than its caller grants, so both calls grant it;
   # with `publish` off nothing is pushed.
   helm-lint:
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@0473da68a2af3101d91a7843b6df0e0742765d0f # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@eeac7d909c0373e481b1ae8dad6d95df5a1bbf20 # main
     permissions:
       contents: read
       packages: write
@@ -358,7 +358,7 @@ jobs:
       lint-values: charts/distant-signal/values-example.yaml
 
   helm-lint-ingest-bucket:
-    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@0473da68a2af3101d91a7843b6df0e0742765d0f # main
+    uses: Distant-Signal/ci/.github/workflows/helm-chart.yml@eeac7d909c0373e481b1ae8dad6d95df5a1bbf20 # main
     permissions:
       contents: read
       packages: write
