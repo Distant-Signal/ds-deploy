@@ -5957,10 +5957,10 @@ scheduleFeed:
     progressStallSecs: 7200
     image:
       repository: ghcr.io/distant-signal/images/schedule-reference
-      tag: "build.44120152367-3187d727d405b5a86e3b90b13c72acb1151959fd"
+      tag: "build.44418747371-52973f622add036f3a824f155ec9357fd2747042"
       # -- Content digest override. See api.image.digest's own comment above
       # for the full rationale; same shape here.
-      digest: "sha256:a5a952fe488c8a73d06168763326b410b7978c2706743b1ea8c1a17d6ad8b17f"
+      digest: "sha256:b08717976be79a3913c3cff1401bb51992ffd829b40224b59551b8aeabeb5236"
       # -- Source repository. See api.image.source.
       source: https://github.com/Distant-Signal/ds-api
       pullPolicy: IfNotPresent
