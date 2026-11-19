@@ -299,6 +299,14 @@ jobs:
       - name: security guards
         run: uv run --no-sync scripts/check-security-guards-chart.py
 
+      # Every client-IP header the stack trusts (the api's X-Real-IP, the
+      # token listener's CF-Connecting-IP, the frontend's) is guarded by a
+      # rendered NetworkPolicy that admits exactly the intended callers, and
+      # no Service, Ingress, hostNetwork or hostPort reaches those pods
+      # around it. Renders that drop or widen a policy must be reported.
+      - name: trusted client-IP headers are guarded by NetworkPolicy
+        run: uv run --no-sync scripts/check-trust-header-netpol-chart.py
+
       # enricher.llm.provider (docs/enricher-anthropic.md): openai renders
       # the enricher as before; anthropic renders the Claude env, key Secret
       # and egress port, batch mode its knobs; bad combinations refuse.
