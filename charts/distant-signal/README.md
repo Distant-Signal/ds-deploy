@@ -1518,6 +1518,21 @@ fires for the defaults or for the production example values:
   or set `api.delegated.allowWithoutNetworkPolicy: true` when another control
   restricts the port.
 
+`scripts/check-trust-header-netpol-chart.py` (CI: "trusted client-IP headers
+are guarded by NetworkPolicy") keeps the controls behind these guards from
+drifting. It renders the production example and the tunnel, token-listener
+and delegated-client variants, and for each trusted header (the api's
+`X-Real-IP`, the token listener's `CF-Connecting-IP`, the frontend's) asserts
+that the NetworkPolicies selecting those pods admit exactly the intended
+callers on the trusted ports (the frontend, the `helm test` probe and
+`apiExtraIngressNamespaces` for the api; the tunnel connector for the token
+listener and the frontend; the ingress controller for the frontend only with
+`ingress.frontend.enabled`), with no empty or release-wide selector, ipBlock,
+rule without `from` or `ports`, NodePort or LoadBalancer Service, Ingress or
+route to the api, hostNetwork or hostPort. It also checks that renders which
+drop or widen a policy are reported. It sees only this repository's values:
+the production values in Ranma-Config are not checked.
+
 ## Distant-Signal-MCP as a service caller
 
 The Distant-Signal-MCP is a separate release (its own `ds-mcp` namespace)
