@@ -313,6 +313,12 @@ jobs:
       - name: enricher LLM provider settings
         run: uv run --no-sync scripts/check-enricher-provider-chart.py
 
+      # An image pin changes the source-images ConfigMap on every build; it
+      # must not restart the api through Reloader (the ConfigMap's ignore
+      # marker; the api re-reads the mounted file per request, no subPath).
+      - name: image pins do not restart the api
+        run: uv run --no-sync scripts/check-reloader-chart.py
+
   # The chart against what each pinned image says it reads (repo split
   # spec §9 phase 3 item 7). scripts/check-config-defaults-chart.py
   # --images runs `docker run --rm <image> --print-config-defaults` on the

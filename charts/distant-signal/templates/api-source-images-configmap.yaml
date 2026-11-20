@@ -3,11 +3,24 @@ The api's /public/version list (AGPL-3.0 §13, repo split spec §6): every
 first-party image this release runs and the source it was built from
 (distant-signal.sourceImagesJson). Mounted into the api, which reads it per
 request, so a new revision updates it without restarting the api.
+
+reloader.stakater.com/ignore: Reloader (production runs it with
+`reloader.stakater.com/auto` on every workload) restarts a workload when a
+ConfigMap or Secret it references changes. This file changes with every
+image pin, including ones that never touch the api (a frontend-only build),
+so without the marker each deploy restarted the api: a few seconds of 502s
+and its in-memory counters and rate-limit state reset. The marker (checked
+against Reloader v1.4.22: a resource annotated "true" never triggers any
+workload) leaves `auto` on for the api's other ConfigMaps and Secrets. The
+api re-reads the mounted file per request, and the volume has no subPath
+so the kubelet updates it in place: keep both (scripts/check-reloader-chart.py).
 */ -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ printf "%s-source-images" (include "distant-signal.fullname" .) | trunc 63 | trimSuffix "-" }}
+  annotations:
+    reloader.stakater.com/ignore: "true"
   labels:
     {{- include "distant-signal.labels" (dict "root" . "component" "api") | nindent 4 }}
 data:
