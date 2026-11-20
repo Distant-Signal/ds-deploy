@@ -1705,6 +1705,12 @@ api:
   service:
     type: ClusterIP
     port: 8080
+    # -- Acknowledge `type` NodePort or LoadBalancer while
+    # `rateLimit.trustXRealIp` is true. The chart refuses that: the Service
+    # then publishes the api's port outside the cluster, where a client
+    # reaches it without the frontend and sends its own X-Real-IP. Set true
+    # only when the Service is reachable from trusted addresses alone.
+    exposedTypeAcknowledged: false
   # -- tracing-subscriber EnvFilter syntax: "info", "api=debug", "warn", ...
   logLevel: info
   # OIDC single sign-on. REQUIRED -- there is no `enabled` toggle and no
@@ -2019,6 +2025,12 @@ api:
     # controller overwrites X-Real-IP itself (the same check as for
     # `networkPolicy.tunnel.api`, which has no override).
     trustXRealIpIngressAcknowledged: false
+    # -- Acknowledge `trustXRealIp` with `networkPolicy.enabled` false. The
+    # chart refuses that pair (global.production already does): with no
+    # policy any pod in the cluster can reach the api's port, send its own
+    # X-Real-IP and pick its own rate-limit key. Set true only when another
+    # control restricts who can reach the port, or set `trustXRealIp` false.
+    trustXRealIpWithoutNetworkPolicyAcknowledged: false
     login:           # /public/auth/login and /public/auth/callback
       perMinute: 10
       burst: 20
@@ -6317,6 +6329,12 @@ frontend:
   service:
     type: ClusterIP
     port: 3000
+    # -- Acknowledge `type` NodePort or LoadBalancer. The chart refuses
+    # either: the frontend's proxy always trusts CF-Connecting-IP and sets
+    # X-Real-IP from it, so a client that reaches the Service around the
+    # tunnel or the ingress controller picks its own rate-limit key. Set
+    # true only when the Service is reachable from trusted addresses alone.
+    exposedTypeAcknowledged: false
   probes:
     # -- Dependency-free health route (frontend/app/healthz/route.ts). It
     # must never call the api: "/" server-renders 5-7 api calls, so probing
@@ -7780,6 +7798,12 @@ networkPolicy:
     ds-mcp:
       app.kubernetes.io/name: distant-signal-mcp
       app.kubernetes.io/component: mcp
+  # -- Acknowledge a namespace in apiExtraIngressNamespaces with no pod
+  # labels (an entry set to null or `{}`). The chart refuses that while
+  # `api.rateLimit.trustXRealIp` is true: every pod in the namespace could
+  # reach the api's port and pick its own rate-limit key. Set true only to
+  # admit a whole namespace on purpose.
+  apiExtraIngressWholeNamespaceAcknowledged: false
   # Ingress to the background workers' and schedulefeed's health ports
   # (kubelet liveness/readiness probes). By default any source may connect,
   # because the probes come from the node, which no pod or namespace
@@ -7854,6 +7878,21 @@ networkPolicy:
     # change to api.rateLimit.trustXRealIp: the token listener never reads
     # X-Real-IP. Rendered only while api.personalTokens.enabled.
     tokenApi: false
+    # -- Acknowledge an empty or null `podLabels`. The chart refuses it while
+    # the policy and the tunnel are on: every pod in `namespace` could then
+    # reach the frontend (whose proxy trusts CF-Connecting-IP) and, with
+    # `tokenApi`, the token port (api.personalTokens.trustCfConnectingIp),
+    # and send its own CF-Connecting-IP. Set true only when the namespace
+    # holds nothing but the connector.
+    wholeNamespaceAcknowledged: false
+  # -- Acknowledge `components.api.extraIngress` (with
+  # `api.rateLimit.trustXRealIp`) and `components.frontend.extraIngress`.
+  # The chart refuses any rule there while the policy is on: a rule is
+  # unchecked (a podSelector with no namespaceSelector, an ipBlock such as
+  # 0.0.0.0/0, or no `ports`), and each caller it admits to a port that
+  # trusts a client-address header can pick its own rate-limit key. Set true
+  # only when every rule is as narrow as it can be.
+  trustedExtraIngressAcknowledged: false
   # Opt-in egress policies (INF-10, SVC-03 defence in depth) for every
   # component: api, frontend, aggregator, enricher, notifier, the
   # Kafka/Redis consumers, movement-relay, every poller, schedulefeed,

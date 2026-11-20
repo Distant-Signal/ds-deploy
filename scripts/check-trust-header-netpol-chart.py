@@ -36,8 +36,10 @@ Per surface, over the rendered manifests (`problems`), this checks:
 
 Each render below states its intent (Intent), so a change that widens a policy
 fails even when the new peer looks harmless. Renders that must fail (the
-policy off, widened, or a Service or Ingress exposing the pods) assert the
-violation, or that the chart refuses to render. What this cannot see: values
+policy off, widened, or a Service or Ingress exposing the pods) assert that the
+chart refuses to render (clientTrustGuards in _helpers.tpl); the same renders
+with the guard's acknowledgement value set assert the violation, so the
+checker still sees what an operator can force. What this cannot see: values
 that live outside this repository (the production values), and what a CNI or
 the ingress controller does with a request.
 
@@ -626,6 +628,27 @@ INGRESS_API = sets("ingress.api.enabled=true", "ingress.api.host=api.example.com
 # The values the chart defaults to: networkPolicy.enabled is false.
 OFF = sets("global.production=false", "networkPolicy.enabled=false")
 
+# The acknowledgements that let the chart render what its client-address trust
+# guards refuse (_helpers.tpl's clientTrustGuards): the checker's own detection
+# is then tested on the renders an operator can still force.
+FRONTEND_EXTRA = "networkPolicy.components.frontend.extraIngress"
+API_EXTRA = "networkPolicy.components.api.extraIngress"
+ANY_POD_RULE = '[{"from":[{"podSelector":{}}]}]'
+ANY_POD_PORT_RULE = '[{"from":[{"podSelector":{}}],"ports":[{"port":8080}]}]'
+IP_BLOCK_RULE = '[{"from":[{"ipBlock":{"cidr":"0.0.0.0/0"}}],"ports":[{"port":8080}]}]'
+NO_PORTS_RULE = (
+    '[{"from":[{"namespaceSelector":{"matchLabels":'
+    '{"kubernetes.io/metadata.name":"other"}}}]}]'
+)
+ACK_NO_POLICY = sets("api.rateLimit.trustXRealIpWithoutNetworkPolicyAcknowledged=true")
+ACK_API_SERVICE = sets("api.service.exposedTypeAcknowledged=true")
+ACK_FRONTEND_SERVICE = sets("frontend.service.exposedTypeAcknowledged=true")
+ACK_EXTRA_INGRESS = sets("networkPolicy.trustedExtraIngressAcknowledged=true")
+ACK_WHOLE_NAMESPACE = sets(
+    "networkPolicy.apiExtraIngressWholeNamespaceAcknowledged=true"
+)
+ACK_TUNNEL_NAMESPACE = sets("networkPolicy.tunnel.wholeNamespaceAcknowledged=true")
+
 CONNECTOR = {"app.kubernetes.io/name": "cloudflared"}
 MCP = {
     "app.kubernetes.io/name": "distant-signal-mcp",
@@ -698,10 +721,87 @@ CASES: tuple[Case, ...] = (
         INTENT_INGRESS,
         refusal="ingress.api.enabled is true while api.rateLimit.trustXRealIp is true",
     ),
-    # Renders the chart accepts but leaves a trusted header unguarded.
     Case(
-        "policy off (the chart defaults) renders but guards nothing",
+        "policy off (the chart defaults) refuses to render",
         (*PRODUCTION, *OFF),
+        INTENT_INGRESS,
+        refusal="api.rateLimit.trustXRealIp is true while networkPolicy.enabled",
+    ),
+    Case(
+        "a NodePort frontend Service refuses to render",
+        (*PRODUCTION, *sets("frontend.service.type=NodePort")),
+        INTENT_INGRESS,
+        refusal="frontend.service.type is NodePort",
+    ),
+    Case(
+        "a LoadBalancer frontend Service refuses to render",
+        (*PRODUCTION, *sets("frontend.service.type=LoadBalancer")),
+        INTENT_INGRESS,
+        refusal="frontend.service.type is LoadBalancer",
+    ),
+    Case(
+        "a LoadBalancer api Service refuses to render",
+        (*PRODUCTION, *sets("api.service.type=LoadBalancer")),
+        INTENT_INGRESS,
+        refusal="api.service.type is LoadBalancer while api.rateLimit.trustXRealIp",
+    ),
+    Case(
+        "a NodePort api Service refuses to render",
+        (*PRODUCTION, *sets("api.service.type=NodePort")),
+        INTENT_INGRESS,
+        refusal="api.service.type is NodePort while api.rateLimit.trustXRealIp",
+    ),
+    Case(
+        "a frontend extraIngress rule refuses to render",
+        (*PRODUCTION, *set_json(FRONTEND_EXTRA, ANY_POD_RULE)),
+        INTENT_INGRESS,
+        refusal="networkPolicy.components.frontend.extraIngress has rules",
+    ),
+    Case(
+        "an api extraIngress rule refuses to render",
+        (*PRODUCTION, *set_json(API_EXTRA, ANY_POD_PORT_RULE)),
+        INTENT_INGRESS,
+        refusal="networkPolicy.components.api.extraIngress has rules",
+    ),
+    Case(
+        "an api extraIngress ipBlock rule refuses to render",
+        (*PRODUCTION, *set_json(API_EXTRA, IP_BLOCK_RULE)),
+        INTENT_INGRESS,
+        refusal="networkPolicy.components.api.extraIngress has rules",
+    ),
+    Case(
+        "an api extraIngress rule with no ports refuses to render",
+        (*PRODUCTION, *set_json(API_EXTRA, NO_PORTS_RULE)),
+        INTENT_INGRESS,
+        refusal="networkPolicy.components.api.extraIngress has rules",
+    ),
+    Case(
+        "the whole ds-mcp namespace admitted to the api refuses to render",
+        (
+            *PRODUCTION,
+            *DELEGATED,
+            *sets("networkPolicy.apiExtraIngressPodLabels.ds-mcp=null"),
+        ),
+        Intent(extra_api_namespaces={"ds-mcp": MCP}, ingress_namespace="ingress-nginx"),
+        refusal="with no pod labels in networkPolicy.apiExtraIngressPodLabels",
+    ),
+    Case(
+        "the whole tunnel namespace admitted to the frontend refuses to render",
+        (*PRODUCTION, *TUNNEL, *sets("networkPolicy.tunnel.podLabels=null")),
+        INTENT_TUNNEL,
+        refusal="networkPolicy.tunnel.podLabels is empty",
+    ),
+    Case(
+        "the whole tunnel namespace admitted to the token listener refuses to render",
+        (*PRODUCTION, *TUNNEL, *TOKENS, *sets("networkPolicy.tunnel.podLabels=null")),
+        INTENT_TUNNEL,
+        refusal="networkPolicy.tunnel.podLabels is empty",
+    ),
+    # Renders an operator can still force with an acknowledgement, which the
+    # checker must report as a trusted header left unguarded.
+    Case(
+        "policy off, acknowledged, renders but guards nothing",
+        (*PRODUCTION, *OFF, *ACK_NO_POLICY),
         INTENT_INGRESS,
         violation="no NetworkPolicy restricts ingress",
     ),
@@ -726,84 +826,76 @@ CASES: tuple[Case, ...] = (
         violation="also admits every pod in namespace ingress-nginx",
     ),
     Case(
-        "a NodePort frontend Service",
-        (*PRODUCTION, *sets("frontend.service.type=NodePort")),
+        "a NodePort frontend Service, acknowledged",
+        (*PRODUCTION, *sets("frontend.service.type=NodePort"), *ACK_FRONTEND_SERVICE),
         INTENT_INGRESS,
         violation="is type NodePort",
     ),
     Case(
-        "a LoadBalancer api Service",
-        (*PRODUCTION, *sets("api.service.type=LoadBalancer")),
+        "a LoadBalancer api Service, acknowledged",
+        (*PRODUCTION, *sets("api.service.type=LoadBalancer"), *ACK_API_SERVICE),
         INTENT_INGRESS,
         violation="is type LoadBalancer",
     ),
     Case(
-        "a frontend extraIngress rule from every pod",
+        "a frontend extraIngress rule from every pod, acknowledged",
         (
             *PRODUCTION,
-            *set_json(
-                "networkPolicy.components.frontend.extraIngress",
-                '[{"from":[{"podSelector":{}}]}]',
-            ),
+            *set_json(FRONTEND_EXTRA, ANY_POD_RULE),
+            *ACK_EXTRA_INGRESS,
         ),
         INTENT_INGRESS,
         violation="admits a podSelector not pinned to this release",
     ),
     Case(
-        "an api extraIngress rule from every pod",
-        (
-            *PRODUCTION,
-            *set_json(
-                "networkPolicy.components.api.extraIngress",
-                '[{"from":[{"podSelector":{}}],"ports":[{"port":8080}]}]',
-            ),
-        ),
+        "an api extraIngress rule from every pod, acknowledged",
+        (*PRODUCTION, *set_json(API_EXTRA, ANY_POD_PORT_RULE), *ACK_EXTRA_INGRESS),
         INTENT_INGRESS,
         violation="admits a podSelector not pinned to this release",
     ),
     Case(
-        "an api extraIngress rule from an ipBlock",
-        (
-            *PRODUCTION,
-            *set_json(
-                "networkPolicy.components.api.extraIngress",
-                '[{"from":[{"ipBlock":{"cidr":"0.0.0.0/0"}}],"ports":[{"port":8080}]}]',
-            ),
-        ),
+        "an api extraIngress rule from an ipBlock, acknowledged",
+        (*PRODUCTION, *set_json(API_EXTRA, IP_BLOCK_RULE), *ACK_EXTRA_INGRESS),
         INTENT_INGRESS,
         violation="admits an ipBlock (0.0.0.0/0)",
     ),
     Case(
-        "an api extraIngress rule with no ports",
-        (
-            *PRODUCTION,
-            *set_json(
-                "networkPolicy.components.api.extraIngress",
-                '[{"from":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"other"}}}]}]',
-            ),
-        ),
+        "an api extraIngress rule with no ports, acknowledged",
+        (*PRODUCTION, *set_json(API_EXTRA, NO_PORTS_RULE), *ACK_EXTRA_INGRESS),
         INTENT_INGRESS,
         violation="a rule with no `ports` admits every port",
     ),
     Case(
-        "the whole ds-mcp namespace admitted to the api",
+        "the whole ds-mcp namespace admitted to the api, acknowledged",
         (
             *PRODUCTION,
             *DELEGATED,
             *sets("networkPolicy.apiExtraIngressPodLabels.ds-mcp=null"),
+            *ACK_WHOLE_NAMESPACE,
         ),
         Intent(extra_api_namespaces={"ds-mcp": MCP}, ingress_namespace="ingress-nginx"),
         violation="also admits every pod in namespace ds-mcp",
     ),
     Case(
-        "the whole tunnel namespace admitted to the frontend",
-        (*PRODUCTION, *TUNNEL, *sets("networkPolicy.tunnel.podLabels=null")),
+        "the whole tunnel namespace admitted to the frontend, acknowledged",
+        (
+            *PRODUCTION,
+            *TUNNEL,
+            *sets("networkPolicy.tunnel.podLabels=null"),
+            *ACK_TUNNEL_NAMESPACE,
+        ),
         INTENT_TUNNEL,
         violation="also admits every pod in namespace cloudflared",
     ),
     Case(
-        "the whole tunnel namespace admitted to the token listener",
-        (*PRODUCTION, *TUNNEL, *TOKENS, *sets("networkPolicy.tunnel.podLabels=null")),
+        "the whole tunnel namespace admitted to the token listener, acknowledged",
+        (
+            *PRODUCTION,
+            *TUNNEL,
+            *TOKENS,
+            *sets("networkPolicy.tunnel.podLabels=null"),
+            *ACK_TUNNEL_NAMESPACE,
+        ),
         INTENT_TUNNEL,
         violation="tokens port 8083: the NetworkPolicy also admits every pod in"
         " namespace cloudflared",

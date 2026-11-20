@@ -37,7 +37,7 @@ uv run --no-sync scripts/pin-images.py --tag build.<run id>-<commit> <service>..
 uv run --no-sync scripts/check-doc-links.py            # links to the Distant-Signal repositories' files resolve
 uv run --no-sync scripts/check-alert-payloads.py --report --download-promtool /tmp/promtool   # alert sizes, runbooks, promtool tests
 uv run --no-sync scripts/check-components-chart.py     # and the other scripts/check-*-chart.py policy checks
-uv run --no-sync scripts/check-trust-header-netpol-chart.py   # trusted X-Real-IP / CF-Connecting-IP surfaces keep a NetworkPolicy for exactly their callers
+uv run --no-sync scripts/check-trust-header-netpol-chart.py   # trusted X-Real-IP / CF-Connecting-IP surfaces keep a NetworkPolicy for exactly their callers (the chart's clientTrustGuards refuse what widens them)
 uv run --no-sync scripts/check-config-defaults-chart.py --images   # the chart vs each pinned image's defaults (docker)
 uv run --no-sync scripts/release-order.py check --values charts/distant-signal/values.yaml --registry \
   --migrations ../ds-core/crates/ds-store/migrations   # ds-core checked out at core-version

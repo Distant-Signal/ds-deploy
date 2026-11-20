@@ -3,6 +3,12 @@
 # render. docs/ingest-phase5-runbook.md, "Release A", has the same list for
 # a real cluster, where these come after the Postgres role and Redis ACL
 # rollouts (docs/postgres-app-role.md, docs/redis-acl.md).
+api:
+  rateLimit:
+    # The renders run with networkPolicy.enabled false (the default), which
+    # the chart refuses while api.rateLimit.trustXRealIp is true unless this
+    # is set. The checks that need the policy turn it on themselves.
+    trustXRealIpWithoutNetworkPolicyAcknowledged: true
 postgresql:
   # With the per-service roles connected, the role limits sum to 101 at
   # Postgres's default max_connections 100 (97 usable). Production runs 200.
