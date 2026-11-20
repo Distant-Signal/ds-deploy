@@ -14,6 +14,12 @@
   - The api exposed by an Ingress with api.rateLimit.trustXRealIp, and a
     delegated client without a NetworkPolicy, fail the render unless
     acknowledged (neither is in the defaults or the production example).
+  - Client-address trust (clientTrustGuards): trustXRealIp without a
+    NetworkPolicy, an exposed (NodePort or LoadBalancer) api or frontend
+    Service, a namespace admitted to the api with no pod labels, an api or
+    frontend extraIngress rule and a tunnel with no pod labels each fail the
+    render unless acknowledged by their own value; the live production
+    layout (tunnel, token listener, ds-mcp) still renders.
 
 Exit 1 with one line per failed check. Needs helm on PATH (or --helm).
 """
@@ -98,6 +104,31 @@ DELEGATED = sets(
     "api.delegated.clients[0].audience=distant-signal-api",
     "api.delegated.clients[0].maxScopes={journeys:read}",
 )
+
+
+def set_json(key: str, value: str) -> tuple[str, ...]:
+    """Return the `--set-json` arguments for `key=value` (JSON)."""
+    return ("--set-json", f"{key}={value}")
+
+
+# BASE acknowledges trustXRealIp without a NetworkPolicy (ci/ingest-prereqs.yaml),
+# so a case about the refusal clears it; POLICY turns the policy on.
+NO_POLICY_ACK = "api.rateLimit.trustXRealIpWithoutNetworkPolicyAcknowledged"
+NO_POLICY = sets(f"{NO_POLICY_ACK}=false")
+POLICY = sets("networkPolicy.enabled=true")
+# The live layout's pieces: ds-mcp admitted to the api (narrowed by the default
+# apiExtraIngressPodLabels), the tunnel connector, the token listener.
+MCP_NAMESPACE = sets("networkPolicy.apiExtraIngressNamespaces={ds-mcp}")
+TUNNEL = sets("ingress.enabled=false", "networkPolicy.tunnel.enabled=true")
+TOKENS = sets(
+    "networkPolicy.tunnel.tokenApi=true",
+    "api.personalTokens.enabled=true",
+    "api.personalTokens.publicBaseUrl=https://api.example.com",
+    "api.personalTokens.trustCfConnectingIp=true",
+)
+API_EXTRA_INGRESS = "networkPolicy.components.api.extraIngress"
+FRONTEND_EXTRA_INGRESS = "networkPolicy.components.frontend.extraIngress"
+EXTRA_RULE = '[{"from":[{"podSelector":{}}]}]'
 
 
 @dataclass(frozen=True)
@@ -213,6 +244,178 @@ CASES: tuple[Case, ...] = (
     Case(
         "a disabled delegated client needs no NetworkPolicy",
         (*BASE, *DELEGATED, *sets("api.delegated.clients[0].enabled=false")),
+    ),
+    # Client-address trust (clientTrustGuards): each refusal, its
+    # acknowledgement, and the value that makes it moot.
+    Case(
+        "trustXRealIp without a NetworkPolicy refuses to render",
+        (*BASE, *NO_POLICY),
+        "api.rateLimit.trustXRealIp is true while networkPolicy.enabled is false",
+    ),
+    Case(
+        "trustXRealIp without a NetworkPolicy renders when acknowledged",
+        (*BASE, *sets(f"{NO_POLICY_ACK}=true")),
+    ),
+    Case(
+        "trustXRealIp off needs no NetworkPolicy",
+        (*BASE, *NO_POLICY, *sets("api.rateLimit.trustXRealIp=false")),
+    ),
+    Case(
+        "trustXRealIp with the NetworkPolicy on renders",
+        (*BASE, *NO_POLICY, *POLICY),
+    ),
+    Case(
+        "a LoadBalancer api Service with trustXRealIp refuses to render",
+        (*BASE, *POLICY, *sets("api.service.type=LoadBalancer")),
+        "api.service.type is LoadBalancer while api.rateLimit.trustXRealIp is true",
+    ),
+    Case(
+        "a NodePort api Service with trustXRealIp refuses to render",
+        (*BASE, *POLICY, *sets("api.service.type=NodePort")),
+        "api.service.type is NodePort while api.rateLimit.trustXRealIp is true",
+    ),
+    Case(
+        "an exposed api Service renders when acknowledged",
+        (
+            *BASE,
+            *POLICY,
+            *sets(
+                "api.service.type=NodePort", "api.service.exposedTypeAcknowledged=true"
+            ),
+        ),
+    ),
+    Case(
+        "an exposed api Service renders without trustXRealIp",
+        (
+            *BASE,
+            *POLICY,
+            *sets("api.service.type=NodePort", "api.rateLimit.trustXRealIp=false"),
+        ),
+    ),
+    Case(
+        "a NodePort frontend Service refuses to render",
+        (*BASE, *POLICY, *sets("frontend.service.type=NodePort")),
+        "frontend.service.type is NodePort",
+    ),
+    Case(
+        "a LoadBalancer frontend Service refuses to render",
+        (*BASE, *POLICY, *sets("frontend.service.type=LoadBalancer")),
+        "frontend.service.type is LoadBalancer",
+    ),
+    Case(
+        "an exposed frontend Service renders when acknowledged",
+        (
+            *BASE,
+            *POLICY,
+            *sets(
+                "frontend.service.type=LoadBalancer",
+                "frontend.service.exposedTypeAcknowledged=true",
+            ),
+        ),
+    ),
+    Case(
+        "a namespace with no pod labels refuses to render (null entry)",
+        (
+            *BASE,
+            *POLICY,
+            *MCP_NAMESPACE,
+            *sets("networkPolicy.apiExtraIngressPodLabels.ds-mcp=null"),
+        ),
+        "with no pod labels in networkPolicy.apiExtraIngressPodLabels",
+    ),
+    Case(
+        "a namespace with no pod labels refuses to render (not in the labels)",
+        (*BASE, *POLICY, *sets("networkPolicy.apiExtraIngressNamespaces={other}")),
+        "with no pod labels in networkPolicy.apiExtraIngressPodLabels",
+    ),
+    Case(
+        "a whole namespace renders when acknowledged",
+        (
+            *BASE,
+            *POLICY,
+            *MCP_NAMESPACE,
+            *sets(
+                "networkPolicy.apiExtraIngressPodLabels.ds-mcp=null",
+                "networkPolicy.apiExtraIngressWholeNamespaceAcknowledged=true",
+            ),
+        ),
+    ),
+    Case(
+        "a whole namespace renders without trustXRealIp",
+        (
+            *BASE,
+            *POLICY,
+            *MCP_NAMESPACE,
+            *sets(
+                "networkPolicy.apiExtraIngressPodLabels.ds-mcp=null",
+                "api.rateLimit.trustXRealIp=false",
+            ),
+        ),
+    ),
+    Case(
+        "a namespace narrowed to its pods renders",
+        (*BASE, *POLICY, *MCP_NAMESPACE),
+    ),
+    Case(
+        "an api extraIngress rule refuses to render",
+        (*BASE, *POLICY, *set_json(API_EXTRA_INGRESS, EXTRA_RULE)),
+        "networkPolicy.components.api.extraIngress has rules",
+    ),
+    Case(
+        "an api extraIngress rule renders when acknowledged",
+        (
+            *BASE,
+            *POLICY,
+            *set_json(API_EXTRA_INGRESS, EXTRA_RULE),
+            *sets("networkPolicy.trustedExtraIngressAcknowledged=true"),
+        ),
+    ),
+    Case(
+        "an api extraIngress rule renders without trustXRealIp",
+        (
+            *BASE,
+            *POLICY,
+            *set_json(API_EXTRA_INGRESS, EXTRA_RULE),
+            *sets("api.rateLimit.trustXRealIp=false"),
+        ),
+    ),
+    Case(
+        "a frontend extraIngress rule refuses to render",
+        (*BASE, *POLICY, *set_json(FRONTEND_EXTRA_INGRESS, EXTRA_RULE)),
+        "networkPolicy.components.frontend.extraIngress has rules",
+    ),
+    Case(
+        "a frontend extraIngress rule renders when acknowledged",
+        (
+            *BASE,
+            *POLICY,
+            *set_json(FRONTEND_EXTRA_INGRESS, EXTRA_RULE),
+            *sets("networkPolicy.trustedExtraIngressAcknowledged=true"),
+        ),
+    ),
+    Case(
+        "a tunnel with no pod labels refuses to render",
+        (*BASE, *POLICY, *TUNNEL, *sets("networkPolicy.tunnel.podLabels=null")),
+        "networkPolicy.tunnel.podLabels is empty",
+    ),
+    Case(
+        "a tunnel with no pod labels renders when acknowledged",
+        (
+            *BASE,
+            *POLICY,
+            *TUNNEL,
+            *sets(
+                "networkPolicy.tunnel.podLabels=null",
+                "networkPolicy.tunnel.wholeNamespaceAcknowledged=true",
+            ),
+        ),
+    ),
+    Case(
+        "a tunnel narrowed to the connector's pods renders", (*BASE, *POLICY, *TUNNEL)
+    ),
+    Case(
+        "the live production layout renders (tunnel, token listener, ds-mcp)",
+        (*PRODUCTION_EXAMPLE, *TUNNEL, *TOKENS, *DELEGATED, *MCP_NAMESPACE),
     ),
     Case("an open SFTP LoadBalancer renders without global.production", (*BASE, *SFTP)),
     Case(

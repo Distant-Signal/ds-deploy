@@ -1503,20 +1503,61 @@ render with it (`helm template ... --set global.production=true`).
 
 ### Client-address trust
 
-These two guards apply whether or not `global.production` is on, and neither
-fires for the defaults or for the production example values:
+The api trusts `X-Real-IP` (`api.rateLimit.trustXRealIp`, on by default), its
+token listener trusts `CF-Connecting-IP` (`api.personalTokens.trustCfConnectingIp`)
+and the frontend's proxy always turns `CF-Connecting-IP` into `X-Real-IP`.
+A header is only as trustworthy as the set of callers that can reach the port,
+so these guards fail the render whenever a caller the chart did not choose
+could. They apply whether or not `global.production` is on. Each has an
+acknowledgement value (default `false`) for a setup that is legitimate: it
+must be set by name, and the chart's own README row says what it gives up.
+None fires for the production example values or for the layout production
+runs (the tunnel with its connector's pod labels, the token listener, a
+delegated client and `apiExtraIngressNamespaces: [ds-mcp]` narrowed by its
+pod labels, every Service ClusterIP).
 
-- `ingress.api.enabled` with `api.rateLimit.trustXRealIp` (the default) fails
-  the render, as `networkPolicy.tunnel.api` already did: a request through
-  the Ingress carries whatever `X-Real-IP` its client sent, so it picks its
-  own rate-limit key. Either set `trustXRealIp: false`, or, if the ingress
+- `api.rateLimit.trustXRealIp` with `networkPolicy.enabled` false (the
+  defaults) fails the render: any pod in the cluster could reach the api and
+  send its own `X-Real-IP`. Turn the policy on, set `trustXRealIp: false`, or
+  set `api.rateLimit.trustXRealIpWithoutNetworkPolicyAcknowledged: true` when
+  another control restricts the port (`values-minimal.yaml` and the CI render
+  values do, for a trial cluster). `global.production` refuses it too.
+- `ingress.api.enabled` with `api.rateLimit.trustXRealIp` fails the render,
+  as `networkPolicy.tunnel.api` already did: a request through the Ingress
+  carries whatever `X-Real-IP` its client sent, so it picks its own
+  rate-limit key. Either set `trustXRealIp: false`, or, if the ingress
   controller overwrites the header, set
-  `api.rateLimit.trustXRealIpIngressAcknowledged: true`.
+  `api.rateLimit.trustXRealIpIngressAcknowledged: true`. That override stays
+  allowed, and it exposes the api: the public hostname then routes to the
+  api's main port and, with the policy on, every pod in
+  `networkPolicy.ingressControllerNamespace` may reach it.
 - An enabled `api.delegated.clients` entry with `networkPolicy.enabled` false
   fails the render: the delegated listener relies on the NetworkPolicy to
   admit only `networkPolicy.apiExtraIngressNamespaces`. Turn the policy on,
   or set `api.delegated.allowWithoutNetworkPolicy: true` when another control
   restricts the port.
+- With `trustXRealIp` and the policy on, an `apiExtraIngressNamespaces` entry
+  with no pod labels in `apiExtraIngressPodLabels` (set to `null`, `{}`, or
+  never listed) admits the whole namespace and fails the render. Name the
+  caller's pod labels, or set
+  `networkPolicy.apiExtraIngressWholeNamespaceAcknowledged: true`.
+- `networkPolicy.tunnel.podLabels` empty or `null` with the tunnel on admits
+  the connector's whole namespace to the frontend and the token port, and
+  fails the render. Set the connector's pod labels, or
+  `networkPolicy.tunnel.wholeNamespaceAcknowledged: true`.
+- Any `networkPolicy.components.api.extraIngress` rule (with `trustXRealIp`)
+  or `networkPolicy.components.frontend.extraIngress` rule (with the policy
+  on) fails the render: the chart cannot tell a `podSelector: {}`, an
+  `ipBlock` of `0.0.0.0/0` or a rule with no `ports` from a narrow one. Set
+  `networkPolicy.trustedExtraIngressAcknowledged: true` once each rule is as
+  narrow as it can be.
+- `api.service.type` NodePort or LoadBalancer with `trustXRealIp`, and
+  `frontend.service.type` NodePort or LoadBalancer at all, fail the render:
+  a client reaches the Service without going through the frontend, the tunnel
+  or the ingress controller, and a NetworkPolicy does not reliably limit
+  node or load-balancer traffic. Use ClusterIP, or set
+  `api.service.exposedTypeAcknowledged` / `frontend.service.exposedTypeAcknowledged`
+  to `true` when the Service is reachable from trusted addresses alone.
 
 `scripts/check-trust-header-netpol-chart.py` (CI: "trusted client-IP headers
 are guarded by NetworkPolicy") keeps the controls behind these guards from
@@ -1529,8 +1570,10 @@ callers on the trusted ports (the frontend, the `helm test` probe and
 listener and the frontend; the ingress controller for the frontend only with
 `ingress.frontend.enabled`), with no empty or release-wide selector, ipBlock,
 rule without `from` or `ports`, NodePort or LoadBalancer Service, Ingress or
-route to the api, hostNetwork or hostPort. It also checks that renders which
-drop or widen a policy are reported. It sees only this repository's values:
+route to the api, hostNetwork or hostPort. It also checks that each render
+which drops or widens a policy is refused by the guards above, and that the
+same render with the guard's acknowledgement set is reported as a violation.
+It sees only this repository's values:
 the production values in Ranma-Config are not checked.
 
 ## Distant-Signal-MCP as a service caller
@@ -2175,6 +2218,7 @@ release after, setting one fails the render:
 | `api.readiness.checkDatabase` | `false` | `API_READINESS_CHECKS_DB`: `/public/ready` also answers 503 while the request pool cannot run `SELECT 1` within 2 s (checked at most every 5 s). Opt-in, and refused below `api.replicaCount: 2`: with one replica NotReady empties the Service, so a database blip would become a full outage. |
 | `api.service.type` | `ClusterIP` | Service type. |
 | `api.service.port` | `8080` | Service and container port; also sets `BIND_URL`. |
+| `api.service.exposedTypeAcknowledged` | `false` | Allow `api.service.type` NodePort or LoadBalancer while `api.rateLimit.trustXRealIp` is true. The chart refuses that otherwise: a client could then reach the api without the frontend and send its own `X-Real-IP`. See "Client-address trust". |
 | `api.logLevel` | `info` | `RUST_LOG` value (tracing-subscriber EnvFilter syntax). |
 | `api.sso.issuerUrl` | `""` | **Required.** OIDC issuer base URL; everything else is discovered from its `.well-known/openid-configuration`. |
 | `api.sso.clientId` | `""` | **Required.** OIDC client id this deployment is registered as. |
@@ -2215,7 +2259,8 @@ release after, setting one fails the render:
 | `api.testAuth.requiredGroup` | `ds-test` | The group the token's `groups` claim must contain. |
 | `api.rateLimit.enabled` | `true` | Master switch for the per-client limits on login, `/Trips/plan`, `/Train/by-uid/*` and public writes (`crates/api/src/rate_limit.rs`). |
 | `api.rateLimit.trustXRealIp` | `true` | Key anonymous clients on the frontend proxy's `X-Real-IP`. Safe only while `ingress.api.enabled` is off: the chart refuses the pair unless `trustXRealIpIngressAcknowledged`. |
-| `api.rateLimit.trustXRealIpIngressAcknowledged` | `false` | Allow `trustXRealIp` with `ingress.api.enabled`, for an ingress controller that overwrites `X-Real-IP` itself. See "Production guards". |
+| `api.rateLimit.trustXRealIpIngressAcknowledged` | `false` | Allow `trustXRealIp` with `ingress.api.enabled`, for an ingress controller that overwrites `X-Real-IP` itself. It routes the public hostname to the api's main port and admits the ingress controller's namespace to it. See "Client-address trust". |
+| `api.rateLimit.trustXRealIpWithoutNetworkPolicyAcknowledged` | `false` | Allow `trustXRealIp` with `networkPolicy.enabled` false, when another control restricts who can reach the api's port. The chart refuses that otherwise: any pod could send its own `X-Real-IP`. See "Client-address trust". |
 | `api.rateLimit.login.perMinute` / `.burst` | `10` / `20` | Per client IP, `/public/auth/login` and `/public/auth/callback`. |
 | `api.rateLimit.tripPlan.perMinute` / `.burst` | `20` / `10` | Per client IP, `/Trips/plan`. |
 | `api.rateLimit.trainByUid.perMinute` / `.burst` | `120` / `60` | Per client IP, `/Train/by-uid/*`. |
@@ -3062,6 +3107,7 @@ rows are duplicates, which the writer's Darwin-timestamp guards discard.
 | `frontend.podDisruptionBudget.minAvailable` | `1` | Pods that must stay available during a voluntary eviction (a number, or a percentage string). |
 | `frontend.service.type` | `ClusterIP` | Service type. |
 | `frontend.service.port` | `3000` | Service and container port. |
+| `frontend.service.exposedTypeAcknowledged` | `false` | Allow `frontend.service.type` NodePort or LoadBalancer. The chart refuses that otherwise: the frontend's proxy always trusts `CF-Connecting-IP`, so a client that reaches the Service around the tunnel or the ingress controller picks its own rate-limit key. See "Client-address trust". |
 | `frontend.probes.path` | `/healthz` | Probe path: the dependency-free `frontend/app/healthz/route.ts`, which never calls the api (probing `/` restarted the frontend whenever the api was down). |
 | `frontend.probes.startup.enabled` | `true` | Render a startupProbe on `frontend.probes.path`: readiness and liveness begin only once it passes. A healthy pod passes in a couple of seconds, so a roll is no slower. |
 | `frontend.probes.startup.periodSeconds` | `2` | Startup probe period. |
@@ -3772,7 +3818,9 @@ creates new per-pod series, so that clause fired on every rollout.
 | `networkPolicy.enabled` | `false` | Render default-deny NetworkPolicies with explicit allows. |
 | `networkPolicy.ingressControllerNamespace` | `ingress-nginx` | Namespace the ingress controller runs in, matched by `kubernetes.io/metadata.name`. |
 | `networkPolicy.apiExtraIngressNamespaces` | `[]` | Extra namespaces allowed to reach `api.service.port` (e.g. `[ds-mcp]` for the Distant-Signal-MCP). |
-| `networkPolicy.apiExtraIngressPodLabels` | `ds-mcp`: `app.kubernetes.io/name: distant-signal-mcp`, `app.kubernetes.io/component: mcp` | Per-namespace pod labels that narrow an `apiExtraIngressNamespaces` entry to the calling pods. A namespace with no entry admits all its pods. Set an entry to `null` to clear it; `{}` merges with the default and does not clear it. |
+| `networkPolicy.apiExtraIngressPodLabels` | `ds-mcp`: `app.kubernetes.io/name: distant-signal-mcp`, `app.kubernetes.io/component: mcp` | Per-namespace pod labels that narrow an `apiExtraIngressNamespaces` entry to the calling pods. A namespace with no entry admits all its pods. Set an entry to `null` to clear it; `{}` merges with the default and does not clear it. With `api.rateLimit.trustXRealIp`, a listed namespace with no entry is refused unless `apiExtraIngressWholeNamespaceAcknowledged`. |
+| `networkPolicy.apiExtraIngressWholeNamespaceAcknowledged` | `false` | Allow an `apiExtraIngressNamespaces` entry with no pod labels (a whole namespace) while `api.rateLimit.trustXRealIp` is true. See "Client-address trust". |
+| `networkPolicy.trustedExtraIngressAcknowledged` | `false` | Allow `networkPolicy.components.api.extraIngress` rules (with `trustXRealIp`) and `networkPolicy.components.frontend.extraIngress` rules, which the chart cannot check for width. See "Client-address trust". |
 | `networkPolicy.healthIngress.enabled` | `true` | Render the rule admitting the workers' and schedulefeed's health (probe) ports. `false` closes them to every pod; probes still work on CNIs that exempt node-local traffic (kube-router, Calico and Cilium by default). |
 | `networkPolicy.healthIngress.from` | `[]` | NetworkPolicy peers allowed to reach the health ports, e.g. the nodes' addresses as ipBlocks. Empty allows any source. |
 | `networkPolicy.postgresClients` | `[]` | Extra NetworkPolicy peers (pod/namespace selectors) admitted to the bundled Postgres, e.g. a postgres-exporter or backup CronJob. See [NetworkPolicy](#networkpolicy). |
@@ -3782,6 +3830,7 @@ creates new per-pod series, so that clause fired on every rollout.
 | `networkPolicy.tunnel.podLabels` | `app.kubernetes.io/name: cloudflared` | Labels selecting the connector pods. Empty admits the whole namespace. |
 | `networkPolicy.tunnel.api` | `false` | Also admit the connector to `api.service.port`, for a hostname routed straight to the api. Requires `api.rateLimit.trustXRealIp: false`. |
 | `networkPolicy.tunnel.tokenApi` | `false` | Admit the connector to `api.personalTokens.port` only, for the personal-token API hostname. Rendered only while `api.personalTokens.enabled`. Needs no change to `api.rateLimit.trustXRealIp`: the token listener never reads `X-Real-IP`. |
+| `networkPolicy.tunnel.wholeNamespaceAcknowledged` | `false` | Allow an empty or `null` `networkPolicy.tunnel.podLabels`, which admits every pod in the connector's namespace to the frontend and the token port. The chart refuses that otherwise. See "Client-address trust". |
 | `networkPolicy.monitoringNamespace` | `monitoring` | Namespace Prometheus runs in, matched by `kubernetes.io/metadata.name`. Allowed to reach each workload's metrics port. Only used when `metrics.enabled` is true. |
 | `networkPolicy.egress.enabled` | `false` | Render an egress policy for every component (see [NetworkPolicy](#networkpolicy)). |
 | `networkPolicy.egress.privateCidrs` | RFC 1918, CGNAT, loopback, link-local, reserved | IPv4 ranges excluded from the public-internet egress allow. |

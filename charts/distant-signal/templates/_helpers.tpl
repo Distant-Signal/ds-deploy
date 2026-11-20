@@ -4262,10 +4262,40 @@ templates/zz-security-guards.yaml (chart README, "Production guards").
 {{- define "distant-signal.clientTrustGuards" -}}
 {{- $v := .Values -}}
 {{- if and $v.ingress.enabled $v.ingress.api.enabled $v.api.rateLimit.enabled $v.api.rateLimit.trustXRealIp (not $v.api.rateLimit.trustXRealIpIngressAcknowledged) -}}
-{{- fail "ingress.api.enabled is true while api.rateLimit.trustXRealIp is true. A request arriving through the Ingress carries whatever X-Real-IP its client sent, so it could choose its own rate-limit key. Set api.rateLimit.trustXRealIp=false (every request the frontend proxies then shares the frontend pod's bucket), or turn ingress.api.enabled off and route the public hostname to the frontend. If the ingress controller overwrites X-Real-IP itself, set api.rateLimit.trustXRealIpIngressAcknowledged=true." -}}
+{{- fail "ingress.api.enabled is true while api.rateLimit.trustXRealIp is true. A request arriving through the Ingress carries whatever X-Real-IP its client sent, so it could choose its own rate-limit key. Set api.rateLimit.trustXRealIp=false (every request the frontend proxies then shares the frontend pod's bucket), or turn ingress.api.enabled off and route the public hostname to the frontend. If the ingress controller overwrites X-Real-IP itself, set api.rateLimit.trustXRealIpIngressAcknowledged=true; that routes the public hostname to the api's main port and, with networkPolicy.enabled, admits every pod in networkPolicy.ingressControllerNamespace to it." -}}
 {{- end -}}
 {{- if and (include "distant-signal.delegatedEnabled" .) (not $v.networkPolicy.enabled) (not $v.api.delegated.allowWithoutNetworkPolicy) -}}
 {{- fail "api.delegated.clients has an enabled client while networkPolicy.enabled is false. Nothing then limits who can reach the delegated listener, so any pod in the cluster could present a bearer and pick its own rate-limit key. Set networkPolicy.enabled=true (admit the caller with networkPolicy.apiExtraIngressNamespaces), or set api.delegated.allowWithoutNetworkPolicy=true if another control restricts the listener's port." -}}
+{{- end -}}
+{{- /* The api main port trusts X-Real-IP (api.rateLimit.trustXRealIp). */ -}}
+{{- $xRealIp := and $v.api.rateLimit.enabled $v.api.rateLimit.trustXRealIp -}}
+{{- if and $xRealIp (not $v.networkPolicy.enabled) (not $v.api.rateLimit.trustXRealIpWithoutNetworkPolicyAcknowledged) -}}
+{{- fail "api.rateLimit.trustXRealIp is true while networkPolicy.enabled is false. Nothing then limits who can reach the api's port, so any pod in the cluster could send its own X-Real-IP and pick its own rate-limit key. Set networkPolicy.enabled=true (the policy admits only the frontend and the callers in networkPolicy.apiExtraIngressNamespaces), set api.rateLimit.trustXRealIp=false (every request the frontend proxies then shares the frontend pod's bucket), or set api.rateLimit.trustXRealIpWithoutNetworkPolicyAcknowledged=true if another control restricts who can reach the api's port." -}}
+{{- end -}}
+{{- if and $xRealIp (has (toString $v.api.service.type) (list "NodePort" "LoadBalancer")) (not $v.api.service.exposedTypeAcknowledged) -}}
+{{- fail (printf "api.service.type is %s while api.rateLimit.trustXRealIp is true. The Service publishes the api's port outside the cluster, where a client reaches it without the frontend and sends its own X-Real-IP to pick its rate-limit key; a NetworkPolicy does not reliably limit node or load-balancer traffic. Use ClusterIP, set api.rateLimit.trustXRealIp=false, or set api.service.exposedTypeAcknowledged=true if the Service is reachable only from addresses you trust." $v.api.service.type) -}}
+{{- end -}}
+{{- if and $xRealIp $v.networkPolicy.enabled $v.networkPolicy.apiExtraIngressNamespaces (not $v.networkPolicy.apiExtraIngressWholeNamespaceAcknowledged) -}}
+{{- $podLabels := $v.networkPolicy.apiExtraIngressPodLabels | default dict -}}
+{{- range $v.networkPolicy.apiExtraIngressNamespaces -}}
+{{- if not (get $podLabels .) -}}
+{{- fail (printf "networkPolicy.apiExtraIngressNamespaces lists %q with no pod labels in networkPolicy.apiExtraIngressPodLabels (an entry set to null or {} counts as none), so every pod in that namespace can reach the api's port while api.rateLimit.trustXRealIp is true, and each can pick its own rate-limit key. Add the calling pods' labels under networkPolicy.apiExtraIngressPodLabels.%s, or set networkPolicy.apiExtraIngressWholeNamespaceAcknowledged=true to admit the whole namespace." . .) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $np := $v.networkPolicy.components | default dict -}}
+{{- if and $xRealIp $v.networkPolicy.enabled (dig "api" "extraIngress" list $np) (not $v.networkPolicy.trustedExtraIngressAcknowledged) -}}
+{{- fail "networkPolicy.components.api.extraIngress has rules while api.rateLimit.trustXRealIp is true. Each rule admits callers to the api that the chart did not choose (a podSelector with no namespaceSelector, an ipBlock such as 0.0.0.0/0 or a rule with no ports reaches the whole cluster or the internet), and each can pick its own rate-limit key. Use networkPolicy.apiExtraIngressNamespaces with apiExtraIngressPodLabels for a caller, or set networkPolicy.trustedExtraIngressAcknowledged=true once every rule is as narrow as it can be." -}}
+{{- end -}}
+{{- /* The frontend's proxy always turns CF-Connecting-IP into X-Real-IP. */ -}}
+{{- if and $v.networkPolicy.enabled (dig "frontend" "extraIngress" list $np) (not $v.networkPolicy.trustedExtraIngressAcknowledged) -}}
+{{- fail "networkPolicy.components.frontend.extraIngress has rules. The frontend's proxy always trusts CF-Connecting-IP and sets X-Real-IP from it, so each rule admits callers that can choose the rate-limit key for the api (a podSelector with no namespaceSelector, an ipBlock such as 0.0.0.0/0 or a rule with no ports reaches the whole cluster or the internet). Set networkPolicy.trustedExtraIngressAcknowledged=true once every rule is as narrow as it can be." -}}
+{{- end -}}
+{{- if and (has (toString $v.frontend.service.type) (list "NodePort" "LoadBalancer")) (not $v.frontend.service.exposedTypeAcknowledged) -}}
+{{- fail (printf "frontend.service.type is %s. The frontend's proxy always trusts CF-Connecting-IP and sets X-Real-IP from it, so a client that reaches the Service directly, around the tunnel or the ingress controller, picks its own rate-limit key. Use ClusterIP, or set frontend.service.exposedTypeAcknowledged=true if the Service is reachable only from addresses you trust." $v.frontend.service.type) -}}
+{{- end -}}
+{{- if and $v.networkPolicy.enabled $v.networkPolicy.tunnel.enabled (not $v.networkPolicy.tunnel.podLabels) (not $v.networkPolicy.tunnel.wholeNamespaceAcknowledged) -}}
+{{- fail (printf "networkPolicy.tunnel.podLabels is empty (or null), so every pod in namespace %q can reach the frontend and, with api.personalTokens.trustCfConnectingIp, the token port: each can send its own CF-Connecting-IP. Set networkPolicy.tunnel.podLabels to the connector's pod labels, or set networkPolicy.tunnel.wholeNamespaceAcknowledged=true to admit the whole namespace." $v.networkPolicy.tunnel.namespace) -}}
 {{- end -}}
 {{- end -}}
 

@@ -27,7 +27,10 @@ type: application
 #   monorepo's.
 # 0.6.1: /public/version names each image's own repository (image.source),
 #   and lists ds-migrate at its release tag while migrate.job.enabled.
-version: 0.6.1
+# 0.6.2: client-address trust guards (the render refuses a trusted header
+#   reachable by a caller the chart did not choose) and their acknowledgement
+#   values; no rendered object changes for values that pass them.
+version: 0.6.2
 
 # CI sets appVersion to `sha-<short sha>` of the ds-deploy commit it packages
 # (`helm package --app-version`). No first-party image falls back to it:

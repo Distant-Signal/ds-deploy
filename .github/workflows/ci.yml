@@ -477,6 +477,7 @@ jobs:
         run: |
           set -euo pipefail
           base=(
+            --set api.rateLimit.trustXRealIpWithoutNetworkPolicyAcknowledged=true
             --set trustConsumer.kafka.brokers=kafka.example.com:9094
             --set trustConsumer.kafka.topic=test-topic
             --set trustConsumer.kafka.saslMechanism=PLAIN
@@ -1822,7 +1823,7 @@ jobs:
           svc=$(render "${client[@]}" --show-only templates/api-service.yaml)
           grep -q 'name: distant-signal-api-delegated' <<<"${svc}" || fail "the delegated Service must render"
           grep -A12 'name: distant-signal-api-delegated' <<<"${svc}" | grep -q 'type: ClusterIP' || fail "the delegated Service must be ClusterIP"
-          svc=$(render "${client[@]}" --set api.service.type=LoadBalancer --show-only templates/api-service.yaml)
+          svc=$(render "${client[@]}" --set api.service.type=LoadBalancer --set api.service.exposedTypeAcknowledged=true --show-only templates/api-service.yaml)
           grep -A12 'name: distant-signal-api-delegated' <<<"${svc}" | grep -q 'type: ClusterIP' \
             || fail "the delegated Service stays ClusterIP whatever api.service.type is"
           dep=$(render "${client[@]}" --show-only templates/api-deployment.yaml)
@@ -1892,7 +1893,7 @@ jobs:
           grep -A1 -- '- name: PERSONAL_TOKENS_ENABLED' <<<"${out}" | grep -q 'value: "false"' \
             || fail "PERSONAL_TOKENS_ENABLED must default to false"
 
-          svc=$(render "${on[@]}" --set api.service.type=LoadBalancer --show-only templates/api-service.yaml)
+          svc=$(render "${on[@]}" --set api.service.type=LoadBalancer --set api.service.exposedTypeAcknowledged=true --show-only templates/api-service.yaml)
           grep -q 'name: distant-signal-api-tokens' <<<"${svc}" || fail "the token Service must render"
           grep -A12 'name: distant-signal-api-tokens' <<<"${svc}" | grep -q 'type: ClusterIP' \
             || fail "the token Service stays ClusterIP whatever api.service.type is"
@@ -3147,6 +3148,7 @@ jobs:
             --set 'networkPolicy.components.aggregator.extraEgress[0].to[0].ipBlock.cidr=192.0.2.10/32' \
             --set 'networkPolicy.components.postgres.extraIngress[0].from[0].podSelector.matchLabels.probe=pg' \
             --set 'networkPolicy.components.frontend.extraIngress[0].from[0].podSelector.matchLabels.probe=fe' \
+            --set networkPolicy.trustedExtraIngressAcknowledged=true \
             --set 'networkPolicy.components.notifier.extraIngress[0].from[0].podSelector.matchLabels.probe=nt' \
             --show-only templates/networkpolicy.yaml)
           out=$(egress_of aggregator "${eg}")
@@ -3172,6 +3174,7 @@ jobs:
             || fail "ds-mcp must be narrowed to the MCP pod by default"
           api=$(render --set 'networkPolicy.apiExtraIngressNamespaces={ds-mcp}' \
             --set networkPolicy.apiExtraIngressPodLabels.ds-mcp=null \
+            --set networkPolicy.apiExtraIngressWholeNamespaceAcknowledged=true \
             --show-only templates/networkpolicy.yaml | policy distant-signal-api)
           if grep -q 'distant-signal-mcp' <<<"${api}"; then fail "a null apiExtraIngressPodLabels entry must admit the whole namespace"; fi
           # The tunnel (cloudflared) reaches the frontend, never the api unless

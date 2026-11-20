@@ -57,6 +57,15 @@ enricher:
 devAuthentik:
   enabled: true
 
+# The api keys anonymous clients on the X-Real-IP the frontend sets, which
+# is safe only while a NetworkPolicy limits who can reach the api. A trial
+# cluster often has no policy-enforcing CNI, so this file leaves
+# networkPolicy.enabled off and acknowledges that. Turn networkPolicy.enabled
+# on and drop this line for anything beyond a trial.
+api:
+  rateLimit:
+    trustXRealIpWithoutNetworkPolicyAcknowledged: true
+
 # movement-relay is the only Kafka client (RDM Train Movements). Off here:
 # the three TRUST consumers then read an empty stream, so there are no live
 # train movements. Turn it on with trustConsumer.kafka.* (brokers, topic,
