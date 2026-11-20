@@ -1126,6 +1126,26 @@ jobs:
           [[ "${n}" -eq 1 ]] || fail "api RUST_LOG must be rendered once, got ${n}"
           grep -A4 'name: RUST_LOG$' <<<"${dep}" | grep -q 'secretKeyRef' || fail "an extraEnv valueFrom must replace the chart's value"
           if grep -A1 'name: RUST_LOG$' <<<"${dep}" | grep -q 'value:'; then fail "the replaced entry must not keep the chart's value"; fi
+          # trust-backlog-consumer's TRUST_BACKLOG_ALL_STATIONS is always
+          # rendered from trustBacklogConsumer.allStationsEnabled (default
+          # true; the image's own default is false), once, and an extraEnv
+          # entry of the same name (the 2026-11-18 trial's) wins in place
+          # without repeating it.
+          trust=templates/trust-backlog-consumer-deployment.yaml
+          dep=$(render --show-only "${trust}")
+          once TRUST_BACKLOG_ALL_STATIONS true
+          dep=$(render --set trustBacklogConsumer.allStationsEnabled=false --show-only "${trust}")
+          once TRUST_BACKLOG_ALL_STATIONS false
+          dep=$(render \
+            --set 'trustBacklogConsumer.extraEnv[0].name=TRUST_BACKLOG_ALL_STATIONS' \
+            --set-string 'trustBacklogConsumer.extraEnv[0].value=true' \
+            --show-only "${trust}")
+          once TRUST_BACKLOG_ALL_STATIONS true
+          dep=$(render --set trustBacklogConsumer.allStationsEnabled=false \
+            --set 'trustBacklogConsumer.extraEnv[0].name=TRUST_BACKLOG_ALL_STATIONS' \
+            --set-string 'trustBacklogConsumer.extraEnv[0].value=true' \
+            --show-only "${trust}")
+          once TRUST_BACKLOG_ALL_STATIONS true
           # No container anywhere repeats a name (containers are the
           # 8-space list items, their env entries the 12-space ones),
           # including schedulefeed's ingest with the bucket source's env.

@@ -465,9 +465,6 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
     "trust-backlog-consumer": {
         "LINES_DIR": LINES,
         "STANOX_CRS_FILE": STANOX,
-        # Off by default: the catalogue-scope trial turns it on through
-        # trustBacklogConsumer.extraEnv, and a named value is a later change.
-        "TRUST_BACKLOG_ALL_STATIONS": no_value("trustBacklogConsumer"),
     },
     "trust-consumer": {"MOVEMENT_FEED_BACKEND": KAFKA_GONE, "STANOX_CRS_FILE": STANOX},
 }
@@ -496,6 +493,10 @@ OVERRIDES: Mapping[tuple[str, str], tuple[str, str]] = {
     # The evening mint (TEMPLATE_MINT_EVENING_HOUR) should land by about a
     # quarter past the hour (regular journeys design §4.3).
     ("notifier", "TEMPLATE_SWEEP_POLL_INTERVAL_SECS"): ("900", "3600"),
+    # Permanent since the 2026-11-18 trial (DS-534): coverage at
+    # uncatalogued stations 4.5% to 99.4% for about +9% rows. The image's
+    # code default stays off; trustBacklogConsumer.allStationsEnabled sets it.
+    ("trust-backlog-consumer", "TRUST_BACKLOG_ALL_STATIONS"): ("true", "false"),
     ("trust-backlog-consumer", "REDIS_URL"): REDIS,
     ("trust-consumer", "REDIS_URL"): REDIS,
 }
