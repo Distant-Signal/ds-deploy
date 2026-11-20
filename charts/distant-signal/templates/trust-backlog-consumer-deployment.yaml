@@ -169,4 +169,9 @@ with trustBacklogConsumer.extraEnv, which replaces an entry of the same name.
             - name: TRAIN_SERVICE_LABELS_ENABLED
               value: "true"
             {{- end }}
+            # Always rendered, so the chart and not the image's own default
+            # (false) decides it. Kept last: an extraEnv entry of the same
+            # name replaces it in place (distant-signal.mergeEnv).
+            - name: TRUST_BACKLOG_ALL_STATIONS
+              value: {{ .Values.trustBacklogConsumer.allStationsEnabled | quote }}
 {{- end }}

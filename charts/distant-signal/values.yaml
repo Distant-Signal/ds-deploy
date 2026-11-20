@@ -4568,6 +4568,18 @@ trustBacklogConsumer:
   # trust-backlog-consumer image built with PR #24 of ds-ingest (an older
   # image ignores it) and ds-core v0.14.5's migration and grants.
   trainServiceLabelsEnabled: false
+  # -- Also keep TRUST calling-point events at stations outside the line
+  # catalogue (TRUST_BACKLOG_ALL_STATIONS), not only at catalogued ones.
+  # Always rendered, as "true" or "false". Measured on production over the
+  # 2026-11-18 trial: TRUST coverage of Darwin actual calls at
+  # previously-uncatalogued stations rose from 4.5% to 99.4%, catalogued
+  # stations unchanged, for about +9% rows/day and +0.2 GB at current
+  # retention. The image's own default is false; this value overrides it.
+  # Roll back by setting false (the Deployment restarts, Recreate: a few
+  # seconds' gap, the consumer group keeps its entries; rows already
+  # written stay until retention prunes them). Needs a trust-backlog-consumer
+  # image built with ds-ingest PR #41.
+  allStationsEnabled: true
   extraEnv: []
   # Reads the movement-events Redis stream in bounded batches and POSTs
   # them on. The backlog itself lives in Redis, not in this process.
