@@ -339,6 +339,7 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "LINES_DIR": LINES,
         "SCHEDULE_DERIVED_PRODUCTS_RETENTION_DAYS": no_value("aggregator"),
         "SCHEDULE_LINE_POPULATION_RETENTION_DAYS": no_value("aggregator"),
+        "TRAINS_SNAPSHOT_GUARD_MAX_DAYS": no_value("aggregator"),
     },
     "api": {
         # Read by the api image pinned for Deploy 1; no chart value yet, so
