@@ -345,6 +345,8 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         # the default applies and api.extraEnv overrides it.
         "ACCOUNT_CONTINUITY_REQUIRE_STRONG_MATCH": no_value("api"),
         "ACCOUNT_CONTINUITY_REVOKE_TOKENS_ON_REKEY": no_value("api"),
+        "API_RATE_LIMIT_TRAIN_PREVIEW_BURST": no_value("api"),
+        "API_RATE_LIMIT_TRAIN_PREVIEW_PER_MINUTE": no_value("api"),
         "API_RATE_LIMIT_TRUSTED_PROXIES": no_value("api"),
         "DARWIN_STOPS_FALLBACK_ENABLED": no_value("api"),
         "LINES_DIR": LINES,
