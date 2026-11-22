@@ -2511,8 +2511,8 @@ write loop, pinned to `replicas: 1` with `strategy: Recreate`.
 | `aggregator.fullCoverageWindow.retentionDays` | `14` | Days window stats and verdicts are kept (pruned in every mode). |
 | `aggregator.trustEventBacklogRetentionDays` | `1` | Days `trust_event_backlog` rows are kept. Deliberately 1: a TRUST licensing safeguard. |
 | `aggregator.scheduleDestinationDeparturesRetentionDays` | `8` | Service dates of `schedule_destination_departures` kept (about 377,000 rows a day); covers the train search's 7-day backward window. |
-| `aggregator.trainsRetentionDays` | `30` | Days a `trains` row (with its movement events and current state) is kept when a user tracked it. |
-| `aggregator.untrackedTrainsRetentionDays` | `14` | Days a `trains` row is kept when nobody tracked it. |
+| `aggregator.trainsRetentionDays` | `30` | Days a `trains` row (with its movement events and current state) is kept when a user tracked it (a `train_subscriptions` row references it). A train bound to a journey leg is kept past this window for as long as the leg exists, up to a hard bound of `TRAINS_SNAPSHOT_GUARD_MAX_DAYS` (default 600, no chart value). |
+| `aggregator.untrackedTrainsRetentionDays` | `14` | Days a `trains` row is kept when nobody tracked it (no `train_subscriptions` row references it). |
 | `aggregator.logLevel` | `info` | `RUST_LOG` value. |
 | `aggregator.extraEnv` | `[]` | Extra env vars for the container. One named like a chart-set var replaces it; the rest follow the chart's own. |
 | `aggregator.resources` | requests `100m`/`256Mi`, limit `384Mi` | Container resource requests/limits. |
