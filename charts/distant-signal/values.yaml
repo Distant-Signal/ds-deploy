@@ -1630,7 +1630,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.44939226100-9f78687e24dad66c10545b2bc9c66772236d8209"
+    tag: "build.44967097892-44586062093d6d72653c44a95bc25c09f6daf3c6"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1643,7 +1643,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:b48f84c4400d005c230180ad9afff39f66339cd4ed902b1324415c0c9d0f1a9b"
+    digest: "sha256:23fbf245d83bdef659333dcf75ccbb490f9067f5772adbc95af15c8cf95718ab"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -3023,10 +3023,10 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: "build.44939554255-43646a5b9a20f5c4b98be18e3f9ba4af099c4958"
+    tag: "build.44966077009-57b9eab27046a7f4f77bcd80eef3d4f7cbf19ccd"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:7515c07a0bc2305dc261a9f45bb3f1617378bbdbb195fd86ebb79e41ec615d81"
+    digest: "sha256:a991ac2afec568decdf7555bd0ab4a6b737178118086aca8b22b213c47190241"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -3144,7 +3144,9 @@ aggregator:
   # -- How long trains rows (and, via CASCADE, train_movement_events/
   # train_current_state) are kept before aggregator prunes them, for a
   # train that HAS at least one train_subscriptions row referencing it --
-  # a real user tracked that journey. Matches
+  # a real user tracked that journey. A train bound to a journey leg is
+  # kept past this window while the leg exists, up to the hard bound
+  # TRAINS_SNAPSHOT_GUARD_MAX_DAYS (default 600; no chart value). Matches
   # crates/aggregator/src/config.rs's own trains_retention_days
   # default_value_t. See untrackedTrainsRetentionDays below for the
   # shorter tier applied to trains nobody is tracking.
@@ -6287,10 +6289,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.44941745312-7ba85e2cce3f61fbc09f5199ccd0cfdb26e667d2"
+    tag: "build.44970604041-f854bf572c56345e83c3bbe949166f802bdde404"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:c63a93026ea60bc0235f50e42c9c41e9d61b77275f007665b96f005d7870879f"
+    digest: "sha256:e25f6e33af80b743fd720ba43f8828daf8a9a3f3d772282ba668424718ca7f1b"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
