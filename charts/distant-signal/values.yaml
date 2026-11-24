@@ -3136,7 +3136,8 @@ aggregator:
   # unlike schedule_network_departures it genuinely accrues and genuinely
   # needs pruning. NOT a licensing safeguard -- purely disk and keeping
   # GET /public/trains/search's 7-day backward search window intact with
-  # a 1-day safety margin. See
+  # a 1-day safety margin. Rows of a train bound to a journey leg are kept
+  # past this (see trainsRetentionDays). See
   # Config::schedule_destination_departures_retention_days
   # (crates/aggregator/src/config.rs) and
   # docs/superpowers/specs/2026-09-09-trains-search-multi-day-design.md.
@@ -3146,7 +3147,9 @@ aggregator:
   # train that HAS at least one train_subscriptions row referencing it --
   # a real user tracked that journey. A train bound to a journey leg is
   # kept past this window while the leg exists, up to the hard bound
-  # TRAINS_SNAPSHOT_GUARD_MAX_DAYS (default 600; no chart value). Matches
+  # TRAINS_SNAPSHOT_GUARD_MAX_DAYS (default 600; no chart value). For such a
+  # train the schedule, Darwin and stop-board rows are kept too (the boards
+  # capped at 300 days: LDBWS_PINNED_BOARDS_MAX_DAYS, no chart value). Matches
   # crates/aggregator/src/config.rs's own trains_retention_days
   # default_value_t. See untrackedTrainsRetentionDays below for the
   # shorter tier applied to trains nobody is tracking.
@@ -7595,6 +7598,15 @@ metrics:
       window: 2h
       minErrors: 2
       for: 0m
+      severity: warning
+    # DistantSignalPinnedTrainDataLost: bound schedule-matched GB trains
+    # (from 2026-11-22) past their ordinary retention that lack schedule,
+    # departure, calling-point or current-state data
+    # (aggregator_pinned_trains_missing_data{kind} > 0). The gauge cannot
+    # rise before about 2027-02, so it is on by default; see docs/alerts.md.
+    pinnedTrainsMissingData:
+      enabled: true
+      for: 6h
       severity: warning
     # Cold-archive expiry (archive.expiry). Renders only when archive.enabled
     # and archive.expiry.enabled are also true. Expiry runs once a day, so

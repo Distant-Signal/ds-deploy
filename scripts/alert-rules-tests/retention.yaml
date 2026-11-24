@@ -49,3 +49,25 @@ tests:
               summary: aggregator retention step schedule_services failing (2 in 2h)
               description: "Its rows stop being pruned (some are licensing deadlines); the other steps still run. See the aggregator's log."
               runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalretentionstepfailing
+
+  # DistantSignalPinnedTrainDataLost: the gauge above 0 for 6h. kind=darwin
+  # goes to 2 at 1m and stays: pending before 6h1m, firing after.
+  # kind=boards stays 0: quiet.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_aggregator_pinned_trains_missing_data{namespace="distant-signal", pod="a", kind="darwin"}'
+        values: '0 2x599'
+      - series: 'distant_signal_aggregator_pinned_trains_missing_data{namespace="distant-signal", pod="a", kind="boards"}'
+        values: '0x600'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: DistantSignalPinnedTrainDataLost
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: DistantSignalPinnedTrainDataLost
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, kind: darwin}
+            exp_annotations:
+              summary: pinned trains missing darwin data (2)
+              description: "Journey-bound trains past ordinary retention lack this kind of data. Nothing is deleted; see the aggregator's ERROR logs."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpinnedtraindatalost

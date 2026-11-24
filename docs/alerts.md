@@ -1460,6 +1460,28 @@ LDBWS-derived `daily_stats`, `half_hourly_stats` and coverage stats.
    DistantSignalArchiveStale. Upload failures do not count here; only
    database errors do.
 
+### DistantSignalPinnedTrainDataLost
+
+`aggregator_pinned_trains_missing_data{kind}` has been above 0 for 6h
+(`metrics.prometheusRule.pinnedTrainsMissingData`). The gauge counts bound,
+schedule-matched GB trains from 2026-11-22 on whose ordinary retention
+(`aggregator.trainsRetentionDays`) has expired but that lack
+`schedule_services`, `schedule_destination_departures`, `calling_points` or
+`current_state` data, one series per `kind`. Such a train is pinned by its
+journey leg, so its data should still be there: some of it was lost. The
+gauge only counts trains past their ordinary retention, so it cannot rise
+before about February 2027.
+
+Do not delete anything. Check:
+
+1. The aggregator's ERROR logs for the alert's `kind`: a failing retention
+   step or pin check
+   ([DistantSignalRetentionStepFailing](#distantsignalretentionstepfailing)).
+2. `TRAINS_SNAPSHOT_GUARD_MAX_DAYS` (default 600, no chart value): a train
+   older than it is no longer pinned.
+3. The ds-workers pin rule that exempts journey-bound trains from the
+   prune, and whether the train's leg still exists.
+
 ### DistantSignalArchiveExpiryErrors
 
 Cold-archive expiry hit errors (`aggregator_archive_expiry_errors_total{stage}`):
