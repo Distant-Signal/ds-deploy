@@ -1630,7 +1630,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.45307342852-690e0330bc89add0d86dae8787fefe7d43ad2bcd"
+    tag: "build.45504678961-d180743315819928ead1ac2b342d20fe12f1fbbd"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1643,7 +1643,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:6b810386d942bd4179db6aa231d1bb0eeb7b2df55970de39bdeda24cf8bbcdac"
+    digest: "sha256:dbe3b723654c9f89e6885750acfb83d344e2da9971520a750667b884e685bf90"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -6292,10 +6292,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.45035633387-c8da932f91b6b667df39977a02dd596e67be20e4"
+    tag: "build.45508576127-b2c623ebee8554bdc3924f8d56c5cdb9bf7d38c1"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:8d427bcab5950018166223382323925f8bd228ae43769f104d8e20277d9f364c"
+    digest: "sha256:e835bfefef9da24690ff12f7d577dfa96d35c340a3373e7dbe45abed86dffa28"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
