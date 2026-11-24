@@ -82,7 +82,7 @@ so that clause fired on every rollout.
 {{- $feedMarkerOn := and ($rule.scheduleFeedMarkerStale).enabled .Values.scheduleFeed.enabled }}
 {{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $leaveByUnreachableOn $archiveAlertOn $signupSpikeOn $missingNamesOn $rekeyedOn $bankHolidaysOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
 {{- $archiveHealthOn := and .Values.archive.enabled (or ($rule.archiveStale).enabled ($rule.archiveBatchChurn).enabled) }}
-{{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled }}
+{{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled ($rule.pinnedTrainsMissingData).enabled }}
 {{- $darwinOn := and ($rule.darwinRelay).enabled .Values.darwinRelay.enabled }}
 {{- $anyOn = or $anyOn $darwinOn }}
 {{- $rolloutStuckOn := ($rule.ingestRolloutStuck).enabled }}
@@ -2038,10 +2038,11 @@ spec:
         {{- end }}
         {{- end }}
     {{- end }}
-    {{- with $rule.retentionStepFailing }}
-    {{- if .enabled }}
+    {{- if or ($rule.retentionStepFailing).enabled ($rule.pinnedTrainsMissingData).enabled }}
     - name: distant-signal.retention
       rules:
+        {{- with $rule.retentionStepFailing }}
+        {{- if .enabled }}
         {{- /*
         Every aggregator retention step (one pass per pollIntervalSecs, 60s
         by default) counts its errors under its own `task`, registered at 0.
@@ -2062,7 +2063,33 @@ spec:
             summary: "aggregator retention step {{ "{{ $labels.task }}" }} failing ({{ "{{ $value | humanize }}" }} in {{ .window }})"
             description: "Its rows stop being pruned (some are licensing deadlines); the other steps still run. See the aggregator's log."
             runbook_url: {{ printf "%s#distantsignalretentionstepfailing" $runbook | quote }}
-    {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.pinnedTrainsMissingData }}
+        {{- if .enabled }}
+        {{- /*
+        The aggregator's gauge of journey-bound GB trains whose ordinary
+        retention has expired but that lack schedule_services,
+        schedule_destination_departures, calling_points or current_state
+        (one series per `kind`). It counts only trains from 2026-11-22 on and
+        only past their ordinary retention, so it cannot rise before about
+        2027-02.
+        */}}
+        - alert: DistantSignalPinnedTrainDataLost
+          expr: |
+            max by (namespace, kind) (distant_signal_aggregator_pinned_trains_missing_data{namespace="{{ $ns }}"}) > 0
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "pinned trains missing {{ "{{ $labels.kind }}" }} data ({{ "{{ $value | humanize }}" }})"
+            description: "Journey-bound trains past ordinary retention lack this kind of data. Nothing is deleted; see the aggregator's ERROR logs."
+            runbook_url: {{ printf "%s#distantsignalpinnedtraindatalost" $runbook | quote }}
+        {{- end }}
+        {{- end }}
     {{- end }}
     {{- if $archiveExpiryOn }}
     {{- $retentionDays := int .Values.archive.expiry.retentionDays }}
