@@ -337,6 +337,7 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "DATABASE_MAX_CONNECTIONS": POOL,
         "FULL_COVERAGE_LINE_STATS_RETENTION_DAYS": no_value("aggregator"),
         "LINES_DIR": LINES,
+        "LDBWS_PINNED_BOARDS_MAX_DAYS": no_value("aggregator"),
         "SCHEDULE_DERIVED_PRODUCTS_RETENTION_DAYS": no_value("aggregator"),
         "SCHEDULE_LINE_POPULATION_RETENTION_DAYS": no_value("aggregator"),
         "TRAINS_SNAPSHOT_GUARD_MAX_DAYS": no_value("aggregator"),
