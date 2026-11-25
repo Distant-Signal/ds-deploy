@@ -154,6 +154,12 @@ with frontend.extraEnv, which replaces an entry of the same name.
             # not a working equivalent default.
             - name: NEXT_PUBLIC_SITE_URL
               value: {{ include "distant-signal.frontendSiteUrl" . | quote }}
+            # The reload hint's floor (frontend.minBuild), read per request.
+            # Empty (the default) renders nothing, which turns it off.
+            {{- with .Values.frontend.minBuild }}
+            - name: FRONTEND_MIN_BUILD
+              value: {{ . | toString | quote }}
+            {{- end }}
             # frontend/lib/legal.ts: publishes the draft legal pages. Read
             # per request, so no image rebuild is needed to flip it.
             - name: LEGAL_PAGES_PUBLISHED

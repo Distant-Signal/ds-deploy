@@ -1630,7 +1630,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.45504678961-d180743315819928ead1ac2b342d20fe12f1fbbd"
+    tag: "build.45511445511-74f30bea33e893db0b28440dd50a366cd69449c4"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1643,7 +1643,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:dbe3b723654c9f89e6885750acfb83d344e2da9971520a750667b884e685bf90"
+    digest: "sha256:866949e6524fe26dd655f430a58fdbc11271d22964d6133850b78badc91742a1"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -2572,9 +2572,9 @@ migrate:
     # vendors; release-order.py checks every pinned image was built against
     # at most this release. Renovate's ds-core group bumps both, with the
     # digest.
-    tag: v0.18.0
+    tag: v0.18.1
     # -- The release's digest (its release notes list it).
-    digest: "sha256:3355211df476e5321cf1eb60bf0d5859e84bb334faeebb04f0115992a0050ac5"
+    digest: "sha256:d35c49d6dc44c23a4b00a1ad36c0b1136e0eee5846bfe4af95988cb0ad8ec312"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-core
     pullPolicy: IfNotPresent
@@ -2745,10 +2745,10 @@ ingestWriter:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/ingest-writer
-    tag: "build.44120723244-97d69e3e6d1bd92716cbf27348e5b33c157ed4a6"
+    tag: "build.45509064625-f0c8d326c4bc352fea55dd3374fd96a0665d5f13"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:cd99e9a272f32cfe9314cbb92cf0e5ddb28272e7a188f3323f3f657e05c6c27b"
+    digest: "sha256:f944017b7dfc9214dfbb0251710b95c7f700701576ca9465720b0f0ef8f06270"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -6292,10 +6292,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.45508576127-b2c623ebee8554bdc3924f8d56c5cdb9bf7d38c1"
+    tag: "build.45514229662-ab256e9676f2a390d8ab7549c59c7939ffe4f705"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:e835bfefef9da24690ff12f7d577dfa96d35c340a3373e7dbe45abed86dffa28"
+    digest: "sha256:b30e6543904d522ac4fbd9fc7e5994b801d95083fc7e55ecd63fd5fe95d9ee44"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
@@ -6405,6 +6405,12 @@ frontend:
   # LEGAL_PAGES_PREVIEW=true through frontend.extraEnv (never in production:
   # it renders them with a "draft" banner, placeholders and all).
   legalPagesPublished: false
+  # -- Lowest frontend build epoch allowed to keep running: older builds show
+  # a "reload" hint (FRONTEND_MIN_BUILD; docs/frontend-min-build.md in the
+  # frontend repository). Empty turns it off and renders no env. Deploy the
+  # frontend build that carries the new epoch BEFORE raising it: a floor above
+  # every deployed build offers a reload that cannot help.
+  minBuild: ""
   # The operator's own details for the legal pages, rendered as LEGAL_* env
   # the frontend reads per request (frontend/lib/legal.ts,
   # docs/legal-pages.md): no image rebuild, and none of it is in source.
