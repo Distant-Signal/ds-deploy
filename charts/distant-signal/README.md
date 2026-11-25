@@ -2895,7 +2895,6 @@ falls back to (see `movementRelay`).
 | `trustConsumer.referenceReloadSecs` | `60` | How often the active-tracked-trains reference set is reloaded from api. |
 | `trustConsumer.stanoxCrsReloadSecs` | `3600` | How often the live STANOX-to-CRS table is reloaded from Postgres. |
 | `trustConsumer.internalReads.database.maxConnections` | `2` | Its Postgres pool under `db` (`DATABASE_MAX_CONNECTIONS`; spec §6.6). |
-| `trustConsumer.retentionDays` | `90` | Days `train_movement_events` rows are kept before pruning. |
 | `trustConsumer.healthPort` | `8081` | Port for `/healthz` (readiness) and `/livez` (liveness). |
 | `trustConsumer.progressStallSecs` | `300` | `/livez` answers 503 once no consume-loop iteration has completed for this many seconds. |
 | `trustConsumer.replicaCount` | `1` | Replicas, 0 or 1: the render fails on more. Exists so trust-consumer can be scaled to 0 through `helm upgrade`. It reads `movement-events` as one fixed consumer name (`trust-consumer-1`), so a second pod would contend for its pending entries. |
