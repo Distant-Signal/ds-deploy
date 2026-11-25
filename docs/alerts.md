@@ -1463,7 +1463,12 @@ LDBWS-derived `daily_stats`, `half_hourly_stats` and coverage stats.
 ### DistantSignalPinnedTrainDataLost
 
 `aggregator_pinned_trains_missing_data{kind}` has been above 0 for 6h
-(`metrics.prometheusRule.pinnedTrainsMissingData`). The gauge counts bound,
+(`metrics.prometheusRule.pinnedTrainsMissingData`), or
+`aggregator_bound_legs_without_train{state="unsnapshotted"}` is above 0
+(reported as kind `legs_no_train`): a bound journey leg whose
+train row is gone and that has no snapshot, so its timetable and outcome
+are lost. Find the leg from the aggregator's ERROR log; `state="snapshotted"`
+legs are safe and never alert. The first gauge counts bound,
 schedule-matched GB trains from 2026-11-22 on whose ordinary retention
 (`aggregator.trainsRetentionDays`) has expired but that lack
 `schedule_services`, `schedule_destination_departures`, `calling_points` or
@@ -1481,6 +1486,16 @@ Do not delete anything. Check:
    older than it is no longer pinned.
 3. The ds-workers pin rule that exempts journey-bound trains from the
    prune, and whether the train's leg still exists.
+
+### DistantSignalIrishHistoryForcedPrune
+
+The ingest-writer pruned Irish board history rows (`table` label) that a
+tracked journey still held, because they were past the 600-day bound
+(`ingest_writer_ioi_history_forced_total{table}` rose within
+`irishHistoryForcedPrune.window`, 1d). This is data loss by the bound, not
+a fault: the journey was held longer than the history is kept. Read the
+ingest-writer's WARN log for the rows, and see
+[its "Forced prunes" paragraph](https://github.com/Distant-Signal/ds-ingest/blob/main/docs/irish-board-history.md).
 
 ### DistantSignalArchiveExpiryErrors
 

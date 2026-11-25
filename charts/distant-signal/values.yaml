@@ -2572,9 +2572,9 @@ migrate:
     # vendors; release-order.py checks every pinned image was built against
     # at most this release. Renovate's ds-core group bumps both, with the
     # digest.
-    tag: v0.18.2
+    tag: v0.18.3
     # -- The release's digest (its release notes list it).
-    digest: "sha256:17b2d8474370d17fd22bed59bdcd020bf5199caf5e727fe1e62ec65adf41923d"
+    digest: "sha256:7e5401eab23f610814fe19604f6c9c76ab4b732c776367cb2f725cb5f03b3287"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-core
     pullPolicy: IfNotPresent
@@ -2745,10 +2745,10 @@ ingestWriter:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/ingest-writer
-    tag: "build.45509064625-f0c8d326c4bc352fea55dd3374fd96a0665d5f13"
+    tag: "build.45694085830-4352bb16b2cb0f17b6951635d4543a516207d614"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:f944017b7dfc9214dfbb0251710b95c7f700701576ca9465720b0f0ef8f06270"
+    digest: "sha256:044ee1b94803bed7b24ec651bb8c04751c292254d031612e7af095299b566fe5"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -3023,10 +3023,10 @@ aggregator:
   progressStallSecs: 1800
   image:
     repository: ghcr.io/distant-signal/images/aggregator
-    tag: "build.45039020252-d8faef51ded283a76de04f90f910e2693b96ada9"
+    tag: "build.45693179967-c3372927cd23820ce052478478228d970c07395a"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:269f82f88cff7b6f79b57b7d124640aacdd5b60a1d0040226e893cf99477da14"
+    digest: "sha256:ed1a5fa2efe7e79b5393b85cce0ab6d151e389515bd715b8a3b24145d2000e41"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-workers
     pullPolicy: IfNotPresent
@@ -7607,11 +7607,23 @@ metrics:
     # DistantSignalPinnedTrainDataLost: bound schedule-matched GB trains
     # (from 2026-11-22) past their ordinary retention that lack schedule,
     # departure, calling-point or current-state data
-    # (aggregator_pinned_trains_missing_data{kind} > 0). The gauge cannot
-    # rise before about 2027-02, so it is on by default; see docs/alerts.md.
+    # (aggregator_pinned_trains_missing_data{kind} > 0), or a bound leg
+    # whose train is gone with no snapshot
+    # (aggregator_bound_legs_without_train{state="unsnapshotted"} > 0). The
+    # first gauge cannot rise before about 2027-02, so it is on by default;
+    # see docs/alerts.md.
     pinnedTrainsMissingData:
       enabled: true
       for: 6h
+      severity: warning
+    # DistantSignalIrishHistoryForcedPrune: the ingest-writer force-pruned
+    # Irish board history rows still held by a tracked journey (past the
+    # 600-day bound; ingest_writer_ioi_history_forced_total{table}) within
+    # `window`; see docs/alerts.md.
+    irishHistoryForcedPrune:
+      enabled: true
+      window: 1d
+      for: 0m
       severity: warning
     # Cold-archive expiry (archive.expiry). Renders only when archive.enabled
     # and archive.expiry.enabled are also true. Expiry runs once a day, so

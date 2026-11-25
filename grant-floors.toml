@@ -15,3 +15,8 @@ reason = "ds-core#83 takes the notifier out of read_shared"
 service = "notifier"
 core = "v0.17.0"
 reason = "train_subscriptions.public_id column grant"
+
+[[floor]]
+service = "aggregator"
+core = "v0.18.3"
+reason = "train_subscriptions column grant for the bound-legs gauge"
