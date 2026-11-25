@@ -1630,7 +1630,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.45511445511-74f30bea33e893db0b28440dd50a366cd69449c4"
+    tag: "build.45688481739-d663682146761820f9318b33c72b540d1c373eca"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1643,7 +1643,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:866949e6524fe26dd655f430a58fdbc11271d22964d6133850b78badc91742a1"
+    digest: "sha256:e45882735415fbc958af4a7c96467fa7bd41cfb9b3db8d7f3053ce3ace7ab6fa"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -2572,9 +2572,9 @@ migrate:
     # vendors; release-order.py checks every pinned image was built against
     # at most this release. Renovate's ds-core group bumps both, with the
     # digest.
-    tag: v0.18.1
+    tag: v0.18.2
     # -- The release's digest (its release notes list it).
-    digest: "sha256:d35c49d6dc44c23a4b00a1ad36c0b1136e0eee5846bfe4af95988cb0ad8ec312"
+    digest: "sha256:17b2d8474370d17fd22bed59bdcd020bf5199caf5e727fe1e62ec65adf41923d"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-core
     pullPolicy: IfNotPresent
@@ -4223,10 +4223,10 @@ enricher:
 trustConsumer:
   image:
     repository: ghcr.io/distant-signal/images/trust-consumer
-    tag: "build.44120723244-97d69e3e6d1bd92716cbf27348e5b33c157ed4a6"
+    tag: "build.45509064625-f0c8d326c4bc352fea55dd3374fd96a0665d5f13"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:9cc2fecf53f9f1f0992ded2842ae98fd8afe9fb46d240010ce6840db5ada7cc5"
+    digest: "sha256:fd8b12eaf5584328eadba2014fee31c8cc0ced5e0e6610413c82a5a599a7cbee"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -4281,7 +4281,6 @@ trustConsumer:
     database:
       # -- Its Postgres pool (DATABASE_MAX_CONNECTIONS; spec §6.6: pool 2).
       maxConnections: 2
-  retentionDays: 90
   healthPort: 8081
   # -- Liveness watchdog (PROGRESS_STALL_SECS): /healthz answers 503 "stalled"
   # once no consume-loop iteration has completed for this many seconds, so a

@@ -121,8 +121,6 @@ with trustConsumer.extraEnv, which replaces an entry of the same name.
             - name: STANOX_CRS_RELOAD_SECS
               value: {{ .Values.trustConsumer.stanoxCrsReloadSecs | quote }}
             {{- with include "distant-signal.internalReadsEnv" (dict "root" . "role" "trust_consumer" "corpus" true "database" false) | trim }}{{ . | nindent 12 }}{{- end }}
-            - name: RETENTION_DAYS
-              value: {{ .Values.trustConsumer.retentionDays | quote }}
             - name: HEALTH_BIND_URL
               value: {{ printf "0.0.0.0:%d" (int .Values.trustConsumer.healthPort) | quote }}
             - name: PROGRESS_STALL_SECS
