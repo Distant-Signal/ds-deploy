@@ -82,7 +82,7 @@ so that clause fired on every rollout.
 {{- $feedMarkerOn := and ($rule.scheduleFeedMarkerStale).enabled .Values.scheduleFeed.enabled }}
 {{- $anyOn = or $anyOn $notifierDroppedOn $forwardQueueOn $leaveByUnreachableOn $archiveAlertOn $signupSpikeOn $missingNamesOn $rekeyedOn $bankHolidaysOn $archiveExpiryOn $healthOn $tokenExchangeOn $enricherBatchesOn $writerDownOn $ingestStreamsOn $outboxOn $writerHealthOn $poolTimeoutsOn $directWritesOn $feedMarkerOn }}
 {{- $archiveHealthOn := and .Values.archive.enabled (or ($rule.archiveStale).enabled ($rule.archiveBatchChurn).enabled) }}
-{{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled ($rule.pinnedTrainsMissingData).enabled }}
+{{- $anyOn = or $anyOn $archiveHealthOn ($rule.retentionStepFailing).enabled ($rule.pinnedTrainsMissingData).enabled ($rule.irishHistoryForcedPrune).enabled }}
 {{- $darwinOn := and ($rule.darwinRelay).enabled .Values.darwinRelay.enabled }}
 {{- $anyOn = or $anyOn $darwinOn }}
 {{- $rolloutStuckOn := ($rule.ingestRolloutStuck).enabled }}
@@ -2038,7 +2038,7 @@ spec:
         {{- end }}
         {{- end }}
     {{- end }}
-    {{- if or ($rule.retentionStepFailing).enabled ($rule.pinnedTrainsMissingData).enabled }}
+    {{- if or ($rule.retentionStepFailing).enabled ($rule.pinnedTrainsMissingData).enabled ($rule.irishHistoryForcedPrune).enabled }}
     - name: distant-signal.retention
       rules:
         {{- with $rule.retentionStepFailing }}
@@ -2074,10 +2074,19 @@ spec:
         (one series per `kind`). It counts only trains from 2026-11-22 on and
         only past their ordinary retention, so it cannot rise before about
         2027-02.
+
+        The second arm counts bound journey legs whose train row is gone
+        and whose snapshot was never taken (`state="unsnapshotted"`; never
+        `snapshotted`, whose data is kept in the snapshot), reported under
+        the kind `legs_no_train`. It does not wait for 2027-02.
         */}}
-        - alert: DistantSignalPinnedTrainDataLost
+        - record: distant_signal:pinned_trains_data_lost:max
           expr: |
             max by (namespace, kind) (distant_signal_aggregator_pinned_trains_missing_data{namespace="{{ $ns }}"}) > 0
+            or label_replace(sum by (namespace) (distant_signal_aggregator_bound_legs_without_train{namespace="{{ $ns }}", state="unsnapshotted"}), "kind", "legs_no_train", "", "") > 0
+        - alert: DistantSignalPinnedTrainDataLost
+          expr: |
+            distant_signal:pinned_trains_data_lost:max{namespace="{{ $ns }}"}
           for: {{ .for }}
           labels:
             severity: {{ .severity }}
@@ -2086,8 +2095,38 @@ spec:
             {{- end }}
           annotations:
             summary: "pinned trains missing {{ "{{ $labels.kind }}" }} data ({{ "{{ $value | humanize }}" }})"
-            description: "Journey-bound trains past ordinary retention lack this kind of data. Nothing is deleted; see the aggregator's ERROR logs."
+            description: "Bound trains lack data past retention, or a bound leg lost its train before a snapshot. Nothing is deleted; see the aggregator's ERROR logs."
             runbook_url: {{ printf "%s#distantsignalpinnedtraindatalost" $runbook | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $rule.irishHistoryForcedPrune }}
+        {{- if .enabled }}
+        {{- /*
+        The ingest-writer pruned Irish board history rows of a tracked
+        journey because they were past the 600-day bound, so the data a
+        bound journey held is gone by design (a WARN log and this counter,
+        per table). Not a fault, but a data loss worth a look. The series
+        exists only after the first forced delete, so a series that is new
+        within the window counts as an increase (as for the clock skew).
+        */}}
+        {{- $m := printf `distant_signal_ingest_writer_ioi_history_forced_total{namespace="%s"}` $ns }}
+        - record: distant_signal:ioi_history_forced:increase
+          expr: |
+            sum by (namespace, table) (increase({{ $m }}[{{ .window }}])) > 0
+            or sum by (namespace, table) ({{ $m }} unless {{ $m }} offset {{ .window }}) > 0
+        - alert: DistantSignalIrishHistoryForcedPrune
+          expr: |
+            distant_signal:ioi_history_forced:increase{namespace="{{ $ns }}"}
+          for: {{ .for }}
+          labels:
+            severity: {{ .severity }}
+            {{- with $extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "tracked Irish history force-pruned ({{ "{{ $labels.table }}" }})"
+            description: "Rows a tracked journey held went past the 600-day bound. See the ingest-writer's WARN log."
+            runbook_url: {{ printf "%s#distantsignalirishhistoryforcedprune" $runbook | quote }}
         {{- end }}
         {{- end }}
     {{- end }}

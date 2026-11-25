@@ -2550,8 +2550,10 @@ jobs:
           # (`unless on (...)` joins are fine. The one exception is
           # DistantSignalIngestClockSkew's second arm: its counter is NOT
           # registered at 0, so a new series above 0 is a real clamp; it
-          # renders since every render here has the ingest-writer on.)
-          if grep -n -E ' unless .* offset ' <<<"${rule}" | grep -v 'observed_at_clamped_total'; then
+          # renders since every render here has the ingest-writer on. The
+          # same goes for DistantSignalIrishHistoryForcedPrune's: its counter
+          # only appears after the first forced delete.)
+          if grep -n -E ' unless .* offset ' <<<"${rule}" | grep -v -e 'observed_at_clamped_total' -e 'ioi_history_forced_total'; then
             echo "PrometheusRule must not use an 'x unless x offset' new-series clause" >&2; exit 1
           fi
           echo "${names}"

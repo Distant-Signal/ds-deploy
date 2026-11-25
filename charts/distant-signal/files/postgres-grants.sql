@@ -808,7 +808,7 @@ BEGIN
         ('train_subscriptions', 'trust_backlog', 'SELECT', 'id,trains_id,resolution_status,unresolved_from'),
         ('train_subscriptions', 'trust_backlog', 'UPDATE', 'resolution_status,unresolved_from'),
         ('train_subscriptions', 'trust_consumer', 'SELECT', 'id,trains_id'),
-        ('train_subscriptions', 'aggregator', 'SELECT', 'id,trains_id'),
+        ('train_subscriptions', 'aggregator', 'SELECT', 'id,trains_id,service_date,resolution_status'),
         ('train_subscriptions', 'notifier', 'SELECT', 'id,user_id,trains_id,notifications_enabled,pin_origin_crs,pin_scheduled_departure,pin_destination_crs,pin_origin_ref,public_id'),
         ('train_subscriptions', 'notifier', 'INSERT', 'user_id,trains_id,service_date,pin_origin_crs,pin_scheduled_departure,pin_destination_crs'),
         ('train_subscriptions', 'notifier', 'UPDATE', 'notifications_enabled,pin_origin_crs,pin_scheduled_departure,pin_destination_crs'),

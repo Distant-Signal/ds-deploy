@@ -342,7 +342,11 @@ tables:
   #   trust_consumer: `SELECT trains_id ... WHERE id` (upsert_train_event_on);
   #   aggregator: `EXISTS ... WHERE trains_id` (prune, archive), and the
   #     prune guard's join to journey_legs (`ts.id = jl.train_subscription_id`,
-  #     DS-638), which is why it reads id too;
+  #     DS-638), which is why it reads id too, and service_date and
+  #     resolution_status for the loss alarm's `bound_legs_without_train`
+  #     gauges (DS-658: a leg whose subscription is matched but has lost its
+  #     train, from the pin's ship date on). Columns only, no write, nothing
+  #     of the user, the pins or the public id;
   #   notifier: candidates and legs (id, user_id, trains_id,
   #     notifications_enabled, the pins: a leg's route falls back to them,
   #     DS-144), create_subscription_for_train's insert and re-enable, and
@@ -352,7 +356,7 @@ tables:
   #     and tags.
   #   The writer's Irish history prune reads only trains_id (whether a
   #   train is tracked); the pin refs are the api's.
-  train_subscriptions: {class: personal, grants: {api: SIUD, writer: [{privileges: S, columns: [id, trains_id, service_date, resolution_status, unresolved_from, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_skipped_stations, pin_platform, pin_planned_platform]}, {privileges: U, columns: [resolution_status, unresolved_from, trains_id, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}], trust_backlog: [{privileges: S, columns: [id, trains_id, resolution_status, unresolved_from]}, {privileges: U, columns: [resolution_status, unresolved_from]}], trust_consumer: {privileges: S, columns: [id, trains_id]}, aggregator: {privileges: S, columns: [id, trains_id]}, notifier: [{privileges: S, columns: [id, user_id, trains_id, notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_origin_ref, public_id]}, {privileges: I, columns: [user_id, trains_id, service_date, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: U, columns: [notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}]}}
+  train_subscriptions: {class: personal, grants: {api: SIUD, writer: [{privileges: S, columns: [id, trains_id, service_date, resolution_status, unresolved_from, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_skipped_stations, pin_platform, pin_planned_platform]}, {privileges: U, columns: [resolution_status, unresolved_from, trains_id, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}], trust_backlog: [{privileges: S, columns: [id, trains_id, resolution_status, unresolved_from]}, {privileges: U, columns: [resolution_status, unresolved_from]}], trust_consumer: {privileges: S, columns: [id, trains_id]}, aggregator: {privileges: S, columns: [id, trains_id, service_date, resolution_status]}, notifier: [{privileges: S, columns: [id, user_id, trains_id, notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs, pin_origin_ref, public_id]}, {privileges: I, columns: [user_id, trains_id, service_date, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}, {privileges: U, columns: [notifications_enabled, pin_origin_crs, pin_scheduled_departure, pin_destination_crs]}]}}
   # No UPDATE for anyone (security review L3): every writer inserts with
   # ON CONFLICT (trains_id, dedup_key) DO NOTHING. The conflict target
   # needs SELECT on its columns, so trust_consumer (outside read_shared)

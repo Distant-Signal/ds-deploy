@@ -69,5 +69,68 @@ tests:
           - exp_labels: {severity: warning, namespace: distant-signal, kind: darwin}
             exp_annotations:
               summary: pinned trains missing darwin data (2)
-              description: "Journey-bound trains past ordinary retention lack this kind of data. Nothing is deleted; see the aggregator's ERROR logs."
+              description: "Bound trains lack data past retention, or a bound leg lost its train before a snapshot. Nothing is deleted; see the aggregator's ERROR logs."
               runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpinnedtraindatalost
+
+  # The bound-legs arm: only state=unsnapshotted counts, under kind
+  # legs_no_train. 1 at 1m: firing after 6h1m. snapshotted
+  # never alerts on its own.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_aggregator_bound_legs_without_train{namespace="distant-signal", pod="a", state="unsnapshotted"}'
+        values: '0 1x599'
+      - series: 'distant_signal_aggregator_bound_legs_without_train{namespace="distant-signal", pod="a", state="snapshotted"}'
+        values: '5x600'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: DistantSignalPinnedTrainDataLost
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: DistantSignalPinnedTrainDataLost
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, kind: legs_no_train}
+            exp_annotations:
+              summary: pinned trains missing legs_no_train data (1)
+              description: "Bound trains lack data past retention, or a bound leg lost its train before a snapshot. Nothing is deleted; see the aggregator's ERROR logs."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalpinnedtraindatalost
+
+  # DistantSignalIrishHistoryForcedPrune: any increase within 1d. The
+  # counter steps from 0 to 3 at 10m on table ioi_x and stays; the other
+  # table never moves.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_writer_ioi_history_forced_total{namespace="distant-signal", pod="w", table="ioi_x"}'
+        values: '0x9 3x50'
+      - series: 'distant_signal_ingest_writer_ioi_history_forced_total{namespace="distant-signal", pod="w", table="ioi_y"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalIrishHistoryForcedPrune
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DistantSignalIrishHistoryForcedPrune
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, table: ioi_x}
+            exp_annotations:
+              summary: tracked Irish history force-pruned (ioi_x)
+              description: "Rows a tracked journey held went past the 600-day bound. See the ingest-writer's WARN log."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalirishhistoryforcedprune
+
+  # The series appears only after the first forced delete: a table that
+  # starts at 4 at 10m (no earlier sample) still fires.
+  - interval: 1m
+    input_series:
+      - series: 'distant_signal_ingest_writer_ioi_history_forced_total{namespace="distant-signal", pod="w", table="ioi_z"}'
+        values: '_x9 4x50'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DistantSignalIrishHistoryForcedPrune
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DistantSignalIrishHistoryForcedPrune
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: distant-signal, table: ioi_z}
+            exp_annotations:
+              summary: tracked Irish history force-pruned (ioi_z)
+              description: "Rows a tracked journey held went past the 600-day bound. See the ingest-writer's WARN log."
+              runbook_url: https://github.com/Distant-Signal/ds-deploy/blob/main/docs/alerts.md#distantsignalirishhistoryforcedprune
