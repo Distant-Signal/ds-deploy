@@ -360,6 +360,7 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "SSO_PRIMARY_SUB_CLAIM": ahead_of_image(
             "api.sso.primarySubClaim", "distant-signal#192, ds-core v0.1.1"
         ),
+        "SSO_END_SESSION_URL": optional("api.logoutEverywhere.endSessionUrl"),
         "WEBHOOK_SECRET_KEYS": optional("api.webhooks.secretKeys.existingSecret"),
         # Test credentials (ds-api's docs/test-auth.md): off by default, so
         # no render sets them; the chart renders the first four only while
