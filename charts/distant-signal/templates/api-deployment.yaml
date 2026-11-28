@@ -622,6 +622,19 @@ with api.extraEnv, which replaces an entry of the same name.
             # in values.yaml.
             - name: JOURNEY_TIGHT_CONNECTIONS
               value: {{ dig "journeyTightConnections" "enabled" false .Values.api | quote }}
+            {{- /* The public station board -- see api.stationBoard in
+                 values.yaml. Both are always rendered. The api refuses to
+                 start on an invalid code, so a bad list fails the render;
+                 set and empty means no station. */}}
+            {{- $stationBoard := .Values.api.stationBoard | default dict }}
+            {{- $noBookedPlatformCrs := dig "noBookedPlatformCrs" "VIC,EUS,PAD,KGX,MYB,STP" $stationBoard | toString }}
+            {{- if and $noBookedPlatformCrs (not (regexMatch "^[A-Z]{3}(,[A-Z]{3})*$" $noBookedPlatformCrs)) }}
+            {{- fail (printf "api.stationBoard.noBookedPlatformCrs is %q: it must be empty or a comma-separated list of three-letter station codes in capitals, with no spaces." $noBookedPlatformCrs) }}
+            {{- end }}
+            - name: STATION_BOARD_ENABLED
+              value: {{ dig "enabled" false $stationBoard | quote }}
+            - name: STATION_BOARD_NO_BOOKED_PLATFORM_CRS
+              value: {{ $noBookedPlatformCrs | quote }}
             {{- /* Log out everywhere -- see api.logoutEverywhere in values.yaml.
                  The api refuses to start on an invalid SSO_END_SESSION_URL
                  and on the switch without one, so the URL is rendered only
