@@ -4788,9 +4788,9 @@ darwinRelay:
   enabled: false
   image:
     repository: ghcr.io/distant-signal/images/darwin-relay
-    tag: "build.45694085830-4352bb16b2cb0f17b6951635d4543a516207d614"
+    tag: "build.46163795028-2d179eb00889214e28997f1d93506b331bb2c86a"
     # -- Content digest override (see api.image.digest).
-    digest: "sha256:6e8fd5753822069a6c4fc7efe75e668c1830aea31eac5115e03a0d341ace84a6"
+    digest: "sha256:52261d7d3e5019ea19fb430cdaa43adbe17b163d36b5009188c6ff9fbf2c1b72"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-ingest
     pullPolicy: IfNotPresent
@@ -6317,10 +6317,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.46159076343-587b8c8b288e48ccc03f369bdb04f2f4d7fae4ac"
+    tag: "build.46160827791-ae186e5c7269a8da47b3b22d2f03390ab39193b5"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:c6e82d0e784677385d7e8aa23dbcf2b5e6e704bb3c0dfac40736195d84065d65"
+    digest: "sha256:d2e021f2f55c635018cac16fb85438f8c18d7b2af90f8ea225fe506e25c6e736"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent

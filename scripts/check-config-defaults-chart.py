@@ -389,6 +389,10 @@ UNWIRED: Mapping[str, Mapping[str, str]] = {
         "TRUST_STOPS_FALLBACK_ENABLED": no_value("api"),
     },
     "darwin-relay": {
+        # The schedule plat-shape probe (ds-ingest#47): on by default and
+        # changes nothing the relay publishes; no chart value, so
+        # darwinRelay.extraEnv overrides it.
+        "DARWIN_PLAT_SHAPE_PROBE": no_value("darwinRelay"),
         "DARWIN_STREAM_MAXLEN": no_value("darwinRelay"),
         "KAFKA_ALLOW_INSECURE_PROTOCOL": no_value("darwinRelay"),
         "KAFKA_COMMIT_DELAY_SECS": no_value("darwinRelay"),
