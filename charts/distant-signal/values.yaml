@@ -1630,7 +1630,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.46167016902-1e420e404b1284750152c28b85ab7dcb18b4a77e"
+    tag: "build.46183904136-edf6f37ff0c4cb544cc59a6ae3be0d48f770f29b"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1643,7 +1643,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:4775771e05f3a05332625a260d702516c0c0e59c355cf3c1e4d02e7b381f2d52"
+    digest: "sha256:230432d0a638b61e46be47212bfa87a0f538a8a9b452f049ace9489e5485f82e"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -1758,19 +1758,6 @@ api:
     # https://status.example.com/. One fixed target, not a round-tripped
     # "return to the page you were on". Required.
     postLoginRedirectUrl: ""
-    # -- Account continuity across a change of identity provider
-    # (Distant-Signal/ds-api docs/connected-apps.md, "Account continuity"):
-    # the ID-token claim carrying the user's Discord id, from the provider's
-    # Discord source connection. A login whose sub has no account takes over
-    # the account with that `users.discord_id`. Empty (the default) is off;
-    # rendered as SSO_DISCORD_ID_CLAIM only when set. Needs an api built
-    # against ds-core v0.1.1 or later.
-    discordIdClaim: ""
-    # -- Account continuity, staff: the ID-token claim carrying the user's
-    # sub at the previous (primary) identity provider, i.e. their existing
-    # `users.id`. Empty (the default) is off; rendered as
-    # SSO_PRIMARY_SUB_CLAIM only when set.
-    primarySubClaim: ""
   # -- Session idle timeout, in days: a sliding expiry. A session ends after
   # this many days without an authenticated request; each request that comes
   # more than sessionExtendThrottleHours after the expiry last moved moves
@@ -2197,12 +2184,13 @@ api:
   stationBoard:
     # -- Turn the board route on.
     enabled: false
-    # -- The stations whose board never shows a timetable platform, only
-    # "to be announced" (STATION_BOARD_NO_BOOKED_PLATFORM_CRS): a
-    # comma-separated list of three-letter station codes. Set and empty
-    # means none. The api refuses to start on an invalid code, so the chart
-    # fails to render one (three capital letters per entry, no spaces).
-    noBookedPlatformCrs: "VIC,EUS,PAD,KGX,MYB,STP"
+    # -- The stations whose timetable platform is shown as a prediction
+    # (likely) instead of booked (STATION_BOARD_NO_BOOKED_PLATFORM_CRS): a
+    # comma-separated list of three-letter station codes. Default none:
+    # unset and set-and-blank both mean none. The api refuses to start on an
+    # invalid code, so the chart fails to render one (three capital letters
+    # per entry, no spaces).
+    noBookedPlatformCrs: ""
   # -- Log out everywhere (LOGOUT_EVERYWHERE_ENABLED, SSO_END_SESSION_URL):
   # `POST /auth/logout-everywhere` ends all of the user's website sessions
   # and the single sign-on session, and revokes the user's MCP tokens and
@@ -2612,9 +2600,9 @@ migrate:
     # vendors; release-order.py checks every pinned image was built against
     # at most this release. Renovate's ds-core group bumps both, with the
     # digest.
-    tag: v0.18.5
+    tag: v0.18.6
     # -- The release's digest (its release notes list it).
-    digest: "sha256:48dee0298d616567641e5c24c099685d6f931527f9879b4979bacb1c9404467b"
+    digest: "sha256:e82bf0023d8d767dcaf6a217394fabbb3fb79b1da1b30048c8550ad8027abd5a"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/ds-core
     pullPolicy: IfNotPresent
@@ -7587,20 +7575,6 @@ metrics:
       metric: distant_signal_api_login_missing_name_claims_total
       window: 1h
       threshold: 3
-      for: 0m
-      severity: warning
-    # DistantSignalAccountRekeyed: the api re-keyed at least one account to
-    # a new login subject within `window` (account continuity). Expected only
-    # while an identity-provider migration runs; otherwise it may be a
-    # takeover through a self-editable Discord id or primary sub claim.
-    # OFF by default: `metric` is api's counter and exists only in an api
-    # build that exports it (ds-api's account continuity), and the alert
-    # means nothing while continuity is off. Turn it on for the migration
-    # window, or permanently once the claims are unforgeable.
-    accountRekeyed:
-      enabled: false
-      metric: distant_signal_api_account_rekeys_total
-      window: 1h
       for: 0m
       severity: warning
     # DistantSignalArchiveUploadFailures: at least minFailures cold-archive

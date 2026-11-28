@@ -121,9 +121,6 @@ RENDER_FLAGS = [
     # leave-by reminders).
     "notifier.leaveReminders.enabled=true",
     "metrics.prometheusRule.notifierLeaveByUnreachable.enabled=true",
-    # DistantSignalAccountRekeyed (off by default: the api's account
-    # continuity counter).
-    "metrics.prometheusRule.accountRekeyed.enabled=true",
     # The bank holidays sync, for DistantSignalBankHolidaysStale.
     "api.bankHolidays.enabled=true",
     "pollers.ldbws.enabled=true",
