@@ -622,6 +622,20 @@ with api.extraEnv, which replaces an entry of the same name.
             # in values.yaml.
             - name: JOURNEY_TIGHT_CONNECTIONS
               value: {{ dig "journeyTightConnections" "enabled" false .Values.api | quote }}
+            {{- /* Log out everywhere -- see api.logoutEverywhere in values.yaml.
+                 The api refuses to start on an invalid SSO_END_SESSION_URL
+                 and on the switch without one, so the URL is rendered only
+                 when set and the switch refuses to render without it. */}}
+            {{- $logoutEverywhere := .Values.api.logoutEverywhere | default dict }}
+            {{- if and (dig "enabled" false $logoutEverywhere) (not (dig "endSessionUrl" "" $logoutEverywhere)) }}
+            {{- fail "api.logoutEverywhere.enabled is true but api.logoutEverywhere.endSessionUrl is empty. Set it to the identity provider's absolute https end-session URL, or leave logoutEverywhere.enabled false." }}
+            {{- end }}
+            - name: LOGOUT_EVERYWHERE_ENABLED
+              value: {{ dig "enabled" false $logoutEverywhere | quote }}
+            {{- with dig "endSessionUrl" "" $logoutEverywhere }}
+            - name: SSO_END_SESSION_URL
+              value: {{ . | quote }}
+            {{- end }}
             # Regular journeys: the plan sweep that picks the day's train --
             # see api.regularJourneys.planSweep in values.yaml.
             - name: REGULAR_PLAN_SWEEP_ENABLED

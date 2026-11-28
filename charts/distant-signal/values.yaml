@@ -1630,7 +1630,7 @@ api:
     # -- The build tag (`build.<run id>-<commit>`), bumped with `digest` by
     # Renovate's ds-images group (renovate.json5). Empty means "use the
     # chart's appVersion".
-    tag: "build.46151315399-aedac573108bd15dbd728153ddec3b54330e995f"
+    tag: "build.46157016378-47b356797063761c9e6c8fafac8bd33dac295103"
     # -- Exact content digest (sha256:<64 hex chars>) of the pinned build.
     # When set, `distant-signal.image` (templates/_helpers.tpl) renders
     # `<repository>@<digest>`, ignoring `tag`/`appVersion` entirely --
@@ -1643,7 +1643,7 @@ api:
     # (repo split spec §5.4): ds-images for the services, ds-core for
     # ds-migrate. To hold one service back, revert its tag and digest in a
     # PR. Empty falls back to tag/appVersion.
-    digest: "sha256:3de961a31a43ac45d3d570cdffd15f4e54230984603babb51c016f1897719b92"
+    digest: "sha256:6ba0254801ed358ef5dce26ce96351cf146f67b82a98df1f0a8fb0741415ef2c"
     # -- The repository this image is built from, as its
     # `org.opencontainers.image.source` label says: the api's
     # `/public/version` lists it (AGPL-3.0 §13), and release-order.py
@@ -2189,6 +2189,24 @@ api:
   # owner agrees. Off by default.
   journeyTightConnections:
     enabled: false
+  # -- Log out everywhere (LOGOUT_EVERYWHERE_ENABLED, SSO_END_SESSION_URL):
+  # `POST /auth/logout-everywhere` ends all of the user's website sessions
+  # and the single sign-on session, and revokes the user's MCP tokens and
+  # delegated grant by back-channel. Off, the route authenticates and then
+  # refuses, and `GET /auth/session` reports `logoutEverywhereEnabled:
+  # false`. Prerequisites before turning it on: the ds-sso provider's
+  # invalidation flow is `default-invalidation-flow`, a throwaway-account
+  # test has passed and the owner agrees. Off by default.
+  logoutEverywhere:
+    # -- Turn the feature on. Needs `endSessionUrl`: the chart refuses to
+    # render with `enabled: true` and an empty `endSessionUrl`.
+    enabled: false
+    # -- The identity provider's end-session URL (SSO_END_SESSION_URL): an
+    # absolute https URL with no query, fragment or user info. The api
+    # refuses to start on an invalid value even with the switch off, so the
+    # chart renders it only when set. Empty by default; set it in the
+    # deployment's own values.
+    endSessionUrl: ""
   # -- Regular journeys, phase 3 (distant-signal's
   # docs/superpowers/specs/2026-11-06-regular-journeys-design.md §6): the
   # api's plan sweep chooses the day's train for each journey of a regular
@@ -6299,10 +6317,10 @@ railMcp:
 frontend:
   image:
     repository: ghcr.io/distant-signal/images/frontend
-    tag: "build.46155187190-83410d7ee46f8753eaee03746b23f6983dbcbdc0"
+    tag: "build.46159076343-587b8c8b288e48ccc03f369bdb04f2f4d7fae4ac"
     # -- Content digest override. See api.image.digest's own comment above
     # for the full rationale; same shape here.
-    digest: "sha256:bfbaa967d2afc7e17405d2e1edff6c7d8a53b47d6932e46f2214bf9d84a7e491"
+    digest: "sha256:c6e82d0e784677385d7e8aa23dbcf2b5e6e704bb3c0dfac40736195d84065d65"
     # -- Source repository. See api.image.source.
     source: https://github.com/Distant-Signal/distant-signal
     pullPolicy: IfNotPresent
