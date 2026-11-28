@@ -618,6 +618,10 @@ with api.extraEnv, which replaces an entry of the same name.
               value: {{ .Values.api.journeyBreaks.maxJourneysPerTick | quote }}
             - name: JOURNEY_BREAKS_SUGGESTIONS_MAX_AGE_SECS
               value: {{ .Values.api.journeyBreaks.suggestionsMaxAgeSecs | quote }}
+            # The tight connection state -- see api.journeyTightConnections
+            # in values.yaml.
+            - name: JOURNEY_TIGHT_CONNECTIONS
+              value: {{ dig "journeyTightConnections" "enabled" false .Values.api | quote }}
             # Regular journeys: the plan sweep that picks the day's train --
             # see api.regularJourneys.planSweep in values.yaml.
             - name: REGULAR_PLAN_SWEEP_ENABLED

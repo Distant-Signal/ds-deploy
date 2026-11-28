@@ -2317,6 +2317,7 @@ release after, setting one fails the render:
 | `api.journeyBreaks.intervalSecs` | `60` | Break sweep cadence; each tick holds an advisory lock, so one api replica runs it. |
 | `api.journeyBreaks.maxJourneysPerTick` | `200` | Most journeys the sweep evaluates per tick. |
 | `api.journeyBreaks.suggestionsMaxAgeSecs` | `120` | Stored suggestions older than this are re-planned when opened. |
+| `api.journeyTightConnections.enabled` | `false` | The tight connection state (`JOURNEY_TIGHT_CONNECTIONS`): a journey connection with a short live margin reports the additive `connection.state` value `tight`. Off: the api answers exactly as before and never reports it. Keep it off until the website's wording for it is live, DS-MCP's release (DSMCP-113) is live and the owner agrees. |
 | `api.regularJourneys.planSweep.enabled` | `false` | The regular journeys plan sweep: picks the day's train for each regular journey with a target (a suggestion in remind mode, a commit in auto mode). Never touches a started, broken or user-picked journey. |
 | `api.regularJourneys.planSweep.intervalSecs` | `300` | Plan sweep cadence; each tick holds an advisory lock, so one api replica runs it. |
 | `api.regularJourneys.planSweep.maxOccurrencesPerTick` | `200` | Most journeys the plan sweep plans per tick. |
